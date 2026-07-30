@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv python install ${{ matrix.python }}
+      - run: uv sync --all-groups --python ${{ matrix.python }} --frozen
+      - run: uv run --python ${{ matrix.python }} ruff check .
+      - run: uv run --python ${{ matrix.python }} pyright
+      - run: uv run --python ${{ matrix.python }} pytest --cov=perflens --cov-report=term-missing
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --all-groups --frozen
+      - run: uv build
+      - run: uv run pip-audit
+      - run: |
+          python -m venv .venv-smoke
+          .venv-smoke/bin/pip install dist/*.whl
+          .venv-smoke/bin/perflens --help
+          .venv-smoke/bin/perflens analyze-folded --input tests/fixtures/folded/normal.folded --output build/smoke.json

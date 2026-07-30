@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.coverage
+.hypothesis/
+.pytest_cache/
+.ruff_cache/
+.venv/
+.venv-smoke/
+.pyright/
+build/
+dist/
+htmlcov/
+perflens-results/
+文档.md

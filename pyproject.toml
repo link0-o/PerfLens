@@ -1,0 +1,96 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "perflens"
+version = "0.1.0"
+description = "Evidence-driven performance analysis toolkit for Linux applications"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "PerfLens contributors" }]
+keywords = ["linux", "performance", "perf", "profiling"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Testing",
+  "Topic :: System :: Benchmark",
+]
+dependencies = [
+  "pydantic>=2.11,<3",
+  "typer>=0.16,<1",
+]
+
+[project.scripts]
+perflens = "perflens.cli.app:main"
+
+[dependency-groups]
+dev = [
+  "build>=1.3,<2",
+  "hypothesis>=6.135,<7",
+  "pip-audit>=2.9,<3",
+  "pyright[nodejs]>=1.1.403,<2",
+  "pytest>=9.0.3,<10",
+  "pytest-cov>=6.2,<7",
+  "pytest-timeout>=2.4,<3",
+  "ruff>=0.12,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/perflens"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"schemas" = "perflens/schemas"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/schemas",
+  "/docs",
+  "/README.md",
+  "/LICENSE",
+  "/CHANGELOG.md",
+  "/SECURITY.md",
+  "/THIRD_PARTY_NOTICES.md",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "S", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S108"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = false
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers --timeout=10"
+testpaths = ["tests"]
+markers = [
+  "performance: deterministic performance and memory baselines",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["perflens"]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true

@@ -1,0 +1,112 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "address_kind": {
+      "const": "unknown",
+      "default": "unknown",
+      "title": "Address Kind",
+      "type": "string"
+    },
+    "dso": {
+      "title": "Dso",
+      "type": "string"
+    },
+    "dso_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Dso Path"
+    },
+    "ip": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ip"
+    },
+    "is_inline": {
+      "default": false,
+      "title": "Is Inline",
+      "type": "boolean"
+    },
+    "is_kernel": {
+      "default": false,
+      "title": "Is Kernel",
+      "type": "boolean"
+    },
+    "is_unknown": {
+      "default": false,
+      "title": "Is Unknown",
+      "type": "boolean"
+    },
+    "normalized_symbol": {
+      "title": "Normalized Symbol",
+      "type": "string"
+    },
+    "raw_symbol": {
+      "title": "Raw Symbol",
+      "type": "string"
+    },
+    "source_column": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Column"
+    },
+    "source_file": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source File"
+    },
+    "source_line": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Line"
+    },
+    "symbol": {
+      "title": "Symbol",
+      "type": "string"
+    }
+  },
+  "required": [
+    "symbol",
+    "raw_symbol",
+    "normalized_symbol",
+    "dso"
+  ],
+  "title": "Frame",
+  "type": "object"
+}

@@ -1,0 +1,8 @@
+
+main;worker;good 7
+missing-weight
+main;;empty 4
+main;worker;bad nope
+main;worker;zero 0
+main;worker;negative -2
+[unknown];leaf 3

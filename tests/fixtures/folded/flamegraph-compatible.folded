@@ -1,0 +1,3 @@
+all;function with spaces;leaf 1
+all;C++::templated<std::pair<int, long> >;operator new 2
+all;[unknown] 3

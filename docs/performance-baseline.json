@@ -1,0 +1,90 @@
+{
+  "environment": {
+    "architecture": "x86_64",
+    "platform": "Linux-6.12.74+deb13+1-amd64-x86_64-with-glibc2.41",
+    "python": "3.13.5 (main, Jun 25 2025, 18:55:22) [GCC 14.2.0]"
+  },
+  "runs": [
+    {
+      "bytes_per_second": 2980114.305902897,
+      "elapsed_seconds": 0.009362057000544155,
+      "input_bytes": 27900,
+      "peak_rss_kib": 31388,
+      "records": 1000,
+      "records_per_second": 106814.13282806081,
+      "repetition": 1
+    },
+    {
+      "bytes_per_second": 2568941.7884227796,
+      "elapsed_seconds": 0.010860503000003519,
+      "input_bytes": 27900,
+      "peak_rss_kib": 31388,
+      "records": 1000,
+      "records_per_second": 92076.76661013547,
+      "repetition": 2
+    },
+    {
+      "bytes_per_second": 3262823.216909933,
+      "elapsed_seconds": 0.008550876999834145,
+      "input_bytes": 27900,
+      "peak_rss_kib": 31516,
+      "records": 1000,
+      "records_per_second": 116947.06870644921,
+      "repetition": 3
+    },
+    {
+      "bytes_per_second": 3779679.0508716726,
+      "elapsed_seconds": 0.738157912999668,
+      "input_bytes": 2790000,
+      "peak_rss_kib": 33436,
+      "records": 100000,
+      "records_per_second": 135472.36741475528,
+      "repetition": 1
+    },
+    {
+      "bytes_per_second": 3813432.893912972,
+      "elapsed_seconds": 0.7316242549995877,
+      "input_bytes": 2790000,
+      "peak_rss_kib": 33480,
+      "records": 100000,
+      "records_per_second": 136682.18257752588,
+      "repetition": 2
+    },
+    {
+      "bytes_per_second": 3818715.8672769917,
+      "elapsed_seconds": 0.7306120949997421,
+      "input_bytes": 2790000,
+      "peak_rss_kib": 33492,
+      "records": 100000,
+      "records_per_second": 136871.5364615409,
+      "repetition": 3
+    },
+    {
+      "bytes_per_second": 3691944.17243006,
+      "elapsed_seconds": 7.556994010999915,
+      "input_bytes": 27900000,
+      "peak_rss_kib": 33504,
+      "records": 1000000,
+      "records_per_second": 132327.74811577276,
+      "repetition": 1
+    },
+    {
+      "bytes_per_second": 3608119.901113651,
+      "elapsed_seconds": 7.73255899599917,
+      "input_bytes": 27900000,
+      "peak_rss_kib": 33504,
+      "records": 1000000,
+      "records_per_second": 129323.29394672585,
+      "repetition": 2
+    },
+    {
+      "bytes_per_second": 3661724.1109229196,
+      "elapsed_seconds": 7.619361577999371,
+      "input_bytes": 27900000,
+      "peak_rss_kib": 33504,
+      "records": 1000000,
+      "records_per_second": 131244.59178935195,
+      "repetition": 3
+    }
+  ]
+}

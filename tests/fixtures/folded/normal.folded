@@ -1,0 +1,3 @@
+main;worker;parse;malloc 182
+main;worker;compute 271
+main;worker;parse;malloc 18

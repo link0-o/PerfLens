@@ -1,0 +1,142 @@
+{
+  "$defs": {
+    "ParseStatistics": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes_read": {
+          "minimum": 0,
+          "title": "Bytes Read",
+          "type": "integer"
+        },
+        "malformed_records": {
+          "minimum": 0,
+          "title": "Malformed Records",
+          "type": "integer"
+        },
+        "parsed_records": {
+          "minimum": 0,
+          "title": "Parsed Records",
+          "type": "integer"
+        },
+        "skipped_records": {
+          "minimum": 0,
+          "title": "Skipped Records",
+          "type": "integer"
+        },
+        "warning_count": {
+          "minimum": 0,
+          "title": "Warning Count",
+          "type": "integer"
+        },
+        "warnings_truncated": {
+          "title": "Warnings Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "parsed_records",
+        "skipped_records",
+        "malformed_records",
+        "warning_count",
+        "warnings_truncated",
+        "bytes_read"
+      ],
+      "title": "ParseStatistics",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "aggregation_semantics": {
+      "const": "unique_symbol_dso_per_sample",
+      "title": "Aggregation Semantics",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "event": {
+      "title": "Event",
+      "type": "string"
+    },
+    "has_call_graph": {
+      "title": "Has Call Graph",
+      "type": "boolean"
+    },
+    "has_source_lines": {
+      "title": "Has Source Lines",
+      "type": "boolean"
+    },
+    "input_path": {
+      "title": "Input Path",
+      "type": "string"
+    },
+    "input_sha256": {
+      "title": "Input Sha256",
+      "type": "string"
+    },
+    "parse_statistics": {
+      "$ref": "#/$defs/ParseStatistics"
+    },
+    "profile_id": {
+      "title": "Profile Id",
+      "type": "string"
+    },
+    "sample_count": {
+      "minimum": 0,
+      "title": "Sample Count",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_type": {
+      "const": "folded",
+      "title": "Source Type",
+      "type": "string"
+    },
+    "total_weight": {
+      "minimum": 0,
+      "title": "Total Weight",
+      "type": "integer"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    },
+    "weight_source": {
+      "title": "Weight Source",
+      "type": "string"
+    },
+    "weight_unit": {
+      "title": "Weight Unit",
+      "type": "string"
+    }
+  },
+  "required": [
+    "profile_id",
+    "source_type",
+    "input_path",
+    "input_sha256",
+    "created_at",
+    "sample_count",
+    "total_weight",
+    "weight_unit",
+    "weight_source",
+    "event",
+    "has_call_graph",
+    "has_source_lines",
+    "aggregation_semantics",
+    "parse_statistics"
+  ],
+  "title": "ProfileMetadata",
+  "type": "object"
+}

@@ -1,0 +1,133 @@
+{
+  "aggregation_semantics": "unique_symbol_dso_per_sample",
+  "call_paths": [
+    {
+      "frames": [
+        {"dso": "unknown", "symbol": "main"},
+        {"dso": "unknown", "symbol": "worker"},
+        {"dso": "unknown", "symbol": "compute"}
+      ],
+      "path_id": "P-001",
+      "percent": 57.537155,
+      "record_count": 1,
+      "weight": 271
+    },
+    {
+      "frames": [
+        {"dso": "unknown", "symbol": "main"},
+        {"dso": "unknown", "symbol": "worker"},
+        {"dso": "unknown", "symbol": "parse"},
+        {"dso": "unknown", "symbol": "malloc"}
+      ],
+      "path_id": "P-002",
+      "percent": 42.462845,
+      "record_count": 2,
+      "weight": 200
+    }
+  ],
+  "hotspots": [
+    {
+      "categories": [],
+      "dso": "unknown",
+      "hotspot_id": "H-001",
+      "inclusive_percent": 57.537155,
+      "inclusive_weight": 271,
+      "sample_count": 1,
+      "self_percent": 57.537155,
+      "self_weight": 271,
+      "source_locations": [],
+      "stack_occurrence_count": 1,
+      "symbol": "compute",
+      "thread_count": 0,
+      "top_callees": [],
+      "top_callers": []
+    },
+    {
+      "categories": [],
+      "dso": "unknown",
+      "hotspot_id": "H-002",
+      "inclusive_percent": 42.462845,
+      "inclusive_weight": 200,
+      "sample_count": 2,
+      "self_percent": 42.462845,
+      "self_weight": 200,
+      "source_locations": [],
+      "stack_occurrence_count": 2,
+      "symbol": "malloc",
+      "thread_count": 0,
+      "top_callees": [],
+      "top_callers": []
+    },
+    {
+      "categories": [],
+      "dso": "unknown",
+      "hotspot_id": "H-003",
+      "inclusive_percent": 100.0,
+      "inclusive_weight": 471,
+      "sample_count": 3,
+      "self_percent": 0.0,
+      "self_weight": 0,
+      "source_locations": [],
+      "stack_occurrence_count": 3,
+      "symbol": "main",
+      "thread_count": 0,
+      "top_callees": [],
+      "top_callers": []
+    },
+    {
+      "categories": [],
+      "dso": "unknown",
+      "hotspot_id": "H-004",
+      "inclusive_percent": 100.0,
+      "inclusive_weight": 471,
+      "sample_count": 3,
+      "self_percent": 0.0,
+      "self_weight": 0,
+      "source_locations": [],
+      "stack_occurrence_count": 3,
+      "symbol": "worker",
+      "thread_count": 0,
+      "top_callees": [],
+      "top_callers": []
+    },
+    {
+      "categories": [],
+      "dso": "unknown",
+      "hotspot_id": "H-005",
+      "inclusive_percent": 42.462845,
+      "inclusive_weight": 200,
+      "sample_count": 2,
+      "self_percent": 0.0,
+      "self_weight": 0,
+      "source_locations": [],
+      "stack_occurrence_count": 2,
+      "symbol": "parse",
+      "thread_count": 0,
+      "top_callees": [],
+      "top_callers": []
+    }
+  ],
+  "metadata": {
+    "aggregation_semantics": "unique_symbol_dso_per_sample",
+    "event": "unknown",
+    "has_call_graph": true,
+    "has_source_lines": false,
+    "parse_statistics": {
+      "bytes_read": 81,
+      "malformed_records": 0,
+      "parsed_records": 3,
+      "skipped_records": 0,
+      "warning_count": 0,
+      "warnings_truncated": false
+    },
+    "sample_count": 3,
+    "source_type": "folded",
+    "total_weight": 471,
+    "warnings": [],
+    "weight_source": "folded_weight",
+    "weight_unit": "sample_count"
+  },
+  "schema_version": "1.0",
+  "status": "complete",
+  "warnings": []
+}

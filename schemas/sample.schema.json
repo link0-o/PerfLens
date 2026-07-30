@@ -1,0 +1,227 @@
+{
+  "$defs": {
+    "Frame": {
+      "additionalProperties": false,
+      "properties": {
+        "address_kind": {
+          "const": "unknown",
+          "default": "unknown",
+          "title": "Address Kind",
+          "type": "string"
+        },
+        "dso": {
+          "title": "Dso",
+          "type": "string"
+        },
+        "dso_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dso Path"
+        },
+        "ip": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ip"
+        },
+        "is_inline": {
+          "default": false,
+          "title": "Is Inline",
+          "type": "boolean"
+        },
+        "is_kernel": {
+          "default": false,
+          "title": "Is Kernel",
+          "type": "boolean"
+        },
+        "is_unknown": {
+          "default": false,
+          "title": "Is Unknown",
+          "type": "boolean"
+        },
+        "normalized_symbol": {
+          "title": "Normalized Symbol",
+          "type": "string"
+        },
+        "raw_symbol": {
+          "title": "Raw Symbol",
+          "type": "string"
+        },
+        "source_column": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Column"
+        },
+        "source_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source File"
+        },
+        "source_line": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Line"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "raw_symbol",
+        "normalized_symbol",
+        "dso"
+      ],
+      "title": "Frame",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "cpu": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cpu"
+    },
+    "event": {
+      "title": "Event",
+      "type": "string"
+    },
+    "frames": {
+      "items": {
+        "$ref": "#/$defs/Frame"
+      },
+      "title": "Frames",
+      "type": "array"
+    },
+    "process_id": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Process Id"
+    },
+    "sample_id": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sample Id"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "thread_id": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Thread Id"
+    },
+    "thread_name": {
+      "title": "Thread Name",
+      "type": "string"
+    },
+    "timestamp": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Timestamp"
+    },
+    "weight": {
+      "exclusiveMinimum": 0,
+      "title": "Weight",
+      "type": "integer"
+    },
+    "weight_source": {
+      "title": "Weight Source",
+      "type": "string"
+    },
+    "weight_unit": {
+      "title": "Weight Unit",
+      "type": "string"
+    }
+  },
+  "required": [
+    "thread_name",
+    "event",
+    "weight",
+    "weight_unit",
+    "weight_source",
+    "frames"
+  ],
+  "title": "StackSample",
+  "type": "object"
+}
