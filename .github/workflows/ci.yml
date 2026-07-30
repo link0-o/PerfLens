@@ -15,8 +15,8 @@ jobs:
       matrix:
         python: ["3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
       - run: uv python install ${{ matrix.python }}
@@ -28,10 +28,10 @@ jobs:
   package:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
       - run: uv sync --all-groups --frozen
-      - run: uv build
+      - run: uv build --no-sources
       - run: >-
           uv export --locked --no-dev --no-emit-project
           --format requirements.txt --output-file build/runtime-requirements.txt
@@ -40,16 +40,14 @@ jobs:
           --no-deps --disable-pip --strict
       - run: >-
           uv export --locked --no-dev --no-emit-project
+          --preview-features sbom-export
           --format cyclonedx1.5 --output-file build/sbom.cdx.json
+      - run: uv run --isolated --no-project --with dist/*.whl tests/package_smoke.py
+      - run: uv run --isolated --no-project --with dist/*.tar.gz tests/package_smoke.py
       - run: |
-          python -m venv .venv-smoke
-          .venv-smoke/bin/pip install dist/*.whl
-          .venv-smoke/bin/perflens --help
-          .venv-smoke/bin/perflens-mcp --help
-          .venv-smoke/bin/perflens analyze-folded --input tests/fixtures/folded/normal.folded --output build/smoke.json
-      - uses: actions/upload-artifact@v4
+          cp build/sbom.cdx.json dist/
+          uv run python scripts/prepare_release.py
+      - uses: actions/upload-artifact@v7
         with:
           name: perflens-package-and-sbom
-          path: |
-            dist/*
-            build/sbom.cdx.json
+          path: dist/*

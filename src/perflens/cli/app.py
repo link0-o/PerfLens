@@ -9,6 +9,7 @@ from typing import Annotated, Literal, NoReturn
 
 import typer
 
+from perflens import __version__
 from perflens.application.analyze import analyze_folded, analyze_perf_data, analyze_perf_script
 from perflens.application.compare import (
     compare_analysis_files,
@@ -31,6 +32,8 @@ from perflens.collection.collector import (
     collect_profile,
 )
 from perflens.contracts.artifacts import ErrorArtifact, ErrorBody
+from perflens.distribution.codex import render_codex_config
+from perflens.distribution.skill import install_project_skill
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.domain.models import ResourceLimits
 from perflens.reporting.diff import render_benchmark_comparison, render_profile_comparison
@@ -45,9 +48,71 @@ app = typer.Typer(
 )
 
 
-@app.callback()
-def root() -> None:
+@app.callback(invoke_without_command=True)
+def root(
+    version: Annotated[
+        bool,
+        typer.Option("--version", help="Show the PerfLens version and exit.", is_eager=True),
+    ] = False,
+) -> None:
     """Run deterministic PerfLens analysis commands."""
+    if version:
+        typer.echo(__version__)
+        raise typer.Exit()
+
+
+@app.command("install-skill")
+def install_skill_command(
+    project_root: Annotated[
+        Path,
+        typer.Option(
+            "--project",
+            file_okay=False,
+            help="Existing project root that will receive .agents/skills.",
+        ),
+    ] = Path("."),
+) -> None:
+    """Install the bundled Performance Analysis Skill into a project."""
+    try:
+        target = install_project_skill(project_root)
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(str(target))
+
+
+@app.command("codex-config")
+def codex_config_command(
+    workspace: Annotated[
+        Path,
+        typer.Option("--workspace", file_okay=False, help="Allowed workspace root."),
+    ] = Path("."),
+    artifact_root: Annotated[
+        Path | None,
+        typer.Option("--artifact-root", file_okay=False),
+    ] = None,
+    allow_process_execution: Annotated[
+        bool,
+        typer.Option(
+            "--allow-process-execution",
+            help="Allow bounded perf.data conversion and source symbolization.",
+        ),
+    ] = False,
+    mcp_command: Annotated[
+        Path | None,
+        typer.Option("--mcp-command", dir_okay=False),
+    ] = None,
+) -> None:
+    """Print a project-scoped Codex MCP TOML configuration snippet."""
+    try:
+        configuration = render_codex_config(
+            workspace,
+            artifact_root=artifact_root,
+            allow_process_execution=allow_process_execution,
+            mcp_command=mcp_command,
+        )
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(configuration, nl=False)
 
 
 @app.command("analyze-folded")

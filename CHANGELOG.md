@@ -4,6 +4,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-30
+
 ### Added
 
 - Milestone 0 packaging, contracts, quality gates, and documentation.
@@ -26,3 +28,11 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - Milestone 9 default-off active perf record/stat/sched/lock/off-CPU collection
   with server and per-call authorization, a separate PID-attachment gate,
   bounded outputs, immutable publication, and typed perf-stat metrics.
+- Installable wheel and source distributions with CLI and MCP entry points.
+- A bundled, non-overwriting project Skill installer and safe Codex MCP
+  configuration renderer.
+- Tag-driven GitHub Release automation with wheel/sdist smoke tests, a
+  standalone Skill archive, CycloneDX SBOM, and SHA-256 checksums.
+
+[Unreleased]: https://github.com/link0-o/PerfLens/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/link0-o/PerfLens/releases/tag/v0.1.0

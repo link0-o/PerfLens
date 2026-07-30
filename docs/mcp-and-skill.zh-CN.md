@@ -14,7 +14,16 @@ Core 和 MCP Server 都不会调用 LLM API。Skill 只是工作流和安全规�
 
 ## 启动和注册 MCP
 
-在 PerfLens 仓库根目录执行：
+如果使用正式 wheel 安装，先把安装包携带的 Skill 安装到目标项目，并生成 MCP 配置：
+
+```bash
+perflens install-skill --project /absolute/path/to/workspace
+perflens codex-config --workspace /absolute/path/to/workspace
+```
+
+第一条命令不会覆盖已有 Skill；第二条命令只把 TOML 输出到终端供你检查，不会自动修改全局或项目配置。需要直接分析 `perf.data` 时，可以在 `codex-config` 后加 `--allow-process-execution`。
+
+如果从源码仓库运行，则在 PerfLens 仓库根目录执行：
 
 ```bash
 uv sync --all-groups
@@ -167,4 +176,3 @@ PerfLens 不会请求 sudo，不会修改 `perf_event_paranoid`、capability 或
 - **只在终端处理文件**：直接使用 CLI，不需要 MCP 或 Skill。
 
 遇到权限、符号或兼容性问题时，请看[中文故障排查](troubleshooting.zh-CN.md)。
-

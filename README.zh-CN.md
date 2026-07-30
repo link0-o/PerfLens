@@ -3,6 +3,10 @@
 > 基于证据的 Linux 性能分析工具，集成 CLI、MCP Server 与 Codex Skill。
 > Evidence-driven Linux performance analysis with a CLI, MCP Server, and Codex Skill.
 
+[![CI](https://github.com/link0-o/PerfLens/actions/workflows/ci.yml/badge.svg)](https://github.com/link0-o/PerfLens/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue)](pyproject.toml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-green)](LICENSE)
+
 简体中文 | [English](README.md)
 
 PerfLens 是一个面向 Linux 应用和编码 Agent 的、基于证据的性能分析工具包。它把 Profile 解析、热点计算、源码定位和诊断规则做成确定性工具，再由 Skill 约束 Agent 如何解释这些证据。
@@ -33,16 +37,31 @@ PerfLens 不包含 LLM API、Web UI、自动修改源码功能、Benchmark 执�
 
 需要 Python 3.12 或更高版本。
 
+从 GitHub Releases 下载 wheel 后，推荐作为独立工具安装：
+
+```bash
+pipx install ./perflens-0.1.0-py3-none-any.whl
+# 或者
+uv tool install ./perflens-0.1.0-py3-none-any.whl
+```
+
+两种方式都会安装 `perflens` 和 `perflens-mcp`。可以这样确认版本：
+
+```bash
+perflens --version
+perflens-mcp --version
+```
+
+也支持直接安装源码目录：
+
+```bash
+python -m pip install .
+```
+
 开发环境推荐使用：
 
 ```bash
 uv sync --all-groups
-```
-
-也可以安装当前目录：
-
-```bash
-python -m pip install .
 ```
 
 下面的命令默认已经激活虚拟环境；未激活时可把 `perflens` 换成 `.venv/bin/perflens`。
@@ -140,6 +159,26 @@ Profile 百分比变化只表示所选事件的分布变化，不等于耗时变
 
 ## 配置 MCP + Skill
 
+正式安装包已经携带 Skill。先把它安装到需要分析的项目中：
+
+```bash
+perflens install-skill --project /absolute/path/to/workspace
+```
+
+该命令会创建 `.agents/skills/perflens-performance-analysis`，如果目标已经存在则拒绝覆盖。然后生成项目级 MCP 配置：
+
+```bash
+perflens codex-config --workspace /absolute/path/to/workspace
+```
+
+检查输出的 TOML，再将它加入项目的 `.codex/config.toml`。需要直接分析 `perf.data` 或调用源码符号化程序时，才增加：
+
+```text
+--allow-process-execution
+```
+
+下面是从源码仓库直接注册 MCP 的方式。
+
 先安装依赖并创建产物目录：
 
 ```bash
@@ -171,12 +210,6 @@ codex mcp list
 ```
 
 Skill 位于 `.agents/skills/perflens-performance-analysis`。`$perflens-performance-analysis` 是 Skill 名称；`perflens` 是 MCP Server 名称。
-
-上面的基础 MCP 配置能读取 folded/perf-script 并写分析产物。若要直接分析 `perf.data` 或调用符号化程序，还需要在 MCP 启动参数中加入：
-
-```text
---allow-process-execution
-```
 
 完整权限说明和项目级配置见[《MCP 与 Skill 使用指南》](docs/mcp-and-skill.zh-CN.md)。
 
@@ -242,4 +275,5 @@ uv run pip-audit
 更多中文资料：
 
 - [MCP 与 Skill 使用指南](docs/mcp-and-skill.zh-CN.md)
+- [发布流程](docs/releasing.zh-CN.md)
 - [故障排查](docs/troubleshooting.zh-CN.md)

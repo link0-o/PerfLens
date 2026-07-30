@@ -1,0 +1,39 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  github-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+      - run: uv python install 3.13
+      - run: uv sync --all-groups --python 3.13 --frozen
+      - run: uv run ruff check .
+      - run: uv run pyright
+      - run: uv run pytest --cov=perflens --cov-fail-under=85
+      - run: uv build --no-sources
+      - run: uv run --isolated --no-project --with dist/*.whl tests/package_smoke.py
+      - run: uv run --isolated --no-project --with dist/*.tar.gz tests/package_smoke.py
+      - run: >-
+          uv export --locked --no-dev --no-emit-project
+          --preview-features sbom-export
+          --format cyclonedx1.5 --output-file dist/sbom.cdx.json
+      - run: uv run python scripts/prepare_release.py --tag "$GITHUB_REF_NAME"
+      - name: Create immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" dist/*
+          --verify-tag
+          --generate-notes
+          --title "PerfLens $GITHUB_REF_NAME"

@@ -561,6 +561,7 @@ def _require_active_collection(config: ServerConfig, *, pid: int | None) -> None
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the PerfLens MCP server over stdio")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--allowed-root", action="append", type=Path, required=True)
     parser.add_argument("--artifact-root", type=Path, required=True)
     parser.add_argument("--allow-writes", action="store_true")

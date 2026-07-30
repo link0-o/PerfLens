@@ -12,7 +12,20 @@ Neither the Core nor MCP server calls an LLM API. The Skill contains workflow in
 
 ## Start the MCP server
 
-Install/sync the project, choose the workspace root that profiles and source files may be read from, and place generated artifacts under that root:
+For an installed wheel, first install the bundled Skill into the target project:
+
+```bash
+perflens install-skill --project /absolute/path/to/workspace
+perflens codex-config --workspace /absolute/path/to/workspace
+```
+
+The first command refuses to overwrite an existing Skill. The second command
+prints TOML for review; it never modifies global or project Codex configuration.
+Add `--allow-process-execution` to `codex-config` only when needed.
+
+For a source checkout, install/sync the project, choose the workspace root that
+profiles and source files may be read from, and place generated artifacts under
+that root:
 
 ```bash
 uv sync --all-groups

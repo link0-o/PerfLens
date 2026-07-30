@@ -31,6 +31,13 @@ dependencies = [
   "typer>=0.16,<1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/link0-o/PerfLens"
+Documentation = "https://github.com/link0-o/PerfLens#readme"
+Repository = "https://github.com/link0-o/PerfLens.git"
+Issues = "https://github.com/link0-o/PerfLens/issues"
+Changelog = "https://github.com/link0-o/PerfLens/blob/main/CHANGELOG.md"
+
 [project.scripts]
 perflens = "perflens.cli.app:main"
 perflens-mcp = "perflens.mcp.server:main"
@@ -52,12 +59,16 @@ packages = ["src/perflens"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "schemas" = "perflens/schemas"
+".agents/skills/perflens-performance-analysis" = "perflens/_bundled/skills/perflens-performance-analysis"
 
 [tool.hatch.build.targets.sdist]
 include = [
   "/.agents",
   "/src",
   "/schemas",
+  "/scripts",
+  "/tests",
+  "/uv.lock",
   "/docs",
   "/README.md",
   "/README.zh-CN.md",

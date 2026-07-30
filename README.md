@@ -3,6 +3,10 @@
 > Evidence-driven Linux performance analysis with a CLI, MCP Server, and Codex Skill.
 > 基于证据的 Linux 性能分析工具，集成 CLI、MCP Server 与 Codex Skill。
 
+[![CI](https://github.com/link0-o/PerfLens/actions/workflows/ci.yml/badge.svg)](https://github.com/link0-o/PerfLens/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue)](pyproject.toml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-green)](LICENSE)
+
 [简体中文](README.zh-CN.md) | English
 
 PerfLens is an evidence-driven performance-analysis toolkit for Linux
@@ -35,6 +39,23 @@ runner, or custom agent framework.
 ## Install
 
 PerfLens requires Python 3.12 or newer.
+
+For a GitHub release, download the wheel and install it as an isolated tool:
+
+```bash
+pipx install ./perflens-0.1.0-py3-none-any.whl
+# or
+uv tool install ./perflens-0.1.0-py3-none-any.whl
+```
+
+Both commands install `perflens` and `perflens-mcp`. Confirm the release:
+
+```bash
+perflens --version
+perflens-mcp --version
+```
+
+Installing directly from a source checkout is also supported:
 
 ```bash
 python -m pip install .
@@ -175,6 +196,27 @@ additional MCP startup gates.
 
 ## Use MCP with the Skill
 
+An installed release contains a copy of the Skill. Install it into the project
+that will use PerfLens:
+
+```bash
+perflens install-skill --project /absolute/path/to/workspace
+```
+
+The command creates
+`.agents/skills/perflens-performance-analysis` and refuses to overwrite an
+existing Skill. To print a project-scoped MCP configuration:
+
+```bash
+perflens codex-config --workspace /absolute/path/to/workspace
+```
+
+Add `--allow-process-execution` only when `perf.data` conversion or source
+symbolization is required. Review the printed TOML before adding it to the
+project's `.codex/config.toml`.
+
+From a source checkout, the equivalent direct registration is:
+
 ```bash
 mkdir -p perflens-results
 codex mcp add perflens -- \
@@ -244,6 +286,7 @@ uv run python tests/performance/benchmark_folded.py \
 See `docs/performance-budget.md` for the recorded environment and baseline.
 
 See [release readiness](docs/release-readiness.md),
+[release process](docs/releasing.md),
 [real-world profile acceptance](docs/real-world-acceptance.md), and
 [troubleshooting](docs/troubleshooting.md) for final verification evidence and
 operational failure guidance.

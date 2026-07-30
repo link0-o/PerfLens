@@ -7,12 +7,43 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from perflens import __version__
 from perflens.application.analyze import analyze_folded
 from perflens.artifacts.filesystem import write_json_atomic
 from perflens.cli.app import app
 from perflens.collection.collector import ACTIVE_COLLECTION_AUTHORIZATION
+from perflens.distribution.skill import SKILL_NAME
 
 runner = CliRunner()
+
+
+def test_cli_exposes_version_and_release_setup_commands(tmp_path: Path) -> None:
+    version = runner.invoke(app, ["--version"])
+    assert version.exit_code == 0, version.output
+    assert version.output == f"{__version__}\n"
+
+    project = tmp_path / "project"
+    project.mkdir()
+    installed = runner.invoke(app, ["install-skill", "--project", str(project)])
+    assert installed.exit_code == 0, installed.output
+    skill_path = project / ".agents" / "skills" / SKILL_NAME
+    assert installed.output.strip() == str(skill_path)
+    assert (skill_path / "SKILL.md").is_file()
+
+    config = runner.invoke(
+        app,
+        [
+            "codex-config",
+            "--workspace",
+            str(project),
+            "--mcp-command",
+            sys.executable,
+            "--allow-process-execution",
+        ],
+    )
+    assert config.exit_code == 0, config.output
+    assert "[mcp_servers.perflens]" in config.output
+    assert '"--allow-process-execution"' in config.output
 
 
 def test_cli_analyzes_folded_profile(fixture_root: Path, tmp_path: Path) -> None:

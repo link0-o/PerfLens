@@ -1,0 +1,78 @@
+# Releasing PerfLens
+
+[简体中文](releasing.zh-CN.md) | English
+
+PerfLens releases are immutable Python distributions plus a standalone Skill
+archive. A release contains:
+
+- `perflens-<version>-py3-none-any.whl`
+- `perflens-<version>.tar.gz`
+- `perflens-performance-analysis-<version>.zip`
+- `sbom.cdx.json`
+- `SHA256SUMS`
+
+## Prepare
+
+1. Work from a clean `main` branch with all CI checks passing.
+2. Update both `pyproject.toml` and `src/perflens/_version.py` to the same
+   version. Release preparation refuses a mismatch.
+3. Move user-visible changes from `Unreleased` to the dated version section in
+   `CHANGELOG.md`.
+4. Confirm Python 3.12 and 3.13 remain supported.
+
+## Validate locally
+
+```bash
+uv sync --all-groups --frozen
+uv run ruff check .
+uv run pyright
+uv run pytest --cov=perflens --cov-fail-under=85
+uv build --no-sources
+
+uv run --isolated --no-project \
+  --with dist/perflens-0.1.0-py3-none-any.whl \
+  tests/package_smoke.py
+uv run --isolated --no-project \
+  --with dist/perflens-0.1.0.tar.gz \
+  tests/package_smoke.py
+
+uv export --locked --no-dev --no-emit-project \
+  --preview-features sbom-export \
+  --format cyclonedx1.5 \
+  --output-file dist/sbom.cdx.json
+uv run python scripts/prepare_release.py --tag v0.1.0
+sha256sum --check dist/SHA256SUMS
+```
+
+Use an empty `dist/` directory so stale artifacts cannot enter the checksum
+manifest.
+
+## Publish a GitHub Release
+
+Create and push an annotated version tag only after the release commit is on
+`main`:
+
+```bash
+git tag -a v0.1.0 -m "PerfLens v0.1.0"
+git push origin v0.1.0
+```
+
+`.github/workflows/release.yml` checks that the tag matches the package
+version, reruns lint, types, tests, coverage, wheel and sdist smoke tests, then
+creates the GitHub Release with all five artifacts. Do not reuse or move a
+published version tag.
+
+## Optional PyPI publication
+
+Configure a protected `pypi` GitHub environment and a PyPI Trusted Publisher
+before enabling automated publication. Publish only the Python distributions,
+not the Skill archive or SBOM:
+
+```bash
+uv publish \
+  dist/perflens-0.1.0-py3-none-any.whl \
+  dist/perflens-0.1.0.tar.gz
+```
+
+PyPI versions are immutable. If a release is wrong, fix it in a new version
+instead of replacing uploaded files.
