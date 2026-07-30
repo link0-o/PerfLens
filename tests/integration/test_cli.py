@@ -110,3 +110,49 @@ def test_cli_classifies_and_renders_report(tmp_path: Path) -> None:
     diagnosis = json.loads(diagnosis_path.read_text(encoding="utf-8"))
     assert diagnosis["classifications"][0]["conclusion_status"] == "candidate"
     assert "Throughput regression" in report_path.read_text(encoding="utf-8")
+
+
+def test_cli_normalizes_benchmark_and_compares_profiles(fixture_root: Path, tmp_path: Path) -> None:
+    benchmark_output = tmp_path / "benchmark.json"
+    normalized = runner.invoke(
+        app,
+        [
+            "normalize-benchmark",
+            "--input",
+            str(fixture_root / "benchmarks" / "hyperfine.json"),
+            "--output",
+            str(benchmark_output),
+        ],
+    )
+    assert normalized.exit_code == 0, normalized.output
+    assert json.loads(benchmark_output.read_text())["source_format"] == "hyperfine"
+
+    baseline_profile = tmp_path / "baseline.folded"
+    candidate_profile = tmp_path / "candidate.folded"
+    baseline_profile.write_text("main;old 70\nmain;shared 30\n")
+    candidate_profile.write_text("main;new 60\nmain;shared 40\n")
+    baseline_analysis = tmp_path / "baseline-analysis.json"
+    candidate_analysis = tmp_path / "candidate-analysis.json"
+    write_json_atomic(analyze_folded(baseline_profile), baseline_analysis, max_output_bytes=1 << 20)
+    write_json_atomic(
+        analyze_folded(candidate_profile), candidate_analysis, max_output_bytes=1 << 20
+    )
+    comparison_output = tmp_path / "comparison.json"
+    markdown_output = tmp_path / "comparison.md"
+    compared = runner.invoke(
+        app,
+        [
+            "compare-profiles",
+            "--baseline",
+            str(baseline_analysis),
+            "--candidate",
+            str(candidate_analysis),
+            "--output",
+            str(comparison_output),
+            "--markdown-output",
+            str(markdown_output),
+        ],
+    )
+    assert compared.exit_code == 0, compared.output
+    assert json.loads(comparison_output.read_text())["hotspot_deltas"]
+    assert "Profile Comparison" in markdown_output.read_text()

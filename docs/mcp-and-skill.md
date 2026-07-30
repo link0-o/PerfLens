@@ -85,5 +85,6 @@ Tool annotations are client hints. The authorization checks above are independen
 6. `classify_hotspots`
 7. `build_diagnosis_bundle`
 8. `read_artifact_page` for large output
+9. `analyze_benchmark`, `compare_profiles`, and `compare_benchmarks` for A/B work
 
 All list responses are bounded and paginated. The server emits typed structured output and checked-in JSON Schemas; it never returns an unbounded full analysis through a list tool.

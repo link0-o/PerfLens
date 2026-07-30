@@ -1,0 +1,368 @@
+{
+  "$defs": {
+    "BenchmarkEnvironment": {
+      "additionalProperties": false,
+      "properties": {
+        "background_load": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Background Load",
+          "type": "object"
+        },
+        "compiler": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Compiler"
+        },
+        "compiler_flags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Compiler Flags",
+          "type": "array"
+        },
+        "containerized": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Containerized"
+        },
+        "cpu_affinity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Affinity"
+        },
+        "cpu_count": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Count"
+        },
+        "cpu_governor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Governor"
+        },
+        "cpu_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Model"
+        },
+        "git_dirty": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Git Dirty"
+        },
+        "kernel": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kernel"
+        },
+        "numa_policy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Numa Policy"
+        },
+        "turbo": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turbo"
+        }
+      },
+      "title": "BenchmarkEnvironment",
+      "type": "object"
+    },
+    "BenchmarkMetric": {
+      "additionalProperties": false,
+      "properties": {
+        "higher_is_better": {
+          "title": "Higher Is Better",
+          "type": "boolean"
+        },
+        "mean": {
+          "title": "Mean",
+          "type": "number"
+        },
+        "median": {
+          "title": "Median",
+          "type": "number"
+        },
+        "standard_deviation": {
+          "minimum": 0,
+          "title": "Standard Deviation",
+          "type": "number"
+        },
+        "unit": {
+          "title": "Unit",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "unit",
+        "higher_is_better",
+        "values",
+        "median",
+        "mean",
+        "standard_deviation"
+      ],
+      "title": "BenchmarkMetric",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "benchmark_id": {
+      "title": "Benchmark Id",
+      "type": "string"
+    },
+    "build_type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Build Type"
+    },
+    "commit": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Commit"
+    },
+    "concurrency": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Concurrency"
+    },
+    "duration_seconds": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Duration Seconds"
+    },
+    "environment": {
+      "$ref": "#/$defs/BenchmarkEnvironment"
+    },
+    "error_count": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error Count"
+    },
+    "metrics": {
+      "additionalProperties": {
+        "$ref": "#/$defs/BenchmarkMetric"
+      },
+      "title": "Metrics",
+      "type": "object"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "operations": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Operations"
+    },
+    "payload_bytes": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Payload Bytes"
+    },
+    "repetitions": {
+      "minimum": 1,
+      "title": "Repetitions",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_format": {
+      "enum": [
+        "perflens",
+        "pyperf",
+        "google_benchmark",
+        "hyperfine"
+      ],
+      "title": "Source Format",
+      "type": "string"
+    },
+    "warmup_seconds": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Warmup Seconds"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "benchmark_id",
+    "name",
+    "repetitions",
+    "metrics",
+    "environment",
+    "source_format"
+  ],
+  "title": "BenchmarkArtifact",
+  "type": "object"
+}

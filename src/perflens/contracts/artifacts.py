@@ -285,3 +285,119 @@ class ArtifactTextPage(ContractModel):
     text: str
     next_offset: int | None = Field(default=None, ge=0)
     total_bytes: int = Field(ge=0)
+
+
+class BenchmarkMetric(ContractModel):
+    unit: str
+    higher_is_better: bool
+    values: tuple[float, ...]
+    median: float
+    mean: float
+    standard_deviation: float = Field(ge=0)
+
+
+class BenchmarkEnvironment(ContractModel):
+    cpu_model: str | None = None
+    cpu_count: int | None = Field(default=None, ge=1)
+    kernel: str | None = None
+    compiler: str | None = None
+    compiler_flags: tuple[str, ...] = ()
+    cpu_governor: str | None = None
+    turbo: bool | None = None
+    cpu_affinity: str | None = None
+    numa_policy: str | None = None
+    background_load: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    git_dirty: bool | None = None
+    containerized: bool | None = None
+
+
+class BenchmarkArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    benchmark_id: str
+    name: str
+    commit: str | None = None
+    build_type: str | None = None
+    duration_seconds: float | None = Field(default=None, gt=0)
+    warmup_seconds: float | None = Field(default=None, ge=0)
+    repetitions: int = Field(ge=1)
+    concurrency: int | None = Field(default=None, ge=1)
+    payload_bytes: int | None = Field(default=None, ge=0)
+    operations: int | None = Field(default=None, ge=0)
+    metrics: dict[str, BenchmarkMetric]
+    environment: BenchmarkEnvironment
+    error_count: int | None = Field(default=None, ge=0)
+    source_format: Literal["perflens", "pyperf", "google_benchmark", "hyperfine"]
+    warnings: tuple[str, ...] = ()
+
+
+class ProfileHotspotDelta(ContractModel):
+    symbol: str
+    dso: str
+    status: Literal["added", "removed", "changed"]
+    baseline_self_percent: float = Field(ge=0, le=100)
+    candidate_self_percent: float = Field(ge=0, le=100)
+    self_delta_percent: float
+    baseline_inclusive_percent: float = Field(ge=0, le=100)
+    candidate_inclusive_percent: float = Field(ge=0, le=100)
+    inclusive_delta_percent: float
+    baseline_rank: int | None = Field(default=None, ge=1)
+    candidate_rank: int | None = Field(default=None, ge=1)
+    rank_delta: int | None = None
+
+
+class CallPathDelta(ContractModel):
+    frames: tuple[CallPathFrame, ...]
+    status: Literal["added", "removed", "changed"]
+    baseline_percent: float = Field(ge=0, le=100)
+    candidate_percent: float = Field(ge=0, le=100)
+    delta_percent: float
+
+
+class ProfileComparison(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    comparison_id: str
+    baseline_analysis_id: str
+    candidate_analysis_id: str
+    comparable: bool
+    metadata_differences: dict[str, tuple[str, str]]
+    hotspot_deltas: tuple[ProfileHotspotDelta, ...]
+    call_path_deltas: tuple[CallPathDelta, ...]
+    dso_changes: dict[str, tuple[tuple[str, ...], tuple[str, ...]]]
+    baseline_unresolved_percent: float = Field(ge=0, le=100)
+    candidate_unresolved_percent: float = Field(ge=0, le=100)
+    unresolved_delta_percent: float
+    warnings: tuple[str, ...]
+
+
+class BenchmarkMetricComparison(ContractModel):
+    metric: str
+    unit: str
+    baseline_samples: int = Field(ge=1)
+    candidate_samples: int = Field(ge=1)
+    baseline_median: float
+    candidate_median: float
+    raw_delta_percent: float | None
+    improvement_percent: float | None
+    confidence_interval_95: tuple[float, float] | None
+    statistically_significant: bool | None
+    practically_significant: bool
+    status: Literal[
+        "insufficient_data",
+        "not_comparable",
+        "no_material_change",
+        "candidate_improvement",
+        "candidate_regression",
+    ]
+
+
+class BenchmarkComparison(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    comparison_id: str
+    baseline_benchmark_id: str
+    candidate_benchmark_id: str
+    comparable: bool
+    condition_differences: dict[str, tuple[str, str]]
+    expected_variables: dict[str, tuple[str, str]]
+    minimum_practical_impact_percent: float = Field(ge=0)
+    metrics: tuple[BenchmarkMetricComparison, ...]
+    warnings: tuple[str, ...]

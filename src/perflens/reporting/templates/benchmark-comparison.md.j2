@@ -1,0 +1,26 @@
+# PerfLens Benchmark Comparison
+
+## Comparability
+
+- Comparable: {{ comparison.comparable }}
+{% for field, values in comparison.expected_variables.items() %}
+- Expected variable `{{ field }}`: `{{ values[0] }}` → `{{ values[1] }}`
+{% endfor %}
+{% for field, values in comparison.condition_differences.items() %}
+- Condition difference `{{ field }}`: `{{ values[0] }}` → `{{ values[1] }}`
+{% endfor %}
+{% for warning in comparison.warnings %}
+- Warning: {{ warning }}
+{% endfor %}
+
+## Metric changes
+
+| Metric | Unit | Samples | Baseline median | Candidate median | Improvement | Statistical | Practical | Status |
+|---|---|---:|---:|---:|---:|---|---|---|
+{% for item in comparison.metrics %}
+| `{{ item.metric }}` | {{ item.unit }} | {{ item.baseline_samples }}/{{ item.candidate_samples }} | {{ item.baseline_median }} | {{ item.candidate_median }} | {{ item.improvement_percent if item.improvement_percent is not none else "n/a" }}% | {{ item.statistically_significant if item.statistically_significant is not none else "insufficient data" }} | {{ item.practically_significant }} | `{{ item.status }}` |
+{% endfor %}
+
+## Conclusion guardrail
+
+No metric in this report is a Verified Improvement by itself. Verification also requires equivalent workload, correctness, stable errors, corresponding profile evidence, and no unacceptable resource transfer.

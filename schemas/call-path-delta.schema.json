@@ -1,0 +1,67 @@
+{
+  "$defs": {
+    "CallPathFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "dso": {
+          "title": "Dso",
+          "type": "string"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "dso"
+      ],
+      "title": "CallPathFrame",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "baseline_percent": {
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Baseline Percent",
+      "type": "number"
+    },
+    "candidate_percent": {
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Candidate Percent",
+      "type": "number"
+    },
+    "delta_percent": {
+      "title": "Delta Percent",
+      "type": "number"
+    },
+    "frames": {
+      "items": {
+        "$ref": "#/$defs/CallPathFrame"
+      },
+      "title": "Frames",
+      "type": "array"
+    },
+    "status": {
+      "enum": [
+        "added",
+        "removed",
+        "changed"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "frames",
+    "status",
+    "baseline_percent",
+    "candidate_percent",
+    "delta_percent"
+  ],
+  "title": "CallPathDelta",
+  "type": "object"
+}

@@ -1,0 +1,37 @@
+# PerfLens Profile Comparison
+
+## Comparability
+
+- Comparable: {{ comparison.comparable }}
+{% for field, values in comparison.metadata_differences.items() %}
+- Metadata difference `{{ field }}`: `{{ values[0] }}` → `{{ values[1] }}`
+{% endfor %}
+{% for warning in comparison.warnings %}
+- Warning: {{ warning }}
+{% endfor %}
+
+## Hotspot distribution changes
+
+| Status | Symbol | DSO | Self before | Self after | Δ Self pp | Inclusive before | Inclusive after | Δ Inclusive pp | Rank Δ |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+{% for item in comparison.hotspot_deltas %}
+| {{ item.status }} | `{{ item.symbol }}` | `{{ item.dso }}` | {{ item.baseline_self_percent }}% | {{ item.candidate_self_percent }}% | {{ item.self_delta_percent }} | {{ item.baseline_inclusive_percent }}% | {{ item.candidate_inclusive_percent }}% | {{ item.inclusive_delta_percent }} | {{ item.rank_delta if item.rank_delta is not none else "n/a" }} |
+{% endfor %}
+
+## Call-path changes
+
+{% for item in comparison.call_path_deltas %}
+- {{ item.status }} ({{ item.delta_percent }} pp): {% for frame in item.frames %}`{{ frame.symbol }}`{% if not loop.last %} → {% endif %}{% endfor %}
+{% else %}
+- No call-path change exceeded the configured threshold.
+{% endfor %}
+
+## Symbol quality
+
+- Baseline unresolved self weight: {{ comparison.baseline_unresolved_percent }}%
+- Candidate unresolved self weight: {{ comparison.candidate_unresolved_percent }}%
+- Delta: {{ comparison.unresolved_delta_percent }} percentage points
+
+## Conclusion guardrail
+
+These values describe relative profile distributions. They do not establish an absolute CPU-time improvement or regression without comparable workload and benchmark evidence.

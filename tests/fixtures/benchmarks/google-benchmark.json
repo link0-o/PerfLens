@@ -1,0 +1,35 @@
+{
+  "context": {
+    "num_cpus": 16,
+    "library_build_type": "release"
+  },
+  "benchmarks": [
+    {
+      "name": "BM_Copy/repeats:3",
+      "run_name": "BM_Copy",
+      "run_type": "iteration",
+      "real_time": 100,
+      "cpu_time": 95,
+      "time_unit": "ns",
+      "items_per_second": 10000000
+    },
+    {
+      "name": "BM_Copy/repeats:3",
+      "run_name": "BM_Copy",
+      "run_type": "iteration",
+      "real_time": 102,
+      "cpu_time": 96,
+      "time_unit": "ns",
+      "items_per_second": 9800000
+    },
+    {
+      "name": "BM_Copy/repeats:3",
+      "run_name": "BM_Copy",
+      "run_type": "iteration",
+      "real_time": 98,
+      "cpu_time": 94,
+      "time_unit": "ns",
+      "items_per_second": 10200000
+    }
+  ]
+}

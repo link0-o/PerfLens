@@ -5,17 +5,23 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated, Literal, NoReturn
 
 import typer
 
 from perflens.application.analyze import analyze_folded, analyze_perf_data, analyze_perf_script
+from perflens.application.compare import (
+    compare_analysis_files,
+    compare_benchmark_files,
+    normalize_benchmark,
+)
 from perflens.application.diagnose import classify_analysis, report_analysis
 from perflens.application.symbols import get_source_context, inspect_elf, resolve_source
 from perflens.artifacts.filesystem import write_json_atomic, write_text_atomic
 from perflens.contracts.artifacts import ErrorArtifact, ErrorBody
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.domain.models import ResourceLimits
+from perflens.reporting.diff import render_benchmark_comparison, render_profile_comparison
 from perflens.security.paths import validate_output_file
 
 app = typer.Typer(
@@ -289,6 +295,108 @@ def report_command(
         )
         safe_output = validate_output_file(output_path, input_path=analysis_path)
         write_text_atomic(report, safe_output, max_output_bytes=max_output_bytes)
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(str(safe_output))
+
+
+@app.command("normalize-benchmark")
+def normalize_benchmark_command(
+    input_path: Annotated[Path, typer.Option("--input", dir_okay=False)],
+    output_path: Annotated[Path, typer.Option("--output", dir_okay=False)],
+    source_format: Annotated[
+        Literal["auto", "perflens", "pyperf", "google_benchmark", "hyperfine"],
+        typer.Option("--format"),
+    ] = "auto",
+    benchmark_name: Annotated[str | None, typer.Option("--benchmark-name")] = None,
+    max_input_bytes: Annotated[int, typer.Option(min=1)] = 64 << 20,
+    max_output_bytes: Annotated[int, typer.Option(min=1)] = 64 << 20,
+) -> None:
+    """Normalize supported third-party benchmark JSON."""
+    try:
+        artifact = normalize_benchmark(
+            input_path,
+            source_format=source_format,
+            benchmark_name=benchmark_name,
+            max_input_bytes=max_input_bytes,
+        )
+        safe_output = validate_output_file(output_path, input_path=input_path)
+        write_json_atomic(artifact, safe_output, max_output_bytes=max_output_bytes)
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(str(safe_output))
+
+
+@app.command("compare-profiles")
+def compare_profiles_command(
+    baseline_path: Annotated[Path, typer.Option("--baseline", dir_okay=False)],
+    candidate_path: Annotated[Path, typer.Option("--candidate", dir_okay=False)],
+    output_path: Annotated[Path, typer.Option("--output", dir_okay=False)],
+    markdown_output: Annotated[Path | None, typer.Option("--markdown-output")] = None,
+    minimum_delta_percent: Annotated[float, typer.Option(min=0)] = 1.0,
+    max_input_bytes: Annotated[int, typer.Option(min=1)] = 128 << 20,
+    max_output_bytes: Annotated[int, typer.Option(min=1)] = 128 << 20,
+) -> None:
+    """Compare two PerfLens profile analysis artifacts."""
+    try:
+        artifact = compare_analysis_files(
+            baseline_path,
+            candidate_path,
+            minimum_delta_percent=minimum_delta_percent,
+            max_input_bytes=max_input_bytes,
+        )
+        safe_output = validate_output_file(output_path, input_path=baseline_path)
+        safe_output = validate_output_file(safe_output, input_path=candidate_path)
+        write_json_atomic(artifact, safe_output, max_output_bytes=max_output_bytes)
+        if markdown_output is not None:
+            safe_markdown = validate_output_file(markdown_output, input_path=baseline_path)
+            safe_markdown = validate_output_file(safe_markdown, input_path=candidate_path)
+            write_text_atomic(
+                render_profile_comparison(artifact),
+                safe_markdown,
+                max_output_bytes=max_output_bytes,
+            )
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(str(safe_output))
+
+
+@app.command("compare-benchmarks")
+def compare_benchmarks_command(
+    baseline_path: Annotated[Path, typer.Option("--baseline", dir_okay=False)],
+    candidate_path: Annotated[Path, typer.Option("--candidate", dir_okay=False)],
+    output_path: Annotated[Path, typer.Option("--output", dir_okay=False)],
+    markdown_output: Annotated[Path | None, typer.Option("--markdown-output")] = None,
+    source_format: Annotated[
+        Literal["auto", "perflens", "pyperf", "google_benchmark", "hyperfine"],
+        typer.Option("--format"),
+    ] = "auto",
+    benchmark_name: Annotated[str | None, typer.Option("--benchmark-name")] = None,
+    minimum_practical_impact_percent: Annotated[float, typer.Option(min=0)] = 1.0,
+    max_input_bytes: Annotated[int, typer.Option(min=1)] = 64 << 20,
+    max_output_bytes: Annotated[int, typer.Option(min=1)] = 64 << 20,
+) -> None:
+    """Compare two normalized or supported third-party benchmark files."""
+    try:
+        artifact = compare_benchmark_files(
+            baseline_path,
+            candidate_path,
+            source_format=source_format,
+            benchmark_name=benchmark_name,
+            minimum_practical_impact_percent=minimum_practical_impact_percent,
+            max_input_bytes=max_input_bytes,
+        )
+        safe_output = validate_output_file(output_path, input_path=baseline_path)
+        safe_output = validate_output_file(safe_output, input_path=candidate_path)
+        write_json_atomic(artifact, safe_output, max_output_bytes=max_output_bytes)
+        if markdown_output is not None:
+            safe_markdown = validate_output_file(markdown_output, input_path=baseline_path)
+            safe_markdown = validate_output_file(safe_markdown, input_path=candidate_path)
+            write_text_atomic(
+                render_benchmark_comparison(artifact),
+                safe_markdown,
+                max_output_bytes=max_output_bytes,
+            )
     except PerfLensError as exc:
         _fail(exc)
     typer.echo(str(safe_output))

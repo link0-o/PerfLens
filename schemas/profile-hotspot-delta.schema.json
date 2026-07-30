@@ -1,0 +1,105 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "baseline_inclusive_percent": {
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Baseline Inclusive Percent",
+      "type": "number"
+    },
+    "baseline_rank": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Baseline Rank"
+    },
+    "baseline_self_percent": {
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Baseline Self Percent",
+      "type": "number"
+    },
+    "candidate_inclusive_percent": {
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Candidate Inclusive Percent",
+      "type": "number"
+    },
+    "candidate_rank": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate Rank"
+    },
+    "candidate_self_percent": {
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Candidate Self Percent",
+      "type": "number"
+    },
+    "dso": {
+      "title": "Dso",
+      "type": "string"
+    },
+    "inclusive_delta_percent": {
+      "title": "Inclusive Delta Percent",
+      "type": "number"
+    },
+    "rank_delta": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Rank Delta"
+    },
+    "self_delta_percent": {
+      "title": "Self Delta Percent",
+      "type": "number"
+    },
+    "status": {
+      "enum": [
+        "added",
+        "removed",
+        "changed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "symbol": {
+      "title": "Symbol",
+      "type": "string"
+    }
+  },
+  "required": [
+    "symbol",
+    "dso",
+    "status",
+    "baseline_self_percent",
+    "candidate_self_percent",
+    "self_delta_percent",
+    "baseline_inclusive_percent",
+    "candidate_inclusive_percent",
+    "inclusive_delta_percent"
+  ],
+  "title": "ProfileHotspotDelta",
+  "type": "object"
+}

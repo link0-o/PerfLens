@@ -1,0 +1,292 @@
+{
+  "$defs": {
+    "CallPathDelta": {
+      "additionalProperties": false,
+      "properties": {
+        "baseline_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Baseline Percent",
+          "type": "number"
+        },
+        "candidate_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Candidate Percent",
+          "type": "number"
+        },
+        "delta_percent": {
+          "title": "Delta Percent",
+          "type": "number"
+        },
+        "frames": {
+          "items": {
+            "$ref": "#/$defs/CallPathFrame"
+          },
+          "title": "Frames",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "added",
+            "removed",
+            "changed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "frames",
+        "status",
+        "baseline_percent",
+        "candidate_percent",
+        "delta_percent"
+      ],
+      "title": "CallPathDelta",
+      "type": "object"
+    },
+    "CallPathFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "dso": {
+          "title": "Dso",
+          "type": "string"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "dso"
+      ],
+      "title": "CallPathFrame",
+      "type": "object"
+    },
+    "ProfileHotspotDelta": {
+      "additionalProperties": false,
+      "properties": {
+        "baseline_inclusive_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Baseline Inclusive Percent",
+          "type": "number"
+        },
+        "baseline_rank": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Baseline Rank"
+        },
+        "baseline_self_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Baseline Self Percent",
+          "type": "number"
+        },
+        "candidate_inclusive_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Candidate Inclusive Percent",
+          "type": "number"
+        },
+        "candidate_rank": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Rank"
+        },
+        "candidate_self_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Candidate Self Percent",
+          "type": "number"
+        },
+        "dso": {
+          "title": "Dso",
+          "type": "string"
+        },
+        "inclusive_delta_percent": {
+          "title": "Inclusive Delta Percent",
+          "type": "number"
+        },
+        "rank_delta": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rank Delta"
+        },
+        "self_delta_percent": {
+          "title": "Self Delta Percent",
+          "type": "number"
+        },
+        "status": {
+          "enum": [
+            "added",
+            "removed",
+            "changed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "dso",
+        "status",
+        "baseline_self_percent",
+        "candidate_self_percent",
+        "self_delta_percent",
+        "baseline_inclusive_percent",
+        "candidate_inclusive_percent",
+        "inclusive_delta_percent"
+      ],
+      "title": "ProfileHotspotDelta",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "baseline_analysis_id": {
+      "title": "Baseline Analysis Id",
+      "type": "string"
+    },
+    "baseline_unresolved_percent": {
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Baseline Unresolved Percent",
+      "type": "number"
+    },
+    "call_path_deltas": {
+      "items": {
+        "$ref": "#/$defs/CallPathDelta"
+      },
+      "title": "Call Path Deltas",
+      "type": "array"
+    },
+    "candidate_analysis_id": {
+      "title": "Candidate Analysis Id",
+      "type": "string"
+    },
+    "candidate_unresolved_percent": {
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Candidate Unresolved Percent",
+      "type": "number"
+    },
+    "comparable": {
+      "title": "Comparable",
+      "type": "boolean"
+    },
+    "comparison_id": {
+      "title": "Comparison Id",
+      "type": "string"
+    },
+    "dso_changes": {
+      "additionalProperties": {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        ],
+        "type": "array"
+      },
+      "title": "Dso Changes",
+      "type": "object"
+    },
+    "hotspot_deltas": {
+      "items": {
+        "$ref": "#/$defs/ProfileHotspotDelta"
+      },
+      "title": "Hotspot Deltas",
+      "type": "array"
+    },
+    "metadata_differences": {
+      "additionalProperties": {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "type": "array"
+      },
+      "title": "Metadata Differences",
+      "type": "object"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "unresolved_delta_percent": {
+      "title": "Unresolved Delta Percent",
+      "type": "number"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "comparison_id",
+    "baseline_analysis_id",
+    "candidate_analysis_id",
+    "comparable",
+    "metadata_differences",
+    "hotspot_deltas",
+    "call_path_deltas",
+    "dso_changes",
+    "baseline_unresolved_percent",
+    "candidate_unresolved_percent",
+    "unresolved_delta_percent",
+    "warnings"
+  ],
+  "title": "ProfileComparison",
+  "type": "object"
+}

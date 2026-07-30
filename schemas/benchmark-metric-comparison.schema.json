@@ -1,0 +1,116 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "baseline_median": {
+      "title": "Baseline Median",
+      "type": "number"
+    },
+    "baseline_samples": {
+      "minimum": 1,
+      "title": "Baseline Samples",
+      "type": "integer"
+    },
+    "candidate_median": {
+      "title": "Candidate Median",
+      "type": "number"
+    },
+    "candidate_samples": {
+      "minimum": 1,
+      "title": "Candidate Samples",
+      "type": "integer"
+    },
+    "confidence_interval_95": {
+      "anyOf": [
+        {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Confidence Interval 95"
+    },
+    "improvement_percent": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Improvement Percent"
+    },
+    "metric": {
+      "title": "Metric",
+      "type": "string"
+    },
+    "practically_significant": {
+      "title": "Practically Significant",
+      "type": "boolean"
+    },
+    "raw_delta_percent": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Raw Delta Percent"
+    },
+    "statistically_significant": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Statistically Significant"
+    },
+    "status": {
+      "enum": [
+        "insufficient_data",
+        "not_comparable",
+        "no_material_change",
+        "candidate_improvement",
+        "candidate_regression"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "unit": {
+      "title": "Unit",
+      "type": "string"
+    }
+  },
+  "required": [
+    "metric",
+    "unit",
+    "baseline_samples",
+    "candidate_samples",
+    "baseline_median",
+    "candidate_median",
+    "raw_delta_percent",
+    "improvement_percent",
+    "confidence_interval_95",
+    "statistically_significant",
+    "practically_significant",
+    "status"
+  ],
+  "title": "BenchmarkMetricComparison",
+  "type": "object"
+}

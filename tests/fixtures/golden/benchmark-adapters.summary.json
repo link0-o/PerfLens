@@ -1,0 +1,18 @@
+{
+  "google_benchmark": {
+    "metrics": ["cpu_time", "items_per_second", "real_time"],
+    "name": "BM_Copy",
+    "repetitions": 3
+  },
+  "hyperfine": {
+    "median": 1.0,
+    "name": "./benchmark",
+    "repetitions": 3,
+    "unit": "seconds"
+  },
+  "pyperf": {
+    "cpu_count": 8,
+    "name": "parse",
+    "repetitions": 4
+  }
+}

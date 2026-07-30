@@ -15,7 +15,10 @@ from perflens import __version__
 from perflens.application.analyze import analyze_folded, analyze_perf_data, analyze_perf_script
 from perflens.application.symbols import get_source_context as resolve_source_context
 from perflens.application.symbols import resolve_source as resolve_module_source
+from perflens.benchmarks.adapters import load_benchmark
 from perflens.classification.engine import build_diagnosis_bundle as create_diagnosis
+from perflens.comparison.benchmarks import compare_benchmarks as compare_benchmark_artifacts
+from perflens.comparison.profiles import compare_profiles as compare_profile_artifacts
 from perflens.contracts.artifacts import (
     ArtifactReference,
     ArtifactTextPage,
@@ -328,6 +331,98 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             workspace_root=safe_workspace,
             before=before,
             after=after,
+        )
+
+    @server.tool(
+        name="analyze_benchmark",
+        description="Normalize a supported benchmark JSON file and store the typed artifact.",
+        annotations=WRITES_ARTIFACTS,
+        meta={"perflens/permission": "WRITES_ARTIFACTS"},
+        structured_output=True,
+    )
+    async def analyze_benchmark(
+        path: str,
+        source_format: Literal[
+            "auto", "perflens", "pyperf", "google_benchmark", "hyperfine"
+        ] = "auto",
+        benchmark_name: str | None = None,
+    ) -> ArtifactReference:
+        benchmark = load_benchmark(
+            policy.input_file(path),
+            source_format=source_format,
+            benchmark_name=benchmark_name,
+        )
+        store.save(benchmark, benchmark.benchmark_id, "benchmark")
+        return ArtifactReference(
+            artifact_id=benchmark.benchmark_id,
+            artifact_type="benchmark",
+            uri=store.uri(benchmark.benchmark_id, "benchmark"),
+            summary={
+                "name": benchmark.name,
+                "repetitions": benchmark.repetitions,
+                "metric_count": len(benchmark.metrics),
+                "source_format": benchmark.source_format,
+            },
+        )
+
+    @server.tool(
+        name="compare_profiles",
+        description="Compare two stored analyses and store bounded profile-difference evidence.",
+        annotations=WRITES_ARTIFACTS,
+        meta={"perflens/permission": "WRITES_ARTIFACTS"},
+        structured_output=True,
+    )
+    async def compare_profiles(
+        baseline_analysis_id: str,
+        candidate_analysis_id: str,
+        minimum_delta_percent: float = 1.0,
+    ) -> ArtifactReference:
+        comparison = compare_profile_artifacts(
+            store.load_analysis(baseline_analysis_id),
+            store.load_analysis(candidate_analysis_id),
+            minimum_delta_percent=minimum_delta_percent,
+        )
+        store.save(comparison, comparison.comparison_id, "profile-comparison")
+        return ArtifactReference(
+            artifact_id=comparison.comparison_id,
+            artifact_type="profile-comparison",
+            uri=store.uri(comparison.comparison_id, "profile-comparison"),
+            summary={
+                "comparable": comparison.comparable,
+                "hotspot_delta_count": len(comparison.hotspot_deltas),
+                "call_path_delta_count": len(comparison.call_path_deltas),
+            },
+        )
+
+    @server.tool(
+        name="compare_benchmarks",
+        description="Compare repeated benchmark values with condition and impact checks.",
+        annotations=WRITES_ARTIFACTS,
+        meta={"perflens/permission": "WRITES_ARTIFACTS"},
+        structured_output=True,
+    )
+    async def compare_benchmarks(
+        baseline_benchmark_id: str,
+        candidate_benchmark_id: str,
+        minimum_practical_impact_percent: float = 1.0,
+    ) -> ArtifactReference:
+        comparison = compare_benchmark_artifacts(
+            store.load_benchmark(baseline_benchmark_id),
+            store.load_benchmark(candidate_benchmark_id),
+            minimum_practical_impact_percent=minimum_practical_impact_percent,
+        )
+        store.save(comparison, comparison.comparison_id, "benchmark-comparison")
+        return ArtifactReference(
+            artifact_id=comparison.comparison_id,
+            artifact_type="benchmark-comparison",
+            uri=store.uri(comparison.comparison_id, "benchmark-comparison"),
+            summary={
+                "comparable": comparison.comparable,
+                "metric_count": len(comparison.metrics),
+                "insufficient_metric_count": sum(
+                    item.status == "insufficient_data" for item in comparison.metrics
+                ),
+            },
         )
 
     return server

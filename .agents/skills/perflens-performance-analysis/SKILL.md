@@ -28,9 +28,10 @@ Always read [evidence-model.md](references/evidence-model.md). Load the topic re
 5. When a verified module offset and matching binary/debug file exist, call `resolve_source`. Then call `get_source_context` within an allowed workspace. Never infer an ASLR/PIE base from runtime IP alone.
 6. Call `classify_hotspots` for investigation categories. Treat every rule result as `candidate`, never as a confirmed cause.
 7. Call `build_diagnosis_bundle` when a durable evidence artifact is useful. Use `read_artifact_page` for bounded retrieval instead of requesting an entire large result.
-8. Form multiple hypotheses. For each, list supporting evidence, counter-evidence, missing evidence, risk, and the smallest discriminating experiment.
-9. For changes, run correctness tests and equivalent-workload before/after measurements. Only matched A/B evidence may be described as a verified improvement.
-10. Produce the final report using [diagnosis-report-template.md](assets/diagnosis-report-template.md).
+8. For a regression or change, analyze both profiles and call `compare_profiles`. Normalize pyperf, Google Benchmark, hyperfine, or PerfLens JSON with `analyze_benchmark`, then call `compare_benchmarks`. Treat commit as an expected A/B variable, while other environment differences reduce comparability.
+9. Form multiple hypotheses. For each, list supporting evidence, counter-evidence, missing evidence, risk, and the smallest discriminating experiment.
+10. For changes, run correctness tests and equivalent-workload before/after measurements. Only matched A/B evidence may be described as a verified improvement.
+11. Produce the final report using [diagnosis-report-template.md](assets/diagnosis-report-template.md).
 
 ## Mandatory interpretation rules
 

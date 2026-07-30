@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any, cast
 
@@ -34,6 +35,9 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "read_artifact_page",
                 "resolve_source",
                 "get_source_context",
+                "analyze_benchmark",
+                "compare_profiles",
+                "compare_benchmarks",
             }
             for tool in tools.values():
                 assert tool.input_schema["type"] == "object"
@@ -56,6 +60,36 @@ def test_end_to_end_analysis_details_diagnosis_and_paging(tmp_path: Path) -> Non
     artifact_root.mkdir()
     profile = tmp_path / "profile.folded"
     profile.write_text("main;worker;malloc 70\nmain;worker;compute 30\n")
+    candidate_profile = tmp_path / "candidate.folded"
+    candidate_profile.write_text("main;worker;malloc 50\nmain;worker;compute 50\n")
+    baseline_benchmark = tmp_path / "baseline-benchmark.json"
+    candidate_benchmark = tmp_path / "candidate-benchmark.json"
+    baseline_benchmark.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "command": "./bench",
+                        "times": [1.0, 1.01, 0.99],
+                        "exit_codes": [0, 0, 0],
+                    }
+                ]
+            }
+        )
+    )
+    candidate_benchmark.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "command": "./bench",
+                        "times": [0.8, 0.81, 0.79],
+                        "exit_codes": [0, 0, 0],
+                    }
+                ]
+            }
+        )
+    )
     server = create_server(ServerConfig((tmp_path,), artifact_root, allow_writes=True))
 
     async def exercise() -> None:
@@ -63,6 +97,9 @@ def test_end_to_end_analysis_details_diagnosis_and_paging(tmp_path: Path) -> Non
             analyzed = await client.call_tool("analyze_profile", {"path": str(profile)})
             analysis = _structured(analyzed)
             analysis_id = cast(str, analysis["artifact_id"])
+            candidate_analysis = _structured(
+                await client.call_tool("analyze_profile", {"path": str(candidate_profile)})
+            )
 
             hotspots = _structured(
                 await client.call_tool(
@@ -115,6 +152,34 @@ def test_end_to_end_analysis_details_diagnosis_and_paging(tmp_path: Path) -> Non
             assert page["total_bytes"] > 128
             assert page["next_offset"] == 128
             assert page["text"].startswith("{")
+
+            profile_comparison = _structured(
+                await client.call_tool(
+                    "compare_profiles",
+                    {
+                        "baseline_analysis_id": analysis_id,
+                        "candidate_analysis_id": candidate_analysis["artifact_id"],
+                    },
+                )
+            )
+            assert profile_comparison["summary"]["hotspot_delta_count"] > 0
+
+            benchmark_ids: list[str] = []
+            for benchmark_path in (baseline_benchmark, candidate_benchmark):
+                normalized = _structured(
+                    await client.call_tool("analyze_benchmark", {"path": str(benchmark_path)})
+                )
+                benchmark_ids.append(cast(str, normalized["artifact_id"]))
+            benchmark_comparison = _structured(
+                await client.call_tool(
+                    "compare_benchmarks",
+                    {
+                        "baseline_benchmark_id": benchmark_ids[0],
+                        "candidate_benchmark_id": benchmark_ids[1],
+                    },
+                )
+            )
+            assert benchmark_comparison["summary"]["metric_count"] == 1
 
     asyncio.run(exercise())
 

@@ -9,7 +9,7 @@ from typing import TypeVar
 from pydantic import BaseModel, ValidationError
 
 from perflens.artifacts.filesystem import write_json_atomic
-from perflens.contracts.artifacts import AnalysisArtifact, DiagnosisBundle
+from perflens.contracts.artifacts import AnalysisArtifact, BenchmarkArtifact, DiagnosisBundle
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -111,6 +111,9 @@ class ArtifactStore:
             if exc.code is ErrorCode.INVALID_INPUT:
                 return None
             raise
+
+    def load_benchmark(self, benchmark_id: str) -> BenchmarkArtifact:
+        return self._load(benchmark_id, "benchmark", BenchmarkArtifact)
 
     def read_page(
         self,

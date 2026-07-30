@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "metadata": {
+    "cpu_count": 8,
+    "cpu_model_name": "Fixture CPU",
+    "cpu_affinity": "0-3"
+  },
+  "benchmarks": [
+    {
+      "metadata": {"name": "parse", "unit": "second"},
+      "runs": [
+        {"values": [0.010, 0.011]},
+        {"values": [0.009, 0.010]}
+      ]
+    }
+  ]
+}

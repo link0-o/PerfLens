@@ -1,0 +1,43 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "higher_is_better": {
+      "title": "Higher Is Better",
+      "type": "boolean"
+    },
+    "mean": {
+      "title": "Mean",
+      "type": "number"
+    },
+    "median": {
+      "title": "Median",
+      "type": "number"
+    },
+    "standard_deviation": {
+      "minimum": 0,
+      "title": "Standard Deviation",
+      "type": "number"
+    },
+    "unit": {
+      "title": "Unit",
+      "type": "string"
+    },
+    "values": {
+      "items": {
+        "type": "number"
+      },
+      "title": "Values",
+      "type": "array"
+    }
+  },
+  "required": [
+    "unit",
+    "higher_is_better",
+    "values",
+    "median",
+    "mean",
+    "standard_deviation"
+  ],
+  "title": "BenchmarkMetric",
+  "type": "object"
+}
