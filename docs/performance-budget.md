@@ -51,3 +51,13 @@ CI uses deliberately wide smoke thresholds (10 seconds and 1 GiB for 1,000
 records) to detect order-of-magnitude regressions without treating shared
 runner noise as a performance failure. Release baselines must retain raw
 repeated measurements before tighter budgets are introduced.
+
+## Final release verification
+
+The same harness was rerun after Milestone 9 on 2026-07-30. Median throughput
+was 92,852 records/s for 1,000 records, 104,038 records/s for 100,000 records,
+and 102,429 records/s for 1,000,000 records; maximum RSS was 33.8 MiB. The host
+was also performing dependency downloads and isolated-environment checks, so
+these values are retained as release-load observations rather than replacing
+the quieter reference baseline above. They remain well within the published CI
+smoke guardrail and preserve the expected near-flat medium-to-large RSS shape.

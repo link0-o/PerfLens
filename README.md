@@ -238,6 +238,11 @@ uv run python tests/performance/benchmark_folded.py \
 
 See `docs/performance-budget.md` for the recorded environment and baseline.
 
+See [release readiness](docs/release-readiness.md),
+[real-world profile acceptance](docs/real-world-acceptance.md), and
+[troubleshooting](docs/troubleshooting.md) for final verification evidence and
+operational failure guidance.
+
 ## Known limitations
 
 - Folded input cannot distinguish identically named functions from different
