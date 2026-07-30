@@ -16,3 +16,7 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   independent debug-file handling, path mapping, and bounded source context.
 - Milestone 5 generic YAML classification rules, candidate-only evidence
   bundles, explicit missing evidence, and Markdown reports.
+- Milestone 6 official-SDK MCP server with typed structured output, bounded
+  paging, artifact storage, annotations, and server-enforced authorization.
+- Milestone 7 repository Performance Analysis Skill with routed evidence,
+  on-CPU, lock, memory, syscall, benchmark, and report guidance.

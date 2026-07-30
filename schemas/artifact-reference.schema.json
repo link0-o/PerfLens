@@ -1,0 +1,54 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "artifact_id": {
+      "title": "Artifact Id",
+      "type": "string"
+    },
+    "artifact_type": {
+      "title": "Artifact Type",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "summary": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "title": "Summary",
+      "type": "object"
+    },
+    "uri": {
+      "title": "Uri",
+      "type": "string"
+    }
+  },
+  "required": [
+    "artifact_id",
+    "artifact_type",
+    "uri",
+    "summary"
+  ],
+  "title": "ArtifactReference",
+  "type": "object"
+}

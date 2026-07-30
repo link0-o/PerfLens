@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from perflens.application.symbols import get_source_context
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.symbols.source import PathMapping, SourceLocator
 
@@ -25,6 +26,15 @@ def test_maps_container_path_and_returns_bounded_context(tmp_path: Path) -> None
     assert context.start_line == 2
     assert context.end_line == 4
     assert context.lines == ("two", "three", "four")
+    artifact = get_source_context(
+        Path("/container/src/main.cc"),
+        3,
+        workspace_root=workspace,
+        before=1,
+        after=1,
+        mappings=(PathMapping(Path("/container/src"), source_root),),
+    )
+    assert artifact.lines == ("two", "three", "four")
 
 
 def test_workspace_escape_and_symlink_escape_are_rejected(tmp_path: Path) -> None:

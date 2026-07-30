@@ -1,0 +1,49 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "artifact_id": {
+      "title": "Artifact Id",
+      "type": "string"
+    },
+    "artifact_type": {
+      "title": "Artifact Type",
+      "type": "string"
+    },
+    "next_offset": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Next Offset"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "text": {
+      "title": "Text",
+      "type": "string"
+    },
+    "total_bytes": {
+      "minimum": 0,
+      "title": "Total Bytes",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "artifact_id",
+    "artifact_type",
+    "text",
+    "total_bytes"
+  ],
+  "title": "ArtifactTextPage",
+  "type": "object"
+}

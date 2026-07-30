@@ -1,0 +1,12 @@
+interface:
+  display_name: "PerfLens Performance Analysis"
+  short_description: "Evidence-driven Linux performance diagnosis"
+  default_prompt: "Use $perflens-performance-analysis to diagnose this Linux performance profile with explicit evidence and limitations."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "perflens"
+      description: "PerfLens deterministic Linux profile analysis tools"
+      transport: "stdio"
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,178 @@
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+from typing import Any, cast
+
+from mcp.client import Client
+
+from perflens.mcp.server import ServerConfig, create_server
+
+
+def _structured(result: Any) -> dict[str, Any]:
+    payload = result.structured_content
+    assert isinstance(payload, dict)
+    return cast(dict[str, Any], payload)
+
+
+def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    server = create_server(ServerConfig((tmp_path,), artifact_root))
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            result = await client.list_tools()
+            tools = {tool.name: tool for tool in result.tools}
+            assert set(tools) == {
+                "analyze_profile",
+                "list_hotspots",
+                "get_hotspot_details",
+                "get_call_paths",
+                "classify_hotspots",
+                "build_diagnosis_bundle",
+                "read_artifact_page",
+                "resolve_source",
+                "get_source_context",
+            }
+            for tool in tools.values():
+                assert tool.input_schema["type"] == "object"
+                assert tool.output_schema is not None
+                assert tool.annotations is not None
+                assert tool.annotations.open_world_hint is False
+            read_annotations = tools["list_hotspots"].annotations
+            write_annotations = tools["analyze_profile"].annotations
+            assert read_annotations is not None
+            assert write_annotations is not None
+            assert read_annotations.read_only_hint is True
+            assert write_annotations.read_only_hint is False
+            assert tools["analyze_profile"].meta == {"perflens/permission": "WRITES_ARTIFACTS"}
+
+    asyncio.run(exercise())
+
+
+def test_end_to_end_analysis_details_diagnosis_and_paging(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    profile = tmp_path / "profile.folded"
+    profile.write_text("main;worker;malloc 70\nmain;worker;compute 30\n")
+    server = create_server(ServerConfig((tmp_path,), artifact_root, allow_writes=True))
+
+    async def exercise() -> None:
+        async with Client(server, raise_exceptions=True) as client:
+            analyzed = await client.call_tool("analyze_profile", {"path": str(profile)})
+            analysis = _structured(analyzed)
+            analysis_id = cast(str, analysis["artifact_id"])
+
+            hotspots = _structured(
+                await client.call_tool(
+                    "list_hotspots",
+                    {"analysis_id": analysis_id, "limit": 1},
+                )
+            )
+            assert hotspots["total_items"] == 4
+            assert hotspots["next_cursor"] == 1
+            hotspot_id = hotspots["items"][0]["hotspot_id"]
+
+            details = _structured(
+                await client.call_tool(
+                    "get_hotspot_details",
+                    {"analysis_id": analysis_id, "hotspot_id": hotspot_id},
+                )
+            )
+            assert details["hotspot"]["symbol"] == "malloc"
+            assert details["classifications"][0]["conclusion_status"] == "candidate"
+
+            paths = _structured(
+                await client.call_tool(
+                    "get_call_paths",
+                    {"analysis_id": analysis_id, "symbol": "malloc"},
+                )
+            )
+            assert paths["total_items"] == 1
+
+            classifications = _structured(
+                await client.call_tool("classify_hotspots", {"analysis_id": analysis_id})
+            )
+            assert classifications["items"][0]["category"] == "memory-allocation"
+
+            bundle = _structured(
+                await client.call_tool(
+                    "build_diagnosis_bundle",
+                    {"analysis_id": analysis_id},
+                )
+            )
+            page = _structured(
+                await client.call_tool(
+                    "read_artifact_page",
+                    {
+                        "artifact_id": bundle["artifact_id"],
+                        "artifact_type": "diagnosis",
+                        "limit": 128,
+                    },
+                )
+            )
+            assert page["total_bytes"] > 128
+            assert page["next_offset"] == 128
+            assert page["text"].startswith("{")
+
+    asyncio.run(exercise())
+
+
+def test_server_enforces_write_process_and_path_authorization(tmp_path: Path) -> None:
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    artifact_root = allowed / "artifacts"
+    artifact_root.mkdir()
+    profile = allowed / "profile.folded"
+    profile.write_text("main 1\n")
+    outside = tmp_path / "outside.folded"
+    outside.write_text("secret 1\n")
+    server = create_server(ServerConfig((allowed,), artifact_root))
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            write_denied = await client.call_tool(
+                "analyze_profile",
+                {"path": str(profile)},
+            )
+            path_denied = await client.call_tool(
+                "analyze_profile",
+                {"path": str(outside)},
+            )
+            process_denied = await client.call_tool(
+                "resolve_source",
+                {"binary_path": str(profile), "module_offset": 1},
+            )
+            assert write_denied.is_error
+            assert path_denied.is_error
+            assert process_denied.is_error
+        assert list(artifact_root.iterdir()) == []
+
+    asyncio.run(exercise())
+
+
+def test_source_context_is_workspace_bounded(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    source = tmp_path / "sample.c"
+    source.write_text("one\ntwo\nthree\n")
+    server = create_server(ServerConfig((tmp_path,), artifact_root))
+
+    async def exercise() -> None:
+        async with Client(server, raise_exceptions=True) as client:
+            result = _structured(
+                await client.call_tool(
+                    "get_source_context",
+                    {
+                        "file": str(source),
+                        "line": 2,
+                        "workspace_root": str(tmp_path),
+                        "before": 1,
+                        "after": 1,
+                    },
+                )
+            )
+            assert result["lines"] == ["one", "two", "three"]
+
+    asyncio.run(exercise())

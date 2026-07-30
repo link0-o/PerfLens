@@ -3,7 +3,7 @@
 PerfLens is an evidence-driven performance-analysis toolkit for Linux
 applications and coding agents.
 
-The current release formally supports Milestones 0 through 5:
+The current release formally supports Milestones 0 through 7:
 
 - streaming FlameGraph-compatible folded stack input;
 - deterministic self and inclusive hotspot aggregation;
@@ -18,9 +18,10 @@ The current release formally supports Milestones 0 through 5:
 - ELF Build ID/debug capability inspection and verified module-offset symbolization;
 - bounded workspace source context and container/build path mapping;
 - generic candidate-only classification, evidence bundles, and Markdown reports.
+- an official-SDK MCP server with typed, paginated tools and server-side authorization;
+- a repository Performance Analysis Skill for evidence-constrained Agent workflows.
 
-It does **not** yet support MCP, benchmark comparison, active sampling, or
-AI/LLM APIs.
+It does **not** yet support benchmark comparison, active sampling, or AI/LLM APIs.
 
 ## Install
 
@@ -115,6 +116,26 @@ provider. Cache identity includes Build ID, module offset, and resolver version.
 Classification rules label investigation candidates only. Generated reports
 keep direct observations, missing evidence, forbidden conclusions, and A/B
 validation requirements separate.
+
+## Use MCP with the Skill
+
+```bash
+mkdir -p perflens-results
+codex mcp add perflens -- \
+  "$PWD/.venv/bin/perflens-mcp" \
+  --allowed-root "$PWD" \
+  --artifact-root "$PWD/perflens-results" \
+  --allow-writes
+```
+
+Restart Codex, then ask:
+
+```text
+$perflens-performance-analysis analyze ./profile.folded and report direct evidence, candidates, and missing evidence.
+```
+
+See [MCP server and Skill setup](docs/mcp-and-skill.md) for permissions,
+project-scoped configuration, process-execution opt-in, and the full tool flow.
 
 ## Resource limits
 

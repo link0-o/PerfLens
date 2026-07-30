@@ -33,6 +33,7 @@ dependencies = [
 
 [project.scripts]
 perflens = "perflens.cli.app:main"
+perflens-mcp = "perflens.mcp.server:main"
 
 [dependency-groups]
 dev = [
@@ -54,6 +55,7 @@ packages = ["src/perflens"]
 
 [tool.hatch.build.targets.sdist]
 include = [
+  "/.agents",
   "/src",
   "/schemas",
   "/docs",

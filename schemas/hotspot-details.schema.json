@@ -1,0 +1,397 @@
+{
+  "$defs": {
+    "CallPath": {
+      "additionalProperties": false,
+      "properties": {
+        "frames": {
+          "items": {
+            "$ref": "#/$defs/CallPathFrame"
+          },
+          "title": "Frames",
+          "type": "array"
+        },
+        "path_id": {
+          "title": "Path Id",
+          "type": "string"
+        },
+        "percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Percent",
+          "type": "number"
+        },
+        "record_count": {
+          "exclusiveMinimum": 0,
+          "title": "Record Count",
+          "type": "integer"
+        },
+        "weight": {
+          "exclusiveMinimum": 0,
+          "title": "Weight",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path_id",
+        "frames",
+        "weight",
+        "record_count",
+        "percent"
+      ],
+      "title": "CallPath",
+      "type": "object"
+    },
+    "CallPathFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "dso": {
+          "title": "Dso",
+          "type": "string"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "dso"
+      ],
+      "title": "CallPathFrame",
+      "type": "object"
+    },
+    "Classification": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "classification_id": {
+          "title": "Classification Id",
+          "type": "string"
+        },
+        "conclusion_status": {
+          "const": "candidate",
+          "default": "candidate",
+          "title": "Conclusion Status",
+          "type": "string"
+        },
+        "confidence": {
+          "enum": [
+            "low",
+            "medium"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "counter_evidence": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Counter Evidence",
+          "type": "array"
+        },
+        "dso": {
+          "title": "Dso",
+          "type": "string"
+        },
+        "evidence_level": {
+          "enum": [
+            "L1",
+            "L2"
+          ],
+          "title": "Evidence Level",
+          "type": "string"
+        },
+        "forbidden_conclusions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Forbidden Conclusions",
+          "type": "array"
+        },
+        "hotspot_id": {
+          "title": "Hotspot Id",
+          "type": "string"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "missing_evidence": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Evidence",
+          "type": "array"
+        },
+        "next_steps": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Next Steps",
+          "type": "array"
+        },
+        "observation": {
+          "title": "Observation",
+          "type": "string"
+        },
+        "rule_id": {
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "rule_version": {
+          "minimum": 1,
+          "title": "Rule Version",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "supporting_evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "title": "Supporting Evidence",
+          "type": "array"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        }
+      },
+      "required": [
+        "classification_id",
+        "rule_id",
+        "rule_version",
+        "hotspot_id",
+        "symbol",
+        "dso",
+        "category",
+        "confidence",
+        "evidence_level",
+        "observation",
+        "supporting_evidence",
+        "counter_evidence",
+        "missing_evidence",
+        "limitations",
+        "next_steps",
+        "forbidden_conclusions"
+      ],
+      "title": "Classification",
+      "type": "object"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "evidence_id": {
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "hotspot_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hotspot Id"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "level": {
+          "enum": [
+            "L0",
+            "L1",
+            "L2",
+            "L3",
+            "L4"
+          ],
+          "title": "Level",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "level",
+        "kind",
+        "statement",
+        "artifact_id"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "Hotspot": {
+      "additionalProperties": false,
+      "properties": {
+        "categories": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Categories",
+          "type": "array"
+        },
+        "dso": {
+          "title": "Dso",
+          "type": "string"
+        },
+        "hotspot_id": {
+          "title": "Hotspot Id",
+          "type": "string"
+        },
+        "inclusive_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Inclusive Percent",
+          "type": "number"
+        },
+        "inclusive_weight": {
+          "minimum": 0,
+          "title": "Inclusive Weight",
+          "type": "integer"
+        },
+        "sample_count": {
+          "minimum": 0,
+          "title": "Sample Count",
+          "type": "integer"
+        },
+        "self_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Self Percent",
+          "type": "number"
+        },
+        "self_weight": {
+          "minimum": 0,
+          "title": "Self Weight",
+          "type": "integer"
+        },
+        "source_locations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Locations",
+          "type": "array"
+        },
+        "stack_occurrence_count": {
+          "minimum": 0,
+          "title": "Stack Occurrence Count",
+          "type": "integer"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "thread_count": {
+          "minimum": 0,
+          "title": "Thread Count",
+          "type": "integer"
+        },
+        "top_callees": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Top Callees",
+          "type": "array"
+        },
+        "top_callers": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Top Callers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "hotspot_id",
+        "symbol",
+        "dso",
+        "self_weight",
+        "inclusive_weight",
+        "sample_count",
+        "stack_occurrence_count",
+        "self_percent",
+        "inclusive_percent",
+        "thread_count"
+      ],
+      "title": "Hotspot",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "analysis_id": {
+      "title": "Analysis Id",
+      "type": "string"
+    },
+    "classifications": {
+      "items": {
+        "$ref": "#/$defs/Classification"
+      },
+      "title": "Classifications",
+      "type": "array"
+    },
+    "dominant_call_paths": {
+      "items": {
+        "$ref": "#/$defs/CallPath"
+      },
+      "title": "Dominant Call Paths",
+      "type": "array"
+    },
+    "hotspot": {
+      "$ref": "#/$defs/Hotspot"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "analysis_id",
+    "hotspot",
+    "dominant_call_paths",
+    "classifications",
+    "limitations"
+  ],
+  "title": "HotspotDetails",
+  "type": "object"
+}

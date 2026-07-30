@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from perflens.application.symbols import inspect_elf, resolve_source
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.domain.symbols import ModuleLocation
 from perflens.symbols.addr2line import Addr2LineResolver, parse_addr2line_group
@@ -65,6 +66,8 @@ def test_inspects_pie_shared_library_build_id_and_debug_info(
     assert not executable_metadata.is_stripped
     assert shared_metadata.elf_type == "ET_DYN"
     assert not shared_metadata.is_pie
+    artifact = inspect_elf(executable)
+    assert artifact.build_id == executable_metadata.build_id
 
 
 def test_long_lived_resolver_matches_source_golden_and_reuses_process(
@@ -98,6 +101,14 @@ def test_long_lived_resolver_matches_source_golden_and_reuses_process(
         (fixture_root / "golden" / "symbol-resolution.summary.json").read_text(encoding="utf-8")
     )
     assert actual == expected
+
+    application_result = resolve_source(
+        executable,
+        address,
+        addr2line_path=Path(_tool("addr2line")),
+    )
+    assert application_result.status == "complete"
+    assert application_result.frames[0].line == 3
 
 
 def test_separate_debug_file_resolves_stripped_binary(fixture_root: Path, tmp_path: Path) -> None:

@@ -1,0 +1,149 @@
+{
+  "$defs": {
+    "Hotspot": {
+      "additionalProperties": false,
+      "properties": {
+        "categories": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Categories",
+          "type": "array"
+        },
+        "dso": {
+          "title": "Dso",
+          "type": "string"
+        },
+        "hotspot_id": {
+          "title": "Hotspot Id",
+          "type": "string"
+        },
+        "inclusive_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Inclusive Percent",
+          "type": "number"
+        },
+        "inclusive_weight": {
+          "minimum": 0,
+          "title": "Inclusive Weight",
+          "type": "integer"
+        },
+        "sample_count": {
+          "minimum": 0,
+          "title": "Sample Count",
+          "type": "integer"
+        },
+        "self_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Self Percent",
+          "type": "number"
+        },
+        "self_weight": {
+          "minimum": 0,
+          "title": "Self Weight",
+          "type": "integer"
+        },
+        "source_locations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Locations",
+          "type": "array"
+        },
+        "stack_occurrence_count": {
+          "minimum": 0,
+          "title": "Stack Occurrence Count",
+          "type": "integer"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "thread_count": {
+          "minimum": 0,
+          "title": "Thread Count",
+          "type": "integer"
+        },
+        "top_callees": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Top Callees",
+          "type": "array"
+        },
+        "top_callers": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Top Callers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "hotspot_id",
+        "symbol",
+        "dso",
+        "self_weight",
+        "inclusive_weight",
+        "sample_count",
+        "stack_occurrence_count",
+        "self_percent",
+        "inclusive_percent",
+        "thread_count"
+      ],
+      "title": "Hotspot",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "analysis_id": {
+      "title": "Analysis Id",
+      "type": "string"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/Hotspot"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "next_cursor": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Next Cursor"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "total_items": {
+      "minimum": 0,
+      "title": "Total Items",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "analysis_id",
+    "items",
+    "total_items"
+  ],
+  "title": "HotspotPage",
+  "type": "object"
+}

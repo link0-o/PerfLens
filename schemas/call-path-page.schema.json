@@ -1,0 +1,121 @@
+{
+  "$defs": {
+    "CallPath": {
+      "additionalProperties": false,
+      "properties": {
+        "frames": {
+          "items": {
+            "$ref": "#/$defs/CallPathFrame"
+          },
+          "title": "Frames",
+          "type": "array"
+        },
+        "path_id": {
+          "title": "Path Id",
+          "type": "string"
+        },
+        "percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Percent",
+          "type": "number"
+        },
+        "record_count": {
+          "exclusiveMinimum": 0,
+          "title": "Record Count",
+          "type": "integer"
+        },
+        "weight": {
+          "exclusiveMinimum": 0,
+          "title": "Weight",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path_id",
+        "frames",
+        "weight",
+        "record_count",
+        "percent"
+      ],
+      "title": "CallPath",
+      "type": "object"
+    },
+    "CallPathFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "dso": {
+          "title": "Dso",
+          "type": "string"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "dso"
+      ],
+      "title": "CallPathFrame",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "analysis_id": {
+      "title": "Analysis Id",
+      "type": "string"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/CallPath"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "next_cursor": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Next Cursor"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "symbol": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Symbol"
+    },
+    "total_items": {
+      "minimum": 0,
+      "title": "Total Items",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "analysis_id",
+    "symbol",
+    "items",
+    "total_items"
+  ],
+  "title": "CallPathPage",
+  "type": "object"
+}

@@ -234,3 +234,54 @@ class DiagnosisBundle(ContractModel):
     observations: tuple[str, ...]
     limitations: tuple[str, ...]
     missing_evidence: tuple[str, ...]
+
+
+class ArtifactReference(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    artifact_id: str
+    artifact_type: str
+    uri: str
+    summary: dict[str, str | int | float | bool | None]
+
+
+class HotspotPage(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    analysis_id: str
+    items: tuple[Hotspot, ...]
+    next_cursor: int | None = Field(default=None, ge=0)
+    total_items: int = Field(ge=0)
+
+
+class CallPathPage(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    analysis_id: str
+    symbol: str | None
+    items: tuple[CallPath, ...]
+    next_cursor: int | None = Field(default=None, ge=0)
+    total_items: int = Field(ge=0)
+
+
+class HotspotDetails(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    analysis_id: str
+    hotspot: Hotspot
+    dominant_call_paths: tuple[CallPath, ...]
+    classifications: tuple[Classification, ...]
+    limitations: tuple[str, ...]
+
+
+class ClassificationPage(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    analysis_id: str
+    items: tuple[Classification, ...]
+    next_cursor: int | None = Field(default=None, ge=0)
+    total_items: int = Field(ge=0)
+
+
+class ArtifactTextPage(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    artifact_id: str
+    artifact_type: str
+    text: str
+    next_offset: int | None = Field(default=None, ge=0)
+    total_bytes: int = Field(ge=0)

@@ -7,13 +7,19 @@ from pathlib import Path
 
 from perflens.contracts.artifacts import (
     AnalysisArtifact,
+    ArtifactReference,
+    ArtifactTextPage,
     CallPath,
+    CallPathPage,
     Classification,
+    ClassificationPage,
     DiagnosisBundle,
     ElfMetadataArtifact,
     Evidence,
     Frame,
     Hotspot,
+    HotspotDetails,
+    HotspotPage,
     ProfileMetadata,
     SourceContextArtifact,
     SourceResolutionArtifact,
@@ -33,6 +39,12 @@ MODELS = {
     "classification.schema.json": Classification,
     "diagnosis-bundle.schema.json": DiagnosisBundle,
     "evidence.schema.json": Evidence,
+    "artifact-reference.schema.json": ArtifactReference,
+    "artifact-text-page.schema.json": ArtifactTextPage,
+    "hotspot-page.schema.json": HotspotPage,
+    "hotspot-details.schema.json": HotspotDetails,
+    "call-path-page.schema.json": CallPathPage,
+    "classification-page.schema.json": ClassificationPage,
 }
 
 
