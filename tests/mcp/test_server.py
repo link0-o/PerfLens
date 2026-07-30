@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import stat
+import sys
 from pathlib import Path
 from typing import Any, cast
 
 from mcp.client import Client
 
+from perflens.collection.collector import ACTIVE_COLLECTION_AUTHORIZATION
 from perflens.mcp.server import ServerConfig, create_server
 
 
@@ -38,6 +41,7 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "analyze_benchmark",
                 "compare_profiles",
                 "compare_benchmarks",
+                "collect_profile",
             }
             for tool in tools.values():
                 assert tool.input_schema["type"] == "object"
@@ -51,6 +55,11 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert read_annotations.read_only_hint is True
             assert write_annotations.read_only_hint is False
             assert tools["analyze_profile"].meta == {"perflens/permission": "WRITES_ARTIFACTS"}
+            active_annotations = tools["collect_profile"].annotations
+            assert active_annotations is not None
+            assert active_annotations.destructive_hint is True
+            assert active_annotations.idempotent_hint is False
+            assert tools["collect_profile"].meta == {"perflens/permission": "ACTIVE_COLLECTION"}
 
     asyncio.run(exercise())
 
@@ -209,10 +218,80 @@ def test_server_enforces_write_process_and_path_authorization(tmp_path: Path) ->
                 "resolve_source",
                 {"binary_path": str(profile), "module_offset": 1},
             )
+            collection_denied = await client.call_tool(
+                "collect_profile",
+                {
+                    "output_path": str(allowed / "profile.data"),
+                    "authorization": ACTIVE_COLLECTION_AUTHORIZATION,
+                    "executable": str(profile),
+                },
+            )
             assert write_denied.is_error
             assert path_denied.is_error
             assert process_denied.is_error
+            assert collection_denied.is_error
         assert list(artifact_root.iterdir()) == []
+
+    asyncio.run(exercise())
+
+
+def test_active_collection_requires_server_and_per_call_authorization(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    fake_perf = tmp_path / "perf"
+    fake_perf.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "pathlib.Path(args[args.index('-o') + 1]).write_bytes(b'PERFILE2')\n",
+        encoding="utf-8",
+    )
+    fake_perf.chmod(fake_perf.stat().st_mode | stat.S_IXUSR)
+    target = tmp_path / "target"
+    target.write_text(f"#!{sys.executable}\nraise SystemExit(0)\n", encoding="utf-8")
+    target.chmod(target.stat().st_mode | stat.S_IXUSR)
+    server = create_server(
+        ServerConfig(
+            (tmp_path,),
+            artifact_root,
+            allow_writes=True,
+            allow_process_execution=True,
+            allow_active_collection=True,
+            perf_path=fake_perf,
+        )
+    )
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            denied = await client.call_tool(
+                "collect_profile",
+                {
+                    "output_path": str(tmp_path / "denied.data"),
+                    "authorization": "not-authorized",
+                    "executable": str(target),
+                },
+            )
+            assert denied.is_error
+            assert not (tmp_path / "denied.data").exists()
+
+        async with Client(server, raise_exceptions=True) as client:
+            collected = _structured(
+                await client.call_tool(
+                    "collect_profile",
+                    {
+                        "output_path": str(tmp_path / "profile.data"),
+                        "authorization": ACTIVE_COLLECTION_AUTHORIZATION,
+                        "executable": str(target),
+                    },
+                )
+            )
+            assert collected["artifact_type"] == "collection"
+            assert collected["summary"]["mode"] == "record"
+            assert (tmp_path / "profile.data").read_bytes() == b"PERFILE2"
+            stored = artifact_root / (
+                f"{collected['artifact_id']}.collection.json"
+            )
+            assert json.loads(stored.read_text(encoding="utf-8"))["authorization"] == "explicit"
 
     asyncio.run(exercise())
 

@@ -401,3 +401,41 @@ class BenchmarkComparison(ContractModel):
     minimum_practical_impact_percent: float = Field(ge=0)
     metrics: tuple[BenchmarkMetricComparison, ...]
     warnings: tuple[str, ...]
+
+
+class PerfStatMetric(ContractModel):
+    event: str
+    value: float | None
+    unit: str
+    run_time_ns: int | None = Field(default=None, ge=0)
+    running_percent: float | None = Field(default=None, ge=0, le=100)
+    derived: bool = False
+    status: Literal["measured", "not_counted", "not_supported", "derived"]
+
+
+class CollectionArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    collection_id: str
+    mode: Literal["record", "stat", "sched", "lock", "off_cpu"]
+    status: Literal["complete"] = "complete"
+    target_type: Literal["command", "pid"]
+    target_executable: str | None = None
+    target_argument_count: int = Field(ge=0)
+    target_argv_sha256: str | None = None
+    target_pid: int | None = Field(default=None, gt=0)
+    output_path: str
+    output_sha256: str
+    output_bytes: int = Field(gt=0)
+    output_format: Literal["perf_data", "perf_stat_delimited"]
+    perf_executable: str
+    started_at: str
+    finished_at: str
+    duration_seconds: float = Field(ge=0)
+    frequency_hz: int | None = Field(default=None, ge=1)
+    call_graph: Literal["fp", "dwarf", "lbr"] | None = None
+    events: tuple[str, ...] = ()
+    metrics: tuple[PerfStatMetric, ...] = ()
+    authorization: Literal["explicit"] = "explicit"
+    diagnostics: tuple[str, ...] = ()
+    diagnostics_truncated: bool = False
+    warnings: tuple[str, ...] = ()

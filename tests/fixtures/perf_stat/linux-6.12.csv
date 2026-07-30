@@ -1,0 +1,6 @@
+# started on Thu Jul 30 12:00:00 2026
+1000000;;cycles;1000000000;100.00
+2000000;;instructions;1000000000;100.00
+2500;;cache-misses;1000000000;99.50
+<not supported>;;branch-misses;0;0.00
+damaged-row

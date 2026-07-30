@@ -3,7 +3,7 @@
 PerfLens is an evidence-driven performance-analysis toolkit for Linux
 applications and coding agents.
 
-The current release formally supports Milestones 0 through 7:
+The current release formally supports Milestones 0 through 9:
 
 - streaming FlameGraph-compatible folded stack input;
 - deterministic self and inclusive hotspot aggregation;
@@ -20,8 +20,12 @@ The current release formally supports Milestones 0 through 7:
 - generic candidate-only classification, evidence bundles, and Markdown reports.
 - an official-SDK MCP server with typed, paginated tools and server-side authorization;
 - a repository Performance Analysis Skill for evidence-constrained Agent workflows.
+- profile and repeated-benchmark comparison with environment comparability checks;
+- pyperf, Google Benchmark, and hyperfine JSON normalization;
+- default-off, explicitly authorized perf record/stat/sched/lock/off-CPU collection.
 
-It does **not** yet support benchmark comparison, active sampling, or AI/LLM APIs.
+It does **not** include an AI/LLM API, Web UI, source-code patch tool, benchmark
+runner, or custom agent framework.
 
 ## Install
 
@@ -117,6 +121,53 @@ Classification rules label investigation candidates only. Generated reports
 keep direct observations, missing evidence, forbidden conclusions, and A/B
 validation requirements separate.
 
+## Compare profiles and benchmarks
+
+```bash
+perflens compare-profiles \
+  --baseline build/baseline-analysis.json \
+  --candidate build/candidate-analysis.json \
+  --output build/profile-comparison.json \
+  --markdown-output build/profile-comparison.md
+
+perflens normalize-benchmark \
+  --input benchmark-hyperfine.json \
+  --output build/benchmark.json
+perflens compare-benchmarks \
+  --baseline build/baseline-benchmark.json \
+  --candidate build/candidate-benchmark.json \
+  --output build/benchmark-comparison.json
+```
+
+Profile percentage changes describe the selected event distribution, not
+absolute elapsed time. Benchmark comparisons require repeated samples, check
+environment differences, apply a practical-impact threshold, and emit only
+candidate improvement/regression states.
+
+## Explicitly authorized active collection
+
+Active collection is disabled by default. A CLI invocation requires both a
+confirmation switch and the exact per-call authorization phrase:
+
+```bash
+perflens collect-profile \
+  --mode record \
+  --executable /absolute/path/to/app \
+  --target-arg=--workload \
+  --data-output build/profile.data \
+  --metadata-output build/collection.json \
+  --authorize-target \
+  --authorization I_EXPLICITLY_AUTHORIZE_TARGET_PROFILING
+```
+
+Modes are `record`, `stat`, `sched`, `lock`, and `off_cpu`. `stat` uses an
+independent typed metric adapter and derives IPC when cycles and instructions
+are available. PID attachment requires `--pid`, a bounded duration,
+`--authorize-pid-attach`, and the separate phrase
+`I_EXPLICITLY_AUTHORIZE_PID_ATTACH`. PerfLens never invokes sudo or changes
+kernel policy. See [MCP server and Skill setup](docs/mcp-and-skill.md) for the
+additional MCP startup gates.
+
 ## Use MCP with the Skill
 
 ```bash
@@ -197,3 +248,8 @@ See `docs/performance-budget.md` for the recorded environment and baseline.
 - A hotspot is an observation, not a confirmed root cause.
 - `perf.data` portability remains dependent on the installed `perf` version and
   access to matching DSOs/symbols; preserved unknown frames make gaps explicit.
+- Active collection depends on kernel perf permissions. On the development
+  host, `perf_event_paranoid=3` rejects unprivileged sampling; PerfLens returns
+  a bounded structured error and leaves no collection output.
+- `off_cpu` mode records `sched:sched_switch` stack evidence; workload-aware
+  post-processing is still required before making blocked-time claims.

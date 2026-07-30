@@ -18,6 +18,7 @@ Always read [evidence-model.md](references/evidence-model.md). Load the topic re
 - Read [memory-analysis.md](references/memory-analysis.md) for allocation, copying, ownership, or cache/memory candidates.
 - Read [syscall-analysis.md](references/syscall-analysis.md) for read/write/send/recv/poll/fsync or kernel-heavy paths.
 - Read [benchmark-validation.md](references/benchmark-validation.md) for regressions, before/after comparisons, or optimization claims.
+- Read [active-collection-safety.md](references/active-collection-safety.md) before any live collection request.
 
 ## Default workflow
 
@@ -33,6 +34,12 @@ Always read [evidence-model.md](references/evidence-model.md). Load the topic re
 10. For changes, run correctness tests and equivalent-workload before/after measurements. Only matched A/B evidence may be described as a verified improvement.
 11. Produce the final report using [diagnosis-report-template.md](assets/diagnosis-report-template.md).
 
+## Active collection is opt-in
+
+Prefer existing folded, perf-script, perf.data, or benchmark artifacts. Call `collect_profile` only when the user explicitly authorizes the exact command or PID and understands that profiling may perturb it. The MCP server must have artifact writes, process execution, and active collection enabled. PID attachment additionally requires the server PID gate and the separate per-call PID authorization token.
+
+Never add `--allow-active-collection` or `--allow-pid-attach` on the user's behalf. Never invoke sudo, never broaden allowed roots, and never substitute a different target. Start with bounded duration, frequency, event set, timeout, and output size. Keep failures caused by kernel perf policy as limitations; do not attempt to weaken host security settings.
+
 ## Mandatory interpretation rules
 
 - A hotspot is an observation, not a root cause.
@@ -47,4 +54,4 @@ Always read [evidence-model.md](references/evidence-model.md). Load the topic re
 
 ## When not to use
 
-Do not invoke this skill for generic refactoring, style review, or speculative optimization without a performance question or profile. Do not attach to a live process or start sampling unless the user explicitly authorizes that separate operation and the server policy allows it.
+Do not invoke this skill for generic refactoring, style review, or speculative optimization without a performance question or profile. Do not attach to a live process or start sampling unless the user explicitly authorizes that separate operation and every server/per-call gate allows it.

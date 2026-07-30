@@ -11,6 +11,7 @@ from pydantic import BaseModel, ValidationError
 from perflens.artifacts.filesystem import write_json_atomic
 from perflens.contracts.artifacts import AnalysisArtifact, BenchmarkArtifact, DiagnosisBundle
 from perflens.domain.errors import ErrorCode, PerfLensError
+from perflens.security.paths import validate_new_output_file
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 ModelT = TypeVar("ModelT", bound=BaseModel)
@@ -58,6 +59,17 @@ class PathPolicy:
                 ErrorCode.PATH_SAFETY_VIOLATION,
                 "mcp",
                 "Workspace root is outside the configured allowed roots",
+                details={"path": str(resolved)},
+            )
+        return resolved
+
+    def new_output_file(self, path: str | Path) -> Path:
+        resolved = validate_new_output_file(Path(path))
+        if not self.contains(resolved):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "mcp",
+                "Output file is outside the configured allowed roots",
                 details={"path": str(resolved)},
             )
         return resolved

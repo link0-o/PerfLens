@@ -19,6 +19,7 @@ from perflens.contracts.artifacts import (
     CallPathPage,
     Classification,
     ClassificationPage,
+    CollectionArtifact,
     DiagnosisBundle,
     ElfMetadataArtifact,
     Evidence,
@@ -26,6 +27,7 @@ from perflens.contracts.artifacts import (
     Hotspot,
     HotspotDetails,
     HotspotPage,
+    PerfStatMetric,
     ProfileComparison,
     ProfileHotspotDelta,
     ProfileMetadata,
@@ -61,6 +63,8 @@ MODELS = {
     "profile-comparison.schema.json": ProfileComparison,
     "profile-hotspot-delta.schema.json": ProfileHotspotDelta,
     "call-path-delta.schema.json": CallPathDelta,
+    "collection.schema.json": CollectionArtifact,
+    "perf-stat-metric.schema.json": PerfStatMetric,
 }
 
 

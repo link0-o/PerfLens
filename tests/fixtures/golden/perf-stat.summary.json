@@ -1,0 +1,14 @@
+{
+  "events": [
+    "cycles",
+    "instructions",
+    "cache-misses",
+    "branch-misses",
+    "instructions-per-cycle"
+  ],
+  "ipc": 2.0,
+  "not_supported": [
+    "branch-misses"
+  ],
+  "warning_count": 1
+}

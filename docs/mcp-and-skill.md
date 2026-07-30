@@ -24,6 +24,19 @@ mkdir -p perflens-results
 
 The server uses stdio, so an MCP client normally starts it. `--allow-writes` authorizes only atomic JSON artifacts beneath `--artifact-root`. Add `--allow-process-execution` only when the client should be allowed to invoke the read-only `perf script` or symbolizer adapters. It does not authorize live sampling or process attachment.
 
+Active collection is a separate, default-off capability. For an explicitly approved target command, all three startup gates are required:
+
+```bash
+.venv/bin/perflens-mcp \
+  --allowed-root "$PWD" \
+  --artifact-root "$PWD/perflens-results" \
+  --allow-writes \
+  --allow-process-execution \
+  --allow-active-collection
+```
+
+Each `collect_profile` call must also carry the exact authorization value `I_EXPLICITLY_AUTHORIZE_TARGET_PROFILING`. PID attachment remains disabled unless `--allow-pid-attach` is present and the call also carries `I_EXPLICITLY_AUTHORIZE_PID_ATTACH`. PerfLens never requests sudo or changes kernel perf policy.
+
 Multiple `--allowed-root` options are supported. Every root must already exist. Input profiles, binaries, debug files, source workspaces, and the artifact directory are canonicalized and checked against these roots.
 
 ## Connect Codex
@@ -72,6 +85,7 @@ It may also trigger implicitly for Linux profile diagnosis. The Skill requires t
 | `READ_ONLY` | hotspot/path lookup, classification pages, artifact pages, source context | Only configured artifact IDs and allowed-root paths are accepted. |
 | `WRITES_ARTIFACTS` | profile analysis, diagnosis bundle | Disabled unless `--allow-writes`; writes only beneath the artifact root. |
 | `PROCESS_EXECUTION` | perf.data conversion and source symbolization | Disabled unless `--allow-process-execution`; executable selection remains allowlisted and bounded. |
+| `ACTIVE_COLLECTION` | `collect_profile` record/stat/sched/lock/off-CPU modes | Requires writes, process execution, active-collection startup gate, exact per-call authorization, bounded output, and a new output path. PID attachment has two additional gates. |
 
 Tool annotations are client hints. The authorization checks above are independent server-side controls.
 
@@ -86,5 +100,7 @@ Tool annotations are client hints. The authorization checks above are independen
 7. `build_diagnosis_bundle`
 8. `read_artifact_page` for large output
 9. `analyze_benchmark`, `compare_profiles`, and `compare_benchmarks` for A/B work
+
+`collect_profile` is intentionally outside the default sequence. Use it only after the user approves the exact target and the [Skill safety rules](../.agents/skills/perflens-performance-analysis/references/active-collection-safety.md) have been applied.
 
 All list responses are bounded and paginated. The server emits typed structured output and checked-in JSON Schemas; it never returns an unbounded full analysis through a list tool.

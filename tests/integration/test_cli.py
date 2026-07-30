@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import stat
+import sys
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -8,6 +10,7 @@ from typer.testing import CliRunner
 from perflens.application.analyze import analyze_folded
 from perflens.artifacts.filesystem import write_json_atomic
 from perflens.cli.app import app
+from perflens.collection.collector import ACTIVE_COLLECTION_AUTHORIZATION
 
 runner = CliRunner()
 
@@ -156,3 +159,45 @@ def test_cli_normalizes_benchmark_and_compares_profiles(fixture_root: Path, tmp_
     assert compared.exit_code == 0, compared.output
     assert json.loads(comparison_output.read_text())["hotspot_deltas"]
     assert "Profile Comparison" in markdown_output.read_text()
+
+
+def test_cli_active_collection_is_double_authorized_and_never_overwrites(tmp_path: Path) -> None:
+    fake_perf = tmp_path / "perf"
+    fake_perf.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "pathlib.Path(args[args.index('-o') + 1]).write_bytes(b'PERFILE2')\n",
+        encoding="utf-8",
+    )
+    fake_perf.chmod(fake_perf.stat().st_mode | stat.S_IXUSR)
+    data_output = tmp_path / "profile.data"
+    metadata_output = tmp_path / "collection.json"
+    arguments = [
+        "collect-profile",
+        "--data-output",
+        str(data_output),
+        "--metadata-output",
+        str(metadata_output),
+        "--executable",
+        str(Path(sys.executable)),
+        "--perf-path",
+        str(fake_perf),
+        "--authorization",
+        ACTIVE_COLLECTION_AUTHORIZATION,
+    ]
+
+    denied = runner.invoke(app, arguments)
+    assert denied.exit_code == 5
+    assert not data_output.exists()
+
+    collected = runner.invoke(app, [*arguments, "--authorize-target"])
+    assert collected.exit_code == 0, collected.output
+    metadata = json.loads(metadata_output.read_text(encoding="utf-8"))
+    assert metadata["mode"] == "record"
+    assert metadata["authorization"] == "explicit"
+    assert data_output.read_bytes() == b"PERFILE2"
+
+    repeated = runner.invoke(app, [*arguments, "--authorize-target"])
+    assert repeated.exit_code == 5
+    assert data_output.read_bytes() == b"PERFILE2"

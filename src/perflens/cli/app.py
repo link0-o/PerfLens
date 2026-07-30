@@ -17,12 +17,24 @@ from perflens.application.compare import (
 )
 from perflens.application.diagnose import classify_analysis, report_analysis
 from perflens.application.symbols import get_source_context, inspect_elf, resolve_source
-from perflens.artifacts.filesystem import write_json_atomic, write_text_atomic
+from perflens.artifacts.filesystem import (
+    write_json_atomic,
+    write_json_new_atomic,
+    write_text_atomic,
+)
+from perflens.collection.collector import (
+    ACTIVE_COLLECTION_AUTHORIZATION,
+    DEFAULT_STAT_EVENTS,
+    PID_ATTACH_AUTHORIZATION,
+    CollectionRequest,
+    CollectionTarget,
+    collect_profile,
+)
 from perflens.contracts.artifacts import ErrorArtifact, ErrorBody
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.domain.models import ResourceLimits
 from perflens.reporting.diff import render_benchmark_comparison, render_profile_comparison
-from perflens.security.paths import validate_output_file
+from perflens.security.paths import validate_new_output_file, validate_output_file
 
 app = typer.Typer(
     name="perflens",
@@ -400,6 +412,105 @@ def compare_benchmarks_command(
     except PerfLensError as exc:
         _fail(exc)
     typer.echo(str(safe_output))
+
+
+@app.command("collect-profile")
+def collect_profile_command(
+    data_output: Annotated[Path, typer.Option("--data-output", dir_okay=False)],
+    metadata_output: Annotated[Path, typer.Option("--metadata-output", dir_okay=False)],
+    mode: Annotated[
+        Literal["record", "stat", "sched", "lock", "off_cpu"],
+        typer.Option("--mode"),
+    ] = "record",
+    executable: Annotated[
+        Path | None,
+        typer.Option("--executable", dir_okay=False, help="Absolute target executable."),
+    ] = None,
+    target_arguments: Annotated[
+        list[str] | None,
+        typer.Option("--target-arg", help="Repeat for each target argument."),
+    ] = None,
+    pid: Annotated[int | None, typer.Option("--pid", min=1)] = None,
+    duration_seconds: Annotated[float | None, typer.Option("--duration-seconds", min=0.01)] = None,
+    perf_path: Annotated[Path | None, typer.Option("--perf-path", dir_okay=False)] = None,
+    frequency_hz: Annotated[int, typer.Option("--frequency-hz", min=1, max=10_000)] = 99,
+    call_graph: Annotated[Literal["fp", "dwarf", "lbr"], typer.Option("--call-graph")] = "dwarf",
+    events: Annotated[
+        list[str] | None,
+        typer.Option("--event", help="Repeat to override default perf-stat events."),
+    ] = None,
+    timeout_seconds: Annotated[float, typer.Option("--timeout-seconds", min=0.1)] = 300.0,
+    max_data_bytes: Annotated[int, typer.Option("--max-data-bytes", min=1)] = 1 << 30,
+    max_metadata_bytes: Annotated[int, typer.Option("--max-metadata-bytes", min=1)] = 8 << 20,
+    authorize_target: Annotated[
+        bool,
+        typer.Option("--authorize-target", help="Confirm target execution or observation impact."),
+    ] = False,
+    authorization: Annotated[str, typer.Option("--authorization")] = "",
+    authorize_pid_attach: Annotated[
+        bool,
+        typer.Option("--authorize-pid-attach", help="Separately confirm attachment to --pid."),
+    ] = False,
+    pid_authorization: Annotated[str, typer.Option("--pid-authorization")] = "",
+) -> None:
+    """Collect bounded perf data only after explicit, per-invocation authorization."""
+    try:
+        if not authorize_target:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "authorization",
+                "Pass --authorize-target after reviewing target impact",
+                recoverable=True,
+                suggested_actions=(
+                    f"Pass --authorization {ACTIVE_COLLECTION_AUTHORIZATION} explicitly.",
+                ),
+            )
+        if pid is not None and not authorize_pid_attach:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "authorization",
+                "PID attachment additionally requires --authorize-pid-attach",
+                recoverable=True,
+                suggested_actions=(
+                    f"Pass --pid-authorization {PID_ATTACH_AUTHORIZATION} explicitly.",
+                ),
+            )
+        safe_data_output = validate_new_output_file(data_output)
+        safe_metadata_output = validate_new_output_file(metadata_output)
+        if safe_data_output == safe_metadata_output:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "output",
+                "Data and metadata outputs must be different paths",
+            )
+        artifact = collect_profile(
+            CollectionRequest(
+                mode=mode,
+                target=CollectionTarget(
+                    executable=executable,
+                    arguments=tuple(target_arguments or ()),
+                    pid=pid,
+                    duration_seconds=duration_seconds,
+                ),
+                output_path=safe_data_output,
+                authorization=authorization,
+                pid_authorization=pid_authorization if pid is not None else None,
+                perf_path=perf_path,
+                frequency_hz=frequency_hz,
+                call_graph=call_graph,
+                events=tuple(events) if events else DEFAULT_STAT_EVENTS,
+                timeout_seconds=timeout_seconds,
+                max_output_bytes=max_data_bytes,
+            )
+        )
+        write_json_new_atomic(
+            artifact,
+            safe_metadata_output,
+            max_output_bytes=max_metadata_bytes,
+        )
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(str(safe_metadata_output))
 
 
 def _parse_address(value: str, field: str) -> int:

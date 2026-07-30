@@ -55,3 +55,33 @@ def validate_output_file(path: Path, *, input_path: Path) -> Path:
             details={"path": str(resolved)},
         )
     return resolved
+
+
+def validate_new_output_file(path: Path) -> Path:
+    """Resolve a new output under an existing directory without allowing overwrite."""
+    expanded = path.expanduser()
+    try:
+        parent = expanded.parent.resolve(strict=True)
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "output",
+            "Output parent directory does not exist or cannot be resolved safely",
+            details={"path": str(path)},
+        ) from exc
+    if not parent.is_dir():
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "output",
+            "Output parent path is not a directory",
+            details={"path": str(parent)},
+        )
+    resolved = parent / expanded.name
+    if resolved.exists() or resolved.is_symlink():
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "output",
+            "Active collection refuses to overwrite an existing output",
+            details={"path": str(resolved)},
+        )
+    return resolved

@@ -13,9 +13,11 @@ silent truncation is used.
 PerfLens delegates `perf.data` decoding to the selected system `perf`. The
 adapter is read-only and bounded, but cross-host profiles may still require a
 matching perf version, DSOs, debug files, build IDs, or mount namespace data.
-This development host has `perf_event_paranoid=3`, so live recording is not
-part of the local acceptance evidence; adapter integration uses an executable
-test double and real `perf script` syntax fixtures.
+This development host has `perf_event_paranoid=3`, so real unprivileged active
+collection is rejected by the kernel. The failure path is exercised with real
+perf 6.12.90 and leaves no output; successful record/stat/sched/lock/off-CPU
+integration uses an executable test double. PerfLens never requests sudo or
+changes perf security policy.
 
 Symbolization requires a verified module offset and a matching module or debug
 file. PerfLens does not guess PIE/ASLR relocation from a runtime address. The
@@ -27,3 +29,13 @@ Classification uses generic symbol/DSO rules. A match is always a low/medium
 confidence candidate, never a confirmed root cause. On-CPU data cannot by
 itself confirm wait time, I/O latency, allocation behavior, or correctness of a
 proposed optimization.
+
+Profile comparisons describe relative selected-event distributions and do not
+prove an absolute-time regression. Benchmark comparison uses an approximate
+normal 95% interval for repeated means, a practical-impact threshold, and
+environment checks; it does not claim a verified improvement without matched
+correctness-preserving A/B evidence.
+
+The `off_cpu` collector records `sched:sched_switch` stack evidence. It does
+not yet reconstruct duration-attributed blocked intervals, so its output alone
+cannot confirm off-CPU wait time.

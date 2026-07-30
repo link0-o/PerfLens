@@ -22,6 +22,7 @@ class CommandLimits:
     terminate_grace_seconds: float = 1.0
     max_stdout_bytes: int = 1 << 30
     max_stderr_bytes: int = 1 << 20
+    max_created_file_bytes: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +50,7 @@ class CommandRunner:
         stdout: BinaryIO,
         *,
         limits: CommandLimits | None = None,
+        watched_output: Path | None = None,
     ) -> CommandResult:
         effective_limits = limits or CommandLimits()
         safe_argv = self._validate_argv(argv)
@@ -75,6 +77,7 @@ class CommandRunner:
             selector.register(process.stdout, selectors.EVENT_READ, "stdout")
             selector.register(process.stderr, selectors.EVENT_READ, "stderr")
             while selector.get_map():
+                self._check_created_file(watched_output, effective_limits, process)
                 if time.monotonic() - started > effective_limits.timeout_seconds:
                     self._terminate_group(process, effective_limits.terminate_grace_seconds)
                     raise PerfLensError(
@@ -113,6 +116,7 @@ class CommandRunner:
                             stderr_buffer.extend(chunk[:remaining])
                         if len(chunk) > remaining:
                             stderr_truncated = True
+            self._check_created_file(watched_output, effective_limits, process)
             exit_code = process.wait()
             duration = time.monotonic() - started
             stderr_text = stderr_buffer.decode("utf-8", errors="replace")
@@ -150,6 +154,37 @@ class CommandRunner:
                     process.stdout.close()
                 if process.stderr is not None:
                     process.stderr.close()
+
+    def _check_created_file(
+        self,
+        path: Path | None,
+        limits: CommandLimits,
+        process: subprocess.Popen[bytes],
+    ) -> None:
+        maximum = limits.max_created_file_bytes
+        if path is None or maximum is None:
+            return
+        try:
+            actual = path.stat().st_size
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            self._terminate_group(process, limits.terminate_grace_seconds)
+            raise PerfLensError(
+                ErrorCode.OUTPUT_WRITE_FAILED,
+                "external_tool",
+                "Unable to inspect the external tool output",
+                details={"path": str(path)},
+            ) from exc
+        if actual > maximum:
+            self._terminate_group(process, limits.terminate_grace_seconds)
+            raise PerfLensError(
+                ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                "external_tool",
+                "External tool created output beyond its size limit",
+                recoverable=True,
+                details={"actual_bytes": actual, "max_created_file_bytes": maximum},
+            )
 
     def _validate_argv(self, argv: Sequence[str]) -> tuple[str, ...]:
         if not argv:

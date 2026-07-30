@@ -1,13 +1,14 @@
 # Architecture
 
 ```text
-CLI
+CLI / MCP boundary
  ↓
-Application service ─→ Contract mapper ─→ JSON artifact writer
+Application services ─→ Contract mapper ─→ bounded artifact writer
  ↓
-ProfileAdapter/ProfileStream ─→ bounded command runner (perf.data only)
- ↓
-Lightweight domain aggregation
+ProfileAdapter/ProfileStream ─→ lightweight domain aggregation
+Benchmark/Metric adapters      ─→ deterministic comparison
+Symbol providers               ─→ verified source resolution
+Explicit collection service    ─→ bounded command runner ─→ system perf
 ```
 
 The domain layer uses frozen/slotted records, integer Frame IDs, and standard
@@ -30,3 +31,15 @@ missing relocation model.
 The rule engine and evidence builder are deterministic. They can emit only
 `candidate` classifications at L1/L2; an L4 verified improvement requires a
 later A/B comparison and cannot be produced by symbol-name rules.
+
+The MCP server and repository Skill are separate orchestration boundaries.
+Neither is imported by the deterministic core and neither calls an LLM API.
+MCP paths, writes, process execution, active collection, and PID attachment are
+independently enforced server-side.
+
+Active collection is isolated from read-only adapters. It accepts one exact
+command or PID only after explicit authorization, runs absolute executables
+without a shell or sudo, monitors output size while the process runs, kills the
+whole child process group on timeout or overflow, and publishes to a new path
+without overwriting. `perf stat` data goes to a dedicated Metric Adapter rather
+than the stack ProfileAdapter hierarchy.

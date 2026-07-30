@@ -23,3 +23,15 @@ def test_artifact_root_must_be_inside_allowed_roots(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     with pytest.raises(ValueError, match="inside an allowed root"):
         ArtifactStore(outside, PathPolicy((allowed,)), allow_writes=True)
+
+
+def test_new_output_file_is_confined_and_must_not_exist(tmp_path: Path) -> None:
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    policy = PathPolicy((allowed,))
+    assert policy.new_output_file(allowed / "profile.data") == allowed / "profile.data"
+
+    outside = tmp_path / "outside.data"
+    with pytest.raises(PerfLensError) as captured:
+        policy.new_output_file(outside)
+    assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION

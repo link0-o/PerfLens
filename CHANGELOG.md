@@ -20,3 +20,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   paging, artifact storage, annotations, and server-enforced authorization.
 - Milestone 7 repository Performance Analysis Skill with routed evidence,
   on-CPU, lock, memory, syscall, benchmark, and report guidance.
+- Milestone 8 deterministic Profile and Benchmark comparison, environment
+  comparability checks, practical-impact thresholds, Markdown diffs, and
+  pyperf/Google Benchmark/hyperfine adapters.
+- Milestone 9 default-off active perf record/stat/sched/lock/off-CPU collection
+  with server and per-call authorization, a separate PID-attachment gate,
+  bounded outputs, immutable publication, and typed perf-stat metrics.

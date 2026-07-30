@@ -16,7 +16,10 @@
 | Address symbolization | Reuse LLVM symbolizer / addr2line | Long-lived Provider processes handle DWARF, demangling, and inline expansion. PerfLens owns only bounded protocol adaptation and caching. |
 | Rule documents | Reuse PyYAML safe loader | Rules are data, validated into strict typed boundary models before regex compilation. |
 | Markdown reports | Reuse Jinja2 | A deterministic packaged template renders evidence; it performs no reasoning. |
-| MCP protocol | Reuse official MCP Python SDK 2.x | Added now for Milestone 6; MCP remains outside Analysis Core. |
+| MCP protocol | Reuse official MCP Python SDK 2.x | MCP remains outside Analysis Core and exposes typed local stdio tools. |
+| Benchmark formats | Build thin adapters | Normalize documented pyperf, Google Benchmark, and hyperfine JSON into one versioned contract; no benchmark runner is built. |
+| Statistical comparison | Build conservative stdlib implementation | Repeated means use an explicitly approximate normal interval plus practical-impact and comparability checks; results remain candidates. |
+| Active collection | Reuse system perf | Thin, default-off wrappers cover record/stat/sched/lock/tracepoint collection. PerfLens owns authorization, bounds, diagnostics, and immutable output, not kernel instrumentation. |
 
 No third-party implementation is copied. Runtime dependencies are version
 bounded and locked in `uv.lock`. Dependency upgrades require schema and golden

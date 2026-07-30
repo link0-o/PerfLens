@@ -1,0 +1,285 @@
+{
+  "$defs": {
+    "PerfStatMetric": {
+      "additionalProperties": false,
+      "properties": {
+        "derived": {
+          "default": false,
+          "title": "Derived",
+          "type": "boolean"
+        },
+        "event": {
+          "title": "Event",
+          "type": "string"
+        },
+        "run_time_ns": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Time Ns"
+        },
+        "running_percent": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Running Percent"
+        },
+        "status": {
+          "enum": [
+            "measured",
+            "not_counted",
+            "not_supported",
+            "derived"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "unit": {
+          "title": "Unit",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "event",
+        "value",
+        "unit",
+        "status"
+      ],
+      "title": "PerfStatMetric",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "authorization": {
+      "const": "explicit",
+      "default": "explicit",
+      "title": "Authorization",
+      "type": "string"
+    },
+    "call_graph": {
+      "anyOf": [
+        {
+          "enum": [
+            "fp",
+            "dwarf",
+            "lbr"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Call Graph"
+    },
+    "collection_id": {
+      "title": "Collection Id",
+      "type": "string"
+    },
+    "diagnostics": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Diagnostics",
+      "type": "array"
+    },
+    "diagnostics_truncated": {
+      "default": false,
+      "title": "Diagnostics Truncated",
+      "type": "boolean"
+    },
+    "duration_seconds": {
+      "minimum": 0,
+      "title": "Duration Seconds",
+      "type": "number"
+    },
+    "events": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Events",
+      "type": "array"
+    },
+    "finished_at": {
+      "title": "Finished At",
+      "type": "string"
+    },
+    "frequency_hz": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Frequency Hz"
+    },
+    "metrics": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PerfStatMetric"
+      },
+      "title": "Metrics",
+      "type": "array"
+    },
+    "mode": {
+      "enum": [
+        "record",
+        "stat",
+        "sched",
+        "lock",
+        "off_cpu"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "output_bytes": {
+      "exclusiveMinimum": 0,
+      "title": "Output Bytes",
+      "type": "integer"
+    },
+    "output_format": {
+      "enum": [
+        "perf_data",
+        "perf_stat_delimited"
+      ],
+      "title": "Output Format",
+      "type": "string"
+    },
+    "output_path": {
+      "title": "Output Path",
+      "type": "string"
+    },
+    "output_sha256": {
+      "title": "Output Sha256",
+      "type": "string"
+    },
+    "perf_executable": {
+      "title": "Perf Executable",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "started_at": {
+      "title": "Started At",
+      "type": "string"
+    },
+    "status": {
+      "const": "complete",
+      "default": "complete",
+      "title": "Status",
+      "type": "string"
+    },
+    "target_argument_count": {
+      "minimum": 0,
+      "title": "Target Argument Count",
+      "type": "integer"
+    },
+    "target_argv_sha256": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Argv Sha256"
+    },
+    "target_executable": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Executable"
+    },
+    "target_pid": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Pid"
+    },
+    "target_type": {
+      "enum": [
+        "command",
+        "pid"
+      ],
+      "title": "Target Type",
+      "type": "string"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "collection_id",
+    "mode",
+    "target_type",
+    "target_argument_count",
+    "output_path",
+    "output_sha256",
+    "output_bytes",
+    "output_format",
+    "perf_executable",
+    "started_at",
+    "finished_at",
+    "duration_seconds"
+  ],
+  "title": "CollectionArtifact",
+  "type": "object"
+}

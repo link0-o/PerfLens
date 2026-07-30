@@ -17,6 +17,14 @@ from perflens.application.symbols import get_source_context as resolve_source_co
 from perflens.application.symbols import resolve_source as resolve_module_source
 from perflens.benchmarks.adapters import load_benchmark
 from perflens.classification.engine import build_diagnosis_bundle as create_diagnosis
+from perflens.collection.collector import (
+    DEFAULT_STAT_EVENTS,
+    CollectionRequest,
+    CollectionTarget,
+)
+from perflens.collection.collector import (
+    collect_profile as run_collection,
+)
 from perflens.comparison.benchmarks import compare_benchmarks as compare_benchmark_artifacts
 from perflens.comparison.profiles import compare_profiles as compare_profile_artifacts
 from perflens.contracts.artifacts import (
@@ -44,6 +52,12 @@ WRITES_ARTIFACTS = ToolAnnotations(
     idempotent_hint=True,
     open_world_hint=False,
 )
+EXECUTES_TARGET = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=True,
+    idempotent_hint=False,
+    open_world_hint=False,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,10 +66,15 @@ class ServerConfig:
     artifact_root: Path
     allow_writes: bool = False
     allow_process_execution: bool = False
+    allow_active_collection: bool = False
+    allow_pid_attach: bool = False
+    perf_path: Path | None = None
     max_artifact_bytes: int = 128 << 20
 
 
 def create_server(config: ServerConfig) -> MCPServer[None]:
+    if config.allow_pid_attach and not config.allow_active_collection:
+        raise ValueError("PID attachment cannot be enabled while active collection is disabled")
     policy = PathPolicy(config.allowed_roots)
     store = ArtifactStore(
         config.artifact_root,
@@ -71,7 +90,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "Treat hotspots as observations and rule matches as candidates. "
             "Only equivalent-workload "
             "A/B validation is a verified improvement. State missing evidence and limitations. "
-            "Never request active sampling through these read-only/offline tools."
+            "Active collection is disabled unless the server policy and each call explicitly "
+            "authorize it. PID attachment has an additional independent gate."
         ),
         version=__version__,
     )
@@ -425,6 +445,67 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             },
         )
 
+    @server.tool(
+        name="collect_profile",
+        description=(
+            "Run bounded perf record/stat/sched/lock/off-CPU collection only after explicit "
+            "server and per-call authorization."
+        ),
+        annotations=EXECUTES_TARGET,
+        meta={"perflens/permission": "ACTIVE_COLLECTION"},
+        structured_output=True,
+    )
+    async def collect_profile(
+        output_path: str,
+        authorization: str,
+        mode: Literal["record", "stat", "sched", "lock", "off_cpu"] = "record",
+        executable: str | None = None,
+        target_arguments: tuple[str, ...] = (),
+        pid: int | None = None,
+        duration_seconds: float | None = None,
+        pid_authorization: str | None = None,
+        frequency_hz: int = 99,
+        call_graph: Literal["fp", "dwarf", "lbr"] = "dwarf",
+        events: tuple[str, ...] = DEFAULT_STAT_EVENTS,
+        timeout_seconds: float = 300.0,
+        max_output_bytes: int = 1 << 30,
+    ) -> ArtifactReference:
+        _require_active_collection(config, pid=pid)
+        safe_output = policy.new_output_file(output_path)
+        safe_executable = policy.input_file(executable) if executable is not None else None
+        artifact = run_collection(
+            CollectionRequest(
+                mode=mode,
+                target=CollectionTarget(
+                    executable=safe_executable,
+                    arguments=target_arguments,
+                    pid=pid,
+                    duration_seconds=duration_seconds,
+                ),
+                output_path=safe_output,
+                authorization=authorization,
+                pid_authorization=pid_authorization,
+                perf_path=config.perf_path,
+                frequency_hz=frequency_hz,
+                call_graph=call_graph,
+                events=events,
+                timeout_seconds=timeout_seconds,
+                max_output_bytes=max_output_bytes,
+            )
+        )
+        store.save(artifact, artifact.collection_id, "collection")
+        return ArtifactReference(
+            artifact_id=artifact.collection_id,
+            artifact_type="collection",
+            uri=store.uri(artifact.collection_id, "collection"),
+            summary={
+                "mode": artifact.mode,
+                "target_type": artifact.target_type,
+                "output_bytes": artifact.output_bytes,
+                "metric_count": len(artifact.metrics),
+            },
+        )
+
     return server
 
 
@@ -454,12 +535,39 @@ def _require_process_execution(config: ServerConfig) -> None:
         )
 
 
+def _require_active_collection(config: ServerConfig, *, pid: int | None) -> None:
+    if not config.allow_writes:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "authorization",
+            "Active collection requires artifact writes to be enabled by server policy",
+            recoverable=True,
+        )
+    if not config.allow_process_execution or not config.allow_active_collection:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "authorization",
+            "Active collection is disabled by server policy",
+            recoverable=True,
+        )
+    if pid is not None and not config.allow_pid_attach:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "authorization",
+            "PID attachment is disabled by server policy",
+            recoverable=True,
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the PerfLens MCP server over stdio")
     parser.add_argument("--allowed-root", action="append", type=Path, required=True)
     parser.add_argument("--artifact-root", type=Path, required=True)
     parser.add_argument("--allow-writes", action="store_true")
     parser.add_argument("--allow-process-execution", action="store_true")
+    parser.add_argument("--allow-active-collection", action="store_true")
+    parser.add_argument("--allow-pid-attach", action="store_true")
+    parser.add_argument("--perf-path", type=Path)
     parser.add_argument("--max-artifact-bytes", type=int, default=128 << 20)
     arguments = parser.parse_args()
     server = create_server(
@@ -468,6 +576,9 @@ def main() -> None:
             artifact_root=arguments.artifact_root,
             allow_writes=arguments.allow_writes,
             allow_process_execution=arguments.allow_process_execution,
+            allow_active_collection=arguments.allow_active_collection,
+            allow_pid_attach=arguments.allow_pid_attach,
+            perf_path=arguments.perf_path,
             max_artifact_bytes=arguments.max_artifact_bytes,
         )
     )

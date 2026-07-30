@@ -1,0 +1,74 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "derived": {
+      "default": false,
+      "title": "Derived",
+      "type": "boolean"
+    },
+    "event": {
+      "title": "Event",
+      "type": "string"
+    },
+    "run_time_ns": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Time Ns"
+    },
+    "running_percent": {
+      "anyOf": [
+        {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Running Percent"
+    },
+    "status": {
+      "enum": [
+        "measured",
+        "not_counted",
+        "not_supported",
+        "derived"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "unit": {
+      "title": "Unit",
+      "type": "string"
+    },
+    "value": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Value"
+    }
+  },
+  "required": [
+    "event",
+    "value",
+    "unit",
+    "status"
+  ],
+  "title": "PerfStatMetric",
+  "type": "object"
+}
