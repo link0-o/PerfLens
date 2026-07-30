@@ -3,7 +3,7 @@
 PerfLens is an evidence-driven performance-analysis toolkit for Linux
 applications and coding agents.
 
-The current release formally supports Milestones 0 through 3:
+The current release formally supports Milestones 0 through 5:
 
 - streaming FlameGraph-compatible folded stack input;
 - deterministic self and inclusive hotspot aggregation;
@@ -15,9 +15,12 @@ The current release formally supports Milestones 0 through 3:
 - streaming parsing of explicitly-fielded `perf script` text;
 - `perf.data` conversion through an allowlisted system `perf` process;
 - bounded subprocess output, stderr diagnostics, timeouts, and process-group cleanup.
+- ELF Build ID/debug capability inspection and verified module-offset symbolization;
+- bounded workspace source context and container/build path mapping;
+- generic candidate-only classification, evidence bundles, and Markdown reports.
 
-It does **not** yet support external ELF symbolization, MCP, benchmark
-comparison, active sampling, or AI/LLM APIs.
+It does **not** yet support MCP, benchmark comparison, active sampling, or
+AI/LLM APIs.
 
 ## Install
 
@@ -84,6 +87,34 @@ perflens analyze-perf-data \
 invokes an absolute, allowlisted `perf` executable without a shell. Use
 `--perf-path` when several versions are installed and `--timeout-seconds` to
 lower the conversion deadline.
+
+## Inspect symbols and build evidence
+
+```bash
+perflens inspect-elf --input build/app --output build/elf.json
+perflens resolve-source \
+  --binary build/app \
+  --module-offset 0x1234 \
+  --output build/source.json
+
+perflens classify \
+  --analysis build/analysis.json \
+  --output build/diagnosis.json
+perflens report \
+  --analysis build/analysis.json \
+  --problem "Throughput regression" \
+  --metric "requests/second" \
+  --output build/report.md
+```
+
+Source resolution requires a verified module-relative offset. A runtime IP by
+itself is never rebased heuristically. PerfLens prefers a long-lived
+`llvm-symbolizer` JSON provider, then falls back to a long-lived `addr2line`
+provider. Cache identity includes Build ID, module offset, and resolver version.
+
+Classification rules label investigation candidates only. Generated reports
+keep direct observations, missing evidence, forbidden conclusions, and A/B
+validation requirements separate.
 
 ## Resource limits
 

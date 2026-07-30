@@ -19,6 +19,14 @@ def serialize_json(model: BaseModel) -> bytes:
 
 def write_json_atomic(model: BaseModel, output: Path, *, max_output_bytes: int) -> int:
     data = serialize_json(model)
+    return _write_bytes_atomic(data, output, max_output_bytes=max_output_bytes)
+
+
+def write_text_atomic(text: str, output: Path, *, max_output_bytes: int) -> int:
+    return _write_bytes_atomic(text.encode("utf-8"), output, max_output_bytes=max_output_bytes)
+
+
+def _write_bytes_atomic(data: bytes, output: Path, *, max_output_bytes: int) -> int:
     if len(data) > max_output_bytes:
         raise PerfLensError(
             ErrorCode.RESOURCE_LIMIT_EXCEEDED,

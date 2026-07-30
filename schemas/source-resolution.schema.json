@@ -1,0 +1,131 @@
+{
+  "$defs": {
+    "ResolvedSourceFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "column": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Column"
+        },
+        "file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "File"
+        },
+        "is_inline": {
+          "title": "Is Inline",
+          "type": "boolean"
+        },
+        "line": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "file",
+        "is_inline"
+      ],
+      "title": "ResolvedSourceFrame",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "binary_path": {
+      "title": "Binary Path",
+      "type": "string"
+    },
+    "build_id": {
+      "title": "Build Id",
+      "type": "string"
+    },
+    "frames": {
+      "items": {
+        "$ref": "#/$defs/ResolvedSourceFrame"
+      },
+      "title": "Frames",
+      "type": "array"
+    },
+    "module_offset": {
+      "title": "Module Offset",
+      "type": "string"
+    },
+    "resolver_version": {
+      "title": "Resolver Version",
+      "type": "string"
+    },
+    "runtime_address": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Address"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "complete",
+        "partial"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "resolver_version",
+    "status",
+    "build_id",
+    "binary_path",
+    "module_offset",
+    "frames"
+  ],
+  "title": "SourceResolutionArtifact",
+  "type": "object"
+}

@@ -1,0 +1,77 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "architecture": {
+      "title": "Architecture",
+      "type": "string"
+    },
+    "build_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Build Id"
+    },
+    "debug_file_candidates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Debug File Candidates",
+      "type": "array"
+    },
+    "debug_link": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Debug Link"
+    },
+    "elf_type": {
+      "title": "Elf Type",
+      "type": "string"
+    },
+    "has_debug_info": {
+      "title": "Has Debug Info",
+      "type": "boolean"
+    },
+    "is_pie": {
+      "title": "Is Pie",
+      "type": "boolean"
+    },
+    "is_stripped": {
+      "title": "Is Stripped",
+      "type": "boolean"
+    },
+    "path": {
+      "title": "Path",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "path",
+    "build_id",
+    "architecture",
+    "elf_type",
+    "is_pie",
+    "is_stripped",
+    "has_debug_info",
+    "debug_link",
+    "debug_file_candidates"
+  ],
+  "title": "ElfMetadataArtifact",
+  "type": "object"
+}

@@ -7,8 +7,13 @@
 | Architecture | x86_64; aarch64 tested when CI capacity exists |
 | Input | FlameGraph folded stacks; supported `perf script` text; `perf.data` through system perf |
 | perf | Linux perf with `script --ns -F`; tested locally with 6.12.90 |
+| ELF/DWARF | ELF through pyelftools 0.33; LLVM JSON provider or GNU/elfutils addr2line fallback |
+| Rules | Safe YAML; packaged generic, Linux, and C++ candidate rules |
+| Reports | JSON evidence bundle and Markdown |
 | Artifact schema | 1.0 |
 
 PerfLens does not parse `perf.data` directly. Binary compatibility is delegated
 to the selected system `perf`; use a matching perf build when a profile cannot
-be decoded. LLVM, elfutils, and MCP compatibility begins in later milestones.
+be decoded. The GNU addr2line fallback is exercised against Binutils 2.44. The
+LLVM JSON provider is protocol-tested because `llvm-symbolizer` is not installed
+on the development host. MCP compatibility begins in the next milestone.

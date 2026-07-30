@@ -5,6 +5,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from perflens.application.analyze import analyze_folded
+from perflens.artifacts.filesystem import write_json_atomic
 from perflens.cli.app import app
 
 runner = CliRunner()
@@ -76,3 +78,35 @@ def test_cli_analyzes_perf_script(fixture_root: Path, tmp_path: Path) -> None:
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["metadata"]["source_type"] == "perf_script"
     assert payload["metadata"]["total_weight"] == 100
+
+
+def test_cli_classifies_and_renders_report(tmp_path: Path) -> None:
+    profile = tmp_path / "input.folded"
+    profile.write_text("main;malloc 10\n")
+    analysis_path = tmp_path / "analysis.json"
+    write_json_atomic(analyze_folded(profile), analysis_path, max_output_bytes=1 << 20)
+    diagnosis_path = tmp_path / "diagnosis.json"
+    report_path = tmp_path / "report.md"
+
+    classified = runner.invoke(
+        app,
+        ["classify", "--analysis", str(analysis_path), "--output", str(diagnosis_path)],
+    )
+    reported = runner.invoke(
+        app,
+        [
+            "report",
+            "--analysis",
+            str(analysis_path),
+            "--output",
+            str(report_path),
+            "--problem",
+            "Throughput regression",
+        ],
+    )
+
+    assert classified.exit_code == 0, classified.output
+    assert reported.exit_code == 0, reported.output
+    diagnosis = json.loads(diagnosis_path.read_text(encoding="utf-8"))
+    assert diagnosis["classifications"][0]["conclusion_status"] == "candidate"
+    assert "Throughput regression" in report_path.read_text(encoding="utf-8")

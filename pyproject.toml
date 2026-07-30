@@ -23,7 +23,11 @@ classifiers = [
   "Topic :: System :: Benchmark",
 ]
 dependencies = [
+  "jinja2>=3.1.6,<4",
+  "mcp>=2,<3",
   "pydantic>=2.11,<3",
+  "pyelftools>=0.32,<1",
+  "pyyaml>=6.0.2,<7",
   "typer>=0.16,<1",
 ]
 

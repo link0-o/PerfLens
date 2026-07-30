@@ -150,3 +150,87 @@ class ErrorBody(ContractModel):
 class ErrorArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     error: ErrorBody
+
+
+class ElfMetadataArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    path: str
+    build_id: str | None
+    architecture: str
+    elf_type: str
+    is_pie: bool
+    is_stripped: bool
+    has_debug_info: bool
+    debug_link: str | None
+    debug_file_candidates: tuple[str, ...]
+
+
+class ResolvedSourceFrame(ContractModel):
+    symbol: str
+    file: str | None
+    line: int | None = Field(default=None, ge=1)
+    column: int | None = Field(default=None, ge=1)
+    is_inline: bool
+
+
+class SourceResolutionArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    resolver_version: str
+    status: Literal["complete", "partial"]
+    build_id: str
+    binary_path: str
+    module_offset: str
+    runtime_address: str | None = None
+    frames: tuple[ResolvedSourceFrame, ...]
+    warnings: tuple[str, ...] = ()
+
+
+class SourceContextArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    file: str
+    line: int = Field(ge=1)
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    lines: tuple[str, ...]
+
+
+class Evidence(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    evidence_id: str
+    level: Literal["L0", "L1", "L2", "L3", "L4"]
+    kind: str
+    statement: str
+    artifact_id: str
+    hotspot_id: str | None = None
+
+
+class Classification(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    classification_id: str
+    rule_id: str
+    rule_version: int = Field(ge=1)
+    hotspot_id: str
+    symbol: str
+    dso: str
+    category: str
+    conclusion_status: Literal["candidate"] = "candidate"
+    confidence: Literal["low", "medium"]
+    evidence_level: Literal["L1", "L2"]
+    observation: str
+    supporting_evidence: tuple[Evidence, ...]
+    counter_evidence: tuple[str, ...]
+    missing_evidence: tuple[str, ...]
+    limitations: tuple[str, ...]
+    next_steps: tuple[str, ...]
+    forbidden_conclusions: tuple[str, ...]
+
+
+class DiagnosisBundle(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    analysis_id: str
+    status: Literal["complete", "partial"]
+    generated_at: str
+    classifications: tuple[Classification, ...]
+    observations: tuple[str, ...]
+    limitations: tuple[str, ...]
+    missing_evidence: tuple[str, ...]

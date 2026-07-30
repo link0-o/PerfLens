@@ -1,0 +1,46 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "end_line": {
+      "minimum": 1,
+      "title": "End Line",
+      "type": "integer"
+    },
+    "file": {
+      "title": "File",
+      "type": "string"
+    },
+    "line": {
+      "minimum": 1,
+      "title": "Line",
+      "type": "integer"
+    },
+    "lines": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Lines",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "start_line": {
+      "minimum": 1,
+      "title": "Start Line",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "file",
+    "line",
+    "start_line",
+    "end_line",
+    "lines"
+  ],
+  "title": "SourceContextArtifact",
+  "type": "object"
+}

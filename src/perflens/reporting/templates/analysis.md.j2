@@ -1,0 +1,83 @@
+# PerfLens Performance Report
+
+## 1. Problem Definition
+
+- Observed problem: {{ problem_statement }}
+- Target metric: {{ target_metric }}
+- Input: `{{ analysis.metadata.input_path }}`
+
+## 2. Data Quality
+
+- Profile type: `{{ analysis.metadata.source_type }}`
+- Event: `{{ analysis.metadata.event }}`
+- Logical samples: {{ analysis.metadata.sample_count }}
+- Total weight: {{ analysis.metadata.total_weight }} {{ analysis.metadata.weight_unit }}
+- Call graph: {{ "available" if analysis.metadata.has_call_graph else "unavailable" }}
+- Source lines: {{ "available" if analysis.metadata.has_source_lines else "unavailable" }}
+- Unresolved self weight: {{ unresolved_percent }}%
+- Analysis status: `{{ analysis.status }}`
+{% for limitation in diagnosis.limitations %}
+- Limitation: {{ limitation }}
+{% endfor %}
+
+## 3. Key Observations
+
+{% for observation in diagnosis.observations %}
+- Observed: {{ observation }}
+{% else %}
+- No weighted hotspot observation is available.
+{% endfor %}
+
+## 4. Top Hotspots
+
+| ID | Symbol | DSO | Self | Inclusive | Categories |
+|---|---|---|---:|---:|---|
+{% for hotspot in analysis.hotspots[:20] %}
+| {{ hotspot.hotspot_id }} | `{{ hotspot.symbol }}` | `{{ hotspot.dso }}` | {{ hotspot.self_percent }}% | {{ hotspot.inclusive_percent }}% | {% for classification in diagnosis.classifications if classification.hotspot_id == hotspot.hotspot_id %}{{ classification.category }}{% if not loop.last %}, {% endif %}{% endfor %} |
+{% endfor %}
+
+## 5. Candidate Root Causes
+
+{% for candidate in diagnosis.classifications %}
+### {{ candidate.classification_id }} — {{ candidate.category }}
+
+- Status: Candidate
+- Confidence: {{ candidate.confidence }}
+- Evidence level: {{ candidate.evidence_level }}
+- Observation: {{ candidate.observation }}
+{% for evidence in candidate.supporting_evidence %}
+- Supporting evidence: {{ evidence.statement }}
+{% endfor %}
+{% for item in candidate.counter_evidence %}
+- Counter-evidence: {{ item }}
+{% endfor %}
+{% for item in candidate.missing_evidence %}
+- Missing evidence: {{ item }}
+{% endfor %}
+{% for item in candidate.limitations %}
+- Limitation: {{ item }}
+{% endfor %}
+{% for item in candidate.forbidden_conclusions %}
+- Not established: {{ item }}
+{% endfor %}
+{% else %}
+No generic rule produced a candidate classification.
+{% endfor %}
+
+## 6. Recommendations
+
+{% for candidate in diagnosis.classifications %}
+{% for step in candidate.next_steps %}
+- For {{ candidate.category }}: {{ step }} Validate under the same workload and run correctness tests; do not claim an improvement before A/B evidence.
+{% endfor %}
+{% else %}
+- Inspect dominant call paths and collect the missing evidence before proposing code changes.
+{% endfor %}
+
+## 7. Final Conclusion
+
+Observed: the hotspot weights and call paths listed above are direct profile facts.
+
+Likely: none. Rule matches remain candidate directions until corroborating evidence is collected.
+
+Confirmed: none. Only equivalent-workload A/B validation with correctness checks can establish a verified improvement.

@@ -1,0 +1,14 @@
+{
+  "category": "memory-allocation",
+  "conclusion_status": "candidate",
+  "confidence": "low",
+  "evidence_level": "L2",
+  "forbidden_conclusions": [
+    "The system allocator is confirmed as the root cause."
+  ],
+  "missing_evidence": [
+    "Allocation count and size distribution are unavailable."
+  ],
+  "rule_id": "generic-allocation-hotspot",
+  "symbol": "malloc"
+}

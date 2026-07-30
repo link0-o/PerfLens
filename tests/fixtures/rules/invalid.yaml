@@ -1,0 +1,9 @@
+- id: broken-rule
+  version: 1
+  scope: project-specific
+  match:
+    symbol_regex:
+      - "[unterminated"
+  classification:
+    category: root-cause
+    confidence: high

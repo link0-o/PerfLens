@@ -8,9 +8,15 @@ from pydantic import BaseModel
 from perflens.contracts.artifacts import (
     AnalysisArtifact,
     CallPath,
+    Classification,
+    DiagnosisBundle,
+    ElfMetadataArtifact,
+    Evidence,
     Frame,
     Hotspot,
     ProfileMetadata,
+    SourceContextArtifact,
+    SourceResolutionArtifact,
     StackSample,
 )
 
@@ -25,6 +31,12 @@ def test_checked_in_json_schemas_match_contract_models() -> None:
         "frame.schema.json": Frame,
         "hotspot.schema.json": Hotspot,
         "call-path.schema.json": CallPath,
+        "elf-metadata.schema.json": ElfMetadataArtifact,
+        "source-resolution.schema.json": SourceResolutionArtifact,
+        "source-context.schema.json": SourceContextArtifact,
+        "classification.schema.json": Classification,
+        "diagnosis-bundle.schema.json": DiagnosisBundle,
+        "evidence.schema.json": Evidence,
     }
 
     for filename, model in models.items():

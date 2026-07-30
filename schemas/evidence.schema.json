@@ -1,0 +1,59 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "artifact_id": {
+      "title": "Artifact Id",
+      "type": "string"
+    },
+    "evidence_id": {
+      "title": "Evidence Id",
+      "type": "string"
+    },
+    "hotspot_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Hotspot Id"
+    },
+    "kind": {
+      "title": "Kind",
+      "type": "string"
+    },
+    "level": {
+      "enum": [
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+        "L4"
+      ],
+      "title": "Level",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "statement": {
+      "title": "Statement",
+      "type": "string"
+    }
+  },
+  "required": [
+    "evidence_id",
+    "level",
+    "kind",
+    "statement",
+    "artifact_id"
+  ],
+  "title": "Evidence",
+  "type": "object"
+}

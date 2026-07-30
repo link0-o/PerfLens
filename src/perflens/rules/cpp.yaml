@@ -1,0 +1,22 @@
+- id: cpp-runtime-hotspot
+  version: 1
+  scope: cpp
+  match:
+    symbol_regex:
+      - "__cxa_"
+      - "std::.*(construct|destroy|locale|iostream)"
+  thresholds:
+    self_percent_gte: 1
+    inclusive_percent_gte: 1
+  classification:
+    category: runtime
+    confidence: low
+  observation: "C++ runtime-related symbol {symbol} has significant sampled weight."
+  limitations:
+    - "Symbol-name matching does not identify object counts or semantic necessity."
+  missing_evidence:
+    - "Object lifetime and invocation-count evidence is unavailable."
+  next_steps:
+    - "Inspect callers and measure operation counts before changing ownership or lifetime."
+  forbidden_conclusions:
+    - "C++ runtime behavior is confirmed as the root cause."

@@ -1,0 +1,189 @@
+{
+  "$defs": {
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "evidence_id": {
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "hotspot_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hotspot Id"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "level": {
+          "enum": [
+            "L0",
+            "L1",
+            "L2",
+            "L3",
+            "L4"
+          ],
+          "title": "Level",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "level",
+        "kind",
+        "statement",
+        "artifact_id"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "category": {
+      "title": "Category",
+      "type": "string"
+    },
+    "classification_id": {
+      "title": "Classification Id",
+      "type": "string"
+    },
+    "conclusion_status": {
+      "const": "candidate",
+      "default": "candidate",
+      "title": "Conclusion Status",
+      "type": "string"
+    },
+    "confidence": {
+      "enum": [
+        "low",
+        "medium"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    },
+    "counter_evidence": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Counter Evidence",
+      "type": "array"
+    },
+    "dso": {
+      "title": "Dso",
+      "type": "string"
+    },
+    "evidence_level": {
+      "enum": [
+        "L1",
+        "L2"
+      ],
+      "title": "Evidence Level",
+      "type": "string"
+    },
+    "forbidden_conclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Forbidden Conclusions",
+      "type": "array"
+    },
+    "hotspot_id": {
+      "title": "Hotspot Id",
+      "type": "string"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "missing_evidence": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Missing Evidence",
+      "type": "array"
+    },
+    "next_steps": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "observation": {
+      "title": "Observation",
+      "type": "string"
+    },
+    "rule_id": {
+      "title": "Rule Id",
+      "type": "string"
+    },
+    "rule_version": {
+      "minimum": 1,
+      "title": "Rule Version",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "supporting_evidence": {
+      "items": {
+        "$ref": "#/$defs/Evidence"
+      },
+      "title": "Supporting Evidence",
+      "type": "array"
+    },
+    "symbol": {
+      "title": "Symbol",
+      "type": "string"
+    }
+  },
+  "required": [
+    "classification_id",
+    "rule_id",
+    "rule_version",
+    "hotspot_id",
+    "symbol",
+    "dso",
+    "category",
+    "confidence",
+    "evidence_level",
+    "observation",
+    "supporting_evidence",
+    "counter_evidence",
+    "missing_evidence",
+    "limitations",
+    "next_steps",
+    "forbidden_conclusions"
+  ],
+  "title": "Classification",
+  "type": "object"
+}

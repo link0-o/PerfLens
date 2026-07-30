@@ -1,0 +1,67 @@
+- id: generic-allocation-hotspot
+  version: 1
+  scope: generic
+  match:
+    symbol_regex:
+      - "(^|::)(malloc|calloc|realloc|free)$"
+      - "operator (new|delete)"
+  thresholds:
+    self_percent_gte: 1
+    inclusive_percent_gte: 1
+  classification:
+    category: memory-allocation
+    confidence: low
+  observation: "Allocation-related symbol {symbol} has significant on-CPU profile weight."
+  limitations:
+    - "On-CPU samples do not provide allocation counts, sizes, or object lifetimes."
+  missing_evidence:
+    - "Allocation count and size distribution are unavailable."
+  next_steps:
+    - "Inspect dominant allocation call paths and collect allocation size data."
+  forbidden_conclusions:
+    - "The system allocator is confirmed as the root cause."
+
+- id: generic-memory-copy-hotspot
+  version: 1
+  scope: generic
+  match:
+    symbol_regex:
+      - "(^|::)(memcpy|memmove)$"
+      - "copy"
+  thresholds:
+    self_percent_gte: 1
+    inclusive_percent_gte: 1
+  classification:
+    category: memory-copy
+    confidence: low
+  observation: "Copy-related symbol {symbol} has significant on-CPU profile weight."
+  limitations:
+    - "The profile does not identify copied byte counts or ownership semantics."
+  missing_evidence:
+    - "Copy sizes and invocation counts are unavailable."
+  next_steps:
+    - "Measure copy sizes and inspect repeated conversion or temporary-buffer paths."
+  forbidden_conclusions:
+    - "Removing all copies is safe or sufficient."
+
+- id: generic-system-call-hotspot
+  version: 1
+  scope: generic
+  match:
+    symbol_regex:
+      - "(^|::)(read|write|send|recv|sendmsg|recvmsg|epoll_wait|poll|fsync)$"
+  thresholds:
+    self_percent_gte: 1
+    inclusive_percent_gte: 1
+  classification:
+    category: system-call
+    confidence: low
+  observation: "System-call-related symbol {symbol} has significant on-CPU profile weight."
+  limitations:
+    - "On-CPU samples do not measure blocked time or identify the backing device."
+  missing_evidence:
+    - "Off-CPU time, return values, request sizes, and device metrics are unavailable."
+  next_steps:
+    - "Collect syscall frequency and off-CPU or device-level evidence."
+  forbidden_conclusions:
+    - "Disk or network latency is confirmed as the root cause."

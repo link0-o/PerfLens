@@ -16,3 +16,14 @@ matching perf version, DSOs, debug files, build IDs, or mount namespace data.
 This development host has `perf_event_paranoid=3`, so live recording is not
 part of the local acceptance evidence; adapter integration uses an executable
 test double and real `perf script` syntax fixtures.
+
+Symbolization requires a verified module offset and a matching module or debug
+file. PerfLens does not guess PIE/ASLR relocation from a runtime address. The
+LLVM provider is protocol-tested locally; the installed GNU addr2line fallback
+is also exercised with PIE, shared-library, stripped, and separate-debug-file
+fixtures.
+
+Classification uses generic symbol/DSO rules. A match is always a low/medium
+confidence candidate, never a confirmed root cause. On-CPU data cannot by
+itself confirm wait time, I/O latency, allocation behavior, or correctness of a
+proposed optimization.

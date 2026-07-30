@@ -1,0 +1,47 @@
+- id: linux-synchronization-hotspot
+  version: 1
+  scope: linux
+  match:
+    symbol_regex:
+      - "pthread_(mutex|rwlock)"
+      - "(^|::)futex"
+      - "std::.*mutex"
+  thresholds:
+    self_percent_gte: 0
+    inclusive_percent_gte: 2
+  classification:
+    category: synchronization
+    confidence: low
+  observation: "Synchronization-related symbol {symbol} appears on a significant call path."
+  limitations:
+    - "An on-CPU profile cannot fully represent lock wait time or contention ownership."
+  missing_evidence:
+    - "Lock contention, owner, and off-CPU duration are unavailable."
+  next_steps:
+    - "Collect perf lock, perf sched, or off-CPU evidence."
+  forbidden_conclusions:
+    - "Lock contention is confirmed as the root cause."
+
+- id: linux-kernel-hotspot
+  version: 1
+  scope: linux
+  match:
+    symbol_regex:
+      - ".+"
+    dso_regex:
+      - "^\\[kernel"
+  thresholds:
+    self_percent_gte: 1
+    inclusive_percent_gte: 1
+  classification:
+    category: kernel
+    confidence: low
+  observation: "Kernel symbol {symbol} has significant sampled weight."
+  limitations:
+    - "Kernel presence alone does not identify whether application behavior or the kernel is causal."
+  missing_evidence:
+    - "Relevant syscall, scheduling, and system-metric correlation is unavailable."
+  next_steps:
+    - "Inspect user-to-kernel call paths and correlate with system metrics."
+  forbidden_conclusions:
+    - "The kernel is confirmed defective."

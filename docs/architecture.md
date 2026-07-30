@@ -19,3 +19,14 @@ fingerprinting, metadata, and conversion to versioned boundary models.
 
 Inputs are immutable. Output is written to a temporary sibling and atomically
 replaced only after serialization and `fsync` complete.
+
+Symbolization is another adapter boundary. `pyelftools` inspects ELF identity
+and debug capabilities; it is not used as a custom high-throughput DWARF
+symbolizer. A per-module LLVM or addr2line process resolves verified module
+offsets in batches and is reused across queries. Cache keys contain Build ID,
+module offset, and resolver version. Runtime addresses never substitute for a
+missing relocation model.
+
+The rule engine and evidence builder are deterministic. They can emit only
+`candidate` classifications at L1/L2; an L4 verified improvement requires a
+later A/B comparison and cannot be produced by symbol-name rules.

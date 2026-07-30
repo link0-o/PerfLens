@@ -1,0 +1,1 @@
+"""Packaged generic classification rules."""
