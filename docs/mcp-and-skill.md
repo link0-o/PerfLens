@@ -1,5 +1,7 @@
 # MCP server and Performance Analysis Skill
 
+[简体中文](mcp-and-skill.zh-CN.md) | English
+
 PerfLens consists of three separable layers:
 
 1. The deterministic Python Core and CLI.

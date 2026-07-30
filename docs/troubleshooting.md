@@ -1,5 +1,7 @@
 # Troubleshooting
 
+[简体中文](troubleshooting.zh-CN.md) | English
+
 ## Active perf collection is denied
 
 PerfLens reports the bounded stderr from `perf` as `EXTERNAL_TOOL_FAILED`. Check `/proc/sys/kernel/perf_event_paranoid`, capabilities, container policy, and access to tracepoints outside PerfLens. The development host uses value `3`, which rejects unprivileged collection.

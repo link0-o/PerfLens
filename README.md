@@ -1,5 +1,10 @@
 # PerfLens
 
+> Evidence-driven Linux performance analysis with a CLI, MCP Server, and Codex Skill.
+> 基于证据的 Linux 性能分析工具，集成 CLI、MCP Server 与 Codex Skill。
+
+[简体中文](README.zh-CN.md) | English
+
 PerfLens is an evidence-driven performance-analysis toolkit for Linux
 applications and coding agents.
 

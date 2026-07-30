@@ -60,6 +60,7 @@ include = [
   "/schemas",
   "/docs",
   "/README.md",
+  "/README.zh-CN.md",
   "/LICENSE",
   "/CHANGELOG.md",
   "/SECURITY.md",
