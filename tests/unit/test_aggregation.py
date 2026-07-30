@@ -13,10 +13,10 @@ def _result(
     table: FrameTable,
     samples: list[StackSample],
 ):  # type: ignore[no-untyped-def]
-    aggregator = HotspotAggregator(ResourceLimits())
+    aggregator = HotspotAggregator(ResourceLimits(), table)
     for sample in samples:
         aggregator.add(sample)
-    return aggregator.finish(table)
+    return aggregator.finish()
 
 
 def test_self_and_recursive_inclusive_are_distinct() -> None:
@@ -25,7 +25,7 @@ def test_self_and_recursive_inclusive_are_distinct() -> None:
     walk = table.intern("walk")
     leaf = table.intern("leaf")
     result = _result(table, [StackSample((main, walk, walk, leaf), weight=10)])
-    by_symbol = {table.resolve(item.frame_id).symbol: item for item in result.hotspots}
+    by_symbol = {item.symbol: item for item in result.hotspots}
 
     assert by_symbol["leaf"].self_weight == 10
     assert by_symbol["walk"].self_weight == 0
@@ -46,10 +46,22 @@ def test_same_symbol_in_different_dsos_is_not_merged() -> None:
         ],
     )
     assert len(result.hotspots) == 2
-    assert {table.resolve(item.frame_id).dso for item in result.hotspots} == {
+    assert {item.dso for item in result.hotspots} == {
         "app",
         "plugin.so",
     }
+
+
+def test_same_symbol_and_dso_at_different_ips_is_merged() -> None:
+    table = FrameTable()
+    first = table.intern("work", dso="app", ip="0x10")
+    second = table.intern("work", dso="app", ip="0x20")
+    result = _result(
+        table,
+        [StackSample((first,), weight=4), StackSample((second,), weight=6)],
+    )
+    assert len(result.hotspots) == 1
+    assert result.hotspots[0].self_weight == 10
 
 
 def test_multiple_threads_are_counted_without_merging_frame_identity() -> None:
@@ -69,7 +81,7 @@ def test_multiple_threads_are_counted_without_merging_frame_identity() -> None:
 def test_different_event_or_weight_unit_is_rejected() -> None:
     table = FrameTable()
     frame = table.intern("work")
-    aggregator = HotspotAggregator(ResourceLimits())
+    aggregator = HotspotAggregator(ResourceLimits(), table)
     aggregator.add(StackSample((frame,), 1, event="cycles"))
     with pytest.raises(PerfLensError, match="cannot be merged"):
         aggregator.add(StackSample((frame,), 1, event="instructions"))

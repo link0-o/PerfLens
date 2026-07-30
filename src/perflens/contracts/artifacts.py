@@ -32,7 +32,7 @@ class Warning(ContractModel):
 class ProfileMetadata(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     profile_id: str
-    source_type: Literal["folded"]
+    source_type: Literal["folded", "perf_script", "perf_data"]
     input_path: str
     input_sha256: str
     created_at: str

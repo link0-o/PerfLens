@@ -1,0 +1,13 @@
+worker pool 101 102 [003] 100.123456789: 50 cycles:u: 7f1001 do_work<int>(item const&)+0x11 (/opt/demo/bin/app) /src/demo.cc:42
+        7f1001 do_work<int>(item const&)+0x11 (/opt/demo/bin/app) /src/demo.cc:42
+        7f0000 worker_loop (/opt/demo/bin/app) /src/worker.cc:12
+        400100 main (/opt/demo/bin/app) /src/main.cc:8
+
+worker pool 101/103 [004] 100.223456789: 30 cycles:u:
+        7f1009 do_work<int>(item const&)+0x19 (/opt/demo/bin/app) /src/demo.cc:45
+        7f0000 worker_loop (/opt/demo/bin/app) /src/worker.cc:12
+        400100 main (/opt/demo/bin/app) /src/main.cc:8
+
+idle 0/33 [001] 100.323456789: 20 cycles:u: ffffffff81000100 schedule+0x10 ([kernel.kallsyms]) kernel/sched/core.c:100
+        ffffffff81000000 entry_SYSCALL_64_after_hwframe+0x0 ([kernel.kallsyms]) arch/x86/entry/common.c:80
+

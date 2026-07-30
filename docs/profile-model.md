@@ -8,5 +8,15 @@ unique `(symbol, DSO)` key in the record. Occurrence count is credited for every
 frame position and therefore preserves recursion depth separately.
 
 All records in one analysis must use the same event, weight unit, and weight
-source. Milestone 1 folded input fixes those values to `unknown`,
+source. Folded input fixes those values to `unknown`,
 `sample_count`, and `folded_weight`.
+
+For `perf script`, PerfLens supports the explicit fields
+`comm,pid,tid,cpu,time,event,period,ip,sym,dso,srcline`. Callchains emitted by
+perf are normalized from leaf-first to root-first. Period becomes event-count
+weight; absent period falls back explicitly to one sample. IP, raw symbol, DSO,
+kernel status, and source line remain attached to interned frames.
+
+Hotspots group by normalized `(symbol, DSO)`, so different instruction
+addresses inside one function are not split. Exact call paths retain distinct
+frames and therefore preserve address/source variation.

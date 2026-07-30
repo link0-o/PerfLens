@@ -1,0 +1,21 @@
+{
+  "call_paths": [
+    ["main", "worker_loop", "do_work<int>(item const&)"],
+    ["main", "worker_loop", "do_work<int>(item const&)"],
+    ["entry_SYSCALL_64_after_hwframe", "schedule"]
+  ],
+  "event": "cycles:u",
+  "has_call_graph": true,
+  "has_source_lines": true,
+  "hotspots": [
+    ["do_work<int>(item const&)", "/opt/demo/bin/app", 80, 80, 2],
+    ["schedule", "[kernel.kallsyms]", 20, 20, 1],
+    ["main", "/opt/demo/bin/app", 0, 80, 2],
+    ["worker_loop", "/opt/demo/bin/app", 0, 80, 2],
+    ["entry_SYSCALL_64_after_hwframe", "[kernel.kallsyms]", 0, 20, 1]
+  ],
+  "sample_count": 3,
+  "source_type": "perf_script",
+  "status": "complete",
+  "total_weight": 100
+}

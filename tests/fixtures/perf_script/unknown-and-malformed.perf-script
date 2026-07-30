@@ -1,0 +1,8 @@
+app 200/201 [000] 2.000001: cycles: 0 [unknown] ([unknown]) ??:0
+
+this is not a header
+
+app 200/201 [000] 2.000002: 7 cycles:
+        frame-without-ip
+        400000 main (/opt/app)
+

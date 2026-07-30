@@ -58,3 +58,21 @@ def test_cli_resource_limit_has_stable_exit_code(fixture_root: Path, tmp_path: P
     )
     assert result.exit_code == 4
     assert not output.exists()
+
+
+def test_cli_analyzes_perf_script(fixture_root: Path, tmp_path: Path) -> None:
+    output = tmp_path / "perf-script-analysis.json"
+    result = runner.invoke(
+        app,
+        [
+            "analyze-perf-script",
+            "--input",
+            str(fixture_root / "perf_script" / "normal.perf-script"),
+            "--output",
+            str(output),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["metadata"]["source_type"] == "perf_script"
+    assert payload["metadata"]["total_weight"] == 100

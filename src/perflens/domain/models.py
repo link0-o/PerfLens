@@ -24,6 +24,10 @@ def _empty_thread_ids() -> set[int]:
 class FrameKey:
     symbol: str
     dso: str = UNKNOWN_DSO
+    raw_symbol: str | None = None
+    ip: str | None = None
+    source_file: str | None = None
+    source_line: int | None = None
     is_kernel: bool = False
     is_unknown: bool = False
 
@@ -42,12 +46,20 @@ class FrameTable:
         symbol: str,
         *,
         dso: str = UNKNOWN_DSO,
+        raw_symbol: str | None = None,
+        ip: str | None = None,
+        source_file: str | None = None,
+        source_line: int | None = None,
         is_kernel: bool = False,
         is_unknown: bool = False,
     ) -> int:
         key = FrameKey(
             symbol=sys.intern(symbol),
             dso=sys.intern(dso),
+            raw_symbol=sys.intern(raw_symbol) if raw_symbol is not None else None,
+            ip=sys.intern(ip) if ip is not None else None,
+            source_file=sys.intern(source_file) if source_file is not None else None,
+            source_line=source_line,
             is_kernel=is_kernel,
             is_unknown=is_unknown,
         )
@@ -134,7 +146,8 @@ class HotspotAccumulator:
 
 @dataclass(frozen=True, slots=True)
 class HotspotResult:
-    frame_id: int
+    symbol: str
+    dso: str
     self_weight: int
     inclusive_weight: int
     sample_count: int

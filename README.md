@@ -3,7 +3,7 @@
 PerfLens is an evidence-driven performance-analysis toolkit for Linux
 applications and coding agents.
 
-The current release formally supports Milestones 0 and 1:
+The current release formally supports Milestones 0 through 3:
 
 - streaming FlameGraph-compatible folded stack input;
 - deterministic self and inclusive hotspot aggregation;
@@ -11,10 +11,13 @@ The current release formally supports Milestones 0 and 1:
 - symbol plus DSO grouping (DSO is explicitly `unknown` for standard folded input);
 - bounded parse diagnostics and versioned JSON artifacts;
 - a production CLI with path checks, stable error output, resource limits, and
-  atomic writes.
+  atomic writes;
+- streaming parsing of explicitly-fielded `perf script` text;
+- `perf.data` conversion through an allowlisted system `perf` process;
+- bounded subprocess output, stderr diagnostics, timeouts, and process-group cleanup.
 
-It does **not** yet support `perf script`, `perf.data`, symbolization, source
-resolution, MCP, benchmark comparison, active sampling, or AI/LLM APIs.
+It does **not** yet support external ELF symbolization, MCP, benchmark
+comparison, active sampling, or AI/LLM APIs.
 
 ## Install
 
@@ -55,6 +58,33 @@ metadata. PerfLens records these fields as `unknown`; it never infers them from
 symbol names. Each folded line is one weighted stack record, not `weight`
 individual samples.
 
+## Analyze perf profiles
+
+For existing text, generate the supported stable field set and analyze it:
+
+```bash
+perf script --ns \
+  -F comm,pid,tid,cpu,time,event,period,ip,sym,dso,srcline \
+  -i perf.data > profile.perf-script
+
+perflens analyze-perf-script \
+  --input profile.perf-script \
+  --output build/analysis.json
+```
+
+Or let PerfLens run the same read-only conversion:
+
+```bash
+perflens analyze-perf-data \
+  --input perf.data \
+  --output build/analysis.json
+```
+
+`analyze-perf-data` never records, attaches to a process, or requests root. It
+invokes an absolute, allowlisted `perf` executable without a shell. Use
+`--perf-path` when several versions are installed and `--timeout-seconds` to
+lower the conversion deadline.
+
 ## Resource limits
 
 Defaults are intentionally explicit:
@@ -82,6 +112,7 @@ records are skipped and reported with bounded line previews.
 | 3 | unsupported or malformed profile |
 | 4 | resource limit exceeded |
 | 5 | output/path safety failure |
+| 6 | external tool failure or timeout |
 | 70 | unexpected internal failure |
 
 ## Development checks
@@ -112,3 +143,5 @@ See `docs/performance-budget.md` for the recorded environment and baseline.
 - Call paths are exact up to the configured unique-path limit.
 - Symbol names are preserved with only conservative compiler-suffix cleanup.
 - A hotspot is an observation, not a confirmed root cause.
+- `perf.data` portability remains dependent on the installed `perf` version and
+  access to matching DSOs/symbols; preserved unknown frames make gaps explicit.

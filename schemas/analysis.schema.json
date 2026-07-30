@@ -255,7 +255,11 @@
           "type": "string"
         },
         "source_type": {
-          "const": "folded",
+          "enum": [
+            "folded",
+            "perf_script",
+            "perf_data"
+          ],
           "title": "Source Type",
           "type": "string"
         },

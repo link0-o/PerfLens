@@ -18,6 +18,7 @@ class HotspotAggregator:
     __slots__ = (
         "_call_paths",
         "_event",
+        "_frame_table",
         "_has_call_graph",
         "_hotspots",
         "_limits",
@@ -27,9 +28,10 @@ class HotspotAggregator:
         "_weight_unit",
     )
 
-    def __init__(self, limits: ResourceLimits) -> None:
+    def __init__(self, limits: ResourceLimits, frame_table: FrameTable) -> None:
         self._limits = limits
-        self._hotspots: dict[int, HotspotAccumulator] = {}
+        self._frame_table = frame_table
+        self._hotspots: dict[tuple[str, str], HotspotAccumulator] = {}
         self._call_paths: dict[tuple[int, ...], list[int]] = {}
         self._total_weight = 0
         self._record_count = 0
@@ -52,20 +54,23 @@ class HotspotAggregator:
         self._total_weight += sample.weight
         self._has_call_graph = self._has_call_graph or len(frames) > 1
 
-        leaf_frame = next(reversed(frames))
-        leaf = self._hotspots.setdefault(leaf_frame, HotspotAccumulator())
+        leaf_frame = self._frame_table.resolve(next(reversed(frames)))
+        leaf_key = (leaf_frame.symbol, leaf_frame.dso)
+        leaf = self._hotspots.setdefault(leaf_key, HotspotAccumulator())
         leaf.self_weight += sample.weight
 
-        seen: set[int] = set()
+        seen: set[tuple[str, str]] = set()
         for frame_id in frames:
-            accumulator = self._hotspots.setdefault(frame_id, HotspotAccumulator())
+            frame = self._frame_table.resolve(frame_id)
+            hotspot_key = (frame.symbol, frame.dso)
+            accumulator = self._hotspots.setdefault(hotspot_key, HotspotAccumulator())
             accumulator.stack_occurrence_count += 1
             if sample.thread_id is not None:
                 accumulator.thread_ids.add(sample.thread_id)
-            if frame_id not in seen:
+            if hotspot_key not in seen:
                 accumulator.inclusive_weight += sample.weight
                 accumulator.sample_count += 1
-                seen.add(frame_id)
+                seen.add(hotspot_key)
 
         path_state = self._call_paths.get(frames)
         if path_state is None:
@@ -82,23 +87,23 @@ class HotspotAggregator:
             path_state[0] += sample.weight
             path_state[1] += 1
 
-    def finish(self, frame_table: FrameTable) -> AggregationResult:
+    def finish(self) -> AggregationResult:
         hotspots = tuple(
             HotspotResult(
-                frame_id=frame_id,
+                symbol=hotspot_key[0],
+                dso=hotspot_key[1],
                 self_weight=state.self_weight,
                 inclusive_weight=state.inclusive_weight,
                 sample_count=state.sample_count,
                 stack_occurrence_count=state.stack_occurrence_count,
                 thread_count=len(state.thread_ids),
             )
-            for frame_id, state in sorted(
+            for hotspot_key, state in sorted(
                 self._hotspots.items(),
                 key=lambda item: (
                     -item[1].self_weight,
                     -item[1].inclusive_weight,
-                    frame_table.resolve(item[0]).symbol,
-                    frame_table.resolve(item[0]).dso,
+                    item[0],
                 ),
             )
         )
@@ -110,8 +115,8 @@ class HotspotAggregator:
                     -item[1][0],
                     tuple(
                         (
-                            frame_table.resolve(frame_id).symbol,
-                            frame_table.resolve(frame_id).dso,
+                            self._frame_table.resolve(frame_id).symbol,
+                            self._frame_table.resolve(frame_id).dso,
                         )
                         for frame_id in item[0]
                     ),

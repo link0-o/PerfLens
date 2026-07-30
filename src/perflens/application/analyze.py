@@ -1,10 +1,11 @@
-"""Folded-stack analysis application service."""
+"""Deterministic profile analysis application service."""
 
 from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from perflens import __version__
 from perflens.contracts.artifacts import (
@@ -19,15 +20,44 @@ from perflens.contracts.artifacts import (
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.domain.models import ResourceLimits
+from perflens.domain.ports import ProfileAdapter
 from perflens.hotspots.aggregate import HotspotAggregator
 from perflens.profiles.base import FileProfileSource
 from perflens.profiles.folded import FoldedStackAdapter
+from perflens.profiles.perf_data import PerfDataAdapter
+from perflens.profiles.perf_script import PerfScriptAdapter
 from perflens.security.paths import validate_input_file
 
 AGGREGATION_SEMANTICS = "unique_symbol_dso_per_sample"
+ProfileSourceType = Literal["folded", "perf_script", "perf_data"]
 
 
 def analyze_folded(path: Path, *, limits: ResourceLimits | None = None) -> AnalysisArtifact:
+    return _analyze_profile(path, "folded", FoldedStackAdapter(), limits=limits)
+
+
+def analyze_perf_script(path: Path, *, limits: ResourceLimits | None = None) -> AnalysisArtifact:
+    return _analyze_profile(path, "perf_script", PerfScriptAdapter(), limits=limits)
+
+
+def analyze_perf_data(
+    path: Path,
+    *,
+    limits: ResourceLimits | None = None,
+    perf_path: Path | None = None,
+    timeout_seconds: float = 300.0,
+) -> AnalysisArtifact:
+    adapter = PerfDataAdapter(perf_path, timeout_seconds=timeout_seconds)
+    return _analyze_profile(path, "perf_data", adapter, limits=limits)
+
+
+def _analyze_profile(
+    path: Path,
+    source_type: ProfileSourceType,
+    adapter: ProfileAdapter,
+    *,
+    limits: ResourceLimits | None = None,
+) -> AnalysisArtifact:
     effective_limits = limits or ResourceLimits()
     input_path = validate_input_file(path)
     input_size = input_path.stat().st_size
@@ -44,15 +74,13 @@ def analyze_folded(path: Path, *, limits: ResourceLimits | None = None) -> Analy
             suggested_actions=("Increase the explicit input limit if the file is trusted.",),
         )
     input_sha256 = _sha256_file(input_path)
-    fingerprint = _fingerprint(input_sha256, effective_limits)
-    source = FileProfileSource(path=input_path, source_type="folded")
-    adapter = FoldedStackAdapter()
-    aggregator = HotspotAggregator(effective_limits)
-
+    fingerprint = _fingerprint(input_sha256, source_type, effective_limits)
+    source = FileProfileSource(path=input_path, source_type=source_type)
     with adapter.open(source, effective_limits) as stream:
+        aggregator = HotspotAggregator(effective_limits, stream.frame_table)
         for sample in stream:
             aggregator.add(sample)
-        result = aggregator.finish(stream.frame_table)
+        result = aggregator.finish()
         diagnostics = stream.diagnostics()
         frame_table = stream.frame_table
 
@@ -73,8 +101,8 @@ def analyze_folded(path: Path, *, limits: ResourceLimits | None = None) -> Analy
     hotspots = tuple(
         Hotspot(
             hotspot_id=f"H-{index:03d}",
-            symbol=frame_table.resolve(item.frame_id).symbol,
-            dso=frame_table.resolve(item.frame_id).dso,
+            symbol=item.symbol,
+            dso=item.dso,
             self_weight=item.self_weight,
             inclusive_weight=item.inclusive_weight,
             sample_count=item.sample_count,
@@ -110,7 +138,7 @@ def analyze_folded(path: Path, *, limits: ResourceLimits | None = None) -> Analy
     created_at = datetime.fromtimestamp(input_path.stat().st_mtime, tz=UTC).isoformat()
     metadata = ProfileMetadata(
         profile_id=f"profile-{input_sha256[:16]}",
-        source_type="folded",
+        source_type=source_type,
         input_path=str(input_path),
         input_sha256=input_sha256,
         created_at=created_at,
@@ -120,7 +148,10 @@ def analyze_folded(path: Path, *, limits: ResourceLimits | None = None) -> Analy
         weight_source=result.weight_source,
         event=result.event,
         has_call_graph=result.has_call_graph,
-        has_source_lines=False,
+        has_source_lines=any(
+            frame_table.resolve(frame_id).source_file is not None
+            for frame_id in range(len(frame_table))
+        ),
         aggregation_semantics=AGGREGATION_SEMANTICS,
         parse_statistics=ParseStatistics(
             parsed_records=diagnostics.parsed_records,
@@ -155,10 +186,11 @@ def _sha256_file(path: Path, *, chunk_size: int = 1 << 20) -> str:
     return digest.hexdigest()
 
 
-def _fingerprint(input_sha256: str, limits: ResourceLimits) -> str:
+def _fingerprint(input_sha256: str, source_type: str, limits: ResourceLimits) -> str:
     digest = hashlib.sha256()
     components = (
         "perflens-analysis-v1",
+        source_type,
         input_sha256,
         AGGREGATION_SEMANTICS,
         *[f"{key}={value}" for key, value in sorted(_limits_dict(limits).items())],
