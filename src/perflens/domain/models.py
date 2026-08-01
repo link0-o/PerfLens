@@ -134,6 +134,21 @@ class ResourceLimits:
     max_call_paths_output: int = 1_000
     max_output_bytes: int = 128 << 20
 
+    def __post_init__(self) -> None:
+        positive_limits = (
+            self.max_input_bytes,
+            self.max_records,
+            self.max_line_chars,
+            self.max_stack_depth,
+            self.max_unique_frames,
+            self.max_unique_call_paths,
+            self.max_hotspots_output,
+            self.max_call_paths_output,
+            self.max_output_bytes,
+        )
+        if any(value < 1 for value in positive_limits) or self.max_warnings < 0:
+            raise ValueError("ResourceLimits values must be positive except max_warnings")
+
 
 @dataclass(slots=True)
 class HotspotAccumulator:

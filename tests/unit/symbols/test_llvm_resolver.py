@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.domain.symbols import ModuleIdentity, ModuleLocation
 from perflens.symbols.llvm import LlvmSymbolizerResolver, parse_llvm_json_line
 
@@ -65,3 +66,46 @@ def test_long_lived_llvm_provider_batches_caches_and_reaps(tmp_path: Path) -> No
     resolver.close()
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
+
+
+def test_llvm_provider_bounds_large_query_batches(tmp_path: Path) -> None:
+    fake = tmp_path / "llvm-symbolizer"
+    fake.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        "for value in sys.stdin:\n"
+        "    address = int(value, 16)\n"
+        "    print(json.dumps({'Symbol': [{'FunctionName': str(address), "
+        "'FileName': '/src/sample.cc', 'Line': address + 1}]}), flush=True)\n"
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    module_path = tmp_path / "module"
+    module_path.write_bytes(b"fixture")
+    identity = ModuleIdentity(
+        build_id="build-many",
+        dso_path=module_path,
+        debug_file_candidates=(),
+        architecture="test",
+    )
+    locations = tuple(
+        ModuleLocation(value, address_kind="module_offset") for value in range(600)
+    )
+
+    with LlvmSymbolizerResolver(fake) as resolver:
+        resolved = resolver.resolve_many(identity, locations)
+
+    assert len(resolved) == len(locations)
+    assert resolved[0][0].symbol == "0"
+    assert resolved[-1][0].symbol == "599"
+
+
+def test_llvm_provider_validates_executable_and_limits(tmp_path: Path) -> None:
+    regular_file = tmp_path / "not-executable"
+    regular_file.write_text("data")
+    with pytest.raises(PerfLensError) as captured:
+        LlvmSymbolizerResolver(regular_file)
+    assert captured.value.code is ErrorCode.INVALID_INPUT
+
+    with pytest.raises(PerfLensError) as captured:
+        LlvmSymbolizerResolver(Path(sys.executable), max_cache_entries=0)
+    assert captured.value.code is ErrorCode.INVALID_INPUT

@@ -25,6 +25,16 @@ def test_artifact_root_must_be_inside_allowed_roots(tmp_path: Path) -> None:
         ArtifactStore(outside, PathPolicy((allowed,)), allow_writes=True)
 
 
+def test_artifact_store_requires_a_positive_size_limit(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="must be positive"):
+        ArtifactStore(
+            tmp_path / "artifacts",
+            PathPolicy((tmp_path,)),
+            allow_writes=True,
+            max_artifact_bytes=0,
+        )
+
+
 def test_new_output_file_is_confined_and_must_not_exist(tmp_path: Path) -> None:
     allowed = tmp_path / "allowed"
     allowed.mkdir()

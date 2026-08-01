@@ -41,7 +41,9 @@ uv run python scripts/prepare_release.py --tag v0.1.0
 sha256sum --check dist/SHA256SUMS
 ```
 
-执行前应确保 `dist/` 为空，避免旧产物被错误写入校验和清单。
+执行前应确保 `dist/` 为空。发布准备脚本也会拒绝旧文件或非预期文件，
+要求 SBOM 是 CycloneDX JSON，并且只为预期的 wheel、sdist、Skill 压缩包和
+SBOM 生成校验和。
 
 ## 发布 GitHub Release
 

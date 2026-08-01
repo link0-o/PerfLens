@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import tempfile
 import tomllib
@@ -16,6 +17,9 @@ from perflens import __version__
 from perflens.distribution.skill import SKILL_NAME
 
 _ZIP_TIMESTAMP = (2020, 1, 1, 0, 0, 0)
+_MAX_SKILL_FILES = 64
+_MAX_SKILL_BYTES = 2 << 20
+_MAX_SBOM_BYTES = 64 << 20
 
 
 def main() -> None:
@@ -52,13 +56,26 @@ def main() -> None:
 
     wheel = dist_dir / f"perflens-{__version__}-py3-none-any.whl"
     source = dist_dir / f"perflens-{__version__}.tar.gz"
-    for required in (wheel, source):
-        if not required.is_file():
+    sbom = dist_dir / "sbom.cdx.json"
+    for required in (wheel, source, sbom):
+        if required.is_symlink() or not required.is_file():
             parser.error(f"required distribution is missing: {required.name}")
+    _validate_sbom(sbom, parser)
 
     archive = dist_dir / f"{SKILL_NAME}-{__version__}.zip"
-    _write_skill_archive(skill_root, archive)
-    _write_checksums(dist_dir)
+    allowed_names = {wheel.name, source.name, sbom.name, archive.name, "SHA256SUMS"}
+    unexpected = sorted(
+        path.name
+        for path in dist_dir.iterdir()
+        if not path.name.startswith(".") and path.name not in allowed_names
+    )
+    if unexpected:
+        parser.error(f"unexpected release artifacts in --dist-dir: {', '.join(unexpected)}")
+    try:
+        _write_skill_archive(skill_root, archive)
+    except (OSError, ValueError) as exc:
+        parser.error(f"unable to build Skill archive: {exc}")
+    _write_checksums(dist_dir, (wheel, source, archive, sbom))
     print(archive)
     print(dist_dir / "SHA256SUMS")
 
@@ -78,11 +95,22 @@ def _write_skill_archive(skill_root: Path, output: Path) -> None:
             compression=zipfile.ZIP_DEFLATED,
             compresslevel=9,
         ) as archive:
+            file_count = 0
+            total_bytes = 0
             for source in sorted(skill_root.rglob("*")):
                 if source.is_symlink():
                     raise ValueError(f"Skill archives cannot contain symlinks: {source}")
                 if not source.is_file():
                     continue
+                file_count += 1
+                if file_count > _MAX_SKILL_FILES:
+                    raise ValueError("Skill archive exceeds its file-count limit")
+                remaining = _MAX_SKILL_BYTES - total_bytes
+                with source.open("rb") as handle:
+                    data = handle.read(remaining + 1)
+                if len(data) > remaining:
+                    raise ValueError("Skill archive exceeds its byte limit")
+                total_bytes += len(data)
                 relative = source.relative_to(skill_root)
                 entry = zipfile.ZipInfo(
                     filename=(Path(SKILL_NAME) / relative).as_posix(),
@@ -90,21 +118,16 @@ def _write_skill_archive(skill_root: Path, output: Path) -> None:
                 )
                 entry.compress_type = zipfile.ZIP_DEFLATED
                 entry.external_attr = 0o100644 << 16
-                archive.writestr(entry, source.read_bytes())
+                archive.writestr(entry, data)
         os.replace(temporary, output)
         output.chmod(0o644)
     finally:
         temporary.unlink(missing_ok=True)
 
 
-def _write_checksums(dist_dir: Path) -> None:
+def _write_checksums(dist_dir: Path, artifacts: tuple[Path, ...]) -> None:
     output = dist_dir / "SHA256SUMS"
-    artifacts = sorted(
-        path
-        for path in dist_dir.iterdir()
-        if path.is_file() and path.name != output.name and not path.name.startswith(".")
-    )
-    lines = [f"{_sha256(path)}  {path.name}" for path in artifacts]
+    lines = [f"{_sha256(path)}  {path.name}" for path in sorted(artifacts)]
     payload = ("\n".join(lines) + "\n").encode()
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{output.name}.",
@@ -141,6 +164,22 @@ def _project_version(pyproject_path: Path) -> str:
     if not isinstance(version, str):
         raise ValueError("pyproject.toml must define project.version")
     return version
+
+
+def _validate_sbom(path: Path, parser: argparse.ArgumentParser) -> None:
+    try:
+        with path.open("rb") as handle:
+            payload = handle.read(_MAX_SBOM_BYTES + 1)
+    except (OSError, json.JSONDecodeError) as exc:
+        parser.error(f"SBOM cannot be read: {exc}")
+    if len(payload) > _MAX_SBOM_BYTES:
+        parser.error(f"SBOM exceeds {_MAX_SBOM_BYTES} bytes")
+    try:
+        raw: object = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        parser.error(f"SBOM is not valid JSON: {exc}")
+    if not isinstance(raw, dict) or raw.get("bomFormat") != "CycloneDX":
+        parser.error("SBOM must be a CycloneDX JSON object")
 
 
 if __name__ == "__main__":

@@ -143,7 +143,12 @@ def _call_path_deltas(
         status = (
             "added" if baseline_path is None else "removed" if candidate_path is None else "changed"
         )
-        frames = candidate_path.frames if candidate_path is not None else baseline_path.frames  # type: ignore[union-attr]
+        if candidate_path is not None:
+            frames = candidate_path.frames
+        elif baseline_path is not None:
+            frames = baseline_path.frames
+        else:
+            raise RuntimeError("call-path delta key has no corresponding profile path")
         deltas.append(
             CallPathDelta(
                 frames=frames,

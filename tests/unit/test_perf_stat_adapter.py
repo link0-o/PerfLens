@@ -41,3 +41,17 @@ def test_perf_stat_adapter_rejects_empty_metrics(tmp_path: Path) -> None:
     with pytest.raises(PerfLensError) as captured:
         PerfStatMetricAdapter().parse(source)
     assert captured.value.code is ErrorCode.PROFILE_PARSE_FAILED
+
+
+def test_perf_stat_adapter_skips_non_finite_and_overlong_lines(tmp_path: Path) -> None:
+    source = tmp_path / "stat.csv"
+    source.write_text(f"Infinity;;cycles\n{'1' * 30};;ignored\n2;;instructions\n")
+    metrics, warnings = PerfStatMetricAdapter(max_line_chars=24).parse(source)
+
+    assert [metric.event for metric in metrics] == ["instructions"]
+    assert len(warnings) == 2
+
+
+def test_perf_stat_adapter_rejects_invalid_resource_limits() -> None:
+    with pytest.raises(ValueError, match="resource limits"):
+        PerfStatMetricAdapter(max_line_chars=0)

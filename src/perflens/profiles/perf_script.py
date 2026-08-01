@@ -161,6 +161,7 @@ class PerfScriptStream:
                 return
             line_number += 1
             self._diagnostics.bytes_read += len(raw_line.encode("utf-8", errors="replace"))
+            self._check_input_bytes()
             if len(raw_line) > self._limits.max_line_chars:
                 if not raw_line.endswith("\n"):
                     self._drain_overlong_line()
@@ -345,8 +346,22 @@ class PerfScriptStream:
             if chunk == "":
                 return
             self._diagnostics.bytes_read += len(chunk.encode("utf-8", errors="replace"))
+            self._check_input_bytes()
             if chunk.endswith("\n"):
                 return
+
+    def _check_input_bytes(self) -> None:
+        if self._diagnostics.bytes_read > self._limits.max_input_bytes:
+            raise PerfLensError(
+                ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                "input",
+                "Input grew beyond max_input_bytes while parsing",
+                recoverable=True,
+                details={
+                    "actual_bytes": self._diagnostics.bytes_read,
+                    "max_input_bytes": self._limits.max_input_bytes,
+                },
+            )
 
     def _warning(self, code: str, message: str, line_number: int, raw: str) -> None:
         self._diagnostics.add_warning(

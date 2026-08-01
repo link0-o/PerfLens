@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from perflens.application.analyze import analyze_folded
+from perflens.application.diagnose import load_analysis
 from perflens.classification.engine import build_diagnosis_bundle
 from perflens.classification.rules import load_builtin_rules, load_rule_file
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -87,3 +88,16 @@ def test_markdown_report_has_required_sections_and_guardrails(tmp_path: Path) ->
     assert "Status: Candidate" in report
     assert "Confirmed: none" in report
     assert "Allocation count and size distribution are unavailable." in report
+
+
+def test_analysis_loader_enforces_bounded_reads_and_valid_limits(tmp_path: Path) -> None:
+    analysis_path = tmp_path / "analysis.json"
+    analysis_path.write_text(_allocation_analysis(tmp_path).model_dump_json())
+
+    with pytest.raises(PerfLensError) as captured:
+        load_analysis(analysis_path, max_input_bytes=32)
+    assert captured.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+
+    with pytest.raises(PerfLensError) as captured:
+        load_analysis(analysis_path, max_input_bytes=0)
+    assert captured.value.code is ErrorCode.INVALID_INPUT

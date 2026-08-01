@@ -73,7 +73,7 @@ def _analyze_profile(
             },
             suggested_actions=("Increase the explicit input limit if the file is trusted.",),
         )
-    input_sha256 = _sha256_file(input_path)
+    input_sha256 = _sha256_file(input_path, max_bytes=effective_limits.max_input_bytes)
     fingerprint = _fingerprint(input_sha256, source_type, effective_limits)
     source = FileProfileSource(path=input_path, source_type=source_type)
     with adapter.open(source, effective_limits) as stream:
@@ -178,10 +178,20 @@ def _analyze_profile(
     )
 
 
-def _sha256_file(path: Path, *, chunk_size: int = 1 << 20) -> str:
+def _sha256_file(path: Path, *, max_bytes: int, chunk_size: int = 1 << 20) -> str:
     digest = hashlib.sha256()
+    bytes_read = 0
     with path.open("rb") as handle:
         while chunk := handle.read(chunk_size):
+            bytes_read += len(chunk)
+            if bytes_read > max_bytes:
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "input",
+                    "Input file grew beyond max_input_bytes while being read",
+                    recoverable=True,
+                    details={"actual_bytes": bytes_read, "max_input_bytes": max_bytes},
+                )
             digest.update(chunk)
     return digest.hexdigest()
 

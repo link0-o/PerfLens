@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import statistics
 from collections.abc import Callable
 from pathlib import Path
@@ -30,14 +31,30 @@ def load_benchmark(
     max_input_bytes: int = 64 << 20,
 ) -> BenchmarkArtifact:
     safe_path = validate_input_file(path)
-    raw_bytes = safe_path.read_bytes()
-    if len(raw_bytes) > max_input_bytes:
+    if max_input_bytes < 1:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "benchmark",
+            "max_input_bytes must be positive",
+        )
+    try:
+        size = safe_path.stat().st_size
+        with safe_path.open("rb") as handle:
+            raw_bytes = handle.read(max_input_bytes + 1)
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "benchmark",
+            "Benchmark input cannot be read",
+            details={"path": str(safe_path)},
+        ) from exc
+    if size > max_input_bytes or len(raw_bytes) > max_input_bytes:
         raise PerfLensError(
             ErrorCode.RESOURCE_LIMIT_EXCEEDED,
             "benchmark",
             "Benchmark JSON exceeds max_input_bytes",
             recoverable=True,
-            details={"actual_bytes": len(raw_bytes), "max_input_bytes": max_input_bytes},
+            details={"actual_bytes": max(size, len(raw_bytes)), "max_input_bytes": max_input_bytes},
         )
     try:
         raw: object = json.loads(raw_bytes)
@@ -215,7 +232,14 @@ def _numbers(raw: object, label: str) -> tuple[float, ...]:
     values = _sequence(raw, label)
     if any(not isinstance(value, (int, float)) or isinstance(value, bool) for value in values):
         raise PerfLensError(ErrorCode.INVALID_INPUT, "benchmark", f"{label} must contain numbers")
-    return tuple(float(cast(int | float, value)) for value in values)
+    numbers = tuple(float(cast(int | float, value)) for value in values)
+    if not all(math.isfinite(value) for value in numbers):
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "benchmark",
+            f"{label} must contain only finite numbers",
+        )
+    return numbers
 
 
 def _integer_sequence(raw: object, label: str) -> tuple[int, ...]:
@@ -292,7 +316,14 @@ def _float_field(item: dict[str, object], field: str) -> float:
             "benchmark",
             f"Google Benchmark field {field} must be numeric",
         )
-    return float(value)
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "benchmark",
+            f"Google Benchmark field {field} must be finite",
+        )
+    return parsed
 
 
 def _invalid_format(label: str, exc: Exception) -> PerfLensError:

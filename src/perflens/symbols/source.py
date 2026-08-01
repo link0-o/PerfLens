@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TextIO
 
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.domain.symbols import SourceContext
@@ -71,22 +72,60 @@ class SourceLocator:
         before: int = 20,
         after: int = 20,
         max_line_chars: int = 16_384,
+        max_input_bytes: int = 64 << 20,
     ) -> SourceContext:
-        if line < 1 or before < 0 or after < 0 or before + after > 400:
+        if (
+            line < 1
+            or before < 0
+            or after < 0
+            or before + after > 400
+            or max_line_chars < 1
+            or max_line_chars > 1 << 20
+            or max_input_bytes < 1
+            or max_input_bytes > 1 << 30
+        ):
             raise PerfLensError(
                 ErrorCode.INVALID_INPUT,
                 "source",
-                "Invalid source context range",
-                details={"line": line, "before": before, "after": after},
+                "Invalid source context bounds",
+                details={
+                    "line": line,
+                    "before": before,
+                    "after": after,
+                    "max_line_chars": max_line_chars,
+                    "max_input_bytes": max_input_bytes,
+                },
             )
         safe_path = self.map_path(source_path)
+        try:
+            size = safe_path.stat().st_size
+        except OSError as exc:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "source",
+                "Source file size cannot be inspected",
+                details={"path": str(safe_path)},
+            ) from exc
+        if size > max_input_bytes:
+            raise PerfLensError(
+                ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                "source",
+                "Source file exceeds max_input_bytes",
+                recoverable=True,
+                details={"actual_bytes": size, "max_input_bytes": max_input_bytes},
+            )
         start = max(1, line - before)
         end = line + after
         selected: list[str] = []
         with safe_path.open(encoding="utf-8", errors="replace") as handle:
-            for number, text in enumerate(handle, start=1):
-                if number > end:
+            number = 0
+            while number < end:
+                text = handle.readline(max_line_chars + 1)
+                if text == "":
                     break
+                number += 1
+                if len(text) > max_line_chars and not text.endswith("\n"):
+                    self._drain_line(handle, max_line_chars=max_line_chars)
                 if number >= start:
                     selected.append(text.rstrip("\r\n")[:max_line_chars])
         actual_end = start + len(selected) - 1 if selected else start
@@ -98,3 +137,10 @@ class SourceLocator:
             end_line=actual_end,
             lines=tuple(selected),
         )
+
+    @staticmethod
+    def _drain_line(handle: TextIO, *, max_line_chars: int) -> None:
+        while True:
+            chunk = handle.readline(max_line_chars + 1)
+            if chunk == "" or chunk.endswith("\n"):
+                return

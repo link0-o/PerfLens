@@ -76,3 +76,32 @@ def test_runner_stops_stdout_flood() -> None:
             limits=CommandLimits(max_stdout_bytes=100),
         )
     assert captured.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+
+
+def test_runner_rejects_invalid_limits_and_non_executable_allowlist(tmp_path: Path) -> None:
+    runner, executable = _runner()
+    with pytest.raises(PerfLensError) as captured:
+        runner.run_to_file(
+            (str(executable), "-c", "pass"),
+            io.BytesIO(),
+            limits=CommandLimits(timeout_seconds=float("inf")),
+        )
+    assert captured.value.code is ErrorCode.INVALID_INPUT
+
+    regular_file = tmp_path / "not-executable"
+    regular_file.write_text("data")
+    with pytest.raises(PerfLensError) as captured:
+        CommandRunner({regular_file})
+    assert captured.value.code is ErrorCode.INVALID_INPUT
+
+
+def test_runner_wraps_output_write_failures() -> None:
+    runner, executable = _runner()
+    output = io.BytesIO()
+    output.close()
+    with pytest.raises(PerfLensError) as captured:
+        runner.run_to_file(
+            (str(executable), "-c", "print('profile')"),
+            output,
+        )
+    assert captured.value.code is ErrorCode.OUTPUT_WRITE_FAILED

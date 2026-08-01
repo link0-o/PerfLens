@@ -4,6 +4,23 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Release preparation now requires a CycloneDX JSON SBOM, rejects stale or
+  unexpected files in `dist/`, and checksums only the four intended assets.
+- CI and release jobs now have explicit timeouts and concurrency controls.
+
+### Fixed
+
+- Enforced bounded reads for benchmark JSON, persisted artifacts, growing
+  profiles, and source files containing extremely long logical lines.
+- Rejected non-finite benchmark and `perf stat` values before they can produce
+  invalid or misleading JSON artifacts.
+- Batched long-lived symbolizer requests to avoid pipe deadlocks on large
+  address sets.
+- Validated command-runner executables, resource limits, artifact limits, and
+  wrapped process-start/output-write failures in stable PerfLens errors.
+
 ## [0.1.0] - 2026-07-30
 
 ### Added

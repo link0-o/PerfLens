@@ -14,18 +14,34 @@ from perflens.security.paths import validate_input_file
 
 
 def load_analysis(path: Path, *, max_input_bytes: int = 128 << 20) -> AnalysisArtifact:
+    if max_input_bytes < 1:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "artifact",
+            "max_input_bytes must be positive",
+        )
     safe_path = validate_input_file(path)
-    size = safe_path.stat().st_size
-    if size > max_input_bytes:
+    try:
+        size = safe_path.stat().st_size
+        with safe_path.open("rb") as handle:
+            payload = handle.read(max_input_bytes + 1)
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "artifact",
+            "Analysis artifact cannot be read",
+            details={"path": str(safe_path)},
+        ) from exc
+    if size > max_input_bytes or len(payload) > max_input_bytes:
         raise PerfLensError(
             ErrorCode.RESOURCE_LIMIT_EXCEEDED,
             "artifact",
             "Analysis artifact exceeds max_input_bytes",
             recoverable=True,
-            details={"actual_bytes": size, "max_input_bytes": max_input_bytes},
+            details={"actual_bytes": max(size, len(payload)), "max_input_bytes": max_input_bytes},
         )
     try:
-        return AnalysisArtifact.model_validate_json(safe_path.read_bytes())
+        return AnalysisArtifact.model_validate_json(payload)
     except ValidationError as exc:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,

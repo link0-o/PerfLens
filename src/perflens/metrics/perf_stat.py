@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import csv
+import math
 from pathlib import Path
+from typing import TextIO
 
 from perflens.contracts.artifacts import PerfStatMetric
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -20,6 +22,13 @@ class PerfStatMetricAdapter:
         max_metrics: int = 256,
         max_warnings: int = 32,
     ) -> None:
+        if (
+            max_input_bytes < 1
+            or max_line_chars < 1
+            or max_metrics < 1
+            or max_warnings < 0
+        ):
+            raise ValueError("perf stat resource limits are invalid")
         self.max_input_bytes = max_input_bytes
         self.max_line_chars = max_line_chars
         self.max_metrics = max_metrics
@@ -54,8 +63,15 @@ class PerfStatMetricAdapter:
         metrics: list[PerfStatMetric] = []
         warnings: list[str] = []
         with safe_path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
-            for line_number, raw_line in enumerate(handle, start=1):
+            line_number = 0
+            while True:
+                raw_line = handle.readline(self.max_line_chars + 1)
+                if raw_line == "":
+                    break
+                line_number += 1
                 if len(raw_line) > self.max_line_chars:
+                    if not raw_line.endswith("\n"):
+                        self._drain_line(handle)
                     self._warn(
                         warnings,
                         f"Line {line_number} exceeds the line limit and was skipped.",
@@ -118,6 +134,12 @@ class PerfStatMetricAdapter:
                     f"Line {line_number} has an invalid numeric value and was skipped.",
                 )
                 return None
+            if not math.isfinite(value):
+                self._warn(
+                    warnings,
+                    f"Line {line_number} has a non-finite numeric value and was skipped.",
+                )
+                return None
             status = "measured"
         run_time_ns = self._optional_int(fields, 3)
         running_percent = self._optional_float(fields, 4)
@@ -136,7 +158,7 @@ class PerfStatMetricAdapter:
             return None
         try:
             value = int(float(fields[index].strip()))
-        except ValueError:
+        except (OverflowError, ValueError):
             return None
         return value if value >= 0 else None
 
@@ -175,3 +197,9 @@ class PerfStatMetricAdapter:
     def _warn(self, warnings: list[str], message: str) -> None:
         if len(warnings) < self.max_warnings:
             warnings.append(message)
+
+    def _drain_line(self, handle: TextIO) -> None:
+        while True:
+            chunk = handle.readline(self.max_line_chars + 1)
+            if chunk == "" or chunk.endswith("\n"):
+                return

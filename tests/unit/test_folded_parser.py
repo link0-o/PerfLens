@@ -97,3 +97,10 @@ def test_deep_stack_limit_is_diagnostic(tmp_path: Path) -> None:
     with _open(profile, ResourceLimits(max_stack_depth=3)) as stream:
         assert list(stream) == []
         assert stream.diagnostics().warnings[0].code == "STACK_TOO_DEEP"
+
+
+def test_resource_limits_reject_invalid_values() -> None:
+    with pytest.raises(ValueError, match="ResourceLimits"):
+        ResourceLimits(max_records=0)
+    with pytest.raises(ValueError, match="ResourceLimits"):
+        ResourceLimits(max_warnings=-1)

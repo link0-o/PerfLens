@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import selectors
 import signal
@@ -40,9 +41,26 @@ class CommandRunner:
     """Run an absolute executable without a shell and drain both output pipes."""
 
     def __init__(self, allowed_executables: Collection[Path]) -> None:
-        self._allowed_executables = frozenset(
-            executable.expanduser().resolve(strict=True) for executable in allowed_executables
-        )
+        resolved_executables: set[Path] = set()
+        for executable in allowed_executables:
+            try:
+                resolved = executable.expanduser().resolve(strict=True)
+            except OSError as exc:
+                raise PerfLensError(
+                    ErrorCode.INVALID_INPUT,
+                    "external_tool",
+                    "Allowlisted executable cannot be resolved",
+                    details={"executable": str(executable)},
+                ) from exc
+            if not resolved.is_file() or not os.access(resolved, os.X_OK):
+                raise PerfLensError(
+                    ErrorCode.INVALID_INPUT,
+                    "external_tool",
+                    "Allowlisted executable is not an executable regular file",
+                    details={"executable": str(resolved)},
+                )
+            resolved_executables.add(resolved)
+        self._allowed_executables = frozenset(resolved_executables)
 
     def run_to_file(
         self,
@@ -53,6 +71,7 @@ class CommandRunner:
         watched_output: Path | None = None,
     ) -> CommandResult:
         effective_limits = limits or CommandLimits()
+        self._validate_limits(effective_limits)
         safe_argv = self._validate_argv(argv)
         started = time.monotonic()
         process: subprocess.Popen[bytes] | None = None
@@ -62,16 +81,25 @@ class CommandRunner:
         stderr_truncated = False
         selector = selectors.DefaultSelector()
         try:
-            process = subprocess.Popen(  # noqa: S603 - executable is canonicalized and allowlisted
-                safe_argv,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                shell=False,
-                close_fds=True,
-                start_new_session=True,
-                env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
-            )
+            try:
+                process = subprocess.Popen(  # noqa: S603 - canonicalized and allowlisted
+                    safe_argv,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    shell=False,
+                    close_fds=True,
+                    start_new_session=True,
+                    env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+                )
+            except OSError as exc:
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "external_tool",
+                    "Unable to start the external tool",
+                    recoverable=True,
+                    details={"executable": safe_argv[0]},
+                ) from exc
             assert process.stdout is not None
             assert process.stderr is not None
             selector.register(process.stdout, selectors.EVENT_READ, "stdout")
@@ -108,7 +136,17 @@ class CommandRunner:
                                     "max_stdout_bytes": effective_limits.max_stdout_bytes,
                                 },
                             )
-                        stdout.write(chunk)
+                        try:
+                            stdout.write(chunk)
+                        except (OSError, ValueError) as exc:
+                            self._terminate_group(
+                                process, effective_limits.terminate_grace_seconds
+                            )
+                            raise PerfLensError(
+                                ErrorCode.OUTPUT_WRITE_FAILED,
+                                "external_tool",
+                                "Unable to write external tool output",
+                            ) from exc
                     else:
                         stderr_bytes += len(chunk)
                         remaining = effective_limits.max_stderr_bytes - len(stderr_buffer)
@@ -218,6 +256,33 @@ class CommandRunner:
                 details={"executable": str(resolved)},
             )
         return (str(resolved), *argv[1:])
+
+    @staticmethod
+    def _validate_limits(limits: CommandLimits) -> None:
+        if not math.isfinite(limits.timeout_seconds) or limits.timeout_seconds <= 0:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "external_tool",
+                "timeout_seconds must be finite and positive",
+            )
+        if not math.isfinite(limits.terminate_grace_seconds) or limits.terminate_grace_seconds < 0:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "external_tool",
+                "terminate_grace_seconds must be finite and non-negative",
+            )
+        byte_limits = {
+            "max_stdout_bytes": limits.max_stdout_bytes,
+            "max_stderr_bytes": limits.max_stderr_bytes,
+            "max_created_file_bytes": limits.max_created_file_bytes,
+        }
+        if any(value is not None and value < 0 for value in byte_limits.values()):
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "external_tool",
+                "Command byte limits must be non-negative",
+                details=byte_limits,
+            )
 
     @staticmethod
     def _terminate_group(process: subprocess.Popen[bytes], grace_seconds: float) -> None:

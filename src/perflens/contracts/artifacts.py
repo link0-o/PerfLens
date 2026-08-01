@@ -10,7 +10,7 @@ SCHEMA_VERSION = "1.0"
 
 
 class ContractModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
 
 class ParseStatistics(ContractModel):

@@ -58,5 +58,37 @@ def test_source_context_range_is_bounded(tmp_path: Path) -> None:
     source = workspace / "main.c"
     source.write_text("line\n")
     locator = SourceLocator(workspace)
-    with pytest.raises(PerfLensError, match="Invalid source context range"):
+    with pytest.raises(PerfLensError, match="Invalid source context bounds"):
         locator.context(source, 1, before=300, after=300)
+
+
+def test_source_context_drains_overlong_lines_with_bounded_reads(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = workspace / "main.c"
+    source.write_text(f"{'x' * 100}\ntarget\n")
+
+    context = SourceLocator(workspace).context(
+        source,
+        2,
+        before=1,
+        after=0,
+        max_line_chars=8,
+    )
+
+    assert context.lines == ("xxxxxxxx", "target")
+    with pytest.raises(PerfLensError, match="Invalid source context bounds"):
+        SourceLocator(workspace).context(source, 1, max_line_chars=0)
+
+
+def test_source_context_rejects_oversized_source_files(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = workspace / "large.c"
+    with source.open("wb") as handle:
+        handle.truncate(4096)
+
+    with pytest.raises(PerfLensError) as captured:
+        SourceLocator(workspace).context(source, 1, max_input_bytes=1024)
+
+    assert captured.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED

@@ -49,6 +49,24 @@ def test_rejects_unknown_or_oversized_benchmark_json(tmp_path: Path) -> None:
     assert captured.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
 
 
+def test_rejects_invalid_limits_and_non_finite_benchmark_values(tmp_path: Path) -> None:
+    profile = tmp_path / "benchmark.json"
+    profile.write_text('{"results":[{"command":"bench","times":[Infinity]}]}')
+    with pytest.raises(PerfLensError, match="finite numbers"):
+        load_benchmark(profile)
+    with pytest.raises(PerfLensError, match="must be positive"):
+        load_benchmark(profile, max_input_bytes=0)
+
+
+def test_oversized_benchmark_is_rejected_before_unbounded_json_loading(tmp_path: Path) -> None:
+    profile = tmp_path / "large.json"
+    with profile.open("wb") as handle:
+        handle.truncate(1 << 20)
+    with pytest.raises(PerfLensError) as captured:
+        load_benchmark(profile, max_input_bytes=1024)
+    assert captured.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+
+
 def test_multiple_benchmarks_require_explicit_selection(tmp_path: Path) -> None:
     profile = tmp_path / "multi.json"
     profile.write_text(

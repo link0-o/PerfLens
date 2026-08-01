@@ -44,8 +44,9 @@ uv run python scripts/prepare_release.py --tag v0.1.0
 sha256sum --check dist/SHA256SUMS
 ```
 
-Use an empty `dist/` directory so stale artifacts cannot enter the checksum
-manifest.
+Use an empty `dist/` directory. The release-preparation script also rejects
+stale or unexpected files, requires a CycloneDX JSON SBOM, and checksums only
+the intended wheel, sdist, Skill zip, and SBOM.
 
 ## Publish a GitHub Release
 

@@ -87,6 +87,8 @@ class ArtifactStore:
         allow_writes: bool,
         max_artifact_bytes: int = 128 << 20,
     ) -> None:
+        if max_artifact_bytes < 1:
+            raise ValueError("max_artifact_bytes must be positive")
         candidate = root.expanduser().resolve(strict=False)
         if not policy.contains(candidate):
             raise ValueError("Artifact root must be inside an allowed root")
@@ -167,14 +169,19 @@ class ArtifactStore:
         path = self._path(artifact_id, artifact_type)
         try:
             size = path.stat().st_size
-            if size > self.max_artifact_bytes:
+            with path.open("rb") as handle:
+                payload = handle.read(self.max_artifact_bytes + 1)
+            if size > self.max_artifact_bytes or len(payload) > self.max_artifact_bytes:
                 raise PerfLensError(
                     ErrorCode.RESOURCE_LIMIT_EXCEEDED,
                     "artifact",
                     "Artifact exceeds configured size limit",
-                    details={"actual_bytes": size, "max_artifact_bytes": self.max_artifact_bytes},
+                    details={
+                        "actual_bytes": max(size, len(payload)),
+                        "max_artifact_bytes": self.max_artifact_bytes,
+                    },
                 )
-            return model.model_validate_json(path.read_bytes())
+            return model.model_validate_json(payload)
         except PerfLensError:
             raise
         except (OSError, ValidationError) as exc:

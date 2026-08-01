@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import selectors
 import shutil
@@ -19,6 +20,8 @@ from typing import cast
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.domain.symbols import ModuleIdentity, ModuleLocation, ResolvedFrame
 
+_QUERY_BATCH_SIZE = 256
+
 
 class _LlvmProcess:
     def __init__(self, executable: Path, module_path: Path, timeout_seconds: float) -> None:
@@ -26,22 +29,32 @@ class _LlvmProcess:
         self._stdout_buffer = bytearray()
         self._stderr = bytearray()
         self._selector = selectors.DefaultSelector()
-        self._process = subprocess.Popen(  # noqa: S603 - canonical executable and module paths
-            (
-                str(executable),
-                "--output-style=JSON",
-                "--inlines",
-                "--demangle",
-                f"--obj={module_path}",
-            ),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=False,
-            close_fds=True,
-            start_new_session=True,
-            env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
-        )
+        try:
+            self._process = subprocess.Popen(  # noqa: S603 - canonical executable and module paths
+                (
+                    str(executable),
+                    "--output-style=JSON",
+                    "--inlines",
+                    "--demangle",
+                    f"--obj={module_path}",
+                ),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=False,
+                close_fds=True,
+                start_new_session=True,
+                env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+            )
+        except OSError as exc:
+            self._selector.close()
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_FAILED,
+                "symbolization",
+                "Unable to start llvm-symbolizer",
+                recoverable=True,
+                details={"executable": str(executable)},
+            ) from exc
         assert self._process.stdout is not None
         assert self._process.stderr is not None
         self._selector.register(self._process.stdout, selectors.EVENT_READ, "stdout")
@@ -133,7 +146,19 @@ class LlvmSymbolizerResolver:
         max_cache_entries: int = 100_000,
     ) -> None:
         selected = executable or _find_llvm_symbolizer()
-        self._executable = selected.expanduser().resolve(strict=True)
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "symbolization",
+                "timeout_seconds must be finite and positive",
+            )
+        if max_cache_entries < 1:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "symbolization",
+                "max_cache_entries must be positive",
+            )
+        self._executable = _validated_executable(selected)
         self._timeout_seconds = timeout_seconds
         self._max_cache_entries = max_cache_entries
         self._cache: OrderedDict[tuple[str, int, str], tuple[ResolvedFrame, ...]] = OrderedDict()
@@ -174,7 +199,12 @@ class LlvmSymbolizerResolver:
                     results[index] = cached
             if missing:
                 process = self._process_for(module)
-                resolved = process.query([offset for _, offset in missing])
+                missing_offsets = [offset for _, offset in missing]
+                resolved: list[tuple[ResolvedFrame, ...]] = []
+                for start in range(0, len(missing_offsets), _QUERY_BATCH_SIZE):
+                    resolved.extend(
+                        process.query(missing_offsets[start : start + _QUERY_BATCH_SIZE])
+                    )
                 for (index, offset), frames in zip(missing, resolved, strict=True):
                     key = (module.build_id, offset, self.resolver_version)
                     self._cache[key] = frames
@@ -296,6 +326,26 @@ def _find_llvm_symbolizer() -> Path:
             recoverable=True,
         )
     return Path(discovered)
+
+
+def _validated_executable(path: Path) -> Path:
+    try:
+        resolved = path.expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "symbolization",
+            "llvm-symbolizer executable cannot be resolved",
+            details={"path": str(path)},
+        ) from exc
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "symbolization",
+            "llvm-symbolizer path is not an executable regular file",
+            details={"path": str(resolved)},
+        )
+    return resolved
 
 
 def llvm_symbolizer_path() -> Path | None:

@@ -201,3 +201,9 @@ def test_resolver_process_is_reaped_on_close(fixture_root: Path, tmp_path: Path)
     resolver.close()
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
+
+
+def test_addr2line_resolver_rejects_invalid_timeout() -> None:
+    with pytest.raises(PerfLensError) as captured:
+        Addr2LineResolver(Path(_tool("addr2line")), timeout_seconds=0)
+    assert captured.value.code is ErrorCode.INVALID_INPUT
