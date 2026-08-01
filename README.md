@@ -291,6 +291,12 @@ See [release readiness](docs/release-readiness.md),
 [troubleshooting](docs/troubleshooting.md) for final verification evidence and
 operational failure guidance.
 
+Chinese maintainer documentation is available in the
+[development guide](docs/development.zh-CN.md),
+[architecture guide](docs/architecture.zh-CN.md),
+[security policy](SECURITY.zh-CN.md), and
+[release-readiness record](docs/release-readiness.zh-CN.md).
+
 ## Known limitations
 
 - Folded input cannot distinguish identically named functions from different

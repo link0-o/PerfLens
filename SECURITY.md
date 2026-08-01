@@ -1,5 +1,7 @@
 # Security policy
 
+[简体中文](SECURITY.zh-CN.md) | English
+
 ## Supported versions
 
 Only the latest released minor version receives security fixes during the

@@ -4,6 +4,11 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Chinese maintainer documentation for development, architecture, security,
+  and release-readiness workflows.
+
 ### Changed
 
 - Release preparation now requires a CycloneDX JSON SBOM, rejects stale or

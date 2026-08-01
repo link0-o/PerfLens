@@ -1,6 +1,8 @@
 # Release readiness
 
-This record maps the final implementation to the planning document's Definition of Done. It records commands that were actually run on 2026-07-30; CI configuration is not presented as a completed remote CI run.
+[简体中文](release-readiness.zh-CN.md) | English
+
+This record maps the final implementation to the planning document's Definition of Done. It records commands that were actually run locally through 2026-08-01; CI configuration is not presented as a completed remote CI run.
 
 ## Functional scope
 
@@ -14,21 +16,22 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 |---|---|---|
 | Lint | `ruff check .` | passed |
 | Strict types | `pyright` | 0 errors, 0 warnings |
-| Python 3.13 | `pytest -q` on 3.13.5 | 96 passed |
-| Python 3.12 | isolated package/test environment on 3.12.13 | 96 passed |
-| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.21%, passed |
-| Skill | `quick_validate.py .agents/skills/perflens-performance-analysis` | valid |
+| Python 3.13 | isolated `pytest -q` environment | 111 passed |
+| Python 3.12 | `pytest -q` on 3.12.13 | 111 passed |
+| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.09%, passed |
+| Skill | structure and package tests | passed |
 | Schemas | checked-in schema equality test | passed |
 | Dependency lock | `uv export --locked` | passed |
 | Vulnerabilities | `pip-audit` on fully pinned runtime export | no known vulnerabilities |
-| SBOM | uv CycloneDX 1.5 export | 41 runtime components |
+| SBOM | uv CycloneDX 1.5 export | passed |
 | Real profile | pinned upstream FlameGraph perf example | full analyze/classify/report flow passed |
 | Active perf denial | real perf 6.12.90, `perf_event_paranoid=3` | structured failure; no residual output |
 | Performance | reproducible small/medium/large corpus | published in `performance-budget.md` |
 
 Package build, isolated wheel and sdist installation, CLI/MCP/Skill smoke
-output, and final artifact hashes are produced by the checked-in release
-workflow. See `docs/releasing.md` for the local and tag-driven procedure.
+output, and four final artifact hashes also passed in fresh local temporary
+directories. The checked-in release workflow repeats these gates. See
+`docs/releasing.md` for the local and tag-driven procedure.
 
 ## Compatibility evidence
 

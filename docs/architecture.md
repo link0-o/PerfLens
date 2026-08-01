@@ -1,5 +1,7 @@
 # Architecture
 
+[简体中文](architecture.zh-CN.md) | English
+
 ```text
 CLI / MCP boundary
  ↓

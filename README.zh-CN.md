@@ -255,6 +255,9 @@ PerfLens 永远不会自行执行 sudo、修改内核策略或降低主机安全
 
 ## 开发验证
 
+第一次维护项目时，建议先阅读[《中文开发指南》](docs/development.zh-CN.md)和
+[《架构说明》](docs/architecture.zh-CN.md)。
+
 ```bash
 uv run ruff check .
 uv run pyright
@@ -274,6 +277,10 @@ uv run pip-audit
 
 更多中文资料：
 
+- [中文开发指南](docs/development.zh-CN.md)
+- [架构说明](docs/architecture.zh-CN.md)
 - [MCP 与 Skill 使用指南](docs/mcp-and-skill.zh-CN.md)
+- [安全策略](SECURITY.zh-CN.md)
+- [发布就绪检查](docs/release-readiness.zh-CN.md)
 - [发布流程](docs/releasing.zh-CN.md)
 - [故障排查](docs/troubleshooting.zh-CN.md)

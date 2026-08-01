@@ -75,6 +75,7 @@ include = [
   "/LICENSE",
   "/CHANGELOG.md",
   "/SECURITY.md",
+  "/SECURITY.zh-CN.md",
   "/THIRD_PARTY_NOTICES.md",
 ]
 
