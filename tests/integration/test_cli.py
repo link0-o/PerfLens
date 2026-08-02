@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import sys
 from pathlib import Path
@@ -56,6 +57,19 @@ def test_cli_exposes_version_and_release_setup_commands(tmp_path: Path) -> None:
         "lock",
         "off_cpu",
     }
+
+    denied_probe = runner.invoke(
+        app,
+        [
+            "verify-collector",
+            "--socket",
+            str(tmp_path / "missing.sock"),
+            "--pid",
+            str(os.getppid()),
+        ],
+    )
+    assert denied_probe.exit_code == 5
+    assert "explicit target authorization" in denied_probe.stderr
 
 
 def test_cli_analyzes_folded_profile(fixture_root: Path, tmp_path: Path) -> None:

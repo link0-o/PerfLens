@@ -50,7 +50,11 @@ perflens doctor --output collection-capabilities.json
 wheel 同时安装 `perflens-collector` 命令。先把模板复制到普通目录检查：
 
 ```bash
-perflens stage-collector-assets --output-directory ./collector-assets
+perflens stage-collector-assets \
+  --output-directory ./collector-assets \
+  --allowed-uid 1000 \
+  --collector-command /opt/perflens/bin/perflens-collector \
+  --perf-path /usr/bin/perf
 ```
 
 这一步不会执行 sudo、不会修改 `/etc`、不会启动服务。目录包含：
@@ -58,6 +62,8 @@ perflens stage-collector-assets --output-directory ./collector-assets
 - `collector.example.toml`：Collector 独立策略；
 - `perflens-collector.service`：最小 capability 的 systemd 模板；
 - `perflens.sysusers`：专用 `perflens` 系统用户定义。
+
+部署、真实验收、升级和卸载的完整流程见[《产品部署指南》](deployment.zh-CN.md)。
 
 ## 管理员安装示例
 

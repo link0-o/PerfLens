@@ -216,6 +216,8 @@ Skill 位于 `.agents/skills/perflens-performance-analysis`。`$perflens-perform
 
 如果希望 Skill 面向已授权实时 PID 自动完成“权限检查 → 计划 → 采集 → 分析”，请看[《自动采集与 Collector Broker》](docs/automatic-collection.zh-CN.md)。MCP 和 Agent 不以 root 运行；可选 Collector 通过独立策略持有最小 perf capability。
 
+面向其他用户安装系统 Collector、执行真实验收和后续升级时，请看[《产品部署指南》](docs/deployment.zh-CN.md)。
+
 ## 主动采样
 
 主动采样默认关闭，而且必须明确授权。CLI 示例：
@@ -286,6 +288,7 @@ uv run pip-audit
 - [架构说明](docs/architecture.zh-CN.md)
 - [MCP 与 Skill 使用指南](docs/mcp-and-skill.zh-CN.md)
 - [自动采集与 Collector Broker](docs/automatic-collection.zh-CN.md)
+- [产品部署、验收、升级与卸载](docs/deployment.zh-CN.md)
 - [安全策略](SECURITY.zh-CN.md)
 - [发布就绪检查](docs/release-readiness.zh-CN.md)
 - [发布流程](docs/releasing.zh-CN.md)

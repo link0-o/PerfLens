@@ -32,6 +32,12 @@ from perflens.collection.collector import (
     CollectionTarget,
     collect_profile,
 )
+from perflens.collection.planning import (
+    AutomaticCollectionPolicy,
+    CollectionPlanRequest,
+    create_collection_plan,
+)
+from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.contracts.artifacts import ErrorArtifact, ErrorBody
 from perflens.distribution.codex import render_codex_config
 from perflens.distribution.collector import install_collector_assets
@@ -153,13 +159,144 @@ def stage_collector_assets_command(
             help="New directory that will receive inspectable service templates.",
         ),
     ],
+    allowed_uids: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--allowed-uid",
+            min=0,
+            help="Repeat for each ordinary UID permitted by the staged policy.",
+        ),
+    ] = None,
+    collector_command: Annotated[
+        Path,
+        typer.Option(
+            "--collector-command",
+            dir_okay=False,
+            help="Absolute perflens-collector path for the staged systemd unit.",
+        ),
+    ] = Path("/usr/bin/perflens-collector"),
+    perf_path: Annotated[
+        Path,
+        typer.Option(
+            "--perf-path",
+            dir_okay=False,
+            help="Absolute perf path for the staged Collector policy.",
+        ),
+    ] = Path("/usr/bin/perf"),
 ) -> None:
     """Stage Collector policy/systemd templates without installing or using sudo."""
     try:
-        target = install_collector_assets(output_directory)
+        target = install_collector_assets(
+            output_directory,
+            allowed_uids=tuple(allowed_uids or (1000,)),
+            collector_command=collector_command,
+            perf_path=perf_path,
+        )
     except PerfLensError as exc:
         _fail(exc)
     typer.echo(str(target))
+
+
+@app.command("verify-collector")
+def verify_collector_command(
+    socket_path: Annotated[
+        Path,
+        typer.Option("--socket", dir_okay=False, help="Existing Collector Unix socket."),
+    ],
+    pid: Annotated[int, typer.Option("--pid", min=1, help="Owned live PID used for the probe.")],
+    duration_seconds: Annotated[
+        float,
+        typer.Option(
+            "--duration-seconds",
+            min=0.1,
+            max=5.0,
+            help="Short perf-stat probe duration; capped at five seconds.",
+        ),
+    ] = 1.0,
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Optional new JSON metadata path."),
+    ] = None,
+    perf_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--perf-path",
+            dir_okay=False,
+            help="Optional local perf path used only for the capability snapshot.",
+        ),
+    ] = None,
+    authorize_target: Annotated[
+        bool,
+        typer.Option("--authorize-target", help="Confirm the bounded observation impact."),
+    ] = False,
+    authorization: Annotated[str, typer.Option("--authorization")] = "",
+    authorize_pid_attach: Annotated[
+        bool,
+        typer.Option("--authorize-pid-attach", help="Separately confirm attachment to --pid."),
+    ] = False,
+    pid_authorization: Annotated[str, typer.Option("--pid-authorization")] = "",
+) -> None:
+    """Run one bounded real perf-stat probe through an installed Collector."""
+    try:
+        if not authorize_target or authorization != ACTIVE_COLLECTION_AUTHORIZATION:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "authorization",
+                "Collector verification requires explicit target authorization",
+                recoverable=True,
+                suggested_actions=(
+                    "Pass --authorize-target and the documented --authorization token.",
+                ),
+            )
+        if not authorize_pid_attach or pid_authorization != PID_ATTACH_AUTHORIZATION:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "authorization",
+                "Collector verification requires explicit PID attachment authorization",
+                recoverable=True,
+                suggested_actions=(
+                    "Pass --authorize-pid-attach and the documented --pid-authorization token.",
+                ),
+            )
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode="stat",
+                pid=pid,
+                duration_seconds=duration_seconds,
+                events=DEFAULT_STAT_EVENTS,
+                max_output_bytes=8 << 20,
+            ),
+            policy=AutomaticCollectionPolicy(
+                enabled=True,
+                allowed_modes=("stat",),
+                max_duration_seconds=5.0,
+                max_output_bytes=8 << 20,
+                plan_ttl_seconds=60,
+            ),
+            capabilities=inspect_collection_capabilities(perf_path),
+        )
+        if plan.policy_status != "allowed":
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "authorization",
+                "Collector verification plan was denied",
+                recoverable=True,
+                details={"warnings": list(plan.warnings)},
+            )
+        artifact = CollectorBrokerClient(
+            socket_path,
+            timeout_seconds=duration_seconds + 15,
+        ).collect(plan)
+        if output_path is not None:
+            safe_output = validate_new_output_file(output_path)
+            write_json_new_atomic(artifact, safe_output, max_output_bytes=1 << 20)
+            typer.echo(str(safe_output))
+            return
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(
+        json.dumps(artifact.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True)
+    )
 
 
 @app.command("analyze-folded")

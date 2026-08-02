@@ -18,6 +18,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   analysis of collected perf-data artifacts.
 - Packaged systemd, sysusers, and Collector policy templates plus a safe staging
   command and complete Chinese deployment documentation.
+- Configurable Collector deployment assets and a bounded, explicitly authorized
+  `verify-collector` real perf-stat acceptance probe.
 
 ### Changed
 

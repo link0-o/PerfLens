@@ -202,6 +202,9 @@ Collector Broker, and analyze the result. See
 [automatic collection](docs/automatic-collection.md). The MCP server and Agent remain
 unprivileged.
 
+See [product deployment](docs/deployment.md) for configurable service assets,
+real Collector verification, upgrades, and uninstall behavior.
+
 ## Use MCP with the Skill
 
 An installed release contains a copy of the Skill. Install it into the project

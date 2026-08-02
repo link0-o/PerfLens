@@ -13,7 +13,11 @@ The optional `perflens-collector` is a Unix-socket broker. It authenticates peer
 Run `perflens doctor` for a read-only capability report. Stage the packaged service templates with:
 
 ```bash
-perflens stage-collector-assets --output-directory ./collector-assets
+perflens stage-collector-assets \
+  --output-directory ./collector-assets \
+  --allowed-uid 1000 \
+  --collector-command /opt/perflens/bin/perflens-collector \
+  --perf-path /usr/bin/perf
 ```
 
 Review `collector.example.toml`, `perflens-collector.service`, and `perflens.sysusers` before an administrator installs them. The service template uses a dedicated account and `CAP_PERFMON`; PerfLens never changes sysctl, capabilities, ownership, or service state at runtime.
@@ -32,3 +36,5 @@ The automatic workflow is:
 6. continue the normal evidence workflow.
 
 The Skill may automate these steps inside an already granted scope. Skill text is never authorization.
+
+See [Product deployment](deployment.md) for configurable asset rendering, the explicitly authorized real `verify-collector` probe, upgrades, and uninstall behavior.

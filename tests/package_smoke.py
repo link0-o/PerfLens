@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -18,6 +19,7 @@ def main() -> None:
     _run(perflens, "--version", expected=__version__)
     _run(perflens_mcp, "--version", expected=__version__)
     _run(perflens_collector, "--version", expected=__version__)
+    _run(perflens, "verify-collector", "--help", expected="bounded real perf-stat probe")
 
     with tempfile.TemporaryDirectory(prefix="perflens-package-smoke-") as directory:
         root = Path(directory)
@@ -55,8 +57,20 @@ def main() -> None:
             "stage-collector-assets",
             "--output-directory",
             str(collector_assets),
+            "--allowed-uid",
+            str(os.geteuid()),
+            "--collector-command",
+            perflens_collector,
+            "--perf-path",
+            "/usr/bin/perf",
         )
         assert (collector_assets / "perflens-collector.service").is_file()
+        policy_text = (collector_assets / "collector.example.toml").read_text(encoding="utf-8")
+        service_text = (collector_assets / "perflens-collector.service").read_text(
+            encoding="utf-8"
+        )
+        assert f"allowed_uids = [{os.geteuid()}]" in policy_text
+        assert f"ExecStart={perflens_collector} " in service_text
 
         config = _run(
             perflens,

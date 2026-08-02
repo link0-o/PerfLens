@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -9,7 +10,13 @@ from pathlib import Path
 
 import pytest
 from mcp.client import Client
+from typer.testing import CliRunner
 
+from perflens.cli.app import app
+from perflens.collection.collector import (
+    ACTIVE_COLLECTION_AUTHORIZATION,
+    PID_ATTACH_AUTHORIZATION,
+)
 from perflens.collection.planning import (
     AutomaticCollectionPolicy,
     CollectionPlanRequest,
@@ -32,7 +39,11 @@ def _fake_perf(tmp_path: Path) -> Path:
         f"#!{sys.executable}\n"
         "import pathlib, sys\n"
         "args = sys.argv[1:]\n"
-        "pathlib.Path(args[args.index('-o') + 1]).write_bytes(b'PERFILE2-broker')\n",
+        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        "if 'stat' in args:\n"
+        "    output.write_text('100;;cycles;10;100.0\\n200;;instructions;10;100.0\\n')\n"
+        "else:\n"
+        "    output.write_bytes(b'PERFILE2-broker')\n",
         encoding="utf-8",
     )
     executable.chmod(0o555)
@@ -137,6 +148,64 @@ def test_broker_policy_rejects_forged_target_owner(tmp_path: Path) -> None:
 
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
     assert list(spool.iterdir()) == []
+
+
+def test_cli_verifies_real_broker_path_with_bounded_stat_probe(tmp_path: Path) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    fake_perf = _fake_perf(tmp_path)
+    target = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        start_new_session=True,
+    )
+    policy = CollectorBrokerPolicy(
+        spool_root=spool,
+        perf_path=fake_perf,
+        allowed_uids=(os.geteuid(),),
+        allowed_modes=("stat",),
+        max_duration_seconds=5,
+        max_output_bytes=8 << 20,
+    )
+    try:
+        with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+            worker = threading.Thread(target=server.serve_once, daemon=True)
+            worker.start()
+            result = CliRunner().invoke(
+                app,
+                [
+                    "verify-collector",
+                    "--socket",
+                    str(server.socket_path),
+                    "--pid",
+                    str(target.pid),
+                    "--duration-seconds",
+                    "0.1",
+                    "--perf-path",
+                    str(fake_perf),
+                    "--authorize-target",
+                    "--authorization",
+                    ACTIVE_COLLECTION_AUTHORIZATION,
+                    "--authorize-pid-attach",
+                    "--pid-authorization",
+                    PID_ATTACH_AUTHORIZATION,
+                ],
+            )
+            worker.join(timeout=5)
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["schema_version"] == "1.0"
+        assert payload["mode"] == "stat"
+        assert payload["target_pid"] == target.pid
+        assert Path(payload["output_path"]).parent == spool
+        assert not worker.is_alive()
+    finally:
+        target.terminate()
+        target.wait(timeout=5)
 
 
 def test_mcp_plans_and_executes_single_use_automatic_collection(tmp_path: Path) -> None:

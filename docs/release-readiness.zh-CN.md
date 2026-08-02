@@ -26,8 +26,8 @@
 |---|---|---|
 | 代码规范 | `ruff check .` | 通过 |
 | 严格类型 | `pyright` | 0 错误、0 警告 |
-| Python 3.12 | `pytest -q`，Python 3.12.13 | 154 通过 |
-| Python 3.13 | 隔离环境 `pytest -q` | 154 通过 |
+| Python 3.12 | `pytest -q`，Python 3.12.13 | 156 通过 |
+| Python 3.13 | 隔离环境 `pytest -q` | 156 通过 |
 | 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.49%，通过 |
 | Skill | Skill 结构和打包测试 | 通过 |
 | Schema | 已提交 Schema 与 Contract 生成结果相等 | 通过 |
@@ -36,6 +36,7 @@
 | SBOM | uv CycloneDX 1.5 导出 | 通过 |
 | wheel/sdist | 全新临时目录构建和隔离安装 | 全部通过 |
 | SHA-256 | wheel、sdist、Skill、SBOM | 四项全部通过 |
+| 部署验收命令 | `verify-collector` → 授权 stat 计划 → Broker | 可执行 perf Test Double 通过 |
 | 性能 | 可复现 small/medium/large folded 语料 | 已记录基线 |
 
 覆盖率目前只比 85% 门槛高少量余量。后续新增代码应优先补齐安全错误分支测试，而不是降低门槛。
