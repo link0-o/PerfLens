@@ -2,11 +2,11 @@
 
 [简体中文](release-readiness.zh-CN.md) | English
 
-This record maps the final implementation to the planning document's Definition of Done. It records commands that were actually run locally through 2026-08-01; CI configuration is not presented as a completed remote CI run.
+This record maps the final implementation to the planning document's Definition of Done. It records commands that were actually run locally through 2026-08-02; CI configuration is not presented as a completed remote CI run.
 
 ## Functional scope
 
-Milestones 0 through 9 are implemented: folded/perf-script/perf.data analysis, exact Self/Inclusive and call paths, ELF/DWARF providers, candidate-only evidence, JSON/Markdown reporting, typed MCP, repository Skill, Profile/Benchmark comparisons, supported benchmark adapters, and explicitly authorized active collection.
+Milestones 0 through 10 are implemented: folded/perf-script/perf.data analysis, exact Self/Inclusive and call paths, ELF/DWARF providers, candidate-only evidence, JSON/Markdown reporting, typed MCP, repository Skill, Profile/Benchmark comparisons, supported benchmark adapters, explicitly authorized active collection, and policy-bounded automatic PID collection through a separate Collector Broker.
 
 The intentionally excluded product areas remain excluded: LLM APIs, custom agent loops, Web UI, source patching, a benchmark runner, production monitoring, direct perf.data parsing, and application-specific rules.
 
@@ -16,9 +16,9 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 |---|---|---|
 | Lint | `ruff check .` | passed |
 | Strict types | `pyright` | 0 errors, 0 warnings |
-| Python 3.13 | isolated `pytest -q` environment | 111 passed |
-| Python 3.12 | `pytest -q` on 3.12.13 | 111 passed |
-| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.09%, passed |
+| Python 3.13 | isolated `pytest -q` environment | 154 passed |
+| Python 3.12 | `pytest -q` on 3.12.13 | 154 passed |
+| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.49%, passed |
 | Skill | structure and package tests | passed |
 | Schemas | checked-in schema equality test | passed |
 | Dependency lock | `uv export --locked` | passed |
@@ -26,10 +26,11 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 | SBOM | uv CycloneDX 1.5 export | passed |
 | Real profile | pinned upstream FlameGraph perf example | full analyze/classify/report flow passed |
 | Active perf denial | real perf 6.12.90, `perf_event_paranoid=3` | structured failure; no residual output |
+| Automatic Broker | MCP plan → authenticated Unix socket → fixed spool | passed with executable perf test double |
 | Performance | reproducible small/medium/large corpus | published in `performance-budget.md` |
 
-Package build, isolated wheel and sdist installation, CLI/MCP/Skill smoke
-output, and four final artifact hashes also passed in fresh local temporary
+Package build, isolated wheel and sdist installation, CLI/MCP/Skill/Collector
+smoke output, and the expected release artifact hashes also passed in fresh local temporary
 directories. The checked-in release workflow repeats these gates. See
 `docs/releasing.md` for the local and tag-driven procedure.
 
@@ -41,6 +42,9 @@ directories. The checked-in release workflow repeats these gates. See
 - GNU addr2line: Binutils 2.44, exercised against PIE, shared, stripped, and separate-debug fixtures.
 - LLVM symbolizer: JSON protocol and long-lived provider lifecycle are test-double verified because it is not installed on this host.
 - MCP: official Python SDK 2.0.0 client/server end-to-end tests.
+- Collector: Linux Unix socket peer authentication, independent policy, single-use
+  PID plan, and fixed spool are end-to-end tested; real privileged sampling is not
+  claimed on this host.
 
 ## Interpretation boundaries
 

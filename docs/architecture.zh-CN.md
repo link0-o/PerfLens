@@ -10,7 +10,8 @@ Application Service ─→ Contract 映射 ─→ 有界产物写入器
 ProfileAdapter/ProfileStream ─→ 轻量领域聚合
 Benchmark/Metric Adapter       ─→ 确定性比较
 Symbol Provider                ─→ 已验证的源码定位
-显式采集服务                   ─→ 有界命令执行器 ─→ 系统 perf
+手工采集服务                   ─→ 有界命令执行器 ─→ 系统 perf
+自动 PID 计划 ─→ Unix Socket ─→ 受限 Collector ─→ 固定 spool
 ```
 
 ## Core 与边界层
@@ -61,6 +62,8 @@ MCP 在服务端分别控制允许根目录、产物写入、进程执行、主�
 采集器只运行绝对可执行文件，不调用 shell 或 sudo；运行过程中监控输出大小；超时或超限时终止整个子进程组；最后以不覆盖方式发布新产物。
 
 `perf stat` 输出由独立 Metric Adapter 处理，不混入栈 ProfileAdapter 层级。
+
+自动采集采用不同的权限边界：MCP 生成短期、单次、绑定 PID 所有者和启动时间的计划；可选 Collector 通过 Unix Socket 对等凭据和独立只读策略再次校验，只接受 PID，且只能写固定 spool。Collector 不接受 shell、任意命令、任意输出路径或全系统目标。MCP 与 Skill 始终保持普通用户权限。
 
 ## 依赖方向
 

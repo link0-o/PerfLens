@@ -19,3 +19,9 @@ shell. Active collection is disabled by default, requires explicit per-call
 authorization, never overwrites an existing output, and adds independent
 server gates for process execution, collection, and PID attachment. PerfLens
 never invokes sudo or changes host perf/sysctl policy.
+
+The optional automatic Collector is a separate privilege boundary. MCP creates
+short-lived, single-use plans bound to PID identity; the Collector authenticates the
+Unix peer, applies an independent policy, accepts PID targets only, and writes to a
+fixed spool. Policy bypass, cross-UID collection, command execution, or spool escape
+should be reported as a security vulnerability.

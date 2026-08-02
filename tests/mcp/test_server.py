@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import stat
 import sys
 from pathlib import Path
@@ -42,6 +43,10 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "compare_profiles",
                 "compare_benchmarks",
                 "collect_profile",
+                "inspect_collection_capabilities",
+                "plan_automatic_collection",
+                "execute_collection_plan",
+                "analyze_collection",
             }
             for tool in tools.values():
                 assert tool.input_schema["type"] == "object"
@@ -60,6 +65,18 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert active_annotations.destructive_hint is True
             assert active_annotations.idempotent_hint is False
             assert tools["collect_profile"].meta == {"perflens/permission": "ACTIVE_COLLECTION"}
+            capability_annotations = tools["inspect_collection_capabilities"].annotations
+            plan_annotations = tools["plan_automatic_collection"].annotations
+            assert capability_annotations is not None
+            assert plan_annotations is not None
+            assert capability_annotations.read_only_hint is True
+            assert plan_annotations.read_only_hint is True
+            assert tools["execute_collection_plan"].meta == {
+                "perflens/permission": "AUTOMATIC_COLLECTION"
+            }
+            assert tools["analyze_collection"].meta == {
+                "perflens/permission": "PROCESS_EXECUTION"
+            }
 
     asyncio.run(exercise())
 
@@ -230,6 +247,29 @@ def test_server_enforces_write_process_and_path_authorization(tmp_path: Path) ->
             assert path_denied.is_error
             assert process_denied.is_error
             assert collection_denied.is_error
+        assert list(artifact_root.iterdir()) == []
+
+    asyncio.run(exercise())
+
+
+def test_automatic_collection_is_plannable_but_not_executable_by_default(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    server = create_server(ServerConfig((tmp_path,), artifact_root))
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            planned = await client.call_tool(
+                "plan_automatic_collection",
+                {"pid": os.getppid(), "duration_seconds": 0.1},
+            )
+            payload = _structured(planned)
+            assert payload["policy_status"] == "denied"
+            executed = await client.call_tool(
+                "execute_collection_plan",
+                {"plan_id": payload["plan_id"]},
+            )
+            assert executed.is_error
         assert list(artifact_root.iterdir()) == []
 
     asyncio.run(exercise())

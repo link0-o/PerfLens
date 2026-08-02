@@ -1,0 +1,46 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "mode": {
+      "enum": [
+        "record",
+        "stat",
+        "sched",
+        "lock",
+        "off_cpu"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "required_privilege": {
+      "enum": [
+        "none",
+        "cap_perfmon",
+        "cap_sys_admin_or_policy_change"
+      ],
+      "title": "Required Privilege",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "available",
+        "conditional",
+        "blocked"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "mode",
+    "status",
+    "required_privilege",
+    "reason"
+  ],
+  "title": "CollectionModeCapability",
+  "type": "object"
+}

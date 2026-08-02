@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from perflens.distribution.codex import render_codex_config
+from perflens.distribution.collector import install_collector_assets
 from perflens.distribution.skill import SKILL_NAME, install_project_skill
 from perflens.domain.errors import ErrorCode, PerfLensError
 
@@ -43,6 +44,18 @@ def test_project_skill_install_rejects_parent_symlink_escape(tmp_path: Path) -> 
 
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
     assert not (outside / "skills").exists()
+
+
+def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
+    target = install_collector_assets(tmp_path / "collector-assets")
+    assert {path.name for path in target.iterdir()} == {
+        "collector.example.toml",
+        "perflens-collector.service",
+        "perflens.sysusers",
+    }
+    with pytest.raises(PerfLensError) as captured:
+        install_collector_assets(target)
+    assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 
 def test_codex_config_uses_canonical_paths_and_optional_process_gate(tmp_path: Path) -> None:

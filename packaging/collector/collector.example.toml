@@ -1,0 +1,26 @@
+# Copy to /etc/perflens/collector.toml, keep it root-owned and mode 0644 or stricter.
+# Replace 1000 with every local UID that may use the collector socket.
+
+[collector]
+spool_root = "/var/lib/perflens"
+perf_path = "/usr/bin/perf"
+allowed_uids = [1000]
+allowed_modes = ["record", "stat"]
+allow_other_target_uids = false
+max_duration_seconds = 30.0
+max_frequency_hz = 99
+max_output_bytes = 1073741824
+max_plan_ttl_seconds = 300
+allowed_stat_events = [
+  "cycles",
+  "instructions",
+  "cache-references",
+  "cache-misses",
+  "branches",
+  "branch-misses",
+  "context-switches",
+  "cpu-migrations",
+  "page-faults",
+]
+socket_mode = "0660"
+artifact_mode = "0640"

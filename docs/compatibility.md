@@ -13,6 +13,7 @@
 | MCP | Official Python SDK 2.x, local stdio transport |
 | Skill | Repository skill under `.agents/skills`, validated by `skill-creator` |
 | Active collection | perf record/stat/sched/lock and sched-switch off-CPU evidence; default off and permission dependent |
+| Automatic collection | Linux Unix socket with `SO_PEERCRED`; PID-only Collector Broker; systemd template provided |
 | Artifact schema | 1.0 |
 
 PerfLens does not parse `perf.data` directly. Binary compatibility is delegated
@@ -20,3 +21,8 @@ to the selected system `perf`; use a matching perf build when a profile cannot
 be decoded. The GNU addr2line fallback is exercised against Binutils 2.44. The
 LLVM JSON provider is protocol-tested because `llvm-symbolizer` is not installed
 on the development host. MCP behavior is tested in memory with the official SDK client.
+
+The Collector Broker integration is tested end-to-end with a real Unix socket and
+an executable perf test double. This host still cannot prove a successful real
+privileged sample because `perf_event_paranoid=3` and no approved Collector service
+has been installed.

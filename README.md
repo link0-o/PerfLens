@@ -48,11 +48,13 @@ pipx install ./perflens-0.1.0-py3-none-any.whl
 uv tool install ./perflens-0.1.0-py3-none-any.whl
 ```
 
-Both commands install `perflens` and `perflens-mcp`. Confirm the release:
+Both commands install `perflens`, `perflens-mcp`, and the optional
+`perflens-collector`. Confirm the release:
 
 ```bash
 perflens --version
 perflens-mcp --version
+perflens-collector --version
 ```
 
 Installing directly from a source checkout is also supported:
@@ -193,6 +195,12 @@ are available. PID attachment requires `--pid`, a bounded duration,
 `I_EXPLICITLY_AUTHORIZE_PID_ATTACH`. PerfLens never invokes sudo or changes
 kernel policy. See [MCP server and Skill setup](docs/mcp-and-skill.md) for the
 additional MCP startup gates.
+
+For an approved live PID, PerfLens can automatically inspect permissions, create a
+short-lived PID-bound plan, execute it once through a separately policy-enforcing
+Collector Broker, and analyze the result. See
+[automatic collection](docs/automatic-collection.md). The MCP server and Agent remain
+unprivileged.
 
 ## Use MCP with the Skill
 

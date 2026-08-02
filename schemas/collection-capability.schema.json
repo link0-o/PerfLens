@@ -1,0 +1,189 @@
+{
+  "$defs": {
+    "CollectionModeCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "record",
+            "stat",
+            "sched",
+            "lock",
+            "off_cpu"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "required_privilege": {
+          "enum": [
+            "none",
+            "cap_perfmon",
+            "cap_sys_admin_or_policy_change"
+          ],
+          "title": "Required Privilege",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "available",
+            "conditional",
+            "blocked"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "status",
+        "required_privilege",
+        "reason"
+      ],
+      "title": "CollectionModeCapability",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "capability_id": {
+      "title": "Capability Id",
+      "type": "string"
+    },
+    "effective_capabilities": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Effective Capabilities",
+      "type": "array"
+    },
+    "effective_uid": {
+      "minimum": 0,
+      "title": "Effective Uid",
+      "type": "integer"
+    },
+    "kernel_release": {
+      "title": "Kernel Release",
+      "type": "string"
+    },
+    "kptr_restrict": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Kptr Restrict"
+    },
+    "modes": {
+      "items": {
+        "$ref": "#/$defs/CollectionModeCapability"
+      },
+      "title": "Modes",
+      "type": "array"
+    },
+    "perf_event_paranoid": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Perf Event Paranoid"
+    },
+    "perf_executable": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Perf Executable"
+    },
+    "perf_file_capabilities": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Perf File Capabilities",
+      "type": "array"
+    },
+    "perf_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Perf Version"
+    },
+    "platform": {
+      "title": "Platform",
+      "type": "string"
+    },
+    "ptrace_scope": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ptrace Scope"
+    },
+    "recommendations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Recommendations",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "tracefs_accessible": {
+      "title": "Tracefs Accessible",
+      "type": "boolean"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "capability_id",
+    "platform",
+    "kernel_release",
+    "effective_uid",
+    "tracefs_accessible",
+    "modes"
+  ],
+  "title": "CollectionCapabilityArtifact",
+  "type": "object"
+}

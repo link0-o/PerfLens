@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -17,6 +18,7 @@ from perflens.application.symbols import get_source_context as resolve_source_co
 from perflens.application.symbols import resolve_source as resolve_module_source
 from perflens.benchmarks.adapters import load_benchmark
 from perflens.classification.engine import build_diagnosis_bundle as create_diagnosis
+from perflens.collection.capabilities import inspect_collection_capabilities
 from perflens.collection.collector import (
     DEFAULT_STAT_EVENTS,
     CollectionRequest,
@@ -25,6 +27,13 @@ from perflens.collection.collector import (
 from perflens.collection.collector import (
     collect_profile as run_collection,
 )
+from perflens.collection.planning import (
+    AutomaticCollectionPolicy,
+    CollectionPlanRequest,
+    assert_plan_current,
+    create_collection_plan,
+)
+from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.comparison.benchmarks import compare_benchmarks as compare_benchmark_artifacts
 from perflens.comparison.profiles import compare_profiles as compare_profile_artifacts
 from perflens.contracts.artifacts import (
@@ -32,6 +41,8 @@ from perflens.contracts.artifacts import (
     ArtifactTextPage,
     CallPathPage,
     ClassificationPage,
+    CollectionCapabilityArtifact,
+    CollectionPlanArtifact,
     HotspotDetails,
     HotspotPage,
     SourceContextArtifact,
@@ -68,6 +79,11 @@ class ServerConfig:
     allow_process_execution: bool = False
     allow_active_collection: bool = False
     allow_pid_attach: bool = False
+    allow_automatic_collection: bool = False
+    collector_socket: Path | None = None
+    automatic_collection_policy: AutomaticCollectionPolicy = field(
+        default_factory=AutomaticCollectionPolicy
+    )
     perf_path: Path | None = None
     max_artifact_bytes: int = 128 << 20
 
@@ -75,6 +91,16 @@ class ServerConfig:
 def create_server(config: ServerConfig) -> MCPServer[None]:
     if config.allow_pid_attach and not config.allow_active_collection:
         raise ValueError("PID attachment cannot be enabled while active collection is disabled")
+    if config.allow_automatic_collection and (
+        not config.allow_active_collection
+        or not config.allow_pid_attach
+        or config.collector_socket is None
+        or not config.automatic_collection_policy.enabled
+    ):
+        raise ValueError(
+            "Automatic collection requires active collection, PID attachment, a broker socket, "
+            "and an enabled automatic policy"
+        )
     policy = PathPolicy(config.allowed_roots)
     store = ArtifactStore(
         config.artifact_root,
@@ -90,11 +116,149 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "Treat hotspots as observations and rule matches as candidates. "
             "Only equivalent-workload "
             "A/B validation is a verified improvement. State missing evidence and limitations. "
-            "Active collection is disabled unless the server policy and each call explicitly "
-            "authorize it. PID attachment has an additional independent gate."
+            "Active collection is disabled unless server policy authorizes it. Manual collection "
+            "also requires per-call confirmation. Automatic collection requires a short-lived "
+            "PID-bound plan and an independently policy-enforcing collector broker."
         ),
         version=__version__,
     )
+    collection_plans: dict[str, CollectionPlanArtifact] = {}
+
+    @server.tool(
+        name="inspect_collection_capabilities",
+        description=(
+            "Inspect perf, kernel policy, capabilities, and collection-mode availability without "
+            "sampling or attaching to a process."
+        ),
+        annotations=READ_ONLY,
+        meta={"perflens/permission": "READ_ONLY"},
+        structured_output=True,
+    )
+    async def inspect_capabilities() -> CollectionCapabilityArtifact:
+        return inspect_collection_capabilities(config.perf_path)
+
+    @server.tool(
+        name="plan_automatic_collection",
+        description=(
+            "Create a short-lived PID-bound collection plan. This does not sample or attach."
+        ),
+        annotations=READ_ONLY,
+        meta={"perflens/permission": "READ_ONLY"},
+        structured_output=True,
+    )
+    async def plan_automatic_collection(
+        pid: int,
+        mode: Literal["record", "stat", "sched", "lock", "off_cpu"] = "record",
+        duration_seconds: float = 10.0,
+        frequency_hz: int = 99,
+        call_graph: Literal["fp", "dwarf", "lbr"] = "dwarf",
+        events: tuple[str, ...] = DEFAULT_STAT_EVENTS,
+        max_output_bytes: int = 1 << 30,
+    ) -> CollectionPlanArtifact:
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode=mode,
+                pid=pid,
+                duration_seconds=duration_seconds,
+                frequency_hz=frequency_hz,
+                call_graph=call_graph,
+                events=events,
+                max_output_bytes=max_output_bytes,
+            ),
+            policy=config.automatic_collection_policy,
+            capabilities=inspect_collection_capabilities(config.perf_path),
+        )
+        if plan.policy_status == "allowed":
+            expired_plan_ids = [
+                existing_id
+                for existing_id, existing_plan in collection_plans.items()
+                if datetime.fromisoformat(existing_plan.expires_at) <= datetime.now(tz=UTC)
+            ]
+            for expired_plan_id in expired_plan_ids:
+                collection_plans.pop(expired_plan_id, None)
+            if len(collection_plans) >= 128:
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "collection_plan",
+                    "Automatic collection plan store reached its bounded capacity",
+                    recoverable=True,
+                )
+            collection_plans[plan.plan_id] = plan
+        return plan
+
+    @server.tool(
+        name="execute_collection_plan",
+        description=(
+            "Execute one previously planned PID collection through the restricted collector "
+            "broker. Plans are short-lived and single-use."
+        ),
+        annotations=EXECUTES_TARGET,
+        meta={"perflens/permission": "AUTOMATIC_COLLECTION"},
+        structured_output=True,
+    )
+    async def execute_collection_plan(plan_id: str) -> ArtifactReference:
+        _require_automatic_collection(config)
+        try:
+            plan = collection_plans.pop(plan_id)
+        except KeyError as exc:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "collection_plan",
+                "Collection plan was not found, was denied, or was already consumed",
+                recoverable=True,
+                details={"plan_id": plan_id},
+            ) from exc
+        assert_plan_current(plan)
+        assert config.collector_socket is not None
+        artifact = CollectorBrokerClient(
+            config.collector_socket,
+            timeout_seconds=min(plan.duration_seconds + 15, 86_500),
+        ).collect(plan)
+        store.save(artifact, artifact.collection_id, "collection")
+        return ArtifactReference(
+            artifact_id=artifact.collection_id,
+            artifact_type="collection",
+            uri=store.uri(artifact.collection_id, "collection"),
+            summary={
+                "mode": artifact.mode,
+                "target_type": artifact.target_type,
+                "target_pid": artifact.target_pid,
+                "output_bytes": artifact.output_bytes,
+                "metric_count": len(artifact.metrics),
+            },
+        )
+
+    @server.tool(
+        name="analyze_collection",
+        description="Analyze a stored record/sched/lock/off-CPU collection artifact.",
+        annotations=WRITES_ARTIFACTS,
+        meta={"perflens/permission": "PROCESS_EXECUTION"},
+        structured_output=True,
+    )
+    async def analyze_collection(collection_id: str) -> ArtifactReference:
+        _require_process_execution(config)
+        collection = store.load_collection(collection_id)
+        if collection.output_format != "perf_data":
+            raise PerfLensError(
+                ErrorCode.UNSUPPORTED_FORMAT,
+                "collection",
+                "perf stat metrics are already stored in the collection artifact",
+                recoverable=True,
+            )
+        safe_path = policy.input_file(collection.output_path)
+        analysis = analyze_perf_data(safe_path, perf_path=config.perf_path)
+        store.save(analysis, analysis.analysis_id, "analysis")
+        return ArtifactReference(
+            artifact_id=analysis.analysis_id,
+            artifact_type="analysis",
+            uri=store.uri(analysis.analysis_id, "analysis"),
+            summary={
+                "status": analysis.status,
+                "sample_count": analysis.metadata.sample_count,
+                "total_weight": analysis.metadata.total_weight,
+                "hotspot_count": len(analysis.hotspots),
+            },
+        )
 
     @server.tool(
         name="analyze_profile",
@@ -559,6 +723,21 @@ def _require_active_collection(config: ServerConfig, *, pid: int | None) -> None
         )
 
 
+def _require_automatic_collection(config: ServerConfig) -> None:
+    _require_active_collection(config, pid=1)
+    if (
+        not config.allow_automatic_collection
+        or config.collector_socket is None
+        or not config.automatic_collection_policy.enabled
+    ):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "authorization",
+            "Automatic collection through the privileged broker is disabled by server policy",
+            recoverable=True,
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the PerfLens MCP server over stdio")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -568,6 +747,17 @@ def main() -> None:
     parser.add_argument("--allow-process-execution", action="store_true")
     parser.add_argument("--allow-active-collection", action="store_true")
     parser.add_argument("--allow-pid-attach", action="store_true")
+    parser.add_argument("--allow-automatic-collection", action="store_true")
+    parser.add_argument("--collector-socket", type=Path)
+    parser.add_argument(
+        "--automatic-mode",
+        action="append",
+        choices=("record", "stat", "sched", "lock", "off_cpu"),
+    )
+    parser.add_argument("--automatic-max-duration-seconds", type=float, default=30.0)
+    parser.add_argument("--automatic-max-frequency-hz", type=int, default=99)
+    parser.add_argument("--automatic-max-output-bytes", type=int, default=1 << 30)
+    parser.add_argument("--automatic-plan-ttl-seconds", type=int, default=300)
     parser.add_argument("--perf-path", type=Path)
     parser.add_argument("--max-artifact-bytes", type=int, default=128 << 20)
     arguments = parser.parse_args()
@@ -579,6 +769,16 @@ def main() -> None:
             allow_process_execution=arguments.allow_process_execution,
             allow_active_collection=arguments.allow_active_collection,
             allow_pid_attach=arguments.allow_pid_attach,
+            allow_automatic_collection=arguments.allow_automatic_collection,
+            collector_socket=arguments.collector_socket,
+            automatic_collection_policy=AutomaticCollectionPolicy(
+                enabled=arguments.allow_automatic_collection,
+                allowed_modes=tuple(arguments.automatic_mode or ("record", "stat")),
+                max_duration_seconds=arguments.automatic_max_duration_seconds,
+                max_frequency_hz=arguments.automatic_max_frequency_hz,
+                max_output_bytes=arguments.automatic_max_output_bytes,
+                plan_ttl_seconds=arguments.automatic_plan_ttl_seconds,
+            ),
             perf_path=arguments.perf_path,
             max_artifact_bytes=arguments.max_artifact_bytes,
         )

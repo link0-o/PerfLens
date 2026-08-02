@@ -1,0 +1,147 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "backend": {
+      "const": "privileged_broker",
+      "title": "Backend",
+      "type": "string"
+    },
+    "call_graph": {
+      "anyOf": [
+        {
+          "enum": [
+            "fp",
+            "dwarf",
+            "lbr"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Call Graph"
+    },
+    "duration_seconds": {
+      "exclusiveMinimum": 0,
+      "maximum": 86400,
+      "title": "Duration Seconds",
+      "type": "number"
+    },
+    "events": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Events",
+      "type": "array"
+    },
+    "expires_at": {
+      "title": "Expires At",
+      "type": "string"
+    },
+    "frequency_hz": {
+      "anyOf": [
+        {
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Frequency Hz"
+    },
+    "max_output_bytes": {
+      "exclusiveMinimum": 0,
+      "title": "Max Output Bytes",
+      "type": "integer"
+    },
+    "mode": {
+      "enum": [
+        "record",
+        "stat",
+        "sched",
+        "lock",
+        "off_cpu"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "plan_id": {
+      "pattern": "^plan-[a-f0-9]{20}$",
+      "title": "Plan Id",
+      "type": "string"
+    },
+    "policy_status": {
+      "enum": [
+        "allowed",
+        "denied"
+      ],
+      "title": "Policy Status",
+      "type": "string"
+    },
+    "required_privilege": {
+      "enum": [
+        "none",
+        "cap_perfmon",
+        "cap_sys_admin_or_policy_change"
+      ],
+      "title": "Required Privilege",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "target_pid": {
+      "exclusiveMinimum": 0,
+      "title": "Target Pid",
+      "type": "integer"
+    },
+    "target_start_time_ticks": {
+      "exclusiveMinimum": 0,
+      "title": "Target Start Time Ticks",
+      "type": "integer"
+    },
+    "target_type": {
+      "const": "pid",
+      "title": "Target Type",
+      "type": "string"
+    },
+    "target_uid": {
+      "minimum": 0,
+      "title": "Target Uid",
+      "type": "integer"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "plan_id",
+    "mode",
+    "target_type",
+    "target_pid",
+    "target_uid",
+    "target_start_time_ticks",
+    "backend",
+    "duration_seconds",
+    "max_output_bytes",
+    "expires_at",
+    "policy_status",
+    "required_privilege"
+  ],
+  "title": "CollectionPlanArtifact",
+  "type": "object"
+}

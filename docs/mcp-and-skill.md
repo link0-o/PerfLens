@@ -101,6 +101,7 @@ It may also trigger implicitly for Linux profile diagnosis. The Skill requires t
 | `WRITES_ARTIFACTS` | profile analysis, diagnosis bundle | Disabled unless `--allow-writes`; writes only beneath the artifact root. |
 | `PROCESS_EXECUTION` | perf.data conversion and source symbolization | Disabled unless `--allow-process-execution`; executable selection remains allowlisted and bounded. |
 | `ACTIVE_COLLECTION` | `collect_profile` record/stat/sched/lock/off-CPU modes | Requires writes, process execution, active-collection startup gate, exact per-call authorization, bounded output, and a new output path. PID attachment has two additional gates. |
+| `AUTOMATIC_COLLECTION` | Execute a short-lived PID-bound plan through the Collector | Requires explicit MCP startup gates and an independent Collector policy. |
 
 Tool annotations are client hints. The authorization checks above are independent server-side controls.
 
@@ -117,5 +118,9 @@ Tool annotations are client hints. The authorization checks above are independen
 9. `analyze_benchmark`, `compare_profiles`, and `compare_benchmarks` for A/B work
 
 `collect_profile` is intentionally outside the default sequence. Use it only after the user approves the exact target and the [Skill safety rules](../.agents/skills/perflens-performance-analysis/references/active-collection-safety.md) have been applied.
+
+For policy-approved live PIDs, use `inspect_collection_capabilities`,
+`plan_automatic_collection`, `execute_collection_plan`, and `analyze_collection`.
+See [automatic collection](automatic-collection.md).
 
 All list responses are bounded and paginated. The server emits typed structured output and checked-in JSON Schemas; it never returns an unbounded full analysis through a list tool.

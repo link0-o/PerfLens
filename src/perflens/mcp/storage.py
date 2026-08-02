@@ -9,7 +9,12 @@ from typing import TypeVar
 from pydantic import BaseModel, ValidationError
 
 from perflens.artifacts.filesystem import write_json_atomic
-from perflens.contracts.artifacts import AnalysisArtifact, BenchmarkArtifact, DiagnosisBundle
+from perflens.contracts.artifacts import (
+    AnalysisArtifact,
+    BenchmarkArtifact,
+    CollectionArtifact,
+    DiagnosisBundle,
+)
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.security.paths import validate_new_output_file
 
@@ -128,6 +133,9 @@ class ArtifactStore:
 
     def load_benchmark(self, benchmark_id: str) -> BenchmarkArtifact:
         return self._load(benchmark_id, "benchmark", BenchmarkArtifact)
+
+    def load_collection(self, collection_id: str) -> CollectionArtifact:
+        return self._load(collection_id, "collection", CollectionArtifact)
 
     def read_page(
         self,

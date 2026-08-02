@@ -1,6 +1,6 @@
 ---
 name: perflens-performance-analysis
-description: Diagnose Linux performance profiles with PerfLens MCP tools using an evidence-first workflow. Use for FlameGraph folded stacks, perf script text, perf.data, CPU hotspot investigation, source attribution, regression analysis, or optimization validation. Do not use for general code review without performance evidence or for unauthorized live process sampling.
+description: Diagnose Linux performance profiles and explicitly authorized live Linux PIDs with PerfLens MCP tools using an evidence-first workflow. Use for automatic bounded perf collection, FlameGraph folded stacks, perf script text, perf.data, CPU hotspot investigation, source attribution, regression analysis, or optimization validation. Do not use for general code review without a performance question or for live targets outside an approved collection policy.
 ---
 
 # PerfLens Performance Analysis
@@ -22,7 +22,7 @@ Always read [evidence-model.md](references/evidence-model.md). Load the topic re
 
 ## Default workflow
 
-1. Call `analyze_profile` with the input path and explicit source type when auto-detection is ambiguous. If writes are disabled, tell the user how to restart the server with artifact writes authorized.
+1. If an existing Profile is available, call `analyze_profile` with its input path and explicit source type when auto-detection is ambiguous. If a live PID is the authorized evidence source, follow **Automatic live collection** below first.
 2. Inspect the returned sample count, event, weight semantics, call-graph availability, source availability, warnings, and unresolved frames before interpreting hotspots.
 3. Call `list_hotspots` for a bounded top page. Compare Self and Inclusive values; do not equate either with elapsed wall time.
 4. Call `get_hotspot_details` and `get_call_paths` for each material hotspot. Do not infer business semantics from a function name alone.
@@ -34,11 +34,22 @@ Always read [evidence-model.md](references/evidence-model.md). Load the topic re
 10. For changes, run correctness tests and equivalent-workload before/after measurements. Only matched A/B evidence may be described as a verified improvement.
 11. Produce the final report using [diagnosis-report-template.md](assets/diagnosis-report-template.md).
 
-## Active collection is opt-in
+## Automatic live collection
 
-Prefer existing folded, perf-script, perf.data, or benchmark artifacts. Call `collect_profile` only when the user explicitly authorizes the exact command or PID and understands that profiling may perturb it. The MCP server must have artifact writes, process execution, and active collection enabled. PID attachment additionally requires the server PID gate and the separate per-call PID authorization token.
+Read [active-collection-safety.md](references/active-collection-safety.md) before using a live target.
 
-Never add `--allow-active-collection` or `--allow-pid-attach` on the user's behalf. Never invoke sudo, never broaden allowed roots, and never substitute a different target. Start with bounded duration, frequency, event set, timeout, and output size. Keep failures caused by kernel perf policy as limitations; do not attempt to weaken host security settings.
+When the user identifies a live PID and the MCP server has an administrator-approved automatic collection policy:
+
+1. Call `inspect_collection_capabilities`; preserve blocked/conditional modes as evidence.
+2. Start with the least intrusive discriminating mode: `stat`, then `record`; use `sched`, `lock`, or `off_cpu` only when the question requires that evidence.
+3. Call `plan_automatic_collection` with the exact PID, short duration, bounded frequency and output size. Do not execute a denied plan or alter the target to make it pass.
+4. Call `execute_collection_plan` only if the MCP host's active-tool approval and server policy permit it. The plan is PID-incarnation-bound, short-lived, and single-use.
+5. For `stat`, interpret the typed metrics already stored in the collection artifact. For perf-data modes, call `analyze_collection`, then continue the default evidence workflow.
+6. Escalate to a stronger mode only when the prior result names missing evidence that the stronger mode can supply.
+
+The Skill may select and sequence collection automatically inside an already granted scope. The Skill itself is not authorization. Never add collection server flags, launch the privileged broker, invoke sudo, change sysctl/capabilities, broaden allowed roots, or select another user's PID on the user's behalf.
+
+The legacy `collect_profile` tool remains for manually confirmed command/PID collection and requires its exact per-call tokens. Prefer the plan/Broker workflow for Agent-driven PID collection.
 
 ## Mandatory interpretation rules
 

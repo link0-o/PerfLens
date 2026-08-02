@@ -126,7 +126,7 @@ Agent 通常按以下顺序工作：
 8. `read_artifact_page`：分页读取较大的产物。
 9. `analyze_benchmark`、`compare_profiles`、`compare_benchmarks`：进行优化前后验证。
 
-`collect_profile` 不在默认流程中，因为它会执行目标程序或附加进程，必须得到用户对精确目标的明确授权。
+已有 Profile 时不需要主动采集。面对策略已经批准的实时 PID，Skill 的默认流程改为 `inspect_collection_capabilities` → `plan_automatic_collection` → `execute_collection_plan` → `analyze_collection`；`stat` 指标直接保存在采集产物中。完整部署见[《自动采集与 Collector Broker》](automatic-collection.zh-CN.md)。
 
 ## 权限级别
 
@@ -136,6 +136,7 @@ Agent 通常按以下顺序工作：
 | `WRITES_ARTIFACTS` | 分析 Profile、生成诊断包 | 需要 `--allow-writes`，只能写 artifact root |
 | `PROCESS_EXECUTION` | 转换 perf.data、执行源码符号化程序 | 需要 `--allow-process-execution`，命令、输出和时长有边界 |
 | `ACTIVE_COLLECTION` | record/stat/sched/lock/off-CPU 采样 | 需要多个启动开关、逐次精确授权和全新输出路径 |
+| `AUTOMATIC_COLLECTION` | 执行短期、单次、PID 绑定计划 | MCP 分类授权与 Collector 独立策略必须同时允许 |
 
 客户端显示的工具注解只是提示；真正的权限检查始终在 PerfLens MCP Server 内执行。
 

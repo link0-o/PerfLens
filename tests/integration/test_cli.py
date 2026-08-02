@@ -45,6 +45,18 @@ def test_cli_exposes_version_and_release_setup_commands(tmp_path: Path) -> None:
     assert "[mcp_servers.perflens]" in config.output
     assert '"--allow-process-execution"' in config.output
 
+    doctor = runner.invoke(app, ["doctor"])
+    assert doctor.exit_code == 0, doctor.output
+    doctor_payload = json.loads(doctor.output)
+    assert doctor_payload["schema_version"] == "1.0"
+    assert {item["mode"] for item in doctor_payload["modes"]} == {
+        "record",
+        "stat",
+        "sched",
+        "lock",
+        "off_cpu",
+    }
+
 
 def test_cli_analyzes_folded_profile(fixture_root: Path, tmp_path: Path) -> None:
     output = tmp_path / "nested" / "analysis.json"

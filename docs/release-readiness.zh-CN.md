@@ -2,11 +2,11 @@
 
 简体中文 | [English](release-readiness.md)
 
-本文把最终实现与项目 Definition of Done 对应起来。表中的本地验证在 2026-08-01 完成；工作流配置本身不等于远程 GitHub Actions 已经成功运行。
+本文把最终实现与项目 Definition of Done 对应起来。表中的本地验证更新到 2026-08-02；工作流配置本身不等于远程 GitHub Actions 已经成功运行。
 
 ## 功能范围
 
-里程碑 0～9 已实现：
+里程碑 0～10 已实现：
 
 - folded、`perf script` 和经系统 perf 转换的 `perf.data` 分析；
 - 精确 Self/Inclusive 热点和调用路径；
@@ -16,6 +16,7 @@
 - PerfLens Performance Analysis Skill；
 - Profile/Benchmark 比较及常见 Benchmark JSON Adapter；
 - 默认关闭、必须明确授权的主动采集。
+- 通过独立 Collector Broker 执行的、策略约束的自动 PID 采集。
 
 项目仍然明确不包含：LLM API、自研 Agent 循环、Web UI、自动修改源码、Benchmark 执行器、生产监控、直接解析 `perf.data` 二进制以及面向特定应用的规则。
 
@@ -25,9 +26,9 @@
 |---|---|---|
 | 代码规范 | `ruff check .` | 通过 |
 | 严格类型 | `pyright` | 0 错误、0 警告 |
-| Python 3.12 | `pytest -q`，Python 3.12.13 | 111 通过 |
-| Python 3.13 | 隔离环境 `pytest -q` | 111 通过 |
-| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.09%，通过 |
+| Python 3.12 | `pytest -q`，Python 3.12.13 | 154 通过 |
+| Python 3.13 | 隔离环境 `pytest -q` | 154 通过 |
+| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.49%，通过 |
 | Skill | Skill 结构和打包测试 | 通过 |
 | Schema | 已提交 Schema 与 Contract 生成结果相等 | 通过 |
 | 依赖锁 | `uv export --locked` | 通过 |
@@ -59,6 +60,7 @@
 - 非有限 Benchmark 与 perf-stat 数值会被拒绝；
 - 大批量符号地址分组发送，避免标准输入/输出管道死锁；
 - 主动采集默认关闭，PID 附加具有额外独立权限门。
+- 自动计划绑定 PID 所有者和启动时间，短期且单次；Collector 验证 Unix 对等 UID、独立策略和固定 spool。
 
 ## 结论边界
 

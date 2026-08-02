@@ -8,12 +8,24 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 - Chinese maintainer documentation for development, architecture, security,
   and release-readiness workflows.
+- Read-only `perflens doctor` capability diagnostics for perf/kernel policy,
+  process and file capabilities, tracefs, and every collection mode.
+- Short-lived, single-use automatic collection plans bound to PID owner and
+  process start time.
+- Optional `perflens-collector` Unix-socket Broker with peer authentication,
+  an independent immutable policy, fixed spool, and no command execution API.
+- MCP tools for capability inspection, automatic planning/execution, and
+  analysis of collected perf-data artifacts.
+- Packaged systemd, sysusers, and Collector policy templates plus a safe staging
+  command and complete Chinese deployment documentation.
 
 ### Changed
 
 - Release preparation now requires a CycloneDX JSON SBOM, rejects stale or
   unexpected files in `dist/`, and checksums only the four intended assets.
 - CI and release jobs now have explicit timeouts and concurrency controls.
+- The Performance Analysis Skill now drives policy-approved live PID collection
+  through the plan/Broker workflow before deterministic analysis.
 
 ### Fixed
 

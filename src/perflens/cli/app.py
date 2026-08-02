@@ -23,6 +23,7 @@ from perflens.artifacts.filesystem import (
     write_json_new_atomic,
     write_text_atomic,
 )
+from perflens.collection.capabilities import inspect_collection_capabilities
 from perflens.collection.collector import (
     ACTIVE_COLLECTION_AUTHORIZATION,
     DEFAULT_STAT_EVENTS,
@@ -33,6 +34,7 @@ from perflens.collection.collector import (
 )
 from perflens.contracts.artifacts import ErrorArtifact, ErrorBody
 from perflens.distribution.codex import render_codex_config
+from perflens.distribution.collector import install_collector_assets
 from perflens.distribution.skill import install_project_skill
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.domain.models import ResourceLimits
@@ -113,6 +115,51 @@ def codex_config_command(
     except PerfLensError as exc:
         _fail(exc)
     typer.echo(configuration, nl=False)
+
+
+@app.command("doctor")
+def doctor_command(
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Optional new JSON output path."),
+    ] = None,
+    perf_path: Annotated[
+        Path | None,
+        typer.Option("--perf-path", dir_okay=False, help="Explicit system perf executable."),
+    ] = None,
+) -> None:
+    """Inspect collection permissions without sampling or attaching to a process."""
+    try:
+        artifact = inspect_collection_capabilities(perf_path)
+        if output_path is not None:
+            safe_output = validate_new_output_file(output_path)
+            write_json_new_atomic(artifact, safe_output, max_output_bytes=1 << 20)
+            typer.echo(str(safe_output))
+            return
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(
+        json.dumps(artifact.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True)
+    )
+
+
+@app.command("stage-collector-assets")
+def stage_collector_assets_command(
+    output_directory: Annotated[
+        Path,
+        typer.Option(
+            "--output-directory",
+            file_okay=False,
+            help="New directory that will receive inspectable service templates.",
+        ),
+    ],
+) -> None:
+    """Stage Collector policy/systemd templates without installing or using sudo."""
+    try:
+        target = install_collector_assets(output_directory)
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(str(target))
 
 
 @app.command("analyze-folded")

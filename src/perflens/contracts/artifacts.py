@@ -413,6 +413,60 @@ class PerfStatMetric(ContractModel):
     status: Literal["measured", "not_counted", "not_supported", "derived"]
 
 
+class CollectionModeCapability(ContractModel):
+    mode: Literal["record", "stat", "sched", "lock", "off_cpu"]
+    status: Literal["available", "conditional", "blocked"]
+    required_privilege: Literal[
+        "none",
+        "cap_perfmon",
+        "cap_sys_admin_or_policy_change",
+    ]
+    reason: str
+
+
+class CollectionCapabilityArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    capability_id: str
+    platform: str
+    kernel_release: str
+    effective_uid: int = Field(ge=0)
+    perf_executable: str | None = None
+    perf_version: str | None = None
+    perf_event_paranoid: int | None = None
+    kptr_restrict: int | None = None
+    ptrace_scope: int | None = None
+    effective_capabilities: tuple[str, ...] = ()
+    perf_file_capabilities: tuple[str, ...] = ()
+    tracefs_accessible: bool
+    modes: tuple[CollectionModeCapability, ...]
+    warnings: tuple[str, ...] = ()
+    recommendations: tuple[str, ...] = ()
+
+
+class CollectionPlanArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    plan_id: str = Field(pattern=r"^plan-[a-f0-9]{20}$")
+    mode: Literal["record", "stat", "sched", "lock", "off_cpu"]
+    target_type: Literal["pid"]
+    target_pid: int = Field(gt=0)
+    target_uid: int = Field(ge=0)
+    target_start_time_ticks: int = Field(gt=0)
+    backend: Literal["privileged_broker"]
+    duration_seconds: float = Field(gt=0, le=86_400)
+    frequency_hz: int | None = Field(default=None, ge=1, le=10_000)
+    call_graph: Literal["fp", "dwarf", "lbr"] | None = None
+    events: tuple[str, ...] = ()
+    max_output_bytes: int = Field(gt=0)
+    expires_at: str
+    policy_status: Literal["allowed", "denied"]
+    required_privilege: Literal[
+        "none",
+        "cap_perfmon",
+        "cap_sys_admin_or_policy_change",
+    ]
+    warnings: tuple[str, ...] = ()
+
+
 class CollectionArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     collection_id: str

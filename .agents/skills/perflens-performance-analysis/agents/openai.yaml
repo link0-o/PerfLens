@@ -1,12 +1,12 @@
 interface:
   display_name: "PerfLens 性能分析"
-  short_description: "基于证据诊断 Linux 性能问题"
-  default_prompt: "使用 $perflens-performance-analysis 分析这个 Linux 性能 Profile，明确列出直接证据、候选原因、局限和缺失证据。"
+  short_description: "自动采集并基于证据诊断 Linux 性能问题"
+  default_prompt: "使用 $perflens-performance-analysis 分析这个 Linux Profile；如果我给出已授权的实时 PID，先按策略自动采集再诊断。"
 dependencies:
   tools:
     - type: "mcp"
       value: "perflens"
-      description: "PerfLens 确定性 Linux 性能 Profile 分析工具"
+      description: "PerfLens 确定性 Linux 性能采集与 Profile 分析工具"
       transport: "stdio"
 policy:
   allow_implicit_invocation: true

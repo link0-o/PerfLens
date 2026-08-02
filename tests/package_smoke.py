@@ -14,8 +14,10 @@ from perflens import __version__
 def main() -> None:
     perflens = _command("perflens")
     perflens_mcp = _command("perflens-mcp")
+    perflens_collector = _command("perflens-collector")
     _run(perflens, "--version", expected=__version__)
     _run(perflens_mcp, "--version", expected=__version__)
+    _run(perflens_collector, "--version", expected=__version__)
 
     with tempfile.TemporaryDirectory(prefix="perflens-package-smoke-") as directory:
         root = Path(directory)
@@ -46,6 +48,15 @@ def main() -> None:
             / "SKILL.md"
         )
         assert skill.is_file()
+
+        collector_assets = root / "collector-assets"
+        _run(
+            perflens,
+            "stage-collector-assets",
+            "--output-directory",
+            str(collector_assets),
+        )
+        assert (collector_assets / "perflens-collector.service").is_file()
 
         config = _run(
             perflens,

@@ -10,7 +10,8 @@ Application services ─→ Contract mapper ─→ bounded artifact writer
 ProfileAdapter/ProfileStream ─→ lightweight domain aggregation
 Benchmark/Metric adapters      ─→ deterministic comparison
 Symbol providers               ─→ verified source resolution
-Explicit collection service    ─→ bounded command runner ─→ system perf
+Manual collection service      ─→ bounded command runner ─→ system perf
+Automatic PID plan ─→ Unix socket ─→ restricted Collector ─→ fixed spool
 ```
 
 The domain layer uses frozen/slotted records, integer Frame IDs, and standard
@@ -45,3 +46,9 @@ without a shell or sudo, monitors output size while the process runs, kills the
 whole child process group on timeout or overflow, and publishes to a new path
 without overwriting. `perf stat` data goes to a dedicated Metric Adapter rather
 than the stack ProfileAdapter hierarchy.
+
+Automatic collection has a second privilege boundary. The MCP server creates a
+short-lived, single-use plan bound to PID owner and process start time. The optional
+Collector revalidates it using Unix peer credentials and an independent immutable
+policy. It accepts no shell, arbitrary command, environment, output path, or
+system-wide target. The MCP server and Skill remain unprivileged.

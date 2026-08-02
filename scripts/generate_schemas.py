@@ -20,6 +20,9 @@ from perflens.contracts.artifacts import (
     Classification,
     ClassificationPage,
     CollectionArtifact,
+    CollectionCapabilityArtifact,
+    CollectionModeCapability,
+    CollectionPlanArtifact,
     DiagnosisBundle,
     ElfMetadataArtifact,
     Evidence,
@@ -64,6 +67,9 @@ MODELS = {
     "profile-hotspot-delta.schema.json": ProfileHotspotDelta,
     "call-path-delta.schema.json": CallPathDelta,
     "collection.schema.json": CollectionArtifact,
+    "collection-capability.schema.json": CollectionCapabilityArtifact,
+    "collection-mode-capability.schema.json": CollectionModeCapability,
+    "collection-plan.schema.json": CollectionPlanArtifact,
     "perf-stat-metric.schema.json": PerfStatMetric,
 }
 

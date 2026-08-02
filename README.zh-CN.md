@@ -45,11 +45,12 @@ pipx install ./perflens-0.1.0-py3-none-any.whl
 uv tool install ./perflens-0.1.0-py3-none-any.whl
 ```
 
-两种方式都会安装 `perflens` 和 `perflens-mcp`。可以这样确认版本：
+两种方式都会安装 `perflens`、`perflens-mcp` 和可选的 `perflens-collector`。可以这样确认版本：
 
 ```bash
 perflens --version
 perflens-mcp --version
+perflens-collector --version
 ```
 
 也支持直接安装源码目录：
@@ -213,6 +214,8 @@ Skill 位于 `.agents/skills/perflens-performance-analysis`。`$perflens-perform
 
 完整权限说明和项目级配置见[《MCP 与 Skill 使用指南》](docs/mcp-and-skill.zh-CN.md)。
 
+如果希望 Skill 面向已授权实时 PID 自动完成“权限检查 → 计划 → 采集 → 分析”，请看[《自动采集与 Collector Broker》](docs/automatic-collection.zh-CN.md)。MCP 和 Agent 不以 root 运行；可选 Collector 通过独立策略持有最小 perf capability。
+
 ## 主动采样
 
 主动采样默认关闭，而且必须明确授权。CLI 示例：
@@ -233,6 +236,8 @@ perflens collect-profile \
 PerfLens 永远不会自行执行 sudo、修改内核策略或降低主机安全限制。若系统的 `perf_event_paranoid`、容器策略或能力设置不允许采样，应由系统管理员提供经过批准的采样环境或 Profile 文件。
 
 ## 权限和安全边界
+
+运行 `perflens doctor` 可以在不采样、不附加 PID 的情况下检查当前五种采集模式。Agent 自动采集使用短期、单次、绑定 PID 所有者和启动时间的计划，并由 Unix Socket Collector 再次检查调用 UID、目标、模式和资源上限。Skill 本身不是授权。
 
 - 所有用户路径都会被规范化，并限制在配置的 allowed root 内。
 - 输入 Profile 不会被覆盖。
@@ -280,6 +285,7 @@ uv run pip-audit
 - [中文开发指南](docs/development.zh-CN.md)
 - [架构说明](docs/architecture.zh-CN.md)
 - [MCP 与 Skill 使用指南](docs/mcp-and-skill.zh-CN.md)
+- [自动采集与 Collector Broker](docs/automatic-collection.zh-CN.md)
 - [安全策略](SECURITY.zh-CN.md)
 - [发布就绪检查](docs/release-readiness.zh-CN.md)
 - [发布流程](docs/releasing.zh-CN.md)
