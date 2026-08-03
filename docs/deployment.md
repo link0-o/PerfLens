@@ -26,7 +26,8 @@ perflens stage-collector-assets \
   --perf-path /usr/bin/perf
 ```
 
-The staged policy is `collector-assets/collector.toml`. Validate it without
+The staged policy is `collector-assets/collector.toml`. It includes bilingual
+field-by-field guidance for tunable, fixed, and security-sensitive settings. Validate it without
 changes, then run one explicit administrator command:
 
 ```bash

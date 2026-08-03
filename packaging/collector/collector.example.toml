@@ -1,16 +1,54 @@
-# Copy to /etc/perflens/collector.toml, keep it root-owned and mode 0644 or stricter.
-# Replace 1000 with every local UID that may use the collector socket.
+# PerfLens Collector 策略配置。部署前请逐项检查；TOML 注释不会影响解析。
+# PerfLens Collector policy. Review every field before deployment; TOML comments are ignored.
+#
+# 推荐先运行 perflens-admin deploy --config <本文件> --dry-run，再由管理员正式部署。
+# First run perflens-admin deploy --config <this-file> --dry-run, then deploy as administrator.
+# 正式配置会安装到 /etc/perflens/collector.toml，并保持 root 所有、0644 或更严格权限。
+# The deployed policy is installed at /etc/perflens/collector.toml, root-owned, mode 0644 or stricter.
 
 [collector]
+
+# 采集产物的固定保存目录。一键部署目前要求保持此值，不要随意修改。
+# Fixed output spool. The one-command deployer currently requires this exact value.
 spool_root = "/var/lib/perflens"
+
+# 系统 perf 可执行文件的绝对路径。通常无需修改；可用 command -v perf 查询。
+# Absolute system perf executable. Usually unchanged; use `command -v perf` to locate it.
 perf_path = "/usr/bin/perf"
+
+# 允许连接 Collector 的普通用户 UID。用 id -u <用户名> 查询；可填写多个 UID。
+# Ordinary-user UIDs allowed to call the Collector. Use `id -u <user>`; multiple UIDs are allowed.
+# 示例 / Example: allowed_uids = [1000, 1001]
 allowed_uids = [1000]
+
+# 允许的采集模式。建议先只开放 stat 和 record，确有需要后再增加其他模式。
+# Allowed collection modes. Start with stat and record; enable other modes only when required.
+# stat：低开销计数器；record：CPU 调用栈；sched/lock/off_cpu：调度、锁和阻塞证据。
+# stat: counters; record: CPU stacks; sched/lock/off_cpu: scheduling, lock, and blocking evidence.
 allowed_modes = ["record", "stat"]
+
+# 是否允许采集其他用户拥有的进程。安全敏感，强烈建议保持 false。
+# Whether callers may profile processes owned by other users. Security-sensitive; keep false.
 allow_other_target_uids = false
+
+# 单次采集最长时间（秒）。用户可请求更短时间，但不能超过此上限。
+# Maximum duration of one collection in seconds. Requests may be shorter, never longer.
 max_duration_seconds = 30.0
+
+# record 模式最大采样频率（Hz）。越高细节越多，同时开销也越大。
+# Maximum record sampling frequency in Hz. Higher values add detail and overhead.
 max_frequency_hz = 99
+
+# 单个采集产物最大字节数。1073741824 字节等于 1 GiB。
+# Maximum bytes for one collection artifact. 1073741824 bytes equals 1 GiB.
 max_output_bytes = 1073741824
+
+# 一次性采集计划的最长有效期（秒）；过期或已经使用的计划会被拒绝。
+# Maximum lifetime of a single-use plan in seconds; expired or consumed plans are rejected.
 max_plan_ttl_seconds = 300
+
+# stat 模式允许请求的事件白名单。删除不需要的事件可进一步收紧策略。
+# Event allowlist for stat mode. Remove unused events to tighten the policy further.
 allowed_stat_events = [
   "cycles",
   "instructions",
@@ -22,5 +60,11 @@ allowed_stat_events = [
   "cpu-migrations",
   "page-faults",
 ]
+
+# Unix Socket 权限：所有者和 perflens 组可读写，其他用户无权限。通常不要修改。
+# Unix-socket mode: owner and perflens group may read/write; no access for others. Usually unchanged.
 socket_mode = "0660"
+
+# 采集产物权限：所有者可读写、perflens 组只读、其他用户无权限。通常不要修改。
+# Artifact mode: owner read/write, perflens group read-only, no access for others. Usually unchanged.
 artifact_mode = "0640"

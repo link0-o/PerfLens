@@ -53,6 +53,7 @@ perflens stage-collector-assets \
 ## 管理员一键安装
 
 先检查生成的 `collector-assets/collector.toml`。建议先用普通用户执行只读预检：
+该文件已经为每个参数提供中英文注释，并标明常用可调项、固定路径和安全敏感项。
 
 ```bash
 /opt/perflens/bin/perflens-admin deploy \

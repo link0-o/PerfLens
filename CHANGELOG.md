@@ -32,6 +32,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - An unprivileged project-workload coordinator and MCP tool that launches one
   confirmed in-project executable, captures its PID internally, and submits
   only a PID-bound plan to the Collector.
+- Bilingual Chinese/English field guidance in generated `collector.toml`
+  policies, including tunable, fixed-path, and security-sensitive settings.
 
 ### Changed
 
