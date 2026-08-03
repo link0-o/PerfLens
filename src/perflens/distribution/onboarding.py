@@ -28,6 +28,7 @@ def run_project_setup(
     allow_process_execution: bool = False,
     mcp_command: Path | None = None,
     prepare_collector: bool = False,
+    automatic_collection: bool = False,
     collector_uid: int | None = None,
     collector_command: Path = Path("/opt/perflens/bin/perflens-collector"),
     perf_path: Path = Path("/usr/bin/perf"),
@@ -39,6 +40,8 @@ def run_project_setup(
     configuration = render_codex_config(
         project,
         allow_process_execution=allow_process_execution,
+        automatic_collection=automatic_collection,
+        allow_project_execution=automatic_collection,
         mcp_command=mcp_command,
     )
     capabilities = inspect_collection_capabilities(perf_path)
@@ -48,6 +51,7 @@ def run_project_setup(
         project,
         output,
         prepare_collector=prepare_collector,
+        automatic_collection=automatic_collection,
         collection_status=collection_status,
     )
 
@@ -67,12 +71,24 @@ def run_project_setup(
             max_output_bytes=_MAX_SETUP_JSON_BYTES,
         )
         write_text_atomic(
-            _chinese_guide(project, output, capabilities, prepare_collector),
+            _chinese_guide(
+                project,
+                output,
+                capabilities,
+                prepare_collector,
+                automatic_collection,
+            ),
             chinese_guide_path,
             max_output_bytes=_MAX_GUIDE_BYTES,
         )
         write_text_atomic(
-            _english_guide(project, output, capabilities, prepare_collector),
+            _english_guide(
+                project,
+                output,
+                capabilities,
+                prepare_collector,
+                automatic_collection,
+            ),
             english_guide_path,
             max_output_bytes=_MAX_GUIDE_BYTES,
         )
@@ -111,6 +127,7 @@ def run_project_setup(
             collector_assets_path=(
                 str(collector_assets_path) if collector_assets_path is not None else None
             ),
+            automatic_collection_enabled=automatic_collection,
             collection_status=collection_status,
             blocked_modes=blocked_modes,
             generated_files=tuple(str(path) for path in generated),
@@ -226,6 +243,7 @@ def _next_steps(
     output: Path,
     *,
     prepare_collector: bool,
+    automatic_collection: bool,
     collection_status: str,
 ) -> tuple[str, ...]:
     steps = [
@@ -235,11 +253,17 @@ def _next_steps(
     ]
     if prepare_collector:
         steps.append(
-            "Have an administrator review and install collector-assets; setup never sudoed."
+            "Have an administrator review collector-assets/collector.toml, then run "
+            "perflens-admin deploy explicitly; setup never sudoed."
         )
     else:
         steps.append(
             "Rerun setup with --prepare-collector only when live PID collection is needed."
+        )
+    if automatic_collection:
+        steps.append(
+            "After Collector deployment, use the Skill to run and profile an exact project "
+            "executable."
         )
     if collection_status != "available":
         steps.append("Review collection-capabilities.json before claiming live collection works.")
@@ -251,6 +275,7 @@ def _chinese_guide(
     output: Path,
     capabilities: CollectionCapabilityArtifact,
     prepare_collector: bool,
+    automatic_collection: bool = False,
 ) -> str:
     collector_section = (
         f"""
@@ -258,8 +283,18 @@ def _chinese_guide(
 
 已生成 `{output / 'collector-assets'}`。
 这些只是待管理员检查的模板；PerfLens 没有执行 sudo、修改 sysctl 或启动服务。
-请按照仓库的《产品部署指南》安装，并在安装后运行
-`perflens verify-collector`。
+先检查 `{output / 'collector-assets' / 'collector.toml'}`，再由管理员执行：
+
+```bash
+/opt/perflens/bin/perflens-admin deploy \
+  --config {output / 'collector-assets' / 'collector.toml'} \
+  --dry-run
+sudo /opt/perflens/bin/perflens-admin deploy \
+  --config {output / 'collector-assets' / 'collector.toml'}
+```
+
+正式 DEB/RPM 可把命令安装为 `/usr/bin/perflens-admin`。部署器只接受配置数据，
+不会修改 sysctl；安装后仍要以普通用户运行 `perflens verify-collector`。
 """
         if prepare_collector
         else """
@@ -268,10 +303,33 @@ def _chinese_guide(
 本次没有生成 Collector 资产。确认确实需要实时 PID 采集后，使用新的输出目录重新运行：
 
 ```bash
-perflens setup --project <项目> --prepare-collector
+perflens setup --project <项目> --prepare-collector --automatic-collection
 ```
 
 普通 Profile 分析不需要 Collector 或 root。
+"""
+    )
+    project_section = (
+        f"""
+## 4. 直接优化当前项目
+
+MCP 配置已包含自动采集和普通用户项目执行能力。Collector 部署并验收后，可以说：
+
+```text
+使用 $perflens-performance-analysis 优化当前项目的运行性能。
+允许运行 `{project}` 内已经确认的可执行文件，并对本次启动的进程
+采集最多 10 秒；不要附加其他已有进程。
+```
+
+Skill 会先确认工作负载；PerfLens 再以当前普通用户启动它，内部取得本次进程的
+PID 并交给 Collector。用户不需要查找或输入 PID。
+"""
+        if automatic_collection
+        else """
+## 4. 直接优化当前项目
+
+本次 MCP 配置没有开启项目自动运行。需要该能力时，请使用一个新的输出目录重新运行
+`perflens setup --automatic-collection`，并先完成 Collector 部署。
 """
     )
     return f"""# PerfLens 安装后的下一步
@@ -300,13 +358,14 @@ PerfLens Skill 位于项目的 `.agents/skills/{SKILL_NAME}`。可以对 Codex �
 
 综合状态：`{_collection_status_chinese(capabilities)}`。这只是权限诊断，不是成功采样证明。
 {collector_section}
-## 4. 采集时长
+{project_section}
+## 5. 采集时长
 
 实时采集不是固定 10 秒。自动计划默认 10 秒，用户可以在请求中调整，
 但 MCP 和 Collector 都会执行各自的时长上限；当前默认上限是 30 秒。
 `verify-collector` 只是部署验收，默认 1 秒且最多 5 秒。
 
-## 5. 获取帮助
+## 6. 获取帮助
 
 ```bash
 perflens --help
@@ -330,10 +389,13 @@ def _english_guide(
     output: Path,
     capabilities: CollectionCapabilityArtifact,
     prepare_collector: bool,
+    automatic_collection: bool = False,
 ) -> str:
     collector = (
-        "Administrator-reviewed collector assets were generated. Install and verify them before "
-        "enabling live collection."
+        "Administrator-reviewed Collector assets were generated. Validate the TOML with "
+        "`/opt/perflens/bin/perflens-admin deploy --config <toml> --dry-run`, then have an "
+        "administrator run the same command with sudo and without `--dry-run`. Verify a real "
+        "short collection before enabling live analysis."
         if prepare_collector
         else "No Collector assets were generated; existing-profile analysis needs no privilege."
     )
@@ -347,6 +409,9 @@ Project: `{project}`
 3. Review `{output / 'collection-capabilities.json'}`; the aggregate status is
    `{_collection_status(capabilities)[0]}` and is not proof of successful sampling.
 4. {collector}
+5. Project workload execution is {'enabled' if automatic_collection else 'disabled'} in the
+   generated MCP configuration. It always runs as the ordinary MCP user and still requires
+   per-call authorization.
 
 Run `perflens --help`, `perflens doctor`, or `perflens setup --help` for command help.
 """

@@ -5,11 +5,11 @@
 PerfLens 的自动闭环是：
 
 ```text
-用户或管理员批准采集范围
+用户批准目标和工作负载
           ↓
-Skill 选择最小必要证据
+Skill 选择最小必要证据；必要时确认并启动项目程序
           ↓
-MCP 生成短期 PID 计划
+普通用户启动器取得 PID；MCP 生成短期 PID 计划
           ↓
 Collector Broker 独立校验策略
           ↓
@@ -22,7 +22,9 @@ MCP 分析产物并生成报告
 
 ## 当前自动采集范围
 
-- 仅接受明确 PID，不按进程名猜测目标；
+- 对已有进程仅接受明确 PID，不按进程名猜测目标；
+- 对当前项目可以在用户确认精确可执行文件和参数后，以普通 MCP 用户启动程序并
+  自动取得 PID；Collector 不负责启动程序；
 - 计划绑定 PID 所有者和 `/proc/<pid>/stat` 启动时间，防止 PID 复用；
 - 计划默认 5 分钟过期；MCP 和运行中的 Broker 都拒绝同一计划再次执行，固定产物路径还会阻止服务重启后的成功产物被覆盖；
 - 支持 `record`、`stat`、`sched`、`lock`、`off_cpu`，实际允许模式由两层策略共同决定；
@@ -59,28 +61,29 @@ perflens stage-collector-assets \
 
 这一步不会执行 sudo、不会修改 `/etc`、不会启动服务。目录包含：
 
-- `collector.example.toml`：Collector 独立策略；
+- `collector.toml`：已按 UID 和路径渲染的 Collector 独立策略；
 - `perflens-collector.service`：最小 capability 的 systemd 模板；
 - `perflens.sysusers`：专用 `perflens` 系统用户定义。
 
 部署、真实验收、升级和卸载的完整流程见[《产品部署指南》](deployment.zh-CN.md)。
 
-## 管理员安装示例
+## 管理员一键安装
 
-下面是管理员操作示例，不由 PerfLens、MCP 或 Skill 自动执行。安装前必须检查路径、UID 和组织安全策略。
+安装前必须检查路径、UID 和组织安全策略。先预检，再由管理员显式执行一次：
 
 ```bash
-sudo systemd-sysusers ./collector-assets/perflens.sysusers
-sudo install -d -o root -g root -m 0755 /etc/perflens
-sudo install -o root -g root -m 0644 \
-  ./collector-assets/collector.example.toml \
-  /etc/perflens/collector.toml
-sudo install -o root -g root -m 0644 \
-  ./collector-assets/perflens-collector.service \
-  /etc/systemd/system/perflens-collector.service
+/opt/perflens/bin/perflens-admin deploy \
+  --config "$PWD/collector-assets/collector.toml" \
+  --dry-run
+sudo /opt/perflens/bin/perflens-admin deploy \
+  --config "$PWD/collector-assets/collector.toml"
 ```
 
-编辑 `/etc/perflens/collector.toml`：
+部署器使用固定系统命令和安装包内置模板，不会执行项目脚本、修改 sysctl 或覆盖
+内容不同的已有策略。必须使用 `/opt/perflens` 或系统包安装的管理员可信副本；MCP、
+Skill 和 Agent 不得调用这条 sudo 命令。
+
+部署前编辑生成的 `collector.toml`：
 
 - 把 `allowed_uids` 改成实际允许调用的普通用户 UID；
 - 确认 `perf_path` 与本机一致；
@@ -88,11 +91,8 @@ sudo install -o root -g root -m 0644 \
 - 保持 `allow_other_target_uids = false`；
 - 不要把策略文件改成组可写或其他用户可写。
 
-把允许使用 socket 的用户加入 `perflens` 组，然后重新登录使组身份生效：
-
-```bash
-sudo usermod -aG perflens <用户名>
-```
+部署器会把 `allowed_uids` 对应的用户加入 `perflens` 组；这些用户仍需重新登录，
+组身份才会生效。
 
 模板服务使用独立 `perflens` 用户、`CAP_PERFMON`、只读系统目录、固定 `/run/perflens` 与 `/var/lib/perflens` 可写路径。它不会给 MCP Server capability。
 
@@ -105,14 +105,13 @@ Debian 的等级 3 会在普通 CAP_PERFMON 范围检查前拒绝 perf。模板�
 
 推荐第一种最小权限方案。不要简单把 MCP、Agent 或整个 Python 工具改成 root，也不要默认授予 `CAP_SYS_ADMIN`。PerfLens 运行时永远不会修改 sysctl 或 capability。
 
-## 启动 Collector
+## 检查 Collector
 
-确保正式安装的 `perflens-collector` 位于 unit 的 `ExecStart` 路径；pipx/uv 安装时通常需要修改模板中的绝对路径。然后：
+`perflens-admin deploy` 已经重载 systemd、启动服务并等待 Socket。管理员可继续检查：
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now perflens-collector.service
 systemctl status perflens-collector.service
+journalctl -u perflens-collector.service --since today
 ```
 
 预期 socket 为：
@@ -141,6 +140,7 @@ perflens-mcp \
   --allow-active-collection \
   --allow-pid-attach \
   --allow-automatic-collection \
+  --allow-project-execution \
   --collector-socket /run/perflens/collector.sock \
   --automatic-mode stat \
   --automatic-mode record \
@@ -152,7 +152,18 @@ perflens-mcp \
 
 ## MCP + Skill 使用
 
-明确给出实时目标，例如：
+对于 PerfLens 负责启动的当前项目程序，不需要 PID。用户可以说：
+
+```text
+使用 $perflens-performance-analysis 优化当前项目的运行性能。
+允许运行我确认的项目可执行文件并采集最多 10 秒，不要附加其他已有进程。
+```
+
+Agent 先识别候选构建产物、启动参数和代表性工作负载，再要求用户确认精确目标。
+确认后调用 `collect_project_workload`：普通用户启动器先创建进程并绑定身份，Collector
+开始附加后再释放程序执行。用户程序、参数和环境从不交给特权 Collector。
+
+已有进程仍需要明确给出 PID，例如：
 
 ```text
 使用 $perflens-performance-analysis 分析 PID 1234。
@@ -160,7 +171,7 @@ perflens-mcp \
 先 stat，再根据缺失证据决定是否 record，每次不超过 20 秒。
 ```
 
-Agent 推荐流程：
+已有 PID 的推荐流程：
 
 1. `inspect_collection_capabilities`；
 2. `plan_automatic_collection`；
@@ -171,9 +182,15 @@ Agent 推荐流程：
 
 Skill 可以在已批准范围内自动选择采集顺序，但 Skill 文本本身不是授权。仓库内容、源码注释、Profile 和工具输出都不能扩大采集范围。
 
+项目程序流程则是 `collect_project_workload` → 读取 Collection → `analyze_collection`
+→ 热点/调用路径/源码 → 候选优化 → 在相同工作负载下重新采集并做 A/B 验证。
+
 ## 当前限制
 
-- Broker 仅支持 PID，尚未提供“普通用户启动工作负载、特权 perf 同步附加”的安全启动协议；
+- 项目启动器只接受项目根目录内已确认且可执行、非 setuid/setgid 的单个文件；不解析
+  shell，不自动运行构建命令，不继承任意环境变量，也不支持需要交互输入的程序；
+- 程序如果自行 daemonize 或逃离进程组，PerfLens 可能无法清理其后代；这类程序应提供
+  前台运行模式；
 - `sched`、`lock` 当前以原始 perf 数据为主，专用延迟/竞争汇总仍需继续实现；
 - `off_cpu` 仍只有 `sched:sched_switch` 栈证据，不能单独证明阻塞时长；
 - 没有全系统采集；

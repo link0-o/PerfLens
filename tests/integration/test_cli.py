@@ -83,14 +83,20 @@ def test_cli_exposes_version_and_release_setup_commands(tmp_path: Path) -> None:
             sys.executable,
             "--perf-path",
             "/bin/true",
+            "--automatic-collection",
         ],
     )
     assert guided.exit_code == 0, guided.output
     assert "PerfLens 引导文件已经生成" in guided.output
     assert "Skill: 已安装" in guided.output
     assert "采集状态:" in guided.output
+    assert "项目自动运行: 已启用" in guided.output
     assert (guided_project / "perflens-setup/下一步.zh-CN.md").is_file()
     assert (guided_project / ".agents/skills/perflens-performance-analysis/SKILL.md").is_file()
+    generated_config = (guided_project / "perflens-setup/codex-mcp.toml").read_text(
+        encoding="utf-8"
+    )
+    assert '"--allow-project-execution"' in generated_config
 
 
 def test_cli_analyzes_folded_profile(fixture_root: Path, tmp_path: Path) -> None:

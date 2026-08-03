@@ -23,6 +23,7 @@ from perflens.contracts.artifacts import (
     CollectionCapabilityArtifact,
     CollectionModeCapability,
     CollectionPlanArtifact,
+    CollectorDeploymentArtifact,
     DiagnosisBundle,
     ElfMetadataArtifact,
     Evidence,
@@ -34,6 +35,7 @@ from perflens.contracts.artifacts import (
     ProfileComparison,
     ProfileHotspotDelta,
     ProfileMetadata,
+    ProjectRunArtifact,
     SetupArtifact,
     SourceContextArtifact,
     SourceResolutionArtifact,
@@ -59,6 +61,7 @@ MODELS = {
     "hotspot-details.schema.json": HotspotDetails,
     "call-path-page.schema.json": CallPathPage,
     "classification-page.schema.json": ClassificationPage,
+    "collector-deployment.schema.json": CollectorDeploymentArtifact,
     "benchmark.schema.json": BenchmarkArtifact,
     "benchmark-metric.schema.json": BenchmarkMetric,
     "benchmark-environment.schema.json": BenchmarkEnvironment,
@@ -72,6 +75,7 @@ MODELS = {
     "collection-mode-capability.schema.json": CollectionModeCapability,
     "collection-plan.schema.json": CollectionPlanArtifact,
     "perf-stat-metric.schema.json": PerfStatMetric,
+    "project-run.schema.json": ProjectRunArtifact,
     "setup.schema.json": SetupArtifact,
 }
 

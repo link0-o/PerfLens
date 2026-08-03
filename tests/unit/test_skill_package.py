@@ -26,6 +26,7 @@ def test_performance_skill_has_valid_minimal_frontmatter_and_resources() -> None
         "syscall-analysis.md",
         "benchmark-validation.md",
         "active-collection-safety.md",
+        "project-workload.md",
     }
     assert {path.name for path in (skill_root / "references").glob("*.md")} == expected_references
     assert (skill_root / "assets" / "diagnosis-report-template.md").is_file()

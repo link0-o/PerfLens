@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from mcp.client import Client
@@ -31,15 +32,17 @@ from perflens.contracts.artifacts import (
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.server import ServerConfig, create_server
+from perflens.workloads.project import PROJECT_EXECUTION_AUTHORIZATION
 
 
 def _fake_perf(tmp_path: Path) -> Path:
     executable = tmp_path / "perf"
     executable.write_text(
         f"#!{sys.executable}\n"
-        "import pathlib, sys\n"
+        "import pathlib, sys, time\n"
         "args = sys.argv[1:]\n"
         "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        "time.sleep(0.35)\n"
         "if 'stat' in args:\n"
         "    output.write_text('100;;cycles;10;100.0\\n200;;instructions;10;100.0\\n')\n"
         "else:\n"
@@ -290,3 +293,89 @@ def test_mcp_plans_and_executes_single_use_automatic_collection(tmp_path: Path) 
     finally:
         target.terminate()
         target.wait(timeout=5)
+
+
+def test_mcp_launches_exact_project_workload_then_collects_bound_pid(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    artifacts = project / "artifacts"
+    for directory in (project, spool, runtime, artifacts):
+        directory.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    marker = project / "started.txt"
+    workload = project / "workload"
+    workload.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys, time\n"
+        "pathlib.Path(sys.argv[1]).write_text('started', encoding='utf-8')\n"
+        "time.sleep(10)\n",
+        encoding="utf-8",
+    )
+    workload.chmod(0o555)
+    fake_perf = _fake_perf(tmp_path)
+    broker_policy = CollectorBrokerPolicy(
+        spool_root=spool,
+        perf_path=fake_perf,
+        allowed_uids=(os.geteuid(),),
+        allowed_modes=("record",),
+        max_duration_seconds=1,
+        max_output_bytes=1024,
+    )
+    with CollectorBrokerServer(runtime / "collector.sock", broker_policy) as broker:
+        worker = threading.Thread(target=broker.serve_once, daemon=True)
+        worker.start()
+        mcp_server = create_server(
+            ServerConfig(
+                allowed_roots=(project, spool),
+                artifact_root=artifacts,
+                allow_writes=True,
+                allow_process_execution=True,
+                allow_active_collection=True,
+                allow_pid_attach=True,
+                allow_automatic_collection=True,
+                allow_project_execution=True,
+                collector_socket=broker.socket_path,
+                automatic_collection_policy=AutomaticCollectionPolicy(
+                    enabled=True,
+                    allowed_modes=("record",),
+                    max_duration_seconds=1,
+                    max_output_bytes=1024,
+                ),
+                perf_path=fake_perf,
+            )
+        )
+
+        async def exercise() -> dict[str, object]:
+            async with Client(mcp_server, raise_exceptions=True) as client:
+                result = await client.call_tool(
+                    "collect_project_workload",
+                    {
+                        "project_root": str(project),
+                        "executable": str(workload),
+                        "arguments": [str(marker)],
+                        "authorization": PROJECT_EXECUTION_AUTHORIZATION,
+                        "mode": "record",
+                        "duration_seconds": 0.1,
+                        "max_output_bytes": 1024,
+                    },
+                )
+                payload = result.structured_content
+                assert isinstance(payload, dict)
+                return cast(dict[str, Any], payload)
+
+        payload = asyncio.run(exercise())
+        worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert marker.read_text(encoding="utf-8") == "started"
+    assert payload["artifact_type"] == "project-run"
+    summary = payload["summary"]
+    assert isinstance(summary, dict)
+    assert summary["workload_status"] == "terminated_after_collection"
+    assert isinstance(summary["target_pid"], int)
+    assert not Path(f"/proc/{summary['target_pid']}").exists()
+    assert len(list(artifacts.glob("*.project-run.json"))) == 1
+    assert len(list(artifacts.glob("*.collection.json"))) == 1
+    assert len(list(spool.iterdir())) == 1

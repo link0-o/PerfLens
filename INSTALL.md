@@ -32,10 +32,21 @@ Existing-profile analysis needs no Collector. To stage administrator-reviewed as
 perflens setup \
   --project /absolute/path/to/project \
   --output-directory perflens-collector-setup \
-  --prepare-collector
+  --prepare-collector \
+  --automatic-collection
 ```
 
-See [Product deployment](docs/deployment.md) before installing those assets. A blocked `perflens doctor` result does not prevent analysis of existing profiles.
+Review the generated policy, validate it with
+`/opt/perflens/bin/perflens-admin deploy --config <toml> --dry-run`, then have an
+administrator run the same command once with `sudo` and without `--dry-run`.
+Use only the trusted copy installed under `/opt/perflens` or by a system package.
+See [Product deployment](docs/deployment.md) before installing those assets. A
+blocked `perflens doctor` result does not prevent analysis of existing profiles.
+
+After verification, a user may ask the Skill to optimize the current project.
+The Skill confirms an exact executable and arguments; PerfLens launches it as
+the ordinary MCP user, obtains that new PID internally, and submits only a
+PID-bound plan to the Collector. The user does not need to discover a PID.
 
 Automatic collection defaults to 10 seconds but is user-adjustable within the
 MCP and Collector policy limits (30 seconds by default). The deployment

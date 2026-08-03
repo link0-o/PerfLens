@@ -50,6 +50,10 @@ from perflens.contracts.artifacts import (
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.storage import ArtifactStore, PathPolicy
+from perflens.workloads.project import (
+    ProjectWorkloadRequest,
+    collect_project_workload,
+)
 
 READ_ONLY = ToolAnnotations(
     read_only_hint=True,
@@ -80,6 +84,7 @@ class ServerConfig:
     allow_active_collection: bool = False
     allow_pid_attach: bool = False
     allow_automatic_collection: bool = False
+    allow_project_execution: bool = False
     collector_socket: Path | None = None
     automatic_collection_policy: AutomaticCollectionPolicy = field(
         default_factory=AutomaticCollectionPolicy
@@ -101,6 +106,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "Automatic collection requires active collection, PID attachment, a broker socket, "
             "and an enabled automatic policy"
         )
+    if config.allow_project_execution and not config.allow_automatic_collection:
+        raise ValueError("Project execution requires automatic collection to be enabled")
     policy = PathPolicy(config.allowed_roots)
     store = ArtifactStore(
         config.artifact_root,
@@ -118,7 +125,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "A/B validation is a verified improvement. State missing evidence and limitations. "
             "Active collection is disabled unless server policy authorizes it. Manual collection "
             "also requires per-call confirmation. Automatic collection requires a short-lived "
-            "PID-bound plan and an independently policy-enforcing collector broker."
+            "PID-bound plan and an independently policy-enforcing collector broker. Project "
+            "workloads run unprivileged and require a separate per-call authorization."
         ),
         version=__version__,
     )
@@ -225,6 +233,67 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "target_pid": artifact.target_pid,
                 "output_bytes": artifact.output_bytes,
                 "metric_count": len(artifact.metrics),
+            },
+        )
+
+    @server.tool(
+        name="collect_project_workload",
+        description=(
+            "Run one explicitly authorized executable inside a project as the MCP user, bind its "
+            "exact PID incarnation, and collect it through the restricted Collector broker."
+        ),
+        annotations=EXECUTES_TARGET,
+        meta={"perflens/permission": "PROJECT_EXECUTION"},
+        structured_output=True,
+    )
+    async def collect_project_workload_tool(
+        project_root: str,
+        executable: str,
+        authorization: str,
+        arguments: tuple[str, ...] = (),
+        mode: Literal["record", "stat", "sched", "lock", "off_cpu"] = "record",
+        duration_seconds: float = 10.0,
+        frequency_hz: int = 99,
+        call_graph: Literal["fp", "dwarf", "lbr"] = "dwarf",
+        events: tuple[str, ...] = DEFAULT_STAT_EVENTS,
+        max_output_bytes: int = 1 << 30,
+    ) -> ArtifactReference:
+        _require_project_execution(config)
+        safe_project = policy.workspace_root(project_root)
+        executable_candidate = Path(executable).expanduser()
+        if not executable_candidate.is_absolute():
+            executable_candidate = safe_project / executable_candidate
+        safe_executable = policy.input_file(str(executable_candidate))
+        assert config.collector_socket is not None
+        collection, project_run = collect_project_workload(
+            ProjectWorkloadRequest(
+                project_root=safe_project,
+                executable=safe_executable,
+                arguments=arguments,
+                authorization=authorization,
+                mode=mode,
+                duration_seconds=duration_seconds,
+                frequency_hz=frequency_hz,
+                call_graph=call_graph,
+                events=events,
+                max_output_bytes=max_output_bytes,
+            ),
+            policy=config.automatic_collection_policy,
+            capabilities=inspect_collection_capabilities(config.perf_path),
+            collector_socket=config.collector_socket,
+        )
+        store.save(collection, collection.collection_id, "collection")
+        store.save(project_run, project_run.project_run_id, "project-run")
+        return ArtifactReference(
+            artifact_id=project_run.project_run_id,
+            artifact_type="project-run",
+            uri=store.uri(project_run.project_run_id, "project-run"),
+            summary={
+                "collection_id": project_run.collection_id,
+                "mode": project_run.mode,
+                "target_pid": project_run.target_pid,
+                "workload_status": project_run.workload_status,
+                "workload_exit_code": project_run.workload_exit_code,
             },
         )
 
@@ -738,6 +807,20 @@ def _require_automatic_collection(config: ServerConfig) -> None:
         )
 
 
+def _require_project_execution(config: ServerConfig) -> None:
+    _require_automatic_collection(config)
+    if not config.allow_project_execution:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "authorization",
+            "Unprivileged project workload execution is disabled by server policy",
+            recoverable=True,
+            suggested_actions=(
+                "Enable it only for a trusted project and require per-call authorization.",
+            ),
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the PerfLens MCP server over stdio")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -748,6 +831,7 @@ def main() -> None:
     parser.add_argument("--allow-active-collection", action="store_true")
     parser.add_argument("--allow-pid-attach", action="store_true")
     parser.add_argument("--allow-automatic-collection", action="store_true")
+    parser.add_argument("--allow-project-execution", action="store_true")
     parser.add_argument("--collector-socket", type=Path)
     parser.add_argument(
         "--automatic-mode",
@@ -770,6 +854,7 @@ def main() -> None:
             allow_active_collection=arguments.allow_active_collection,
             allow_pid_attach=arguments.allow_pid_attach,
             allow_automatic_collection=arguments.allow_automatic_collection,
+            allow_project_execution=arguments.allow_project_execution,
             collector_socket=arguments.collector_socket,
             automatic_collection_policy=AutomaticCollectionPolicy(
                 enabled=arguments.allow_automatic_collection,

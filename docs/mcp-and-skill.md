@@ -106,6 +106,13 @@ $perflens-performance-analysis analyze ./perf.data and explain the strongest evi
 
 It may also trigger implicitly for Linux profile diagnosis. The Skill requires the Agent to inspect metadata and dominant paths, treat rule matches as candidates, state missing evidence, and reserve `Verified Improvement` for equivalent-workload A/B validation.
 
+With an administrator-deployed Collector and an MCP configuration generated
+with `--automatic-collection`, the user may ask to optimize the current project
+without supplying a PID. The Skill must first confirm one exact in-project
+executable, arguments, representative workload, and per-call authorization.
+`collect_project_workload` then launches it as the ordinary MCP user, obtains
+the new PID internally, and gives the Collector only a PID-bound plan.
+
 ## Tool permissions
 
 | Permission | Tools | Server enforcement |
@@ -115,6 +122,7 @@ It may also trigger implicitly for Linux profile diagnosis. The Skill requires t
 | `PROCESS_EXECUTION` | perf.data conversion and source symbolization | Disabled unless `--allow-process-execution`; executable selection remains allowlisted and bounded. |
 | `ACTIVE_COLLECTION` | `collect_profile` record/stat/sched/lock/off-CPU modes | Requires writes, process execution, active-collection startup gate, exact per-call authorization, bounded output, and a new output path. PID attachment has two additional gates. |
 | `AUTOMATIC_COLLECTION` | Execute a short-lived PID-bound plan through the Collector | Requires explicit MCP startup gates and an independent Collector policy. |
+| `PROJECT_EXECUTION` | Launch one confirmed project executable and collect its new PID | Also requires automatic collection, `--allow-project-execution`, exact per-call authorization, and project path checks. |
 
 Tool annotations are client hints. The authorization checks above are independent server-side controls.
 
@@ -135,5 +143,10 @@ Tool annotations are client hints. The authorization checks above are independen
 For policy-approved live PIDs, use `inspect_collection_capabilities`,
 `plan_automatic_collection`, `execute_collection_plan`, and `analyze_collection`.
 See [automatic collection](automatic-collection.md).
+
+For a confirmed current-project workload, use `collect_project_workload`, then
+analyze its Collection artifact and perform matched baseline/candidate runs.
+The user need not discover a PID, but natural-language intent alone is not
+authorization to execute arbitrary project files.
 
 All list responses are bounded and paginated. The server emits typed structured output and checked-in JSON Schemas; it never returns an unbounded full analysis through a list tool.

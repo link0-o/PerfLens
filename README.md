@@ -53,18 +53,23 @@ uv tool install ./perflens-0.1.0-py3-none-any.whl
 Then run project-scoped onboarding:
 
 ```bash
-perflens setup --project /absolute/path/to/project
+perflens setup \
+  --project /absolute/path/to/project \
+  --prepare-collector \
+  --automatic-collection
 ```
 
 Follow the generated `NEXT_STEPS.md`. See [Installation and first use](INSTALL.md) for the complete beginner flow.
 
-Both commands install `perflens`, `perflens-mcp`, and the optional
-`perflens-collector`. Confirm the release:
+Both commands install `perflens`, `perflens-mcp`, the optional
+`perflens-collector`, and the explicit administrator entry point
+`perflens-admin`. Confirm the release:
 
 ```bash
 perflens --version
 perflens-mcp --version
 perflens-collector --version
+perflens-admin --version
 ```
 
 Installing directly from a source checkout is also supported:
@@ -211,6 +216,12 @@ short-lived PID-bound plan, execute it once through a separately policy-enforcin
 Collector Broker, and analyze the result. See
 [automatic collection](docs/automatic-collection.md). The MCP server and Agent remain
 unprivileged.
+
+After one administrator-reviewed deployment, users do not need to discover a
+PID. They may ask the Skill to optimize the current project, approve one exact
+executable and argument list, and let the ordinary-user launcher obtain the new
+PID internally. The Collector still receives only a short-lived PID-bound plan;
+the project workload never runs with Collector privilege.
 
 See [product deployment](docs/deployment.md) for configurable service assets,
 real Collector verification, upgrades, and uninstall behavior.

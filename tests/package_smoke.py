@@ -16,9 +16,11 @@ def main() -> None:
     perflens = _command("perflens")
     perflens_mcp = _command("perflens-mcp")
     perflens_collector = _command("perflens-collector")
+    perflens_admin = _command("perflens-admin")
     _run(perflens, "--version", expected=__version__)
     _run(perflens_mcp, "--version", expected=__version__)
     _run(perflens_collector, "--version", expected=__version__)
+    _run(perflens_admin, "--version", expected=__version__)
     _run(perflens, "verify-collector", "--help", expected="bounded real perf-stat probe")
 
     with tempfile.TemporaryDirectory(prefix="perflens-package-smoke-") as directory:
@@ -62,6 +64,7 @@ def main() -> None:
             perflens_mcp,
             "--perf-path",
             "/bin/true",
+            "--automatic-collection",
         )
         guided_setup = project / "guided-setup"
         assert (guided_setup / "下一步.zh-CN.md").is_file()
@@ -70,6 +73,10 @@ def main() -> None:
         )
         assert setup_payload["schema_version"] == "1.0"
         assert setup_payload["skill_status"] == "existing"
+        assert setup_payload["automatic_collection_enabled"] is True
+        assert '"--allow-project-execution"' in (
+            guided_setup / "codex-mcp.toml"
+        ).read_text(encoding="utf-8")
 
         collector_assets = root / "collector-assets"
         _run(
@@ -85,7 +92,7 @@ def main() -> None:
             "/usr/bin/perf",
         )
         assert (collector_assets / "perflens-collector.service").is_file()
-        policy_text = (collector_assets / "collector.example.toml").read_text(encoding="utf-8")
+        policy_text = (collector_assets / "collector.toml").read_text(encoding="utf-8")
         service_text = (collector_assets / "perflens-collector.service").read_text(
             encoding="utf-8"
         )

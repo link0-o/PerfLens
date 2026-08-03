@@ -5,7 +5,7 @@ English | [简体中文](automatic-collection.zh-CN.md)
 PerfLens closes the loop from an approved live PID to evidence, analysis, and a report without making the Agent or MCP server privileged.
 
 ```text
-user/admin grant → Skill → PID-bound MCP plan → restricted Collector → perf spool → analysis
+user grant → Skill → optional ordinary-user launch → PID-bound MCP plan → restricted Collector → analysis
 ```
 
 The optional `perflens-collector` is a Unix-socket broker. It authenticates peers with `SO_PEERCRED`, accepts only typed PID plans, revalidates PID owner/start time, enforces an independent root-owned policy, and writes only to a fixed spool. Plans have a bounded lifetime, and the running Broker rejects replay of the same plan. It also rejects a `perf` executable that is both non-root-owned and writable by the service account. It never accepts a shell command, arbitrary executable, environment, output path, or system-wide target.
@@ -20,7 +20,11 @@ perflens stage-collector-assets \
   --perf-path /usr/bin/perf
 ```
 
-Review `collector.example.toml`, `perflens-collector.service`, and `perflens.sysusers` before an administrator installs them. The service template uses a dedicated account and `CAP_PERFMON`; PerfLens never changes sysctl, capabilities, ownership, or service state at runtime.
+Review `collector.toml`, `perflens-collector.service`, and `perflens.sysusers`.
+Validate the policy with `/opt/perflens/bin/perflens-admin deploy --config
+<toml> --dry-run`, then run that trusted entry point once with `sudo` and
+without `--dry-run`. The fixed deployer uses packaged templates and never
+executes project-provided commands or changes sysctl.
 
 On Debian, `perf_event_paranoid=3` blocks perf before the normal CAP_PERFMON path. An administrator must either review and lower that policy for the dedicated collector or design a more privileged isolation boundary. Do not run the MCP server or Agent as root.
 
@@ -36,5 +40,14 @@ The automatic workflow is:
 6. continue the normal evidence workflow.
 
 The Skill may automate these steps inside an already granted scope. Skill text is never authorization.
+
+For a current-project request, the user does not need a PID. After confirming
+one exact in-project executable, arguments, representative workload, and the
+per-call authorization, the Skill calls `collect_project_workload`. An
+ordinary-user coordinator creates the process, captures its identity, submits
+the PID-only plan, and then releases the same process to execute. The privileged
+Collector never receives or launches the workload command. Interactive,
+setuid/setgid, shell, arbitrary-environment, and system-wide workloads are not
+supported; daemonizing programs should expose a foreground mode.
 
 See [Product deployment](deployment.md) for configurable asset rendering, the explicitly authorized real `verify-collector` probe, upgrades, and uninstall behavior.

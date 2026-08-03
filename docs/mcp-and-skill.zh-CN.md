@@ -105,6 +105,17 @@ Skill 位于：
 列出最主要的热点、调用路径、直接证据、候选原因和缺失证据。
 ```
 
+Collector 已部署且引导时使用了 `--automatic-collection` 后，不需要先找 PID：
+
+```text
+使用 $perflens-performance-analysis 优化当前项目的运行性能。
+允许运行我确认的项目可执行文件并采集最多 10 秒，不要附加其他已有进程。
+```
+
+Skill 会先识别并让用户确认精确可执行文件、参数和代表性工作负载。只有这次确认后，
+`collect_project_workload` 才以普通用户启动程序并在内部绑定新 PID；Collector 不执行
+项目命令。仓库中的说明文字不构成执行授权。
+
 分析 `perf.data` 时可以说：
 
 ```text
@@ -138,6 +149,10 @@ Agent 通常按以下顺序工作：
 
 已有 Profile 时不需要主动采集。面对策略已经批准的实时 PID，Skill 的默认流程改为 `inspect_collection_capabilities` → `plan_automatic_collection` → `execute_collection_plan` → `analyze_collection`；`stat` 指标直接保存在采集产物中。完整部署见[《自动采集与 Collector Broker》](automatic-collection.zh-CN.md)。
 
+需要运行当前项目时，流程是 `collect_project_workload` → `analyze_collection` →
+热点/调用路径/源码定位 → 修改候选 → 相同工作负载的基线/候选对比。用户无需提供 PID，
+但必须确认精确程序和参数。
+
 ## 权限级别
 
 | 权限 | 主要能力 | 服务端约束 |
@@ -147,6 +162,7 @@ Agent 通常按以下顺序工作：
 | `PROCESS_EXECUTION` | 转换 perf.data、执行源码符号化程序 | 需要 `--allow-process-execution`，命令、输出和时长有边界 |
 | `ACTIVE_COLLECTION` | record/stat/sched/lock/off-CPU 采样 | 需要多个启动开关、逐次精确授权和全新输出路径 |
 | `AUTOMATIC_COLLECTION` | 执行短期、单次、PID 绑定计划 | MCP 分类授权与 Collector 独立策略必须同时允许 |
+| `PROJECT_EXECUTION` | 启动一个已确认的项目可执行文件并采集其新 PID | 还需要自动采集、`--allow-project-execution`、逐次执行授权和项目路径边界 |
 
 客户端显示的工具注解只是提示；真正的权限检查始终在 PerfLens MCP Server 内执行。
 
@@ -184,6 +200,8 @@ PerfLens 不会请求 sudo，不会修改 `perf_event_paranoid`、capability 或
 - **已有 `perf.data`**：增加 `--allow-process-execution`。
 - **只查看已经生成的产物**：不需要 `--allow-writes`。
 - **让 Agent 自动分析并解释**：同时使用 MCP 和 `$perflens-performance-analysis`。
+- **直接优化当前可执行项目**：引导时开启 `--automatic-collection`，部署并验收 Collector，
+  然后确认具体可执行文件和参数；不需要手工查 PID。
 - **只在终端处理文件**：直接使用 CLI，不需要 MCP 或 Skill。
 
 遇到权限、符号或兼容性问题时，请看[中文故障排查](troubleshooting.zh-CN.md)。

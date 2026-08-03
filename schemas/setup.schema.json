@@ -1,6 +1,11 @@
 {
   "additionalProperties": false,
   "properties": {
+    "automatic_collection_enabled": {
+      "default": false,
+      "title": "Automatic Collection Enabled",
+      "type": "boolean"
+    },
     "blocked_modes": {
       "default": [],
       "items": {

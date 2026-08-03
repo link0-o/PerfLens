@@ -10,10 +10,10 @@ from pathlib import Path
 
 from perflens.domain.errors import ErrorCode, PerfLensError
 
-_ASSET_NAMES = (
-    "collector.example.toml",
-    "perflens-collector.service",
-    "perflens.sysusers",
+_ASSET_MAPPINGS = (
+    ("collector.example.toml", "collector.toml"),
+    ("perflens-collector.service", "perflens-collector.service"),
+    ("perflens.sysusers", "perflens.sysusers"),
 )
 _MAX_ASSET_BYTES = 256 << 10
 
@@ -56,30 +56,30 @@ def install_collector_assets(
     try:
         target.mkdir()
         total = 0
-        for name in _ASSET_NAMES:
-            data = source.joinpath(name).read_bytes()
-            if name == "collector.example.toml":
+        for source_name, output_name in _ASSET_MAPPINGS:
+            data = source.joinpath(source_name).read_bytes()
+            if source_name == "collector.example.toml":
                 text = data.decode("utf-8")
                 text = _replace_exact(
                     text,
                     "allowed_uids = [1000]",
                     f"allowed_uids = {rendered_uids}",
-                    name,
+                    source_name,
                 )
                 text = _replace_exact(
                     text,
                     'perf_path = "/usr/bin/perf"',
                     f"perf_path = {rendered_perf}",
-                    name,
+                    source_name,
                 )
                 data = text.encode("utf-8")
-            elif name == "perflens-collector.service":
+            elif source_name == "perflens-collector.service":
                 text = data.decode("utf-8")
                 text = _replace_exact(
                     text,
                     "ExecStart=/usr/bin/perflens-collector ",
                     f"ExecStart={rendered_collector} ",
-                    name,
+                    source_name,
                 )
                 data = text.encode("utf-8")
             total += len(data)
@@ -89,7 +89,7 @@ def install_collector_assets(
                     "collector_assets",
                     "Bundled collector assets exceed their size limit",
                 )
-            with (target / name).open("xb") as handle:
+            with (target / output_name).open("xb") as handle:
                 handle.write(data)
     except PerfLensError:
         shutil.rmtree(target, ignore_errors=True)
@@ -153,10 +153,10 @@ def _replace_exact(text: str, marker: str, replacement: str, asset_name: str) ->
 
 def _bundled_collector_root() -> Traversable:
     packaged = resources.files("perflens").joinpath("_bundled").joinpath("collector")
-    if all(packaged.joinpath(name).is_file() for name in _ASSET_NAMES):
+    if all(packaged.joinpath(name).is_file() for name, _ in _ASSET_MAPPINGS):
         return packaged
     repository_copy = Path(__file__).resolve().parents[3] / "packaging" / "collector"
-    if all((repository_copy / name).is_file() for name in _ASSET_NAMES):
+    if all((repository_copy / name).is_file() for name, _ in _ASSET_MAPPINGS):
         return repository_copy
     raise PerfLensError(
         ErrorCode.INTERNAL_ERROR,

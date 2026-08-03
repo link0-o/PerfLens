@@ -41,12 +41,18 @@ def test_setup_creates_guided_bundle_and_installs_skill(tmp_path: Path) -> None:
         mcp_command=Path(sys.executable),
         perf_path=Path("/bin/true"),
         prepare_collector=True,
+        automatic_collection=True,
         collector_uid=os.geteuid(),
     )
     assert repeated.skill_status == "existing"
+    assert repeated.automatic_collection_enabled is True
     assert repeated.collector_assets_path is not None
-    policy = Path(repeated.collector_assets_path) / "collector.example.toml"
+    policy = Path(repeated.collector_assets_path) / "collector.toml"
     assert f"allowed_uids = [{os.geteuid()}]" in policy.read_text(encoding="utf-8")
+    mcp_config = (project / "setup-two/codex-mcp.toml").read_text(encoding="utf-8")
+    assert '"--allow-project-execution"' in mcp_config
+    guide = (project / "setup-two/下一步.zh-CN.md").read_text(encoding="utf-8")
+    assert "用户不需要查找或输入 PID" in guide
 
 
 def test_setup_refuses_overwrite_escape_and_unsafe_existing_skill(tmp_path: Path) -> None:

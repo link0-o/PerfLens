@@ -495,6 +495,40 @@ class CollectionArtifact(ContractModel):
     warnings: tuple[str, ...] = ()
 
 
+class ProjectRunArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    project_run_id: str = Field(pattern=r"^project-run-[a-f0-9]{20}$")
+    project_root: str
+    executable: str
+    arguments: tuple[str, ...] = ()
+    target_pid: int = Field(gt=0)
+    target_uid: int = Field(ge=0)
+    target_start_time_ticks: int = Field(gt=0)
+    mode: Literal["record", "stat", "sched", "lock", "off_cpu"]
+    requested_duration_seconds: float = Field(gt=0, le=86_400)
+    collection_id: str
+    workload_status: Literal["exited", "terminated_after_collection"]
+    workload_exit_code: int | None = None
+    started_at: str
+    finished_at: str
+    warnings: tuple[str, ...] = ()
+
+
+class CollectorDeploymentArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    status: Literal["dry_run", "deployed"]
+    config_source: str
+    config_path: str
+    service_path: str
+    collector_command: str
+    allowed_uids: tuple[int, ...]
+    planned_commands: tuple[tuple[str, ...], ...]
+    warnings: tuple[str, ...] = ()
+    next_steps: tuple[str, ...] = ()
+
+
 class SetupArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     perflens_version: str
@@ -505,6 +539,7 @@ class SetupArtifact(ContractModel):
     mcp_config_path: str
     capability_report_path: str
     collector_assets_path: str | None = None
+    automatic_collection_enabled: bool = False
     collection_status: Literal["available", "conditional", "blocked"]
     blocked_modes: tuple[str, ...] = ()
     generated_files: tuple[str, ...]

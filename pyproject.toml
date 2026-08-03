@@ -42,6 +42,7 @@ Changelog = "https://github.com/link0-o/PerfLens/blob/main/CHANGELOG.md"
 perflens = "perflens.cli.app:main"
 perflens-mcp = "perflens.mcp.server:main"
 perflens-collector = "perflens.collector_broker.server:main"
+perflens-admin = "perflens.admin.app:main"
 
 [dependency-groups]
 dev = [

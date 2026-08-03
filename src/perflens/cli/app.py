@@ -193,6 +193,13 @@ def setup_command(
             help="Stage administrator-reviewed Collector assets; never install or elevate.",
         ),
     ] = False,
+    automatic_collection: Annotated[
+        bool,
+        typer.Option(
+            "--automatic-collection",
+            help="Generate MCP policy for authorized unprivileged project launch and collection.",
+        ),
+    ] = False,
     collector_uid: Annotated[
         int | None,
         typer.Option(
@@ -223,6 +230,7 @@ def setup_command(
             allow_process_execution=allow_process_execution,
             mcp_command=mcp_command,
             prepare_collector=prepare_collector,
+            automatic_collection=automatic_collection,
             collector_uid=collector_uid,
             collector_command=collector_command,
             perf_path=perf_path,
@@ -243,6 +251,9 @@ def setup_command(
     typer.echo(f"项目: {artifact.project_root}")
     typer.echo(f"Skill: {skill_label}")
     typer.echo(f"采集状态: {collection_label}")
+    typer.echo(
+        f"项目自动运行: {'已启用' if artifact.automatic_collection_enabled else '未启用'}"
+    )
     typer.echo(f"请继续阅读: {Path(artifact.output_directory) / '下一步.zh-CN.md'}")
 
 

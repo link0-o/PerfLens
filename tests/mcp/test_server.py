@@ -46,6 +46,7 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "inspect_collection_capabilities",
                 "plan_automatic_collection",
                 "execute_collection_plan",
+                "collect_project_workload",
                 "analyze_collection",
             }
             for tool in tools.values():
@@ -73,6 +74,9 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert plan_annotations.read_only_hint is True
             assert tools["execute_collection_plan"].meta == {
                 "perflens/permission": "AUTOMATIC_COLLECTION"
+            }
+            assert tools["collect_project_workload"].meta == {
+                "perflens/permission": "PROJECT_EXECUTION"
             }
             assert tools["analyze_collection"].meta == {
                 "perflens/permission": "PROCESS_EXECUTION"

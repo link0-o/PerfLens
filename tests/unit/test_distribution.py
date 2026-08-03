@@ -23,7 +23,7 @@ def test_project_skill_install_copies_the_complete_skill_and_refuses_overwrite(
     assert (installed / "SKILL.md").is_file()
     assert (installed / "agents" / "openai.yaml").is_file()
     assert (installed / "assets" / "diagnosis-report-template.md").is_file()
-    assert len(tuple((installed / "references").glob("*.md"))) == 7
+    assert len(tuple((installed / "references").glob("*.md"))) == 8
 
     skill_text = (installed / "SKILL.md").read_text(encoding="utf-8")
     with pytest.raises(PerfLensError) as captured:
@@ -54,11 +54,11 @@ def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
         perf_path=Path("/usr/lib/linux-tools/perf"),
     )
     assert {path.name for path in target.iterdir()} == {
-        "collector.example.toml",
+        "collector.toml",
         "perflens-collector.service",
         "perflens.sysusers",
     }
-    policy = (target / "collector.example.toml").read_text(encoding="utf-8")
+    policy = (target / "collector.toml").read_text(encoding="utf-8")
     service = (target / "perflens-collector.service").read_text(encoding="utf-8")
     assert "allowed_uids = [1000,1001]" in policy
     assert 'perf_path = "/usr/lib/linux-tools/perf"' in policy
@@ -117,3 +117,32 @@ def test_codex_config_rejects_artifact_root_outside_workspace(tmp_path: Path) ->
         )
 
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_codex_config_generates_complete_project_collection_policy(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    config = render_codex_config(
+        workspace,
+        automatic_collection=True,
+        allow_project_execution=True,
+        automatic_modes=("stat", "record", "stat"),
+        automatic_max_duration_seconds=12,
+        mcp_command=Path(sys.executable),
+    )
+
+    assert '  "/var/lib/perflens"' in config
+    assert '  "--collector-socket"' in config
+    assert '  "/run/perflens/collector.sock"' in config
+    assert '  "--allow-automatic-collection"' in config
+    assert '  "--allow-project-execution"' in config
+    assert config.count('  "--automatic-mode"') == 2
+    assert '  "12"' in config
+
+    with pytest.raises(PerfLensError):
+        render_codex_config(
+            workspace,
+            allow_project_execution=True,
+            mcp_command=Path(sys.executable),
+        )

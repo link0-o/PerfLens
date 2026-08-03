@@ -1,0 +1,125 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "arguments": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Arguments",
+      "type": "array"
+    },
+    "collection_id": {
+      "title": "Collection Id",
+      "type": "string"
+    },
+    "executable": {
+      "title": "Executable",
+      "type": "string"
+    },
+    "finished_at": {
+      "title": "Finished At",
+      "type": "string"
+    },
+    "mode": {
+      "enum": [
+        "record",
+        "stat",
+        "sched",
+        "lock",
+        "off_cpu"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "project_root": {
+      "title": "Project Root",
+      "type": "string"
+    },
+    "project_run_id": {
+      "pattern": "^project-run-[a-f0-9]{20}$",
+      "title": "Project Run Id",
+      "type": "string"
+    },
+    "requested_duration_seconds": {
+      "exclusiveMinimum": 0,
+      "maximum": 86400,
+      "title": "Requested Duration Seconds",
+      "type": "number"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "started_at": {
+      "title": "Started At",
+      "type": "string"
+    },
+    "target_pid": {
+      "exclusiveMinimum": 0,
+      "title": "Target Pid",
+      "type": "integer"
+    },
+    "target_start_time_ticks": {
+      "exclusiveMinimum": 0,
+      "title": "Target Start Time Ticks",
+      "type": "integer"
+    },
+    "target_uid": {
+      "minimum": 0,
+      "title": "Target Uid",
+      "type": "integer"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    },
+    "workload_exit_code": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workload Exit Code"
+    },
+    "workload_status": {
+      "enum": [
+        "exited",
+        "terminated_after_collection"
+      ],
+      "title": "Workload Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "project_run_id",
+    "project_root",
+    "executable",
+    "target_pid",
+    "target_uid",
+    "target_start_time_ticks",
+    "mode",
+    "requested_duration_seconds",
+    "collection_id",
+    "workload_status",
+    "started_at",
+    "finished_at"
+  ],
+  "title": "ProjectRunArtifact",
+  "type": "object"
+}

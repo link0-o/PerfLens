@@ -20,6 +20,7 @@ from perflens.contracts.artifacts import (
     Classification,
     ClassificationPage,
     CollectionArtifact,
+    CollectorDeploymentArtifact,
     DiagnosisBundle,
     ElfMetadataArtifact,
     Evidence,
@@ -31,6 +32,7 @@ from perflens.contracts.artifacts import (
     ProfileComparison,
     ProfileHotspotDelta,
     ProfileMetadata,
+    ProjectRunArtifact,
     SetupArtifact,
     SourceContextArtifact,
     SourceResolutionArtifact,
@@ -60,6 +62,7 @@ def test_checked_in_json_schemas_match_contract_models() -> None:
         "hotspot-details.schema.json": HotspotDetails,
         "call-path-page.schema.json": CallPathPage,
         "classification-page.schema.json": ClassificationPage,
+        "collector-deployment.schema.json": CollectorDeploymentArtifact,
         "benchmark.schema.json": BenchmarkArtifact,
         "benchmark-metric.schema.json": BenchmarkMetric,
         "benchmark-environment.schema.json": BenchmarkEnvironment,
@@ -70,6 +73,7 @@ def test_checked_in_json_schemas_match_contract_models() -> None:
         "call-path-delta.schema.json": CallPathDelta,
         "collection.schema.json": CollectionArtifact,
         "perf-stat-metric.schema.json": PerfStatMetric,
+        "project-run.schema.json": ProjectRunArtifact,
         "setup.schema.json": SetupArtifact,
     }
 

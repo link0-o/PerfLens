@@ -50,23 +50,34 @@ perflens stage-collector-assets \
 
 多个被授权用户需要重复传入 `--allowed-uid`。该命令只生成可检查文件，不执行 sudo、不写 `/etc`、不启动服务。
 
-## 管理员安装
+## 管理员一键安装
 
-先检查生成的 TOML 和 systemd unit，然后安装：
+先检查生成的 `collector-assets/collector.toml`。建议先用普通用户执行只读预检：
 
 ```bash
-sudo systemd-sysusers ./collector-assets/perflens.sysusers
-sudo install -d -o root -g root -m 0755 /etc/perflens
-sudo install -o root -g root -m 0644 \
-  ./collector-assets/collector.example.toml \
-  /etc/perflens/collector.toml
-sudo install -o root -g root -m 0644 \
-  ./collector-assets/perflens-collector.service \
-  /etc/systemd/system/perflens-collector.service
-sudo usermod -aG perflens <用户名>
-sudo systemctl daemon-reload
-sudo systemctl enable --now perflens-collector.service
+/opt/perflens/bin/perflens-admin deploy \
+  --config "$PWD/collector-assets/collector.toml" \
+  --dry-run
 ```
+
+确认 JSON 计划中的 UID、`perf`、Collector 和目标路径无误后，管理员只执行一次：
+
+```bash
+sudo /opt/perflens/bin/perflens-admin deploy \
+  --config "$PWD/collector-assets/collector.toml"
+```
+
+这条命令会完成以下固定操作：创建专用系统账号和目录、安装策略与 systemd unit、
+把策略中的 `allowed_uids` 对应用户加入 `perflens` 组、重载 systemd、启动服务并等待
+Unix Socket。部署结果是带 `schema_version` 的 JSON。它不执行配置里的命令，
+不修改 sysctl 或 capability，也不会覆盖内容不同的已有配置。
+
+`perflens-admin` 必须来自管理员控制的系统安装，例如 `/opt/perflens` 或将来的
+DEB/RPM；不要通过 `sudo` 执行用户家目录里可修改的 pipx 脚本。正式系统包安装后，
+命令将简化为 `sudo perflens-admin deploy --config ...`。
+
+生成目录中的 service 和 sysusers 文件用于审查；部署器使用安装包内置的可信模板，
+不会执行或直接安装项目工作区提供的 service 文件。需要逐步排错时才参考这些审查副本。
 
 用户加入组后应重新登录。检查服务、Socket 和日志：
 
@@ -131,6 +142,7 @@ perflens-mcp \
   --allow-active-collection \
   --allow-pid-attach \
   --allow-automatic-collection \
+  --allow-project-execution \
   --collector-socket /run/perflens/collector.sock \
   --automatic-mode stat \
   --automatic-mode record \
@@ -138,6 +150,17 @@ perflens-mcp \
 ```
 
 MCP 参数是第一层授权，Collector TOML 是独立的第二层授权。Skill 只能在两层都允许的范围内选择采集顺序。
+
+完成配置后，用户可以用自然语言请求，不需要手工查 PID：
+
+```text
+使用 $perflens-performance-analysis 优化当前项目的运行性能。
+允许运行我确认的项目可执行文件并采集最多 10 秒，不要附加其他已有进程。
+```
+
+Skill 必须先确认精确的项目根目录、可执行文件、参数和代表性工作负载。
+PerfLens 以普通用户启动该文件并取得新 PID；Collector 只收到 PID 计划，不会收到项目
+命令、环境变量或任意输出路径。用户要求“优化项目”不是无限执行授权。
 
 ## 升级和卸载
 

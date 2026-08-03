@@ -1,7 +1,7 @@
 interface:
   display_name: "PerfLens 性能分析"
-  short_description: "自动采集并基于证据诊断 Linux 性能问题"
-  default_prompt: "使用 $perflens-performance-analysis 分析这个 Linux Profile；如果我给出已授权的实时 PID，先按策略自动采集再诊断。"
+  short_description: "自动运行项目、采集并基于证据优化 Linux 性能"
+  default_prompt: "使用 $perflens-performance-analysis 优化当前项目的运行性能；先确认可重复工作负载，再自动运行、采集并做前后对比。"
 dependencies:
   tools:
     - type: "mcp"

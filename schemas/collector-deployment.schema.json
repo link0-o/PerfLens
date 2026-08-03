@@ -1,0 +1,84 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "allowed_uids": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Allowed Uids",
+      "type": "array"
+    },
+    "collector_command": {
+      "title": "Collector Command",
+      "type": "string"
+    },
+    "config_path": {
+      "title": "Config Path",
+      "type": "string"
+    },
+    "config_source": {
+      "title": "Config Source",
+      "type": "string"
+    },
+    "next_steps": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "planned_commands": {
+      "items": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "title": "Planned Commands",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "service_path": {
+      "title": "Service Path",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "dry_run",
+        "deployed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "status",
+    "config_source",
+    "config_path",
+    "service_path",
+    "collector_command",
+    "allowed_uids",
+    "planned_commands"
+  ],
+  "title": "CollectorDeploymentArtifact",
+  "type": "object"
+}

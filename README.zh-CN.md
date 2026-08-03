@@ -50,17 +50,22 @@ uv tool install ./perflens-0.1.0-py3-none-any.whl
 不要手工提取 wheel。安装成功后运行项目引导：
 
 ```bash
-perflens setup --project /绝对路径/你的项目
+perflens setup \
+  --project /绝对路径/你的项目 \
+  --prepare-collector \
+  --automatic-collection
 ```
 
 然后打开命令显示的 `下一步.zh-CN.md`。完整新手流程见[《安装与首次使用》](INSTALL.zh-CN.md)。
 
-两种方式都会安装 `perflens`、`perflens-mcp` 和可选的 `perflens-collector`。可以这样确认版本：
+两种方式都会安装 `perflens`、`perflens-mcp`、可选的 `perflens-collector`
+和管理员入口 `perflens-admin`。可以这样确认版本：
 
 ```bash
 perflens --version
 perflens-mcp --version
 perflens-collector --version
+perflens-admin --version
 ```
 
 也支持直接安装源码目录：
@@ -225,6 +230,16 @@ Skill 位于 `.agents/skills/perflens-performance-analysis`。`$perflens-perform
 完整权限说明和项目级配置见[《MCP 与 Skill 使用指南》](docs/mcp-and-skill.zh-CN.md)。
 
 如果希望 Skill 面向已授权实时 PID 自动完成“权限检查 → 计划 → 采集 → 分析”，请看[《自动采集与 Collector Broker》](docs/automatic-collection.zh-CN.md)。MCP 和 Agent 不以 root 运行；可选 Collector 通过独立策略持有最小 perf capability。
+
+完成一次管理员部署后，用户不必自己找 PID。可以直接说：
+
+```text
+使用 $perflens-performance-analysis 优化当前项目的运行性能。
+允许运行我确认的项目可执行文件并采集最多 10 秒，不要附加其他已有进程。
+```
+
+Skill 会先确认具体可执行文件、参数和工作负载；普通用户启动器取得新 PID，
+Collector 只接收绑定该 PID 的短期采集计划。项目程序不会以 root 运行。
 
 面向其他用户安装系统 Collector、执行真实验收和后续升级时，请看[《产品部署指南》](docs/deployment.zh-CN.md)。
 

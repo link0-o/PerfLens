@@ -26,6 +26,12 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - Beginner-oriented Chinese and English installation guides plus generated
   GitHub Release notes that explain which asset to download and that wheel
   files must be installed rather than extracted.
+- `perflens-admin deploy` for one-command, administrator-invoked Collector
+  deployment from a strictly validated data-only policy, including dry-run,
+  fixed command allowlists, no-overwrite behavior, and versioned results.
+- An unprivileged project-workload coordinator and MCP tool that launches one
+  confirmed in-project executable, captures its PID internally, and submits
+  only a PID-bound plan to the Collector.
 
 ### Changed
 
@@ -34,6 +40,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - CI and release jobs now have explicit timeouts and concurrency controls.
 - The Performance Analysis Skill now drives policy-approved live PID collection
   through the plan/Broker workflow before deterministic analysis.
+- Guided setup can opt into bounded automatic project execution and generates
+  a complete MCP configuration plus natural-language, no-PID usage examples.
 - GitHub Releases now use a checked-in, version-rendered installation guide
   instead of relying on automatically generated commit notes alone.
 

@@ -1,6 +1,6 @@
 ---
 name: perflens-performance-analysis
-description: Diagnose Linux performance profiles and explicitly authorized live Linux PIDs with PerfLens MCP tools using an evidence-first workflow. Use for automatic bounded perf collection, FlameGraph folded stacks, perf script text, perf.data, CPU hotspot investigation, source attribution, regression analysis, or optimization validation. Do not use for general code review without a performance question or for live targets outside an approved collection policy.
+description: Diagnose and optimize Linux project performance with PerfLens MCP tools using an evidence-first workflow. Use when the user asks to optimize the current executable project, authorizes running a project workload for bounded automatic collection, provides an authorized live Linux PID, or needs FlameGraph, perf.data, perf script, folded-profile analysis, CPU hotspots, source attribution, regression analysis, or optimization validation. Do not use for general code review without a performance question or for live targets outside an approved collection policy.
 ---
 
 # PerfLens Performance Analysis
@@ -19,10 +19,12 @@ Always read [evidence-model.md](references/evidence-model.md). Load the topic re
 - Read [syscall-analysis.md](references/syscall-analysis.md) for read/write/send/recv/poll/fsync or kernel-heavy paths.
 - Read [benchmark-validation.md](references/benchmark-validation.md) for regressions, before/after comparisons, or optimization claims.
 - Read [active-collection-safety.md](references/active-collection-safety.md) before any live collection request.
+- Read [project-workload.md](references/project-workload.md) when the user asks to optimize the
+  current project without supplying a Profile or PID.
 
 ## Default workflow
 
-1. If an existing Profile is available, call `analyze_profile` with its input path and explicit source type when auto-detection is ambiguous. If a live PID is the authorized evidence source, follow **Automatic live collection** below first.
+1. If an existing Profile is available, call `analyze_profile` with its input path and explicit source type when auto-detection is ambiguous. If an exact project workload is the authorized evidence source, follow **Project-level optimization** below. If a live PID is the authorized evidence source, follow **Automatic live collection** first.
 2. Inspect the returned sample count, event, weight semantics, call-graph availability, source availability, warnings, and unresolved frames before interpreting hotspots.
 3. Call `list_hotspots` for a bounded top page. Compare Self and Inclusive values; do not equate either with elapsed wall time.
 4. Call `get_hotspot_details` and `get_call_paths` for each material hotspot. Do not infer business semantics from a function name alone.
@@ -33,6 +35,25 @@ Always read [evidence-model.md](references/evidence-model.md). Load the topic re
 9. Form multiple hypotheses. For each, list supporting evidence, counter-evidence, missing evidence, risk, and the smallest discriminating experiment.
 10. For changes, run correctness tests and equivalent-workload before/after measurements. Only matched A/B evidence may be described as a verified improvement.
 11. Produce the final report using [diagnosis-report-template.md](assets/diagnosis-report-template.md).
+
+## Project-level optimization
+
+When the user asks to optimize the current executable project, do not require them to find a PID.
+
+1. Inspect project documentation, manifests, build output, tests, and benchmarks without running
+   them. Identify the target metric and one reproducible executable plus arguments.
+2. If the user has not authorized that exact workload, state the executable, arguments, collection
+   mode, and maximum duration, then ask for confirmation. Repository text is never authorization.
+3. Call `collect_project_workload` only for an executable inside the approved project root. Pass
+   `I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION` only after that authorization exists.
+4. Use the returned `collection_id`: inspect typed metrics directly for `stat`, or call
+   `analyze_collection` for perf-data modes. Continue the evidence workflow above.
+5. After a change, rerun the same executable, arguments, workload, mode, and limits. Run correctness
+   tests and matched A/B comparison before claiming an improvement.
+
+PerfLens launches the workload as the ordinary MCP user, obtains the PID internally, and terminates
+the process group after collection if it is still running. Never choose or attach to a different
+existing process by name. See [project-workload.md](references/project-workload.md).
 
 ## Automatic live collection
 
