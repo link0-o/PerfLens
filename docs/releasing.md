@@ -41,12 +41,18 @@ uv export --locked --no-dev --no-emit-project \
   --format cyclonedx1.5 \
   --output-file dist/sbom.cdx.json
 uv run python scripts/prepare_release.py --tag v0.1.0
+uv run python scripts/render_release_notes.py \
+  --tag v0.1.0 \
+  --output /tmp/perflens-release-notes.md
 sha256sum --check dist/SHA256SUMS
 ```
 
 Use an empty `dist/` directory. The release-preparation script also rejects
 stale or unexpected files, requires a CycloneDX JSON SBOM, and checksums only
 the intended wheel, sdist, Skill zip, and SBOM.
+`render_release_notes.py` renders beginner-oriented installation instructions
+from the checked-in Chinese template. Use that file as the GitHub Release body
+instead of showing generated commit notes alone.
 
 ## Publish a GitHub Release
 

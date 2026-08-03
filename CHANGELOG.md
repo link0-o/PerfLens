@@ -20,6 +20,12 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   command and complete Chinese deployment documentation.
 - Configurable Collector deployment assets and a bounded, explicitly authorized
   `verify-collector` real perf-stat acceptance probe.
+- Chinese-first `perflens setup` onboarding that installs the project Skill and
+  generates MCP configuration, capability diagnostics, typed setup metadata,
+  and optional Collector deployment assets without elevating privileges.
+- Beginner-oriented Chinese and English installation guides plus generated
+  GitHub Release notes that explain which asset to download and that wheel
+  files must be installed rather than extracted.
 
 ### Changed
 
@@ -28,6 +34,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - CI and release jobs now have explicit timeouts and concurrency controls.
 - The Performance Analysis Skill now drives policy-approved live PID collection
   through the plan/Broker workflow before deterministic analysis.
+- GitHub Releases now use a checked-in, version-rendered installation guide
+  instead of relying on automatically generated commit notes alone.
 
 ### Fixed
 

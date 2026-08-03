@@ -51,6 +51,26 @@ def main() -> None:
         )
         assert skill.is_file()
 
+        _run(
+            perflens,
+            "setup",
+            "--project",
+            str(project),
+            "--output-directory",
+            "guided-setup",
+            "--mcp-command",
+            perflens_mcp,
+            "--perf-path",
+            "/bin/true",
+        )
+        guided_setup = project / "guided-setup"
+        assert (guided_setup / "下一步.zh-CN.md").is_file()
+        setup_payload = json.loads(
+            (guided_setup / "setup.json").read_text(encoding="utf-8")
+        )
+        assert setup_payload["schema_version"] == "1.0"
+        assert setup_payload["skill_status"] == "existing"
+
         collector_assets = root / "collector-assets"
         _run(
             perflens,

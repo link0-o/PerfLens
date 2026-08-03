@@ -9,6 +9,8 @@
 
 [简体中文](README.zh-CN.md) | English
 
+**First installation: read [Installation and first use](INSTALL.md). Do not extract the wheel; install it with pipx or uv.**
+
 PerfLens is an evidence-driven performance-analysis toolkit for Linux
 applications and coding agents.
 
@@ -47,6 +49,14 @@ pipx install ./perflens-0.1.0-py3-none-any.whl
 # or
 uv tool install ./perflens-0.1.0-py3-none-any.whl
 ```
+
+Then run project-scoped onboarding:
+
+```bash
+perflens setup --project /absolute/path/to/project
+```
+
+Follow the generated `NEXT_STEPS.md`. See [Installation and first use](INSTALL.md) for the complete beginner flow.
 
 Both commands install `perflens`, `perflens-mcp`, and the optional
 `perflens-collector`. Confirm the release:

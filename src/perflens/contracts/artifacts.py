@@ -493,3 +493,19 @@ class CollectionArtifact(ContractModel):
     diagnostics: tuple[str, ...] = ()
     diagnostics_truncated: bool = False
     warnings: tuple[str, ...] = ()
+
+
+class SetupArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    project_root: str
+    output_directory: str
+    skill_status: Literal["installed", "existing", "skipped"]
+    skill_path: str | None = None
+    mcp_config_path: str
+    capability_report_path: str
+    collector_assets_path: str | None = None
+    collection_status: Literal["available", "conditional", "blocked"]
+    blocked_modes: tuple[str, ...] = ()
+    generated_files: tuple[str, ...]
+    next_steps: tuple[str, ...]

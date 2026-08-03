@@ -4,6 +4,8 @@ English | [简体中文](deployment.zh-CN.md)
 
 Deploy PerfLens as two privilege domains: ordinary-user CLI/MCP/Skill processes and a dedicated `perflens-collector` system service with only the host-approved perf capability. The Agent and MCP server must not run as root.
 
+Ordinary users should complete [Installation and first use](../INSTALL.md) and run `perflens setup` first. This page focuses on administrator-managed Collector deployment.
+
 For the current wheel-based deployment:
 
 1. install the Collector runtime outside user home, for example under `/opt/perflens`;

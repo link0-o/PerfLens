@@ -41,6 +41,7 @@ from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.contracts.artifacts import ErrorArtifact, ErrorBody
 from perflens.distribution.codex import render_codex_config
 from perflens.distribution.collector import install_collector_assets
+from perflens.distribution.onboarding import run_project_setup
 from perflens.distribution.skill import install_project_skill
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.domain.models import ResourceLimits
@@ -147,6 +148,102 @@ def doctor_command(
     typer.echo(
         json.dumps(artifact.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True)
     )
+
+
+@app.command("setup")
+def setup_command(
+    project_root: Annotated[
+        Path,
+        typer.Option(
+            "--project",
+            file_okay=False,
+            help="Existing project that will receive the Skill and onboarding files.",
+        ),
+    ] = Path("."),
+    output_directory: Annotated[
+        Path | None,
+        typer.Option(
+            "--output-directory",
+            file_okay=False,
+            help="New directory inside the project; defaults to perflens-setup.",
+        ),
+    ] = None,
+    install_skill: Annotated[
+        bool,
+        typer.Option(
+            "--install-skill/--skip-skill",
+            help="Install the bundled Skill when it is not already present.",
+        ),
+    ] = True,
+    allow_process_execution: Annotated[
+        bool,
+        typer.Option(
+            "--allow-process-execution",
+            help="Include bounded perf.data conversion and symbolization in the MCP snippet.",
+        ),
+    ] = False,
+    mcp_command: Annotated[
+        Path | None,
+        typer.Option("--mcp-command", dir_okay=False),
+    ] = None,
+    prepare_collector: Annotated[
+        bool,
+        typer.Option(
+            "--prepare-collector",
+            help="Stage administrator-reviewed Collector assets; never install or elevate.",
+        ),
+    ] = False,
+    collector_uid: Annotated[
+        int | None,
+        typer.Option(
+            "--collector-uid",
+            min=0,
+            help="Ordinary UID to place in staged Collector policy; defaults to current UID.",
+        ),
+    ] = None,
+    collector_command: Annotated[
+        Path,
+        typer.Option(
+            "--collector-command",
+            dir_okay=False,
+            help="Future absolute system Collector path used only in staged assets.",
+        ),
+    ] = Path("/opt/perflens/bin/perflens-collector"),
+    perf_path: Annotated[
+        Path,
+        typer.Option("--perf-path", dir_okay=False),
+    ] = Path("/usr/bin/perf"),
+) -> None:
+    """Generate a safe Chinese-first onboarding bundle for one project."""
+    try:
+        artifact = run_project_setup(
+            project_root,
+            output_directory=output_directory,
+            install_skill=install_skill,
+            allow_process_execution=allow_process_execution,
+            mcp_command=mcp_command,
+            prepare_collector=prepare_collector,
+            collector_uid=collector_uid,
+            collector_command=collector_command,
+            perf_path=perf_path,
+        )
+    except PerfLensError as exc:
+        _fail(exc)
+    skill_label = {
+        "installed": "已安装",
+        "existing": "已存在/未覆盖",
+        "skipped": "已跳过",
+    }[artifact.skill_status]
+    collection_label = {
+        "available": "可用",
+        "conditional": "部分受限",
+        "blocked": "当前不可用",
+    }[artifact.collection_status]
+    typer.echo("PerfLens 引导文件已经生成。")
+    typer.echo(f"项目: {artifact.project_root}")
+    typer.echo(f"Skill: {skill_label}")
+    typer.echo(f"采集状态: {collection_label}")
+    typer.echo(f"请继续阅读: {Path(artifact.output_directory) / '下一步.zh-CN.md'}")
 
 
 @app.command("stage-collector-assets")

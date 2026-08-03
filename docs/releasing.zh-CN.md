@@ -38,12 +38,17 @@ uv export --locked --no-dev --no-emit-project \
   --format cyclonedx1.5 \
   --output-file dist/sbom.cdx.json
 uv run python scripts/prepare_release.py --tag v0.1.0
+uv run python scripts/render_release_notes.py \
+  --tag v0.1.0 \
+  --output /tmp/perflens-release-notes.md
 sha256sum --check dist/SHA256SUMS
 ```
 
 执行前应确保 `dist/` 为空。发布准备脚本也会拒绝旧文件或非预期文件，
 要求 SBOM 是 CycloneDX JSON，并且只为预期的 wheel、sdist、Skill 压缩包和
 SBOM 生成校验和。
+`render_release_notes.py` 会从受版本控制的中文模板生成面向普通用户的安装说明；
+正式 Release 正文应使用这份文件，而不是只展示提交记录。
 
 ## 发布 GitHub Release
 

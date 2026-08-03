@@ -1,0 +1,108 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "blocked_modes": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocked Modes",
+      "type": "array"
+    },
+    "capability_report_path": {
+      "title": "Capability Report Path",
+      "type": "string"
+    },
+    "collection_status": {
+      "enum": [
+        "available",
+        "conditional",
+        "blocked"
+      ],
+      "title": "Collection Status",
+      "type": "string"
+    },
+    "collector_assets_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Collector Assets Path"
+    },
+    "generated_files": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Generated Files",
+      "type": "array"
+    },
+    "mcp_config_path": {
+      "title": "Mcp Config Path",
+      "type": "string"
+    },
+    "next_steps": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "output_directory": {
+      "title": "Output Directory",
+      "type": "string"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "project_root": {
+      "title": "Project Root",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "skill_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Skill Path"
+    },
+    "skill_status": {
+      "enum": [
+        "installed",
+        "existing",
+        "skipped"
+      ],
+      "title": "Skill Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "project_root",
+    "output_directory",
+    "skill_status",
+    "mcp_config_path",
+    "capability_report_path",
+    "collection_status",
+    "generated_files",
+    "next_steps"
+  ],
+  "title": "SetupArtifact",
+  "type": "object"
+}

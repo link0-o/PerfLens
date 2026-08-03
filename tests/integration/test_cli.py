@@ -71,6 +71,27 @@ def test_cli_exposes_version_and_release_setup_commands(tmp_path: Path) -> None:
     assert denied_probe.exit_code == 5
     assert "explicit target authorization" in denied_probe.stderr
 
+    guided_project = tmp_path / "guided-project"
+    guided_project.mkdir()
+    guided = runner.invoke(
+        app,
+        [
+            "setup",
+            "--project",
+            str(guided_project),
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+    assert guided.exit_code == 0, guided.output
+    assert "PerfLens 引导文件已经生成" in guided.output
+    assert "Skill: 已安装" in guided.output
+    assert "采集状态:" in guided.output
+    assert (guided_project / "perflens-setup/下一步.zh-CN.md").is_file()
+    assert (guided_project / ".agents/skills/perflens-performance-analysis/SKILL.md").is_file()
+
 
 def test_cli_analyzes_folded_profile(fixture_root: Path, tmp_path: Path) -> None:
     output = tmp_path / "nested" / "analysis.json"

@@ -14,7 +14,17 @@ Core 和 MCP Server 都不会调用 LLM API。Skill 只是工作流和安全规�
 
 ## 启动和注册 MCP
 
-如果使用正式 wheel 安装，先把安装包携带的 Skill 安装到目标项目，并生成 MCP 配置：
+如果使用正式 wheel 安装，推荐先运行一次中文引导：
+
+```bash
+perflens setup --project /absolute/path/to/workspace
+```
+
+它会安装项目 Skill，并在工作区的 `perflens-setup/` 中生成中文下一步说明、
+采集能力诊断和可复制的 `codex-mcp.toml`；不会覆盖已有文件，也不会申请管理员权限。
+完整的下载、安装和接入步骤见[《中文安装指南》](../INSTALL.zh-CN.md)。
+
+下面两条命令适合需要分别控制步骤的用户：
 
 ```bash
 perflens install-skill --project /absolute/path/to/workspace

@@ -26,9 +26,9 @@
 |---|---|---|
 | 代码规范 | `ruff check .` | 通过 |
 | 严格类型 | `pyright` | 0 错误、0 警告 |
-| Python 3.12 | `pytest -q`，Python 3.12.13 | 156 通过 |
-| Python 3.13 | 隔离环境 `pytest -q` | 156 通过 |
-| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.49%，通过 |
+| Python 3.12 | `pytest -q`，Python 3.12.13 | 160 通过 |
+| Python 3.13 | 隔离环境 `pytest -q` | 160 通过 |
+| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.43%，通过 |
 | Skill | Skill 结构和打包测试 | 通过 |
 | Schema | 已提交 Schema 与 Contract 生成结果相等 | 通过 |
 | 依赖锁 | `uv export --locked` | 通过 |

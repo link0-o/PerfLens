@@ -31,6 +31,7 @@ from perflens.contracts.artifacts import (
     ProfileComparison,
     ProfileHotspotDelta,
     ProfileMetadata,
+    SetupArtifact,
     SourceContextArtifact,
     SourceResolutionArtifact,
     StackSample,
@@ -69,6 +70,7 @@ def test_checked_in_json_schemas_match_contract_models() -> None:
         "call-path-delta.schema.json": CallPathDelta,
         "collection.schema.json": CollectionArtifact,
         "perf-stat-metric.schema.json": PerfStatMetric,
+        "setup.schema.json": SetupArtifact,
     }
 
     for filename, model in models.items():

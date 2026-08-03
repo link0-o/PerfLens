@@ -9,6 +9,8 @@
 
 简体中文 | [English](README.md)
 
+**第一次安装：请先看[《安装与首次使用》](INSTALL.zh-CN.md)。`.whl` 不要解压，应使用 pipx 或 uv 安装。**
+
 PerfLens 是一个面向 Linux 应用和编码 Agent 的、基于证据的性能分析工具包。它把 Profile 解析、热点计算、源码定位和诊断规则做成确定性工具，再由 Skill 约束 Agent 如何解释这些证据。
 
 ## 它是 MCP 还是 Skill？
@@ -44,6 +46,14 @@ pipx install ./perflens-0.1.0-py3-none-any.whl
 # 或者
 uv tool install ./perflens-0.1.0-py3-none-any.whl
 ```
+
+不要手工提取 wheel。安装成功后运行项目引导：
+
+```bash
+perflens setup --project /绝对路径/你的项目
+```
+
+然后打开命令显示的 `下一步.zh-CN.md`。完整新手流程见[《安装与首次使用》](INSTALL.zh-CN.md)。
 
 两种方式都会安装 `perflens`、`perflens-mcp` 和可选的 `perflens-collector`。可以这样确认版本：
 
