@@ -15,7 +15,8 @@ artifact-count quotas and a filesystem free-space floor. Exhaustion denies the
 new collection without deleting or overwriting existing evidence.
 
 Evidence retention is a separate human-administrator archive-then-prune flow.
-The MCP, Skill, and Collector protocol expose no automatic deletion operation.
+Archives have a dedicated read-only verifier; the MCP, Skill, and Collector
+protocol expose no automatic deletion operation.
 
 Run `perflens doctor` for a read-only capability report. Stage the packaged service templates with:
 

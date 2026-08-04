@@ -43,7 +43,8 @@ UID, fixed spool, unit, and evidence, and rolls back the policy if activation
 fails.
 
 For retention, use `archive-spool --dry-run` and `archive-spool` to create a
-root-managed stored ZIP with a versioned hash manifest. Verify it with
+root-managed stored ZIP with a versioned hash manifest. Use the read-only
+`verify-spool-archive`, optionally with `--verify-sources`, before reviewing
 `prune-archived-spool --dry-run`; exact source deletion remains disabled until
 the administrator supplies `I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE`.
 

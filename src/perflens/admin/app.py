@@ -17,8 +17,17 @@ from perflens.admin.deploy import (
     update_collector_policy,
     upgrade_collector,
 )
-from perflens.admin.spool import archive_collector_spool, prune_archived_collector_spool
-from perflens.contracts.artifacts import CollectorSpoolStatusArtifact, ErrorArtifact, ErrorBody
+from perflens.admin.spool import (
+    archive_collector_spool,
+    prune_archived_collector_spool,
+    verify_collector_spool_archive,
+)
+from perflens.contracts.artifacts import (
+    CollectorSpoolArchiveVerificationArtifact,
+    CollectorSpoolStatusArtifact,
+    ErrorArtifact,
+    ErrorBody,
+)
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 app = typer.Typer(
@@ -245,6 +254,43 @@ def prune_archived_spool_command(
     typer.echo(result.model_dump_json(indent=2))
 
 
+@app.command("verify-spool-archive")
+def verify_spool_archive_command(
+    archive: Annotated[
+        Path,
+        typer.Option("--archive", dir_okay=False, help="Root-managed archive ZIP path."),
+    ],
+    config: Annotated[
+        Path,
+        typer.Option("--config", dir_okay=False, help="Deployed Collector TOML policy."),
+    ] = Path("/etc/perflens/collector.toml"),
+    verify_sources: Annotated[
+        bool,
+        typer.Option(
+            "--verify-sources",
+            help="Also verify every still-present source artifact without deleting it.",
+        ),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the complete versioned JSON artifact."),
+    ] = False,
+) -> None:
+    """Verify archive structure and hashes without pruning any evidence."""
+    try:
+        result = verify_collector_spool_archive(
+            archive,
+            config_path=config,
+            verify_sources=verify_sources,
+        )
+    except PerfLensError as exc:
+        _fail(exc)
+    if json_output:
+        typer.echo(result.model_dump_json(indent=2))
+        return
+    _render_archive_verification_chinese(result)
+
+
 def _render_spool_status_chinese(artifact: CollectorSpoolStatusArtifact) -> None:
     status_labels = {
         "ready": "正常",
@@ -300,6 +346,31 @@ def _render_spool_status_chinese(artifact: CollectorSpoolStatusArtifact) -> None
             typer.echo(f"- {issue_labels.get(issue, issue)}")
     typer.echo("建议:")
     typer.echo(f"- {advice_labels[artifact.status]}")
+
+
+def _render_archive_verification_chinese(
+    artifact: CollectorSpoolArchiveVerificationArtifact,
+) -> None:
+    typer.echo("PerfLens Collector 归档验证 (只读)")
+    typer.echo("状态: 验证通过")
+    typer.echo(f"归档: {artifact.archive_path}")
+    typer.echo(f"归档 ID: {artifact.archive_id}")
+    typer.echo(f"归档 SHA-256: {artifact.archive_sha256}")
+    typer.echo(f"归档内证据: {artifact.artifact_count} 个")
+    typer.echo(f"证据逻辑大小: {_human_bytes(artifact.total_logical_bytes)}")
+    typer.echo(f"归档创建时间: {artifact.archive_created_at}")
+    typer.echo(f"本次检查时间: {artifact.checked_at}")
+    if artifact.source_artifacts_checked:
+        typer.echo("源文件核对: 已完成")
+        typer.echo(f"仍存在且完全匹配: {artifact.present_source_artifact_count}")
+        typer.echo(f"已经不存在: {artifact.absent_source_artifact_count}")
+    else:
+        typer.echo("源文件核对: 未请求 (可加 --verify-sources)")
+    typer.echo("结论:")
+    typer.echo("- ZIP 结构、manifest、成员大小和逐文件 SHA-256 全部匹配。")
+    typer.echo("- 本命令没有删除、覆盖或修改归档与 spool 证据。")
+    if artifact.source_artifacts_checked and artifact.absent_source_artifact_count:
+        typer.echo("- 原文件不存在不影响归档完整性。它们可能已经完成过安全清理。")
 
 
 def _optional_human_bytes(value: int | None) -> str:

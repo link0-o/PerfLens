@@ -29,6 +29,7 @@ from perflens.contracts.artifacts import (
     CollectorSpoolArchiveArtifact,
     CollectorSpoolArchiveEntry,
     CollectorSpoolArchiveManifest,
+    CollectorSpoolArchiveVerificationArtifact,
     CollectorSpoolPruneArtifact,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -210,6 +211,74 @@ def archive_collector_spool(
         stage=stage,
     )
     return _archive_result("archived", safe_output, archive_sha256, manifest)
+
+
+def verify_collector_spool_archive(
+    archive_path: Path,
+    *,
+    config_path: Path = Path("/etc/perflens/collector.toml"),
+    verify_sources: bool = False,
+    layout: CollectorSystemLayout | None = None,
+    require_root: bool = True,
+    service_uid: int | None = None,
+    service_gid: int | None = None,
+) -> CollectorSpoolArchiveVerificationArtifact:
+    """Verify a root-managed archive and optionally cross-check surviving sources."""
+    stage = "collector_spool_archive_verification"
+    effective_layout = layout or CollectorSystemLayout()
+    source = load_collector_config(config_path, stage=stage)
+    policy = parse_collector_deployment_policy(
+        source.raw_text,
+        expected_spool=effective_layout.state_directory,
+        require_root_owned_tools=require_root,
+        stage=stage,
+    )
+    resolved_archive, archive_sha256, manifest = _verify_archive(
+        archive_path,
+        policy=policy,
+        require_root_owner=require_root,
+        stage=stage,
+    )
+    present_count: int | None = None
+    absent_count: int | None = None
+    if verify_sources:
+        expected_service_uid, expected_service_gid = _collector_service_identity(
+            service_uid,
+            service_gid,
+            stage=stage,
+        )
+        spool_descriptor = _open_spool(
+            policy,
+            expected_service_uid=expected_service_uid,
+            expected_service_gid=expected_service_gid,
+            stage=stage,
+        )
+        try:
+            present_count = 0
+            absent_count = 0
+            for entry in manifest.entries:
+                if _entry_exists(spool_descriptor, entry.name, stage=stage):
+                    _verify_source_entry(
+                        spool_descriptor,
+                        entry,
+                        expected_service_uid=expected_service_uid,
+                        expected_service_gid=expected_service_gid,
+                        stage=stage,
+                    )
+                    present_count += 1
+                else:
+                    absent_count += 1
+        finally:
+            os.close(spool_descriptor)
+    return _archive_verification_result(
+        resolved_archive,
+        archive_sha256,
+        source.path,
+        manifest,
+        source_artifacts_checked=verify_sources,
+        present_source_artifact_count=present_count,
+        absent_source_artifact_count=absent_count,
+    )
 
 
 def prune_archived_collector_spool(
@@ -1316,6 +1385,54 @@ def _archive_result(
             "Keep the archive on independent storage before pruning source artifacts.",
             "Run prune-archived-spool --dry-run and review every planned artifact name.",
         ),
+    )
+
+
+def _archive_verification_result(
+    archive_path: Path,
+    archive_sha256: str,
+    config_path: Path,
+    manifest: CollectorSpoolArchiveManifest,
+    *,
+    source_artifacts_checked: bool,
+    present_source_artifact_count: int | None,
+    absent_source_artifact_count: int | None,
+) -> CollectorSpoolArchiveVerificationArtifact:
+    checked_at = datetime.now(tz=UTC).isoformat()
+    identity = "\0".join(
+        (archive_sha256, checked_at, str(source_artifacts_checked))
+    )
+    next_steps = [
+        "Keep the verified archive on independent storage for the required retention period."
+    ]
+    if not source_artifacts_checked:
+        next_steps.append(
+            "Rerun verify-spool-archive with --verify-sources to cross-check surviving sources."
+        )
+    elif present_source_artifact_count:
+        next_steps.append(
+            "Use prune-archived-spool --dry-run only if source-space reclamation is intended."
+        )
+    else:
+        next_steps.append("No matching source artifact remains in the Collector spool.")
+    return CollectorSpoolArchiveVerificationArtifact(
+        perflens_version=__version__,
+        verification_id=(
+            f"archive-verification-{hashlib.sha256(identity.encode()).hexdigest()[:16]}"
+        ),
+        checked_at=checked_at,
+        archive_path=str(archive_path),
+        archive_sha256=archive_sha256,
+        archive_id=manifest.archive_id,
+        archive_created_at=manifest.created_at,
+        config_path=str(config_path),
+        spool_root=manifest.spool_root,
+        artifact_count=manifest.artifact_count,
+        total_logical_bytes=manifest.total_logical_bytes,
+        source_artifacts_checked=source_artifacts_checked,
+        present_source_artifact_count=present_source_artifact_count,
+        absent_source_artifact_count=absent_source_artifact_count,
+        next_steps=tuple(next_steps),
     )
 
 

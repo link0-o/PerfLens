@@ -69,7 +69,8 @@ Collector 还会在启动 perf 前检查 spool 总字节数、文件数和文件
 每套 Collector 只允许一个普通用户 UID，避免共享 `perflens` 组导致 Profile 跨用户泄露。
 
 旧证据不会按时间自动删除。管理员可先用 `archive-spool --dry-run` 审查选择结果，再创建
-带版本化 manifest 与逐文件 SHA-256 的 root 管理 ZIP。只有完成独立备份、运行
+带版本化 manifest 与逐文件 SHA-256 的 root 管理 ZIP。可用 `verify-spool-archive`
+完全只读地验证归档，加 `--verify-sources` 核对仍存在的原文件。只有完成独立备份、运行
 `prune-archived-spool --dry-run` 并逐项确认后，才输入
 `I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE` 清理完全匹配的原文件；归档始终保留。
 

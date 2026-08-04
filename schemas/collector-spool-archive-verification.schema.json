@@ -1,0 +1,127 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "absent_source_artifact_count": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Absent Source Artifact Count"
+    },
+    "archive_created_at": {
+      "title": "Archive Created At",
+      "type": "string"
+    },
+    "archive_id": {
+      "pattern": "^spool-archive-[a-f0-9]{16}$",
+      "title": "Archive Id",
+      "type": "string"
+    },
+    "archive_path": {
+      "title": "Archive Path",
+      "type": "string"
+    },
+    "archive_preserved": {
+      "default": true,
+      "title": "Archive Preserved",
+      "type": "boolean"
+    },
+    "archive_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Archive Sha256",
+      "type": "string"
+    },
+    "artifact_count": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Artifact Count",
+      "type": "integer"
+    },
+    "checked_at": {
+      "title": "Checked At",
+      "type": "string"
+    },
+    "config_path": {
+      "title": "Config Path",
+      "type": "string"
+    },
+    "next_steps": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "present_source_artifact_count": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Present Source Artifact Count"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_artifacts_checked": {
+      "title": "Source Artifacts Checked",
+      "type": "boolean"
+    },
+    "spool_root": {
+      "title": "Spool Root",
+      "type": "string"
+    },
+    "status": {
+      "const": "verified",
+      "default": "verified",
+      "title": "Status",
+      "type": "string"
+    },
+    "total_logical_bytes": {
+      "maximum": 1099511627776,
+      "minimum": 0,
+      "title": "Total Logical Bytes",
+      "type": "integer"
+    },
+    "verification_id": {
+      "pattern": "^archive-verification-[a-f0-9]{16}$",
+      "title": "Verification Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "verification_id",
+    "checked_at",
+    "archive_path",
+    "archive_sha256",
+    "archive_id",
+    "archive_created_at",
+    "config_path",
+    "spool_root",
+    "artifact_count",
+    "total_logical_bytes",
+    "source_artifacts_checked"
+  ],
+  "title": "CollectorSpoolArchiveVerificationArtifact",
+  "type": "object"
+}

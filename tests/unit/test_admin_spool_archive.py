@@ -18,9 +18,11 @@ from perflens.admin.spool import (
     SPOOL_PRUNE_AUTHORIZATION,
     archive_collector_spool,
     prune_archived_collector_spool,
+    verify_collector_spool_archive,
 )
 from perflens.contracts.artifacts import (
     CollectorSpoolArchiveArtifact,
+    CollectorSpoolArchiveVerificationArtifact,
     CollectorSpoolPruneArtifact,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -116,6 +118,23 @@ def _prune(
     )
 
 
+def _verify(
+    archive: Path,
+    config: Path,
+    layout: CollectorSystemLayout,
+    **kwargs: object,
+) -> CollectorSpoolArchiveVerificationArtifact:
+    return verify_collector_spool_archive(
+        archive,
+        config_path=config,
+        layout=layout,
+        require_root=False,
+        service_uid=os.geteuid(),
+        service_gid=os.getegid(),
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
 def test_archive_plan_copy_and_explicit_prune_form_a_verified_lifecycle(
     tmp_path: Path,
 ) -> None:
@@ -180,6 +199,27 @@ def test_archive_plan_copy_and_explicit_prune_form_a_verified_lifecycle(
         }
         assert bundle.read(f"artifacts/{oldest.name}") == b"oldest"
 
+    archive_verification = _verify(output, config, layout)
+    assert archive_verification.schema_version == "1.0"
+    assert archive_verification.status == "verified"
+    assert archive_verification.archive_sha256 == archived.archive_sha256
+    assert archive_verification.archive_id == archived.manifest.archive_id
+    assert archive_verification.artifact_count == 2
+    assert archive_verification.source_artifacts_checked is False
+    assert archive_verification.present_source_artifact_count is None
+    assert archive_verification.absent_source_artifact_count is None
+
+    source_verification = _verify(
+        output,
+        config,
+        layout,
+        verify_sources=True,
+    )
+    assert source_verification.source_artifacts_checked is True
+    assert source_verification.present_source_artifact_count == 2
+    assert source_verification.absent_source_artifact_count == 0
+    assert all(path.exists() for path in (oldest, second, third, latest))
+
     prune_plan = _prune(output, config, layout, dry_run=True)
     assert prune_plan.status == "dry_run"
     assert prune_plan.removed_artifact_count == 0
@@ -203,6 +243,16 @@ def test_archive_plan_copy_and_explicit_prune_form_a_verified_lifecycle(
     assert third.read_bytes() == b"third"
     assert latest.read_bytes() == b"latest"
     assert output.exists()
+
+    post_prune_verification = _verify(
+        output,
+        config,
+        layout,
+        verify_sources=True,
+    )
+    assert post_prune_verification.status == "verified"
+    assert post_prune_verification.present_source_artifact_count == 0
+    assert post_prune_verification.absent_source_artifact_count == 2
 
     repeated = _prune(output, config, layout)
     assert repeated.status == "nothing_to_prune"
@@ -315,6 +365,9 @@ def test_empty_spool_and_invalid_archive_inputs_remain_non_mutating(tmp_path: Pa
     with pytest.raises(PerfLensError) as invalid_archive:
         _prune(invalid_zip, config, layout, dry_run=True)
     assert invalid_archive.value.code is ErrorCode.INVALID_INPUT
+    with pytest.raises(PerfLensError) as invalid_verification:
+        _verify(invalid_zip, config, layout)
+    assert invalid_verification.value.code is ErrorCode.INVALID_INPUT
 
     archive_link = archive_directory / "linked-archive.zip"
     archive_link.symlink_to(invalid_zip)
@@ -419,6 +472,13 @@ def test_prune_rejects_changed_source_without_removing_anything(tmp_path: Path) 
         manifest = json.loads(bundle.read("manifest.json"))
     modified_time_ns = manifest["entries"][0]["modified_time_ns"]
     os.utime(source, ns=(modified_time_ns, modified_time_ns))
+
+    archive_only = _verify(output, config, layout)
+    assert archive_only.status == "verified"
+    assert archive_only.source_artifacts_checked is False
+    with pytest.raises(PerfLensError) as changed_verification:
+        _verify(output, config, layout, verify_sources=True)
+    assert changed_verification.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
     with pytest.raises(PerfLensError) as changed:
         _prune(output, config, layout, dry_run=True)
@@ -590,6 +650,35 @@ def test_archive_and_prune_cli_emit_versioned_json(
         keep_latest=0,
     )
     del actual_archive
+    verification_result = _verify(output, config, layout, verify_sources=True)
+
+    def fake_verify(
+        _archive: Path,
+        **_kwargs: object,
+    ) -> CollectorSpoolArchiveVerificationArtifact:
+        return verification_result
+
+    monkeypatch.setattr(
+        "perflens.admin.app.verify_collector_spool_archive",
+        fake_verify,
+    )
+    verify_summary_cli = CliRunner().invoke(
+        app,
+        ["verify-spool-archive", "--archive", str(output), "--verify-sources"],
+    )
+    assert verify_summary_cli.exit_code == 0, verify_summary_cli.output
+    assert "PerfLens Collector 归档验证 (只读)" in verify_summary_cli.output
+    assert "状态: 验证通过" in verify_summary_cli.output
+    assert "仍存在且完全匹配: 1" in verify_summary_cli.output
+
+    verify_json_cli = CliRunner().invoke(
+        app,
+        ["verify-spool-archive", "--archive", str(output), "--json"],
+    )
+    assert verify_json_cli.exit_code == 0, verify_json_cli.output
+    assert '"schema_version": "1.0"' in verify_json_cli.output
+    assert '"status": "verified"' in verify_json_cli.output
+
     prune_result = _prune(output, config, layout, dry_run=True)
 
     def fake_prune(_archive: Path, **_kwargs: object) -> CollectorSpoolPruneArtifact:

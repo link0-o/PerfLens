@@ -294,8 +294,10 @@ PerfLens 永远不会自行执行 sudo、修改内核策略或降低主机安全
 
 旧证据不会自动轮转。管理员可以先用 `perflens-admin archive-spool --dry-run` 生成精确
 计划，再创建带版本化 manifest 和逐文件 SHA-256 的只读 ZIP；源文件此时仍全部保留。
-只有把归档放到独立存储、运行 `prune-archived-spool --dry-run` 并逐项审查后，才能输入
-`I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE` 清理完全匹配的原文件。完整命令见
+使用 `verify-spool-archive` 可以完全只读地验证归档；加 `--verify-sources` 还会核对仍
+存在的原文件。只有把归档放到独立存储、运行 `prune-archived-spool --dry-run` 并逐项
+审查后，才能输入 `I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE` 清理完全匹配的
+原文件。完整命令见
 [《产品部署指南》](docs/deployment.zh-CN.md)。Agent 不应自动执行该清理流程。
 
 首次部署和后续升级都会完成只读健康协议往返，并通过内核凭据复核服务 PID/UID；仅

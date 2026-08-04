@@ -101,9 +101,12 @@ The stored ZIP contains a versioned manifest plus source identity and SHA-256
 for every `plan-<20 hex>.perf.data` or `.stat.csv` member. Archive creation
 rejects unknown entries, links, directories, unsafe ownership/modes, concurrent
 changes, and existing outputs; it preserves every source. After copying the ZIP
-to independent storage, run `sudo perflens-admin prune-archived-spool --archive
-/absolute/archive.zip --dry-run`. Only after reviewing every planned name, pass
-`--authorization I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE`.
+to independent storage, run `sudo perflens-admin verify-spool-archive --archive
+/absolute/archive.zip`. Add `--verify-sources` to cross-check every source that
+still exists; absent sources are reported and do not invalidate an intact
+archive. This command never prunes evidence. If reclamation is intended, next
+run `prune-archived-spool --dry-run`. Only after reviewing every planned name,
+pass `--authorization I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE`.
 
 Pruning requires a root-managed archive and parent, verifies the ZIP, manifest,
 archived bytes, and each source device/inode/size/mtime/owner/mode/SHA-256 before

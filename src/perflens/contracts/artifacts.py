@@ -680,6 +680,27 @@ class CollectorSpoolArchiveArtifact(ContractModel):
     next_steps: tuple[str, ...] = ()
 
 
+class CollectorSpoolArchiveVerificationArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    verification_id: str = Field(pattern=r"^archive-verification-[a-f0-9]{16}$")
+    checked_at: str
+    status: Literal["verified"] = "verified"
+    archive_path: str
+    archive_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    archive_id: str = Field(pattern=r"^spool-archive-[a-f0-9]{16}$")
+    archive_created_at: str
+    config_path: str
+    spool_root: str
+    artifact_count: int = Field(ge=0, le=10_000)
+    total_logical_bytes: int = Field(ge=0, le=1 << 40)
+    source_artifacts_checked: bool
+    present_source_artifact_count: int | None = Field(default=None, ge=0)
+    absent_source_artifact_count: int | None = Field(default=None, ge=0)
+    archive_preserved: bool = True
+    next_steps: tuple[str, ...] = ()
+
+
 class CollectorSpoolPruneArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     perflens_version: str

@@ -74,8 +74,9 @@ rolls back on failure while preserving the authorized UID and fixed spool.
 
 For long-term evidence retention, use the administrator archive-then-prune
 workflow instead of deleting spool files by age. It creates a root-managed ZIP
-with a versioned hash manifest, preserves sources, verifies both copies in dry
-run, and requires a separate explicit authorization before exact-source removal.
+with a versioned hash manifest and preserves sources. Use the read-only
+`verify-spool-archive`, optionally with `--verify-sources`, before the separate
+prune dry-run and explicit authorization required for exact-source removal.
 
 For upgrades, install the new wheel or matching DEBs first, then run `sudo
 perflens-admin upgrade --dry-run` and `sudo perflens-admin upgrade`. Policy and

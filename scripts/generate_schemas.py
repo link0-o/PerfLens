@@ -29,6 +29,7 @@ from perflens.contracts.artifacts import (
     CollectorSpoolArchiveArtifact,
     CollectorSpoolArchiveEntry,
     CollectorSpoolArchiveManifest,
+    CollectorSpoolArchiveVerificationArtifact,
     CollectorSpoolPruneArtifact,
     CollectorSpoolStatusArtifact,
     CollectorUndeploymentArtifact,
@@ -78,6 +79,9 @@ MODELS = {
     "collector-spool-archive.schema.json": CollectorSpoolArchiveArtifact,
     "collector-spool-archive-entry.schema.json": CollectorSpoolArchiveEntry,
     "collector-spool-archive-manifest.schema.json": CollectorSpoolArchiveManifest,
+    "collector-spool-archive-verification.schema.json": (
+        CollectorSpoolArchiveVerificationArtifact
+    ),
     "collector-spool-prune.schema.json": CollectorSpoolPruneArtifact,
     "collector-undeployment.schema.json": CollectorUndeploymentArtifact,
     "collector-upgrade.schema.json": CollectorUpgradeArtifact,

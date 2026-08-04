@@ -169,7 +169,22 @@ sudo perflens-admin archive-spool \
 manifest、源 inode/大小/mtime 和逐文件 SHA-256；发布时拒绝覆盖已有路径。源文件全部
 保留，`selection_truncated: true` 表示还有符合条件的证据未装入本次有界归档。
 
-把 ZIP 复制到独立存储并确认备份策略后，先做完整双向校验，不删除任何内容：
+把 ZIP 复制到独立存储并确认备份策略后，先运行名字和行为都完全只读的归档验证：
+
+```bash
+sudo perflens-admin verify-spool-archive \
+  --archive /srv/perflens-archives/perflens-2026-08-04.zip
+sudo perflens-admin verify-spool-archive \
+  --archive /srv/perflens-archives/perflens-2026-08-04.zip \
+  --verify-sources
+```
+
+第一条验证 ZIP 结构、manifest 和归档内每个成员的大小与 SHA-256。第二条还核对 spool
+中仍存在的原文件设备号、inode、大小、mtime、属主、权限和 SHA-256；已经不存在的原
+文件只会计入“已经不存在”，不会让完整归档变成失败。两条命令都不会删除或修改文件；
+自动化程序可加 `--json` 获取版本化结果。
+
+确实需要释放空间时，再生成精确清理计划：
 
 ```bash
 sudo perflens-admin prune-archived-spool \

@@ -68,6 +68,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - A Chinese-first `accept-collector` success summary with evidence identity,
   size, hash, metric count, conclusion boundaries, and explicit `--json` output
   for automation; acceptance now rejects runs containing no measured metric.
+- Read-only `perflens-admin verify-spool-archive` validation for archive
+  structure, manifest consistency, member hashes, and optional surviving-source
+  identity checks, without exposing any deletion operation.
 
 ### Changed
 

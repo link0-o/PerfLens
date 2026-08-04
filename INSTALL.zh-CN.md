@@ -185,8 +185,9 @@ sudo perflens-admin update-policy --config "$PWD/collector.next.toml"
 
 长期使用后需要释放采集目录空间时，不要手工按文件时间直接删除。使用
 `perflens-admin archive-spool` 先生成带哈希 manifest 的 root 管理归档，再通过
-`prune-archived-spool --dry-run` 复核，最后输入独立的显式授权短语。完整步骤和默认
-“7 天前、保留最新 20 份”的边界见[《产品部署指南》](docs/deployment.zh-CN.md)。
+`verify-spool-archive --verify-sources` 只读核对归档和仍存在的原文件，然后运行
+`prune-archived-spool --dry-run` 审查清理计划，最后输入独立的显式授权短语。完整步骤和
+默认“7 天前、保留最新 20 份”的边界见[《产品部署指南》](docs/deployment.zh-CN.md)。
 
 先安装新 wheel 或同版本配套的两个新 DEB，再由管理员运行：
 

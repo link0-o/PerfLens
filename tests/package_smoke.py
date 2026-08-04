@@ -57,6 +57,12 @@ def main() -> None:
         "--help",
         expected="Prune only exact source files",
     )
+    _run(
+        perflens_admin,
+        "verify-spool-archive",
+        "--help",
+        expected="without pruning any evidence",
+    )
     _run(perflens, "verify-collector", "--help", expected="bounded real perf-stat probe")
     acceptance_help = _run(
         perflens,
