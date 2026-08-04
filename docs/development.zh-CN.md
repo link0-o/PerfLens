@@ -168,6 +168,19 @@ uv run pip-audit \
 为什么选择或自研某项能力，记录在[《自研与复用决策》](dependency-decisions.zh-CN.md)。
 安全报告和默认权限见[《安全策略》](../SECURITY.zh-CN.md)。
 
+## 如何维护 GitHub Actions
+
+- 外部 Action 的 `uses:` 必须使用 40 位完整提交 SHA，旁边保留便于审查的版本注释；
+- 只从 Action 官方仓库核对 Release 标签对应的提交，不使用第三方转述的哈希；
+- 所有 checkout 都保持 `persist-credentials: false`；
+- 普通 CI 和 Release 构建默认只有 `contents: read`；
+- `contents: write` 只允许出现在不 checkout、不运行项目代码的最终发布任务；
+- 上传产物必须在文件缺失时失败，并设置不超过 7 天的中间保留期；
+- 修改工作流后运行 `uv run pytest tests/unit/test_workflow_security.py`。
+
+固定 SHA 不会自动获得安全修复，因此 Dependabot 或维护者仍需定期审查官方新版本并
+明确升级。不可变引用解决的是“运行内容被静默移动”，不是替代更新维护。
+
 ## 提交与发布建议
 
 - 一个提交只表达一个清楚目的，例如 `fix:`、`feat:`、`docs:`。

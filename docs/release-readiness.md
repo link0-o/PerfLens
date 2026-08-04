@@ -16,7 +16,7 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 |---|---|---|
 | Lint | `ruff check .` | passed |
 | Strict types | `pyright` | 0 errors, 0 warnings |
-| Python 3.13 | isolated `pytest -q` environment | 296 passed |
+| Python 3.13 | isolated `pytest -q` environment | 300 passed |
 | Python 3.12 | `pytest -q` on 3.12.13 | previous full release gate: 256 passed; not locally rerun for this change, so CI remains required |
 | Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.24%, passed |
 | Skill | structure and package tests | passed |
@@ -24,6 +24,7 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 | Dependency lock | `uv export --locked` | passed |
 | Vulnerabilities | `pip-audit` on fully pinned runtime export | no known vulnerabilities |
 | SBOM | uv CycloneDX 1.5 export | passed |
+| Workflow supply chain | immutable Action pins + read-only builds + isolated publisher test | passed |
 | Real profile | pinned upstream FlameGraph perf example | full analyze/classify/report flow passed |
 | Active perf denial | real perf 6.12.90, `perf_event_paranoid=3` | structured failure; no residual output |
 | Automatic Broker | MCP plan → authenticated Unix socket → fixed spool | passed with executable perf test double |

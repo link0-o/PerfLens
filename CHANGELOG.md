@@ -36,6 +36,13 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Changed
 
+- CI and release workflows now pin every external GitHub Action to an immutable
+  full commit SHA, disable checkout credential persistence, fail closed on
+  missing upload inputs, and retain intermediate artifacts for at most seven
+  days. The release workflow builds and verifies with read-only repository
+  permissions, then passes one named bundle to a separate publisher job whose
+  only write-capable operation is `gh release create`. Weekly Dependabot checks
+  now propose reviewed updates for immutable Action pins and the uv lockfile.
 - `perflens --help`, every user subcommand, and `perflens-admin --help` are now
   Chinese-first. Previously undocumented analysis limits and administrator
   archive controls now explain their units and safety boundaries; command and

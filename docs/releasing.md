@@ -75,8 +75,19 @@ git push origin v0.1.1
 
 `.github/workflows/release.yml` checks that the tag matches the package
 version, reruns lint, types, tests, coverage, wheel, sdist, and DEB smoke tests,
-then creates the GitHub Release. Do not reuse or move a
+then creates the GitHub Release. Build and verification jobs have read-only
+repository permission and do not retain checkout credentials. They transfer a
+single named release bundle to a separate publisher job; only that job receives
+`contents: write`, does not check out or execute repository code, and runs only
+the pinned artifact downloader plus `gh release create`. Do not reuse or move a
 published version tag.
+
+All external Actions are pinned to full commit SHAs. When upgrading one, review
+the official release and source, replace the SHA and adjacent version comment
+together, and run `tests/unit/test_workflow_security.py`. Never replace a pin
+with a branch or movable major-version tag. Dependabot checks Action pins and
+the uv lockfile weekly, but its pull requests still require the normal review
+and full CI gates.
 
 ## Optional PyPI publication
 

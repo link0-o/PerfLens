@@ -31,3 +31,13 @@ reported as a security vulnerability.
 Each Collector instance supports exactly one authorized ordinary UID. Adding
 multiple callers to the shared `perflens` group would expose group-readable
 profiles across users and is deliberately rejected.
+
+## Build and release supply chain
+
+External GitHub Actions are pinned to full commit SHAs and checkouts do not
+persist credentials. CI and release-build jobs receive read-only repository
+permission. The only `contents: write` job does not check out or run repository
+code; it downloads the verified same-run bundle with a pinned official Action
+and invokes `gh release create`. A regression test enforces these boundaries.
+Dependabot proposes weekly Action-pin and uv-lock updates for review; it does
+not auto-merge them.

@@ -42,6 +42,19 @@ PerfLens 不会绕过 Linux 的 `perf_event_paranoid`、容器 Capability、LSM 
 每套 Collector 只允许一个普通用户 UID。多个调用者共享 `perflens` 组会互相看到组可读
 Profile，因此策略和部署会明确拒绝多 UID，管理员也不应手工把额外用户加入该组。
 
+## 构建与发布供应链
+
+- 外部 GitHub Action 固定到完整提交 SHA；
+- checkout 不保留 Git 凭据；
+- CI 和 Release 构建任务只有仓库只读权限；
+- 唯一拥有 `contents: write` 的发布任务不 checkout、不执行仓库代码；
+- 它只用固定提交的官方 Action 下载同一次工作流已验证的 Bundle，再执行
+  `gh release create`；
+- 回归测试会拒绝可移动 Action 标签、凭据持久化或发布写权限重新扩散。
+
+Dependabot 每周提出 Action 固定版本与 uv 锁文件更新，但不会自动合并；所有更新仍需代码
+审查并通过完整 CI。
+
 ## 处理不可信输入
 
 Profile、Benchmark JSON、ELF 文件、源码路径和持久化产物都应视为不可信输入。相关代码必须：

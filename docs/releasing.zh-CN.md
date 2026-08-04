@@ -69,6 +69,17 @@ git push origin v0.1.1
 
 `.github/workflows/release.yml` 会检查标签和包版本是否一致，重新运行代码规范、类型、测试、覆盖率、wheel、sdist 和 DEB 冒烟测试，然后创建 GitHub Release。
 
+构建与验证任务只有仓库只读权限，并且 checkout 不保留 Git 凭据。通过全部门禁后，它们
+只把一个具名 Release Bundle 交给独立发布任务；只有该任务获得 `contents: write`，而且
+不会 checkout 或执行仓库代码，只运行固定提交的产物下载 Action 和
+`gh release create`。这样测试脚本、构建后端和项目依赖不会接触发布写权限。
+
+所有外部 GitHub Action 都必须固定到完整提交 SHA。升级 Action 时应检查官方 Release
+和源码，同时更新 SHA 与旁边的版本注释，并运行
+`tests/unit/test_workflow_security.py`；禁止退回分支名或可移动的大版本标签。Dependabot
+每周检查 Action 固定版本和 uv 锁文件，但它创建的 PR 仍需正常审查并通过全部 CI，不能
+自动绕过门禁。
+
 已经发布的版本标签不要重复使用或移动。如果发现问题，应修复后发布新版本。
 
 ## 可选：发布到 PyPI

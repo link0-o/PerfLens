@@ -6,7 +6,7 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -20,7 +20,9 @@ jobs:
     steps:
       - name: Install Debian build prerequisites
         run: apt-get update && apt-get install --yes ca-certificates dpkg-dev git python3
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
@@ -70,17 +72,21 @@ jobs:
           test ! -e /etc/systemd/system/perflens-collector.service
           apt-get remove --yes perflens-collector perflens
           test ! -e /usr/bin/perflens
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: perflens-debian-packages
           path: dist/*.deb
+          if-no-files-found: error
+          retention-days: 7
 
-  github-release:
+  build-release-assets:
     needs: debian-package
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
@@ -92,7 +98,7 @@ jobs:
       - run: uv build --no-sources
       - run: uv run --isolated --no-project --with dist/*.whl tests/package_smoke.py
       - run: uv run --isolated --no-project --with dist/*.tar.gz tests/package_smoke.py
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: perflens-debian-packages
           path: dist
@@ -105,12 +111,34 @@ jobs:
         run: >-
           uv run python scripts/render_release_notes.py
           --tag "$GITHUB_REF_NAME"
-          --output /tmp/perflens-release-notes.md
+          --output release-notes.md
+      - name: Transfer the verified release bundle to the publisher
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perflens-release-bundle
+          path: |
+            dist/*
+            release-notes.md
+          if-no-files-found: error
+          retention-days: 1
+
+  github-release:
+    needs: build-release-assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download the verified release bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: perflens-release-bundle
+          path: release-bundle
       - name: Create immutable GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          gh release create "$GITHUB_REF_NAME" dist/*
+          gh release create "$GITHUB_REF_NAME" release-bundle/dist/*
           --verify-tag
-          --notes-file /tmp/perflens-release-notes.md
+          --notes-file release-bundle/release-notes.md
           --title "PerfLens $GITHUB_REF_NAME"
