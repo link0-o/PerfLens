@@ -110,4 +110,11 @@ For upgrades, install the new wheel or matching DEBs first, then run `sudo
 perflens-admin upgrade --dry-run` and `sudo perflens-admin upgrade`. Policy and
 spool evidence are preserved; rerun ordinary-user `accept-collector` afterward.
 
-Uninstall a pipx installation with `pipx uninstall perflens`. Project Skill files, setup output, Collector service state, and collected artifacts are deliberately not removed automatically.
+Before uninstalling, run `perflens detach --project <project> --dry-run` and then
+repeat without `--dry-run` for every configured project. Detach removes only a
+structurally verified PerfLens-managed block from project `.codex/config.toml`;
+it preserves unrelated settings and refuses unmarked or mixed-content blocks.
+It never deletes the Skill, onboarding directories, results, or Collector data.
+After all projects are detached, uninstall a pipx installation with `pipx
+uninstall perflens`. Review preserved project files separately, and use the
+administrator `undeploy` workflow for a system Collector.

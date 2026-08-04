@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from perflens.distribution.codex import plan_codex_project_config, render_codex_config
+from perflens.distribution.codex import (
+    plan_codex_project_config,
+    plan_codex_project_config_removal,
+    render_codex_config,
+)
 from perflens.distribution.collector import install_collector_assets
 from perflens.distribution.skill import SKILL_NAME, install_project_skill
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -268,3 +272,47 @@ def test_codex_project_config_install_refuses_user_table_and_unsafe_path(
         plan_codex_project_config(workspace, generated)
     assert escaped.value.code is ErrorCode.PATH_SAFETY_VIOLATION
     assert not (outside / "config.toml").exists()
+
+
+def test_codex_project_config_removal_preserves_unrelated_settings(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    config_dir = workspace / ".codex"
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "config.toml"
+    config_path.write_text('model = "keep-me"\n', encoding="utf-8")
+    generated = render_codex_config(workspace, mcp_command=Path(sys.executable))
+    plan_codex_project_config(workspace, generated).apply()
+
+    removal = plan_codex_project_config_removal(workspace)
+    assert removal is not None
+    assert 'model = "keep-me"' in removal.content
+    assert "mcp_servers.perflens" not in removal.content
+    removal.apply()
+
+    assert config_path.read_text(encoding="utf-8") == 'model = "keep-me"\n\n'
+    assert plan_codex_project_config_removal(workspace) is None
+
+
+def test_codex_managed_block_rejects_mixed_user_configuration(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    generated = render_codex_config(workspace, mcp_command=Path(sys.executable))
+    plan_codex_project_config(workspace, generated).apply()
+    config = workspace / ".codex/config.toml"
+    content = config.read_text(encoding="utf-8")
+    config.write_text(
+        content.replace(
+            "# END PerfLens managed MCP configuration",
+            '[mcp_servers.other]\ncommand = "/keep/me"\n'
+            "# END PerfLens managed MCP configuration",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PerfLensError, match="markers"):
+        plan_codex_project_config(workspace, generated)
+    with pytest.raises(PerfLensError, match="markers"):
+        plan_codex_project_config_removal(workspace)
+    assert '[mcp_servers.other]\ncommand = "/keep/me"' in config.read_text(
+        encoding="utf-8"
+    )

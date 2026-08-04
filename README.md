@@ -65,6 +65,9 @@ so copy the exact generated deployment command instead of guessing paths.
 It also installs a marked, project-scoped MCP block in `.codex/config.toml`
 while preserving other settings; restart Codex instead of manually copying the
 long snippet. Use `--skip-codex-config` for generation-only workflows.
+Before package uninstall, preview `perflens detach --project <project>
+--dry-run`, then repeat without `--dry-run` to remove only PerfLens's managed
+MCP block while preserving Skill, onboarding, and analysis evidence.
 
 Debian 13 users can instead install the native, offline `.deb` packages. See
 [Debian packages](docs/debian-packages.md) for the split main/Collector flow.

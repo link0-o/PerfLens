@@ -71,8 +71,10 @@ and spool, updates only a verified managed unit, restarts the new program, and
 attempts to restore the old unit if activation fails. Repeat ordinary-user
 `perflens accept-collector --authorize-host-acceptance` afterward.
 
-Before package removal, use `sudo perflens-admin undeploy`. It verifies and removes
-only a trusted PerfLens-managed unit. Policy, collected artifacts, and the system
+Before package removal, preview and run `perflens detach --project <project>` for
+every configured project, then use `sudo perflens-admin undeploy`. These remove
+only a structurally owned project MCP block and a trusted managed unit. Policy,
+collected artifacts, project Skill files, onboarding files, and the system
 identity are preserved by default. See the Chinese guide above for the full flow.
 
 The main package vendors dependencies selected and hashed by `uv.lock`, so install

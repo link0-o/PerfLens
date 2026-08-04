@@ -236,13 +236,33 @@ sudo perflens-admin upgrade
 
 ## 卸载
 
-pipx 安装的普通用户程序可以这样卸载：
+先对每个通过 `setup` 接入过的项目运行预演：
+
+```bash
+perflens detach --project /绝对路径/你的项目 --dry-run
+```
+
+确认它只计划移除带 PerfLens 标记的 MCP 配置块后，再执行：
+
+```bash
+perflens detach --project /绝对路径/你的项目
+```
+
+该命令默认输出中文摘要，只修改项目 `.codex/config.toml` 中结构验证通过的 PerfLens
+托管块；其他 Codex 设置会保留。Skill、`perflens-setup`、自定义引导目录、
+`perflens-results` 和 Collector 数据都不会删除。用户手写的无标记 PerfLens 表，或混入
+其他 TOML 表的托管区会被拒绝自动删除，必须人工检查。自动化程序使用 `--json`；留档
+使用 `--output <新文件.json>`。
+
+每个已配置项目都完成 detach 后，pipx 安装的普通用户程序可以这样卸载：
 
 ```bash
 pipx uninstall perflens
 ```
 
-项目内的 Skill、`perflens-setup` 目录、Collector 服务和历史采集数据不会被静默删除，应由用户或管理员检查后分别处理。
+项目内保留的 Skill、引导目录、Collector 服务和历史采集数据不会被静默删除，应由
+用户或管理员检查后分别处理。系统 Collector 还必须先按产品部署指南执行管理员
+`undeploy`，不能由普通用户 detach 代替。
 
 ## 常见问题
 

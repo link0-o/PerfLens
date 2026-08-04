@@ -6,6 +6,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Added
 
+- Chinese-first `perflens detach` project lifecycle cleanup with dry-run,
+  versioned JSON evidence, exact managed-block ownership checks, and explicit
+  preservation of Skill, onboarding, results, and Collector data.
 - Safe project-level Codex MCP configuration installation during `perflens
   setup`. PerfLens creates or updates only its marked block, preserves unrelated
   settings, refuses conflicting user-managed tables and unsafe paths, and
@@ -49,6 +52,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
+- Refresh and detach now reject a marked PerfLens block if unrelated TOML
+  tables were inserted inside it, preventing managed-block replacement from
+  deleting user configuration that PerfLens does not own.
 - Reproducible Debian builds now remove installer `direct_url.json` metadata
   and its wheel RECORD entry, preventing the absolute input-wheel path from
   changing otherwise identical main-package bytes.

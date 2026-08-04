@@ -778,3 +778,15 @@ class SetupArtifact(ContractModel):
     blocked_modes: tuple[str, ...] = ()
     generated_files: tuple[str, ...]
     next_steps: tuple[str, ...]
+
+
+class ProjectDetachmentArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    detachment_id: str = Field(pattern=r"^detachment-[a-f0-9]{16}$")
+    project_root: str
+    dry_run: bool
+    codex_config_path: str
+    codex_config_status: Literal["not_found", "planned", "removed"]
+    preserved_paths: tuple[str, ...] = ()
+    next_steps: tuple[str, ...] = ()

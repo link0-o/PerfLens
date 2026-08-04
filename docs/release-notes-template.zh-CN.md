@@ -85,4 +85,10 @@ Collector 还会在启动 perf 前检查 spool 总字节数、文件数和文件
 先运行 `perflens-admin update-policy --config <候选> --dry-run`，再由管理员加 `sudo`
 应用。它自动重启、健康检查并在失败时恢复原策略，同时拒绝迁移授权 UID 或固定 spool。
 
+## 卸载前
+
+先对每个接入项目运行 `perflens detach --project <项目> --dry-run`，确认后去掉
+`--dry-run`。它只移除 PerfLens 托管的 MCP 配置块，保留其他 Codex 设置、Skill、引导
+文件和分析证据。系统 Collector 还需要管理员另行执行 `perflens-admin undeploy`。
+
 **Full Changelog**：https://github.com/link0-o/PerfLens/commits/{tag}

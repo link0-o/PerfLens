@@ -344,7 +344,9 @@ systemd unit，再执行固定的 `daemon-reload` 和 `restart`。它不会接�
 perflens accept-collector --authorize-host-acceptance
 ```
 
-软件卸载前先执行：
+软件卸载前，普通用户先对每个已接入项目运行 `perflens detach --project <项目>
+--dry-run`，确认后去掉 `--dry-run`。它只移除项目 Codex 配置中的 PerfLens 托管块，
+不会代替系统服务卸载。然后由管理员执行：
 
 ```bash
 sudo perflens-admin undeploy --dry-run

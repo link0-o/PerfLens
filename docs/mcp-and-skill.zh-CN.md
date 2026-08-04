@@ -209,3 +209,15 @@ PerfLens 不会请求 sudo，不会修改 `perf_event_paranoid`、capability 或
 - **只在终端处理文件**：直接使用 CLI，不需要 MCP 或 Skill。
 
 遇到权限、符号或兼容性问题时，请看[中文故障排查](troubleshooting.zh-CN.md)。
+
+## 移除项目 MCP 接入
+
+卸载 PerfLens 前，对每个接入过的项目先预演再移除：
+
+```bash
+perflens detach --project /绝对路径/项目 --dry-run
+perflens detach --project /绝对路径/项目
+```
+
+它只删除带完整托管标记、且内部只包含 `mcp_servers.perflens` 的配置块。其他项目 Codex
+配置、Skill、引导文件和分析产物均保留；用户手写或混入其他表的配置拒绝自动删除。

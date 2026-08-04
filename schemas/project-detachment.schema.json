@@ -1,0 +1,67 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "codex_config_path": {
+      "title": "Codex Config Path",
+      "type": "string"
+    },
+    "codex_config_status": {
+      "enum": [
+        "not_found",
+        "planned",
+        "removed"
+      ],
+      "title": "Codex Config Status",
+      "type": "string"
+    },
+    "detachment_id": {
+      "pattern": "^detachment-[a-f0-9]{16}$",
+      "title": "Detachment Id",
+      "type": "string"
+    },
+    "dry_run": {
+      "title": "Dry Run",
+      "type": "boolean"
+    },
+    "next_steps": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "preserved_paths": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Preserved Paths",
+      "type": "array"
+    },
+    "project_root": {
+      "title": "Project Root",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "detachment_id",
+    "project_root",
+    "dry_run",
+    "codex_config_path",
+    "codex_config_status"
+  ],
+  "title": "ProjectDetachmentArtifact",
+  "type": "object"
+}

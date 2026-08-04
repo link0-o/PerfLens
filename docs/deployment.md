@@ -178,7 +178,9 @@ sends only a short-lived PID plan to the Collector. This enables natural
 “optimize the current project” requests without giving workload commands to the
 privileged service or requiring the user to discover a PID.
 
-Before package removal, run `sudo perflens-admin undeploy --dry-run` and then
-`sudo perflens-admin undeploy`. It removes only a verified managed unit while
+Before package removal, ordinary users first preview and run `perflens detach
+--project <project>` for every configured project. This removes only the
+managed project MCP block. Then run `sudo perflens-admin undeploy --dry-run`
+and `sudo perflens-admin undeploy`. It removes only a verified managed unit while
 preserving policy, collected artifacts, and the system identity. See the
 [Chinese guide](deployment.zh-CN.md) for the complete lifecycle.

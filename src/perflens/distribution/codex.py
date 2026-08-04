@@ -54,6 +54,23 @@ class CodexConfigInstallPlan:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class CodexConfigRemovalPlan:
+    """A checked removal of only PerfLens's marked project configuration block."""
+
+    path: Path
+    content: str
+    expected_content: str
+
+    def apply(self) -> None:
+        _assert_config_unchanged(self.path, self.expected_content)
+        write_text_atomic(
+            self.content,
+            self.path,
+            max_output_bytes=_MAX_CODEX_CONFIG_BYTES,
+        )
+
+
 def plan_codex_project_config(
     workspace: Path,
     configuration: str,
@@ -93,19 +110,11 @@ def plan_codex_project_config(
                 ),
             ) from exc
         lines = expected.splitlines(keepends=True)
-        begins = [
-            index
-            for index, line in enumerate(lines)
-            if line.rstrip("\r\n") == _MANAGED_BEGIN
-        ]
-        ends = [
-            index
-            for index, line in enumerate(lines)
-            if line.rstrip("\r\n") == _MANAGED_END
-        ]
+        begins, ends = _managed_marker_lines(lines)
         if begins or ends:
             if len(begins) != 1 or len(ends) != 1 or begins[0] >= ends[0]:
                 raise _managed_block_error(target)
+            _validate_managed_block(lines, begins[0], ends[0], target)
             replacement = "".join(lines[: begins[0]]) + managed + "".join(
                 lines[ends[0] + 1 :]
             )
@@ -149,6 +158,104 @@ def plan_codex_project_config(
             expected,
         )
     return CodexConfigInstallPlan(target, "installed", managed, None)
+
+
+def plan_codex_project_config_removal(
+    workspace: Path,
+) -> CodexConfigRemovalPlan | None:
+    """Plan removal of a structurally valid PerfLens-managed project block."""
+    project = _existing_directory(workspace, label="Workspace")
+    parent = project / ".codex"
+    target = parent / "config.toml"
+    if not target.exists() and not target.is_symlink():
+        return None
+    if (
+        parent.is_symlink()
+        or not parent.is_dir()
+        or parent.resolve(strict=True) != parent
+        or target.is_symlink()
+        or not target.is_file()
+    ):
+        raise _unsafe_codex_path(target)
+    try:
+        raw = target.read_bytes()
+        if len(raw) > _MAX_CODEX_CONFIG_BYTES:
+            raise ValueError("Codex configuration exceeds its size limit")
+        expected = raw.decode("utf-8")
+        parsed = cast(dict[str, object], tomllib.loads(expected))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError) as exc:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "codex_config",
+            "Existing project Codex configuration is invalid or too large",
+            recoverable=True,
+            details={"path": str(target)},
+            suggested_actions=("Repair .codex/config.toml before detaching PerfLens.",),
+        ) from exc
+    lines = expected.splitlines(keepends=True)
+    begins, ends = _managed_marker_lines(lines)
+    if not begins and not ends:
+        servers = parsed.get("mcp_servers")
+        perflens = (
+            cast(dict[str, object], servers).get("perflens")
+            if isinstance(servers, dict)
+            else None
+        )
+        if perflens is None:
+            return None
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "codex_config",
+            "User-managed PerfLens MCP configuration was preserved",
+            recoverable=True,
+            details={"path": str(target)},
+            suggested_actions=(
+                "Review and remove the unmarked [mcp_servers.perflens] table manually.",
+            ),
+        )
+    if len(begins) != 1 or len(ends) != 1 or begins[0] >= ends[0]:
+        raise _managed_block_error(target)
+    _validate_managed_block(lines, begins[0], ends[0], target)
+    content = "".join(lines[: begins[0]] + lines[ends[0] + 1 :])
+    try:
+        if content.strip():
+            tomllib.loads(content)
+    except tomllib.TOMLDecodeError as exc:
+        raise _managed_block_error(target) from exc
+    return CodexConfigRemovalPlan(target, content, expected)
+
+
+def _managed_marker_lines(lines: list[str]) -> tuple[list[int], list[int]]:
+    begins = [
+        index for index, line in enumerate(lines) if line.rstrip("\r\n") == _MANAGED_BEGIN
+    ]
+    ends = [
+        index for index, line in enumerate(lines) if line.rstrip("\r\n") == _MANAGED_END
+    ]
+    return begins, ends
+
+
+def _validate_managed_block(
+    lines: list[str],
+    begin: int,
+    end: int,
+    path: Path,
+) -> None:
+    fragment = "".join(lines[begin + 1 : end])
+    try:
+        payload = cast(dict[str, object], tomllib.loads(fragment))
+    except tomllib.TOMLDecodeError as exc:
+        raise _managed_block_error(path) from exc
+    if set(payload) != {"mcp_servers"}:
+        raise _managed_block_error(path)
+    servers = payload["mcp_servers"]
+    if not isinstance(servers, dict):
+        raise _managed_block_error(path)
+    server_table = cast(dict[str, object], servers)
+    if set(server_table) != {"perflens"}:
+        raise _managed_block_error(path)
+    if not isinstance(server_table["perflens"], dict):
+        raise _managed_block_error(path)
 
 
 def _assert_config_unchanged(path: Path, expected: str | None) -> None:

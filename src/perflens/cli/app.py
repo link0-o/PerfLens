@@ -42,11 +42,13 @@ from perflens.contracts.artifacts import (
     CollectionArtifact,
     CollectionCapabilityArtifact,
     CollectorAcceptanceArtifact,
+    ProjectDetachmentArtifact,
     RuntimeStatusArtifact,
 )
 from perflens.distribution.acceptance import accept_collector
 from perflens.distribution.codex import render_codex_config
 from perflens.distribution.collector import install_collector_assets
+from perflens.distribution.detach import detach_project_integration
 from perflens.distribution.onboarding import run_project_setup
 from perflens.distribution.skill import install_project_skill
 from perflens.distribution.status import inspect_runtime_status
@@ -370,6 +372,45 @@ def setup_command(
             )
         )
     )
+
+
+@app.command("detach")
+def detach_command(
+    project_root: Annotated[
+        Path,
+        typer.Option(
+            "--project",
+            file_okay=False,
+            help="Project whose PerfLens-managed Codex MCP block will be removed.",
+        ),
+    ] = Path("."),
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Inspect the exact managed block without changing it."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the complete versioned detachment artifact."),
+    ] = False,
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Optional new JSON evidence path."),
+    ] = None,
+) -> None:
+    """Detach project MCP configuration while preserving Skill, setup, and results."""
+    try:
+        safe_output = (
+            validate_new_output_file(output_path) if output_path is not None else None
+        )
+        artifact = detach_project_integration(project_root, dry_run=dry_run)
+        if safe_output is not None:
+            write_json_new_atomic(artifact, safe_output, max_output_bytes=1 << 20)
+    except PerfLensError as exc:
+        _fail(exc)
+    if json_output:
+        typer.echo(artifact.model_dump_json(indent=2))
+        return
+    _render_detachment_chinese(artifact, output_path=safe_output)
 
 
 @app.command("stage-collector-assets")
@@ -1380,6 +1421,38 @@ def _runtime_next_steps_chinese(artifact: RuntimeStatusArtifact) -> tuple[str, .
         )
         steps.append(f"执行一次 1 秒真实短时采集验收: `{acceptance_command}`")
     return tuple(steps)
+
+
+def _render_detachment_chinese(
+    artifact: ProjectDetachmentArtifact,
+    *,
+    output_path: Path | None,
+) -> None:
+    typer.echo("PerfLens 项目 MCP 接入移除")
+    typer.echo(f"项目: {artifact.project_root}")
+    typer.echo(f"Codex 配置: {artifact.codex_config_path}")
+    status = {
+        "not_found": "未找到 PerfLens 托管配置; 未修改文件",
+        "planned": "预演通过; 尚未修改文件",
+        "removed": "已只移除 PerfLens 托管配置块",
+    }[artifact.codex_config_status]
+    typer.echo(f"结果: {status}")
+    typer.echo("保留边界: 不删除 Skill、引导目录、分析结果或 Collector 数据。")
+    if artifact.preserved_paths:
+        typer.echo("已保留的已知路径:")
+        for path in artifact.preserved_paths:
+            typer.echo(f"- {path}")
+    if output_path is not None:
+        typer.echo(f"版本化结果: {output_path}")
+    typer.echo("下一步:")
+    if artifact.codex_config_status == "planned":
+        command = shlex.join(("perflens", "detach", "--project", artifact.project_root))
+        typer.echo(f"- 确认后执行真实移除: `{command}`")
+    elif artifact.codex_config_status == "removed":
+        typer.echo("- 重启 Codex, 让项目停止启动 PerfLens MCP Server。")
+        typer.echo("- 确认其他项目也已 detach 后, 再卸载 wheel 或 DEB。")
+    else:
+        typer.echo("- 如果项目使用用户手写的 PerfLens MCP 表, 请人工检查后移除。")
 
 
 def _unused_setup_directory_name(project: Path, status_id: str) -> str:

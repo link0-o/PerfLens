@@ -97,7 +97,8 @@ perflens accept-collector --authorize-host-acceptance
 短时采集。不要用 `undeploy` 加 `deploy` 代替日常升级，也不要重新提交项目目录中的旧
 策略覆盖 `/etc/perflens/collector.toml`。
 
-卸载 Collector 前，先让管理员入口验证并移除 PerfLens 托管的 unit：
+卸载软件包前，普通用户先对每个接入项目执行 `perflens detach --project <项目>
+--dry-run`，确认后去掉 `--dry-run`。然后让管理员入口验证并移除 PerfLens 托管的 unit：
 
 ```bash
 sudo perflens-admin undeploy --dry-run

@@ -22,6 +22,9 @@ def main() -> None:
     _run(perflens_collector, "--version", expected=__version__)
     _run(perflens_admin, "--version", expected=__version__)
     assert "--json-errors" in _run(perflens, "--help")
+    detach_help = _run(perflens, "detach", "--help")
+    assert "--dry-run" in detach_help
+    assert "--json" in detach_help
     assert "--json-errors" in _run(perflens_admin, "--help")
     doctor_help = _run(perflens, "doctor", "--help")
     assert "--json" in doctor_help
@@ -267,6 +270,28 @@ def main() -> None:
         )
         assert "[mcp_servers.perflens]" in config
         assert "--allow-active-collection" not in config
+
+        active_config = project / ".codex/config.toml"
+        before_detach = active_config.read_text(encoding="utf-8")
+        preview = _run(
+            perflens,
+            "detach",
+            "--project",
+            str(project),
+            "--dry-run",
+            expected="预演通过; 尚未修改文件",
+        )
+        assert "不删除 Skill、引导目录、分析结果或 Collector 数据" in preview
+        assert active_config.read_text(encoding="utf-8") == before_detach
+        detach_payload = json.loads(
+            _run(perflens, "detach", "--project", str(project), "--json")
+        )
+        assert detach_payload["schema_version"] == "1.0"
+        assert detach_payload["codex_config_status"] == "removed"
+        assert "BEGIN PerfLens managed MCP configuration" not in active_config.read_text(
+            encoding="utf-8"
+        )
+        assert (project / "guided-setup/setup.json").is_file()
 
 
 def _command(name: str) -> str:

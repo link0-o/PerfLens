@@ -20,6 +20,10 @@ Setup schema `1.0` may include the optional project Codex configuration path
 and install status. Readers treat older setup artifacts as generation-only
 onboarding that skipped project configuration installation.
 
+Project detach results use the independent `ProjectDetachmentArtifact` schema
+`1.0`. It records preview/removal state, the exact configuration path, and known
+preserved project paths; it never claims those paths were deleted or archived.
+
 Collector TOML policies use an independent integer `policy_version`. Generated
 policies currently write version `1`; a missing field is read as legacy version
 1 for compatibility, while unsupported versions are rejected before deployment

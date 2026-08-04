@@ -443,8 +443,8 @@ PID 并交给 Collector。用户不需要查找或输入 PID。
     )
     codex_section = (
         f"""项目级配置已安全{_codex_status_chinese(codex_plan.status)}到
-`{codex_plan.path}`。PerfLens 只管理带有中英文标记的 MCP 配置块；已有其他 Codex
-设置会保留。现在重启 Codex，再执行 `codex mcp list` 检查 `perflens`。
+`{codex_plan.path}`。PerfLens 只管理带有明确 PerfLens 托管标记的 MCP 配置块；
+已有其他 Codex 设置会保留。现在重启 Codex，再执行 `codex mcp list` 检查 `perflens`。
 
 同时保留了 `{output / 'codex-mcp.toml'}` 作为可检查、可迁移的独立配置片段。
 """

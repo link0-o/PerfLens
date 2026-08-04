@@ -151,3 +151,16 @@ The user need not discover a PID, but natural-language intent alone is not
 authorization to execute arbitrary project files.
 
 All list responses are bounded and paginated. The server emits typed structured output and checked-in JSON Schemas; it never returns an unbounded full analysis through a list tool.
+
+## Detach project MCP configuration
+
+Before package uninstall, preview and then detach every configured project:
+
+```bash
+perflens detach --project /absolute/path/to/project --dry-run
+perflens detach --project /absolute/path/to/project
+```
+
+Only a complete marked block containing exclusively `mcp_servers.perflens` is
+removed. Other Codex settings, the Skill, onboarding files, and analysis
+artifacts are preserved; unmarked or mixed-content configuration is refused.

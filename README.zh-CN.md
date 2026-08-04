@@ -61,6 +61,8 @@ perflens setup \
 命令即可，不需要记忆或猜测路径。
 它还会安全接入项目 `.codex/config.toml`，保留其他 Codex 设置；重启 Codex 即可，不再
 需要手工复制 MCP 长配置。需要仅生成文件时使用 `--skip-codex-config`。
+卸载软件包前使用 `perflens detach --project <项目> --dry-run` 预演，再去掉
+`--dry-run`，即可只移除 PerfLens 托管块而保留 Skill、引导文件和分析证据。
 
 Debian 13 用户也可以直接安装原生 `.deb`，不需要自己创建 Python 环境。主包与
 可选 Collector 包的选择、安装和安全卸载见[《Debian 安装包》](docs/debian-packages.zh-CN.md)。
