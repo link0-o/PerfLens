@@ -228,8 +228,40 @@ def test_cli_refuses_to_overwrite_source(tmp_path: Path) -> None:
         ["analyze-folded", "--input", str(source), "--output", str(source)],
     )
     assert result.exit_code == 5
-    payload = json.loads(result.stderr)
+    assert "PerfLens 操作失败" in result.stderr
+    assert "错误代码: PATH_SAFETY_VIOLATION" in result.stderr
+    assert "--json-errors" in result.stderr
+
+    machine_result = runner.invoke(
+        app,
+        [
+            "--json-errors",
+            "analyze-folded",
+            "--input",
+            str(source),
+            "--output",
+            str(source),
+        ],
+    )
+    assert machine_result.exit_code == 5
+    payload = json.loads(machine_result.stderr)
     assert payload["error"]["code"] == "PATH_SAFETY_VIOLATION"
+
+    environment_result = runner.invoke(
+        app,
+        [
+            "analyze-folded",
+            "--input",
+            str(source),
+            "--output",
+            str(source),
+        ],
+        env={"PERFLENS_JSON_ERRORS": "1"},
+    )
+    assert environment_result.exit_code == 5
+    assert json.loads(environment_result.stderr)["error"]["code"] == (
+        "PATH_SAFETY_VIOLATION"
+    )
     assert source.read_text() == "main 1\n"
 
 

@@ -1197,7 +1197,15 @@ def test_admin_deploy_rejects_unsafe_policy_and_symlink(tmp_path: Path) -> None:
         ["deploy", "--config", str(link), "--dry-run"],
     )
     assert cli_error.exit_code == 5
-    assert '"schema_version": "1.0"' in cli_error.stderr
+    assert "PerfLens 操作失败" in cli_error.stderr
+    assert "错误代码: PATH_SAFETY_VIOLATION" in cli_error.stderr
+
+    json_error = CliRunner().invoke(
+        app,
+        ["--json-errors", "deploy", "--config", str(link), "--dry-run"],
+    )
+    assert json_error.exit_code == 5
+    assert '"schema_version": "1.0"' in json_error.stderr
 
 
 @pytest.mark.parametrize(

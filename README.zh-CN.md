@@ -73,6 +73,9 @@ perflens status --project /绝对路径/你的项目
 通过内核 peer credentials 复核 Collector 的 PID/UID。遗留 Socket、无响应服务或错误
 身份进程会明确显示为不可用，不再被误报为“可验收”。
 
+业务错误默认显示中文和下一步；脚本需要稳定 JSON 时使用
+`perflens --json-errors <子命令> ...` 或设置 `PERFLENS_JSON_ERRORS=1`。
+
 管理员完成 Collector 部署、用户重新登录后，只需一条命令做真实验收，不必查 PID：
 
 ```bash

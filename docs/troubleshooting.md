@@ -23,6 +23,13 @@ malformed, or wrong-identity socket remains unavailable. `ready_for_verification
 real `perflens accept-collector --authorize-host-acceptance` probe is the next step, not that sampling has already
 succeeded.
 
+PerfLens domain failures are Chinese-first for people. Automation must not parse
+that prose: place the global `--json-errors` option before the subcommand, for
+example `perflens --json-errors <command> ...` or `perflens-admin --json-errors
+<command> ...`, or set `PERFLENS_JSON_ERRORS=1`. This preserves the complete
+versioned `ErrorArtifact` and existing exit codes. Framework-level usage errors
+that occur before command dispatch retain Typer's own format.
+
 If the socket is missing or inaccessible, inspect the service and journal,
 confirm the socket belongs to the `perflens` group, and start a new login session
 after group membership changes. Do not run the Agent or MCP server as root.

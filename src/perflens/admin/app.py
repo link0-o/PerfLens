@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import shlex
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -27,10 +25,15 @@ from perflens.contracts.artifacts import (
     CollectorDeploymentArtifact,
     CollectorSpoolArchiveVerificationArtifact,
     CollectorSpoolStatusArtifact,
-    ErrorArtifact,
-    ErrorBody,
 )
-from perflens.domain.errors import ErrorCode, PerfLensError
+from perflens.domain.errors import PerfLensError
+from perflens.error_presentation import (
+    ERROR_EXIT_CODES,
+    configure_json_errors,
+    error_json,
+    json_errors_enabled,
+    render_error_chinese,
+)
 
 app = typer.Typer(
     name="perflens-admin",
@@ -47,7 +50,16 @@ def root(
         bool,
         typer.Option("--version", help="Show the PerfLens version and exit.", is_eager=True),
     ] = False,
+    json_errors: Annotated[
+        bool,
+        typer.Option(
+            "--json-errors",
+            help="自动化程序输出完整的版本化 JSON 错误。",
+            envvar="PERFLENS_JSON_ERRORS",
+        ),
+    ] = False,
 ) -> None:
+    configure_json_errors(json_errors)
     if version:
         typer.echo(__version__)
         raise typer.Exit()
@@ -458,32 +470,11 @@ def _human_bytes(value: int) -> str:
 
 
 def _fail(error: PerfLensError) -> NoReturn:
-    exit_code = {
-        ErrorCode.INVALID_INPUT: 2,
-        ErrorCode.UNSUPPORTED_FORMAT: 3,
-        ErrorCode.PROFILE_PARSE_FAILED: 3,
-        ErrorCode.EXTERNAL_TOOL_FAILED: 6,
-        ErrorCode.EXTERNAL_TOOL_TIMEOUT: 6,
-        ErrorCode.RESOURCE_LIMIT_EXCEEDED: 4,
-        ErrorCode.PATH_SAFETY_VIOLATION: 5,
-        ErrorCode.OUTPUT_WRITE_FAILED: 5,
-        ErrorCode.INTERNAL_ERROR: 70,
-    }[error.code]
-    material = f"{error.code}:{error.stage}:{error.message}"
-    payload = ErrorArtifact(
-        error=ErrorBody(
-            error_id=f"err-{hashlib.sha256(material.encode()).hexdigest()[:16]}",
-            code=error.code.value,
-            stage=error.stage,
-            message=error.message,
-            recoverable=error.recoverable,
-            retryable=error.retryable,
-            details=error.details,
-            suggested_actions=error.suggested_actions,
-        )
+    output = error_json(error) if json_errors_enabled() else render_error_chinese(
+        error, executable="perflens-admin"
     )
-    typer.echo(json.dumps(payload.model_dump(mode="json"), ensure_ascii=False), err=True)
-    raise typer.Exit(code=exit_code)
+    typer.echo(output, err=True)
+    raise typer.Exit(code=ERROR_EXIT_CODES[error.code])
 
 
 def main() -> None:

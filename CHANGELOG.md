@@ -6,6 +6,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Added
 
+- Chinese-first terminal error summaries for `perflens` and `perflens-admin`,
+  including stable error IDs, code-specific recovery guidance, and the original
+  bounded technical detail. `--json-errors` and `PERFLENS_JSON_ERRORS=1`
+  preserve the complete versioned `ErrorArtifact` for automation.
 - Generated onboarding guides and the setup completion summary now include an
   exact, shell-quoted `perflens status` command bound to that setup directory.
   The Chinese status view prints state-specific, copyable recovery or real
@@ -17,6 +21,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Changed
 
+- CLI domain errors now default to a human-readable Chinese summary. Automation
+  that parses errors must place the global `--json-errors` option before the
+  subcommand or set `PERFLENS_JSON_ERRORS=1`; exit codes and the versioned JSON
+  schema are unchanged.
 - The default `perflens-admin deploy` output is now the human-readable Chinese
   summary. Existing automation that consumes deployment JSON must pass
   `--json` explicitly.

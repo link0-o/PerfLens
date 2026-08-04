@@ -77,6 +77,10 @@ also performs a bounded, read-only health handshake. It verifies the Collector
 PID/UID with kernel peer credentials and reports stale, unreachable, or
 wrong-identity sockets instead of declaring them ready.
 
+Domain failures are Chinese-first for people. Automation should use the global
+`perflens --json-errors <command> ...` option or set
+`PERFLENS_JSON_ERRORS=1` to preserve the versioned JSON error artifact.
+
 After administrator deployment and a fresh login, verify the Collector without
 finding a PID:
 

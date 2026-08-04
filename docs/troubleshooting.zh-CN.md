@@ -30,6 +30,20 @@ perflens status \
   --output perflens-status.json
 ```
 
+## 错误输出给人看还是给程序解析
+
+`perflens` 和 `perflens-admin` 的业务错误默认显示中文摘要。它保留稳定错误代码、错误
+ID 和有界技术信息，但不是 JSON。脚本不要从中文文本提取字段，应使用：
+
+```bash
+perflens --json-errors <子命令> ...
+perflens-admin --json-errors <子命令> ...
+```
+
+全局选项必须位于子命令前，也可以设置环境变量 `PERFLENS_JSON_ERRORS=1`。这只改变错误
+展示，不改变正常输出、退出码、安全检查或版本化 `ErrorArtifact`。Typer 自身在参数尚未
+进入 PerfLens 业务层时产生的用法错误仍采用框架格式。
+
 ## Collector Socket 不存在或当前用户不可访问
 
 - 确认管理员已经执行 `perflens-admin deploy`；

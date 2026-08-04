@@ -21,6 +21,8 @@ def main() -> None:
     _run(perflens_mcp, "--version", expected=__version__)
     _run(perflens_collector, "--version", expected=__version__)
     _run(perflens_admin, "--version", expected=__version__)
+    assert "--json-errors" in _run(perflens, "--help")
+    assert "--json-errors" in _run(perflens_admin, "--help")
     deploy_help = _run(
         perflens_admin,
         "deploy",
@@ -99,6 +101,50 @@ def main() -> None:
         payload = json.loads(analysis.read_text(encoding="utf-8"))
         assert payload["schema_version"] == "1.0"
         assert payload["metadata"]["total_weight"] == 20
+
+        human_error = _run_failure(
+            perflens,
+            "analyze-folded",
+            "--input",
+            str(profile),
+            "--output",
+            str(profile),
+            expected_exit_code=5,
+        )
+        assert "PerfLens 操作失败" in human_error
+        assert "错误代码: PATH_SAFETY_VIOLATION" in human_error
+        machine_error = _run_failure(
+            perflens,
+            "--json-errors",
+            "analyze-folded",
+            "--input",
+            str(profile),
+            "--output",
+            str(profile),
+            expected_exit_code=5,
+        )
+        assert json.loads(machine_error)["error"]["code"] == "PATH_SAFETY_VIOLATION"
+
+        missing_policy = root / "missing-collector.toml"
+        admin_error = _run_failure(
+            perflens_admin,
+            "deploy",
+            "--config",
+            str(missing_policy),
+            "--dry-run",
+            expected_exit_code=2,
+        )
+        assert "PerfLens 操作失败" in admin_error
+        admin_machine_error = _run_failure(
+            perflens_admin,
+            "--json-errors",
+            "deploy",
+            "--config",
+            str(missing_policy),
+            "--dry-run",
+            expected_exit_code=2,
+        )
+        assert json.loads(admin_machine_error)["error"]["code"] == "INVALID_INPUT"
 
         _run(perflens, "install-skill", "--project", str(project))
         skill = (
@@ -206,6 +252,25 @@ def _run(command: str, *arguments: str, expected: str | None = None) -> str:
     if expected is not None and expected not in output:
         raise AssertionError(f"{command} output did not contain {expected!r}: {output!r}")
     return output
+
+
+def _run_failure(
+    command: str,
+    *arguments: str,
+    expected_exit_code: int,
+) -> str:
+    completed = subprocess.run(  # noqa: S603 - command is resolved from isolated PATH
+        [command, *arguments],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != expected_exit_code:
+        raise AssertionError(
+            f"{command} returned {completed.returncode}, expected {expected_exit_code}: "
+            f"{completed.stderr!r}"
+        )
+    return completed.stderr.strip()
 
 
 if __name__ == "__main__":

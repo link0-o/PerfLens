@@ -104,6 +104,16 @@ perflens status --project /绝对路径/你的项目
 它会用中文指出引导、Skill、MCP、Collector 资产、Socket、用户组或 perf 权限中
 尚未完成的部分，不会执行采样或修改系统。
 
+普通命令失败时同样默认显示中文摘要，包括稳定错误代码、错误 ID、有限技术信息和
+下一步。自动化程序需要解析完整版本化错误 JSON 时，把全局选项放在子命令前：
+
+```bash
+perflens --json-errors <子命令> ...
+perflens-admin --json-errors <子命令> ...
+```
+
+也可以设置 `PERFLENS_JSON_ERRORS=1`。错误退出码和 `ErrorArtifact` Schema 保持不变。
+
 ## 第三步：开始分析
 
 只使用 CLI 分析 folded Profile：
