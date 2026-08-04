@@ -62,7 +62,10 @@ commands from the config. The staged unit and sysusers files remain audit
 copies; the deployer renders trusted packaged templates.
 
 After login-group changes, ordinary users can run `perflens status --project
-/absolute/path/to/workspace` for one read-only readiness summary. Generated
+/absolute/path/to/workspace` for one read-only readiness summary. When the
+configuration, socket, and group checks pass, the command also authenticates a
+bounded health response against the dedicated service UID and kernel peer
+credentials. It does not run perf or write the spool. Generated
 policies carry `policy_version = 1`; a missing field is treated as legacy
 version 1, while unsupported versions are rejected before deployment and
 Collector startup.

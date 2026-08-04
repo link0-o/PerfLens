@@ -737,6 +737,15 @@ class RuntimeStatusArtifact(ContractModel):
     collector_socket: str
     collector_socket_status: Literal["missing", "invalid", "inaccessible", "ready"]
     collector_group_status: Literal["missing", "not_member", "member"]
+    collector_health_status: Literal[
+        "not_checked", "ready", "unreachable", "rejected"
+    ] = "not_checked"
+    collector_health_error_code: str | None = None
+    collector_service_pid: int | None = Field(default=None, gt=0)
+    collector_service_uid: int | None = Field(default=None, ge=0)
+    collector_policy_version: int | None = Field(default=None, gt=0)
+    collector_allowed_modes: tuple[str, ...] = ()
+    collector_spool_root: str | None = None
     capability_id: str
     host_collection_status: Literal["available", "conditional", "blocked"]
     automatic_collection_status: Literal[

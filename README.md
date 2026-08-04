@@ -70,6 +70,11 @@ Run a read-only readiness summary at any time:
 perflens status --project /absolute/path/to/project
 ```
 
+When automatic collection is configured and local access is available, this
+also performs a bounded, read-only health handshake. It verifies the Collector
+PID/UID with kernel peer credentials and reports stale, unreachable, or
+wrong-identity sockets instead of declaring them ready.
+
 After administrator deployment and a fresh login, verify the Collector without
 finding a PID:
 

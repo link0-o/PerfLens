@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import socket
 import sys
 from pathlib import Path
 
 import pytest
 
 from perflens.collection.capabilities import inspect_collection_capabilities
+from perflens.contracts.artifacts import CollectorHealthArtifact, RuntimeStatusArtifact
 from perflens.distribution.onboarding import run_project_setup
 from perflens.distribution.status import inspect_runtime_status
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -42,6 +44,32 @@ def test_runtime_status_reports_missing_setup_without_mutation(tmp_path: Path) -
     assert artifact.automatic_collection_status == "not_configured"
     assert "setup_missing" in artifact.issues
     assert not (tmp_path / "perflens-setup").exists()
+
+
+def test_runtime_status_artifact_accepts_pre_health_fields_payload(tmp_path: Path) -> None:
+    artifact = inspect_runtime_status(
+        tmp_path,
+        collector_socket=tmp_path / "missing.sock",
+        perf_path=Path("/bin/true"),
+    )
+    payload = artifact.model_dump()
+    for field in (
+        "collector_health_status",
+        "collector_health_error_code",
+        "collector_service_pid",
+        "collector_service_uid",
+        "collector_policy_version",
+        "collector_allowed_modes",
+        "collector_spool_root",
+    ):
+        payload.pop(field)
+
+    restored = RuntimeStatusArtifact.model_validate(payload)
+
+    assert restored.collector_health_status == "not_checked"
+    assert restored.collector_health_error_code is None
+    assert restored.collector_service_pid is None
+    assert restored.collector_allowed_modes == ()
 
 
 def test_runtime_status_tracks_generated_automatic_setup(
@@ -171,11 +199,13 @@ def test_runtime_status_reports_incomplete_collector_assets(tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize(
-    ("socket_status", "group_status", "expected"),
+    ("socket_status", "group_status", "health_status", "expected"),
     [
-        ("inaccessible", "member", "access_denied"),
-        ("ready", "not_member", "access_denied"),
-        ("ready", "member", "ready_for_verification"),
+        ("inaccessible", "member", "not_checked", "access_denied"),
+        ("ready", "not_member", "not_checked", "access_denied"),
+        ("ready", "member", "unreachable", "collector_unavailable"),
+        ("ready", "member", "rejected", "collector_unavailable"),
+        ("ready", "member", "ready", "ready_for_verification"),
     ],
 )
 def test_runtime_status_distinguishes_collector_access_and_verification(
@@ -183,6 +213,7 @@ def test_runtime_status_distinguishes_collector_access_and_verification(
     monkeypatch: pytest.MonkeyPatch,
     socket_status: str,
     group_status: str,
+    health_status: str,
     expected: str,
 ) -> None:
     _prepare_automatic_setup(tmp_path)
@@ -193,17 +224,116 @@ def test_runtime_status_distinguishes_collector_access_and_verification(
     def reported_group_status() -> str:
         return group_status
 
+    health_artifact = CollectorHealthArtifact(
+        perflens_version="test",
+        policy_version=1,
+        service_pid=123,
+        service_uid=456,
+        peer_uid=789,
+        allowed_modes=("stat",),
+        spool_root="/var/lib/perflens",
+    )
+
+    def reported_service_uid() -> int:
+        return 456
+
+    class ReportedBrokerClient:
+        def __init__(self, _path: Path, *, timeout_seconds: float) -> None:
+            assert timeout_seconds == 0.5
+
+        def health(self, *, expected_service_uid: int | None) -> CollectorHealthArtifact:
+            assert expected_service_uid == 456
+            if health_status == "ready":
+                return health_artifact
+            if health_status == "unreachable":
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "collector_broker",
+                    "unreachable",
+                )
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "collector_broker",
+                "rejected",
+            )
+
     monkeypatch.setattr(
         "perflens.distribution.status._inspect_socket", reported_socket_status
     )
     monkeypatch.setattr(
         "perflens.distribution.status._collector_group_status", reported_group_status
     )
+    monkeypatch.setattr(
+        "perflens.distribution.status._collector_service_uid", reported_service_uid
+    )
+    monkeypatch.setattr(
+        "perflens.distribution.status.CollectorBrokerClient", ReportedBrokerClient
+    )
 
     artifact = inspect_runtime_status(tmp_path, perf_path=Path("/bin/true"))
 
     assert artifact.automatic_collection_status == expected
+    assert artifact.collector_health_status == health_status
     if expected == "ready_for_verification":
+        assert artifact.collector_service_pid == 123
+        assert artifact.collector_service_uid == 456
+        assert artifact.collector_allowed_modes == ("stat",)
         assert artifact.next_steps == (
             "Run perflens accept-collector --authorize-host-acceptance.",
         )
+
+
+def test_runtime_status_rejects_stale_socket_as_unreachable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _prepare_automatic_setup(tmp_path)
+    socket_path = tmp_path / "stale.sock"
+    stale_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale_socket.bind(str(socket_path))
+    stale_socket.close()
+    monkeypatch.setattr(
+        "perflens.distribution.status._collector_group_status", lambda: "member"
+    )
+    monkeypatch.setattr(
+        "perflens.distribution.status._collector_service_uid", lambda: 456
+    )
+
+    artifact = inspect_runtime_status(
+        tmp_path,
+        collector_socket=socket_path,
+        perf_path=Path("/bin/true"),
+    )
+
+    assert artifact.collector_socket_status == "ready"
+    assert artifact.collector_health_status == "unreachable"
+    assert artifact.collector_health_error_code == ErrorCode.EXTERNAL_TOOL_FAILED.value
+    assert artifact.automatic_collection_status == "collector_unavailable"
+    assert "collector_health_unreachable" in artifact.issues
+
+
+def test_runtime_status_requires_dedicated_collector_service_user(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _prepare_automatic_setup(tmp_path)
+
+    def ready_socket(_path: Path) -> str:
+        return "ready"
+
+    monkeypatch.setattr(
+        "perflens.distribution.status._inspect_socket", ready_socket
+    )
+    monkeypatch.setattr(
+        "perflens.distribution.status._collector_group_status", lambda: "member"
+    )
+    monkeypatch.setattr(
+        "perflens.distribution.status._collector_service_uid", lambda: None
+    )
+
+    artifact = inspect_runtime_status(tmp_path, perf_path=Path("/bin/true"))
+
+    assert artifact.collector_health_status == "rejected"
+    assert artifact.collector_health_error_code == ErrorCode.PATH_SAFETY_VIOLATION.value
+    assert artifact.automatic_collection_status == "collector_unavailable"
+    assert "collector_service_user_missing" in artifact.issues

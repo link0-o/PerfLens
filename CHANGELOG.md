@@ -4,6 +4,13 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- `perflens status` now requires a bounded, authenticated Collector health
+  handshake before reporting `ready_for_verification`, preventing stale,
+  unreachable, malformed, or wrong-identity Unix sockets from producing false
+  readiness.
+
 ## [0.1.1] - 2026-08-04
 
 ### Added

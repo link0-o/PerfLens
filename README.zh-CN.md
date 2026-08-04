@@ -67,6 +67,10 @@ Debian 13 用户也可以直接安装原生 `.deb`，不需要自己创建 Pytho
 perflens status --project /绝对路径/你的项目
 ```
 
+自动采集已配置且本地访问条件满足时，这条命令还会执行一次有界、只读的健康握手，
+通过内核 peer credentials 复核 Collector 的 PID/UID。遗留 Socket、无响应服务或错误
+身份进程会明确显示为不可用，不再被误报为“可验收”。
+
 管理员完成 Collector 部署、用户重新登录后，只需一条命令做真实验收，不必查 PID：
 
 ```bash

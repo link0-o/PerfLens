@@ -75,6 +75,9 @@ service UID. A socket pathname alone is never treated as a healthy service.
 `perflens status` is a separate read-only diagnostic boundary. It summarizes
 onboarding files, Skill and MCP snippets, staged assets, socket access, current
 login-group membership, and host perf conditions without sampling a target.
+After its configuration and access prerequisites pass, it also performs one
+500 ms-bounded `health` round trip and requires the dedicated service UID plus
+kernel `SO_PEERCRED` identity before reporting `ready_for_verification`.
 
 Native Debian distribution preserves the same boundary: the main `perflens`
 package exposes only ordinary-user CLI/MCP entry points, while the exact-version

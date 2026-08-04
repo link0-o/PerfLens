@@ -106,6 +106,10 @@ journalctl -u perflens-collector.service --since today
 perflens status --project /绝对路径/工作区
 ```
 
+配置、Socket 和用户组前置检查通过后，该命令还会执行一次最长 500 毫秒的只读健康
+握手，并用专用服务 UID 和内核 peer credentials 复核 Collector 身份；它不会运行 perf，
+也不会写入 spool。Socket 文件仅仅存在不代表服务就绪。
+
 `collector.toml` 的 `policy_version = 1` 用于未来安全升级；缺失时兼容读取为版本 1，
 不支持的版本会在部署和服务启动前拒绝。
 

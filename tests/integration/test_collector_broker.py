@@ -30,6 +30,8 @@ from perflens.contracts.artifacts import (
     CollectionCapabilityArtifact,
     CollectionModeCapability,
 )
+from perflens.distribution.onboarding import run_project_setup
+from perflens.distribution.status import inspect_runtime_status
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.server import ServerConfig, create_server
 from perflens.workloads.project import PROJECT_EXECUTION_AUTHORIZATION
@@ -69,6 +71,24 @@ def _capabilities() -> CollectionCapabilityArtifact:
             )
             for mode in ("record", "stat", "sched", "lock", "off_cpu")
         ),
+    )
+
+
+def _prepare_status_setup(project: Path, fake_perf: Path) -> None:
+    project.mkdir()
+    mcp = project / "perflens-mcp"
+    mcp.write_text(f"#!{sys.executable}\nraise SystemExit(0)\n", encoding="utf-8")
+    mcp.chmod(0o500)
+    collector = project / "perflens-collector"
+    collector.write_text(f"#!{sys.executable}\nraise SystemExit(0)\n", encoding="utf-8")
+    collector.chmod(0o500)
+    run_project_setup(
+        project,
+        mcp_command=mcp,
+        perf_path=fake_perf,
+        collector_command=collector,
+        prepare_collector=True,
+        automatic_collection=True,
     )
 
 
@@ -113,6 +133,71 @@ def test_broker_health_is_authenticated_versioned_and_read_only(tmp_path: Path) 
     assert health.allowed_modes == ("record", "stat")
     assert health.spool_root == str(spool.resolve())
     assert list(spool.iterdir()) == []
+
+
+def test_runtime_status_requires_authenticated_broker_health(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    project = tmp_path / "project"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    fake_perf = _fake_perf(tmp_path)
+    _prepare_status_setup(project, fake_perf)
+    policy = CollectorBrokerPolicy(
+        spool_root=spool,
+        perf_path=fake_perf,
+        allowed_uids=(os.geteuid(),),
+        allowed_modes=("record", "stat"),
+    )
+    monkeypatch.setattr(
+        "perflens.distribution.status._collector_group_status", lambda: "member"
+    )
+    with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+        monkeypatch.setattr(
+            "perflens.distribution.status._collector_service_uid", os.geteuid
+        )
+        worker = threading.Thread(target=server.serve_once, daemon=True)
+        worker.start()
+        accepted = inspect_runtime_status(
+            project,
+            collector_socket=server.socket_path,
+            perf_path=fake_perf,
+        )
+        worker.join(timeout=5)
+
+        monkeypatch.setattr(
+            "perflens.distribution.status._collector_service_uid",
+            lambda: os.geteuid() + 1,
+        )
+        rejected_worker = threading.Thread(target=server.serve_once, daemon=True)
+        rejected_worker.start()
+        rejected = inspect_runtime_status(
+            project,
+            collector_socket=server.socket_path,
+            perf_path=fake_perf,
+        )
+        rejected_worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert accepted.collector_health_status == "ready"
+    assert accepted.collector_service_pid == os.getpid()
+    assert accepted.collector_service_uid == os.geteuid()
+    assert accepted.collector_policy_version == 1
+    assert accepted.collector_allowed_modes == ("record", "stat")
+    assert accepted.collector_spool_root == str(spool.resolve())
+    assert accepted.automatic_collection_status == "ready_for_verification"
+    assert list(spool.iterdir()) == []
+
+    assert not rejected_worker.is_alive()
+    assert rejected.collector_health_status == "rejected"
+    assert rejected.collector_health_error_code == ErrorCode.PATH_SAFETY_VIOLATION.value
+    assert rejected.automatic_collection_status == "collector_unavailable"
+    assert "collector_health_rejected" in rejected.issues
 
 
 def test_broker_health_rejects_unauthorized_peer_end_to_end(tmp_path: Path) -> None:

@@ -138,6 +138,7 @@ def test_cli_status_is_chinese_first_and_can_write_json(tmp_path: Path) -> None:
     assert displayed.exit_code == 0, displayed.output
     assert "PerfLens 状态检查 (只读)" in displayed.output
     assert "引导目录: 未生成" in displayed.output
+    assert "Collector 健康握手: 未执行 (前置条件未满足)" in displayed.output
     assert "自动采集: 未配置" in displayed.output
 
     output = tmp_path / "status.json"

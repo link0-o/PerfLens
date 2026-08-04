@@ -24,6 +24,14 @@
       "title": "Checked At",
       "type": "string"
     },
+    "collector_allowed_modes": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Collector Allowed Modes",
+      "type": "array"
+    },
     "collector_assets_status": {
       "enum": [
         "not_requested",
@@ -43,6 +51,68 @@
       "title": "Collector Group Status",
       "type": "string"
     },
+    "collector_health_error_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Collector Health Error Code"
+    },
+    "collector_health_status": {
+      "default": "not_checked",
+      "enum": [
+        "not_checked",
+        "ready",
+        "unreachable",
+        "rejected"
+      ],
+      "title": "Collector Health Status",
+      "type": "string"
+    },
+    "collector_policy_version": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Collector Policy Version"
+    },
+    "collector_service_pid": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Collector Service Pid"
+    },
+    "collector_service_uid": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Collector Service Uid"
+    },
     "collector_socket": {
       "title": "Collector Socket",
       "type": "string"
@@ -56,6 +126,18 @@
       ],
       "title": "Collector Socket Status",
       "type": "string"
+    },
+    "collector_spool_root": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Collector Spool Root"
     },
     "host_collection_status": {
       "enum": [

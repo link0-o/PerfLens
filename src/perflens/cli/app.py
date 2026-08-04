@@ -1026,6 +1026,12 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
         "ready": "可访问",
     }
     group_labels = {"missing": "系统组不存在", "not_member": "当前会话未加入", "member": "已加入"}
+    health_labels = {
+        "not_checked": "未执行 (前置条件未满足)",
+        "ready": "已通过身份认证",
+        "unreachable": "无法完成通信",
+        "rejected": "身份、权限或协议校验未通过",
+    }
     host_labels = {"available": "可用", "conditional": "部分受限", "blocked": "当前受阻"}
     automatic_labels = {
         "not_configured": "未配置",
@@ -1050,6 +1056,9 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
         "collector_socket_inaccessible": "当前用户无法访问 Collector Socket。",
         "collector_group_missing": "perflens 系统组尚未创建。",
         "collector_group_not_member": "当前登录会话尚未加入 perflens 组。",
+        "collector_service_user_missing": "专用 perflens 服务用户不存在; 无法验证 Collector 身份。",
+        "collector_health_unreachable": "Collector Socket 存在; 但服务无法连接或没有响应。",
+        "collector_health_rejected": "Collector 身份/权限/协议响应未通过安全校验。",
         "host_collection_conditional": "本机普通用户 perf 权限仍需真实验收。",
         "host_collection_blocked": "本机普通用户 perf 权限诊断为受阻; Collector 权限需另行验收。",
     }
@@ -1061,6 +1070,18 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
     typer.echo(f"Collector 资产: {asset_labels[artifact.collector_assets_status]}")
     typer.echo(f"Collector Socket: {socket_labels[artifact.collector_socket_status]}")
     typer.echo(f"perflens 用户组: {group_labels[artifact.collector_group_status]}")
+    typer.echo(f"Collector 健康握手: {health_labels[artifact.collector_health_status]}")
+    if artifact.collector_health_status == "ready":
+        typer.echo(
+            f"Collector 服务身份: PID {artifact.collector_service_pid}, "
+            f"UID {artifact.collector_service_uid}"
+        )
+        typer.echo(f"Collector 策略版本: {artifact.collector_policy_version}")
+        typer.echo(
+            "Collector 允许模式: "
+            + (", ".join(artifact.collector_allowed_modes) or "无")
+        )
+        typer.echo(f"Collector 固定产物目录: {artifact.collector_spool_root}")
     typer.echo(f"本机 perf 权限: {host_labels[artifact.host_collection_status]}")
     typer.echo(f"自动采集: {automatic_labels[artifact.automatic_collection_status]}")
     issues = artifact.issues

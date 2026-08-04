@@ -10,7 +10,10 @@ perflens status --project /absolute/path/to/project
 
 It checks onboarding, Skill and MCP snippets, staged Collector assets, the Unix
 socket, current login-group membership, and host perf conditions. It never
-samples or attaches to a process. `ready_for_verification` means an explicit
+samples or attaches to a process. If those prerequisites pass, it additionally
+performs a 500 ms-bounded, read-only health exchange and authenticates the
+service PID/UID with kernel `SO_PEERCRED`. An existing but stale, unresponsive,
+malformed, or wrong-identity socket remains unavailable. `ready_for_verification` means an explicit
 real `perflens accept-collector --authorize-host-acceptance` probe is the next step, not that sampling has already
 succeeded.
 

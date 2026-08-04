@@ -5,7 +5,9 @@ from __future__ import annotations
 import grp
 import hashlib
 import os
+import pwd
 import stat
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -14,8 +16,10 @@ from pydantic import ValidationError
 
 from perflens import __version__
 from perflens.collection.capabilities import inspect_collection_capabilities
+from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.contracts.artifacts import (
     CollectionCapabilityArtifact,
+    CollectorHealthArtifact,
     RuntimeStatusArtifact,
     SetupArtifact,
 )
@@ -29,6 +33,7 @@ McpStatus = Literal["missing", "ready"]
 AssetsStatus = Literal["not_requested", "missing", "incomplete", "ready"]
 SocketStatus = Literal["missing", "invalid", "inaccessible", "ready"]
 GroupStatus = Literal["missing", "not_member", "member"]
+HealthStatus = Literal["not_checked", "ready", "unreachable", "rejected"]
 HostStatus = Literal["available", "conditional", "blocked"]
 AutomaticStatus = Literal[
     "not_configured",
@@ -37,6 +42,14 @@ AutomaticStatus = Literal[
     "access_denied",
     "ready_for_verification",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class _HealthSnapshot:
+    status: HealthStatus = "not_checked"
+    artifact: CollectorHealthArtifact | None = None
+    error_code: str | None = None
+    issue: str | None = None
 
 
 def inspect_runtime_status(
@@ -55,6 +68,18 @@ def inspect_runtime_status(
     assets_status = _inspect_assets(setup, automatic_requested=automatic_requested)
     socket_status = _inspect_socket(collector_socket)
     group_status = _collector_group_status()
+    health = _HealthSnapshot()
+    if (
+        automatic_requested
+        and setup_status == "ready"
+        and assets_status == "ready"
+        and socket_status == "ready"
+        and group_status == "member"
+    ):
+        health = _inspect_collector_health(
+            collector_socket,
+            expected_service_uid=_collector_service_uid(),
+        )
     capabilities = inspect_collection_capabilities(perf_path)
     host_status = _host_collection_status(capabilities)
 
@@ -69,6 +94,8 @@ def inspect_runtime_status(
         issues.append(f"collector_socket_{socket_status}")
     if automatic_requested and group_status != "member":
         issues.append(f"collector_group_{group_status}")
+    if health.issue is not None:
+        issues.append(health.issue)
     if host_status != "available":
         issues.append(f"host_collection_{host_status}")
 
@@ -78,6 +105,7 @@ def inspect_runtime_status(
         assets_status=assets_status,
         socket_status=socket_status,
         group_status=group_status,
+        health_status=health.status,
     )
     next_steps = _next_steps(
         setup_status=setup_status,
@@ -97,6 +125,17 @@ def inspect_runtime_status(
             assets_status,
             socket_status,
             group_status,
+            health.status,
+            health.error_code or "",
+            str(health.artifact.service_pid if health.artifact is not None else ""),
+            str(health.artifact.service_uid if health.artifact is not None else ""),
+            str(health.artifact.policy_version if health.artifact is not None else ""),
+            (
+                ",".join(health.artifact.allowed_modes)
+                if health.artifact is not None
+                else ""
+            ),
+            health.artifact.spool_root if health.artifact is not None else "",
             capabilities.capability_id,
         )
     )
@@ -114,6 +153,23 @@ def inspect_runtime_status(
         collector_socket=str(collector_socket),
         collector_socket_status=socket_status,
         collector_group_status=group_status,
+        collector_health_status=health.status,
+        collector_health_error_code=health.error_code,
+        collector_service_pid=(
+            health.artifact.service_pid if health.artifact is not None else None
+        ),
+        collector_service_uid=(
+            health.artifact.service_uid if health.artifact is not None else None
+        ),
+        collector_policy_version=(
+            health.artifact.policy_version if health.artifact is not None else None
+        ),
+        collector_allowed_modes=(
+            health.artifact.allowed_modes if health.artifact is not None else ()
+        ),
+        collector_spool_root=(
+            health.artifact.spool_root if health.artifact is not None else None
+        ),
         capability_id=capabilities.capability_id,
         host_collection_status=host_status,
         automatic_collection_status=automatic_status,
@@ -251,6 +307,49 @@ def _collector_group_status() -> GroupStatus:
     return "member" if group.gr_gid in {*os.getgroups(), os.getegid()} else "not_member"
 
 
+def _collector_service_uid() -> int | None:
+    try:
+        return pwd.getpwnam("perflens").pw_uid
+    except KeyError:
+        return None
+
+
+def _inspect_collector_health(
+    path: Path,
+    *,
+    expected_service_uid: int | None,
+) -> _HealthSnapshot:
+    if expected_service_uid is None:
+        return _HealthSnapshot(
+            status="rejected",
+            error_code=ErrorCode.PATH_SAFETY_VIOLATION.value,
+            issue="collector_service_user_missing",
+        )
+    try:
+        artifact = CollectorBrokerClient(path, timeout_seconds=0.5).health(
+            expected_service_uid=expected_service_uid
+        )
+    except ValueError:
+        return _HealthSnapshot(
+            status="unreachable",
+            error_code=ErrorCode.EXTERNAL_TOOL_FAILED.value,
+            issue="collector_health_unreachable",
+        )
+    except PerfLensError as exc:
+        if exc.code in {ErrorCode.EXTERNAL_TOOL_FAILED, ErrorCode.EXTERNAL_TOOL_TIMEOUT}:
+            return _HealthSnapshot(
+                status="unreachable",
+                error_code=exc.code.value,
+                issue="collector_health_unreachable",
+            )
+        return _HealthSnapshot(
+            status="rejected",
+            error_code=exc.code.value,
+            issue="collector_health_rejected",
+        )
+    return _HealthSnapshot(status="ready", artifact=artifact)
+
+
 def _host_collection_status(capabilities: CollectionCapabilityArtifact) -> HostStatus:
     statuses = tuple(mode.status for mode in capabilities.modes)
     if statuses and all(status == "available" for status in statuses):
@@ -267,6 +366,7 @@ def _automatic_status(
     assets_status: AssetsStatus,
     socket_status: SocketStatus,
     group_status: GroupStatus,
+    health_status: HealthStatus,
 ) -> AutomaticStatus:
     if not requested:
         return "not_configured"
@@ -276,6 +376,8 @@ def _automatic_status(
         return "collector_unavailable"
     if socket_status == "inaccessible" or group_status != "member":
         return "access_denied"
+    if health_status != "ready":
+        return "collector_unavailable"
     return "ready_for_verification"
 
 
