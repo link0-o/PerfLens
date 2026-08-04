@@ -152,7 +152,9 @@ summary by default; `--json` emits the complete versioned acceptance artifact an
 command refuses a false pass when perf returns only unsupported or uncounted
 events: at least one finite `measured` metric is required. The advanced
 `verify-collector` command remains available for an explicitly authorized
-existing PID.
+existing PID. It is Chinese-first on success; automation must add `--json` for
+the complete Collection Artifact, while `--output <new-file.json>` preserves it
+safely.
 
 Production releases now ship separate `perflens` and `perflens-collector` DEBs.
 They install offline and do not activate the service. Future RPM installers must

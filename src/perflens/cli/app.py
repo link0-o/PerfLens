@@ -39,6 +39,7 @@ from perflens.collection.planning import (
 )
 from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.contracts.artifacts import (
+    CollectionArtifact,
     CollectionCapabilityArtifact,
     CollectorAcceptanceArtifact,
     RuntimeStatusArtifact,
@@ -420,6 +421,10 @@ def verify_collector_command(
         Path | None,
         typer.Option("--output", dir_okay=False, help="Optional new JSON metadata path."),
     ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the complete versioned collection JSON."),
+    ] = False,
     perf_path: Annotated[
         Path | None,
         typer.Option(
@@ -497,9 +502,17 @@ def verify_collector_command(
             return
     except PerfLensError as exc:
         _fail(exc)
-    typer.echo(
-        json.dumps(artifact.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True)
-    )
+    if json_output:
+        typer.echo(
+            json.dumps(
+                artifact.model_dump(mode="json"),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+    _render_collector_verification_chinese(artifact)
 
 
 @app.command("accept-collector")
@@ -1377,6 +1390,38 @@ def _render_collector_acceptance_chinese(
     typer.echo("下一步:")
     typer.echo("- 需要留档时重新运行并使用 --output <新文件.json>。")
     typer.echo("- 需要机器可读输出时使用 --json。")
+
+
+def _render_collector_verification_chinese(artifact: CollectionArtifact) -> None:
+    measured = sum(
+        metric.status == "measured" and metric.value is not None for metric in artifact.metrics
+    )
+    typer.echo("PerfLens Collector 已有 PID 真实采集验证")
+    typer.echo("状态: 采集完成")
+    typer.echo(f"采集 ID: {_terminal_text(artifact.collection_id)}")
+    typer.echo(f"目标 PID: {artifact.target_pid}")
+    typer.echo(f"采集模式: {artifact.mode}")
+    typer.echo(f"实际采集时长: {artifact.duration_seconds:g} 秒")
+    typer.echo(f"指标: 实测 {measured} / 共 {len(artifact.metrics)}")
+    typer.echo(f"证据文件: {_terminal_text(artifact.output_path)}")
+    typer.echo(f"证据大小: {_human_bytes(artifact.output_bytes)}")
+    typer.echo(f"证据 SHA-256: {artifact.output_sha256}")
+    typer.echo(f"采集开始: {_terminal_text(artifact.started_at)}")
+    typer.echo(f"采集结束: {_terminal_text(artifact.finished_at)}")
+    if artifact.warnings:
+        typer.echo("警告:")
+        for warning in artifact.warnings:
+            typer.echo(f"- {_terminal_text(warning)}")
+    if artifact.diagnostics:
+        typer.echo("有界诊断:")
+        for diagnostic in artifact.diagnostics:
+            typer.echo(f"- {_terminal_text(diagnostic)}")
+    typer.echo("结论边界:")
+    typer.echo("- 这证明 Collector 对本次明确授权的已有 PID 完成了一次短时采集。")
+    typer.echo("- 它不证明其他 PID、项目、事件或采集模式一定可用。")
+    typer.echo("下一步:")
+    typer.echo("- 需要完整机器结果时重新运行并添加 --json。")
+    typer.echo("- 需要留档时重新运行并添加 --output <新文件.json>。")
 
 
 def _human_bytes(value: int) -> str:

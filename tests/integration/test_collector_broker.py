@@ -357,7 +357,11 @@ def test_broker_policy_rejects_forged_target_owner(tmp_path: Path) -> None:
     assert list(spool.iterdir()) == []
 
 
-def test_cli_verifies_real_broker_path_with_bounded_stat_probe(tmp_path: Path) -> None:
+@pytest.mark.parametrize("output_mode", ["summary", "json", "file"])
+def test_cli_verifies_real_broker_path_with_bounded_stat_probe(
+    tmp_path: Path,
+    output_mode: Literal["summary", "json", "file"],
+) -> None:
     spool = tmp_path / "spool"
     runtime = tmp_path / "run"
     spool.mkdir()
@@ -381,34 +385,49 @@ def test_cli_verifies_real_broker_path_with_bounded_stat_probe(tmp_path: Path) -
         with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
             worker = threading.Thread(target=server.serve_once, daemon=True)
             worker.start()
-            result = CliRunner().invoke(
-                app,
-                [
-                    "verify-collector",
-                    "--socket",
-                    str(server.socket_path),
-                    "--pid",
-                    str(target.pid),
-                    "--duration-seconds",
-                    "0.1",
-                    "--perf-path",
-                    str(fake_perf),
-                    "--authorize-target",
-                    "--authorization",
-                    ACTIVE_COLLECTION_AUTHORIZATION,
-                    "--authorize-pid-attach",
-                    "--pid-authorization",
-                    PID_ATTACH_AUTHORIZATION,
-                ],
-            )
+            arguments = [
+                "verify-collector",
+                "--socket",
+                str(server.socket_path),
+                "--pid",
+                str(target.pid),
+                "--duration-seconds",
+                "0.1",
+                "--perf-path",
+                str(fake_perf),
+                "--authorize-target",
+                "--authorization",
+                ACTIVE_COLLECTION_AUTHORIZATION,
+                "--authorize-pid-attach",
+                "--pid-authorization",
+                PID_ATTACH_AUTHORIZATION,
+            ]
+            metadata_output = tmp_path / "verification.json"
+            if output_mode == "json":
+                arguments.append("--json")
+            elif output_mode == "file":
+                arguments.extend(("--output", str(metadata_output)))
+            result = CliRunner().invoke(app, arguments)
             worker.join(timeout=5)
 
         assert result.exit_code == 0, result.output
-        payload = json.loads(result.output)
-        assert payload["schema_version"] == "1.0"
-        assert payload["mode"] == "stat"
-        assert payload["target_pid"] == target.pid
-        assert Path(payload["output_path"]).parent == spool
+        if output_mode == "summary":
+            assert "PerfLens Collector 已有 PID 真实采集验证" in result.output
+            assert f"目标 PID: {target.pid}" in result.output
+            assert "状态: 采集完成" in result.output
+            assert "指标: 实测" in result.output
+            assert "结论边界:" in result.output
+        else:
+            raw = (
+                result.output
+                if output_mode == "json"
+                else metadata_output.read_text(encoding="utf-8")
+            )
+            payload = json.loads(raw)
+            assert payload["schema_version"] == "1.0"
+            assert payload["mode"] == "stat"
+            assert payload["target_pid"] == target.pid
+            assert Path(payload["output_path"]).parent == spool
         assert not worker.is_alive()
     finally:
         target.terminate()

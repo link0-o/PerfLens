@@ -6,6 +6,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Added
 
+- Chinese-first `verify-collector` summaries for advanced, explicitly authorized
+  existing-PID probes, including evidence identity, measured metric count,
+  bounded diagnostics, and conclusion limits. `--json` preserves the complete
+  collection artifact and `--output` safely writes it to a new file.
 - Chinese-first `perflens doctor` capability summaries with mode-by-mode status,
   kernel controls, privilege boundaries, translated recommendations, and exact
   next actions. `--json` keeps console automation and `--output` safely writes
@@ -25,6 +29,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Changed
 
+- `verify-collector` now defaults to a human-readable Chinese summary. Existing
+  automation that parsed its stdout must add `--json`; authorization phrases,
+  exit codes, Collector policy checks, and the artifact schema are unchanged.
 - `perflens doctor` now defaults to a human-readable Chinese summary. Existing
   automation that parsed stdout must add `--json`; `--output` behavior and the
   `CollectionCapabilityArtifact` schema are unchanged.

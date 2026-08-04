@@ -87,7 +87,11 @@ def main() -> None:
         "--help",
         expected="without pruning any evidence",
     )
-    _run(perflens, "verify-collector", "--help", expected="bounded real perf-stat probe")
+    verification_help = _run(
+        perflens, "verify-collector", "--help", expected="bounded real perf-stat probe"
+    )
+    assert "--json" in verification_help
+    assert "--output" in verification_help
     acceptance_help = _run(
         perflens,
         "accept-collector",
