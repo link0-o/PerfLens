@@ -29,6 +29,7 @@ from perflens.collection.planning import (
 from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.collector_broker.policy import CollectorBrokerPolicy
 from perflens.collector_broker.server import CollectorBrokerServer
+from perflens.collector_broker.state import collection_artifact_name, replay_marker_name
 from perflens.contracts.artifacts import (
     CollectionCapabilityArtifact,
     CollectionModeCapability,
@@ -56,6 +57,10 @@ def _fake_perf(tmp_path: Path) -> Path:
     )
     executable.chmod(0o555)
     return executable
+
+
+def _collection_artifacts(spool: Path) -> tuple[Path, ...]:
+    return tuple(path for path in spool.iterdir() if collection_artifact_name(path.name))
 
 
 def _capabilities() -> CollectionCapabilityArtifact:
@@ -371,7 +376,76 @@ def test_broker_collects_verified_pid_to_fixed_spool(tmp_path: Path) -> None:
         assert artifact.target_pid == target.pid
         assert artifact.output_path.startswith(str(spool))
         assert Path(artifact.output_path).read_bytes() == b"PERFILE2-broker"
-        assert list(spool.iterdir()) == [Path(artifact.output_path)]
+        assert _collection_artifacts(spool) == (Path(artifact.output_path),)
+        assert (spool / replay_marker_name(plan.plan_id)).is_file()
+    finally:
+        target.terminate()
+        target.wait(timeout=5)
+
+
+def test_failed_plan_cannot_be_replayed_after_broker_restart(tmp_path: Path) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    invocation_count = tmp_path / "perf-invocations"
+    failing_perf = tmp_path / "failing-perf"
+    failing_perf.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib\n"
+        f"counter = pathlib.Path({str(invocation_count)!r})\n"
+        "count = int(counter.read_text() or '0') if counter.exists() else 0\n"
+        "counter.write_text(str(count + 1))\n"
+        "raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    failing_perf.chmod(0o555)
+    target = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        start_new_session=True,
+    )
+    try:
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode="record",
+                pid=target.pid,
+                duration_seconds=0.1,
+                max_output_bytes=1024,
+            ),
+            policy=AutomaticCollectionPolicy(enabled=True),
+            capabilities=_capabilities(),
+        )
+        policy = CollectorBrokerPolicy(
+            spool_root=spool,
+            perf_path=failing_perf,
+            allowed_uids=(os.geteuid(),),
+            max_duration_seconds=1,
+            max_output_bytes=1024,
+        )
+        with CollectorBrokerServer(runtime / "collector.sock", policy) as first_server:
+            worker = threading.Thread(target=first_server.serve_once, daemon=True)
+            worker.start()
+            with pytest.raises(PerfLensError):
+                CollectorBrokerClient(first_server.socket_path, timeout_seconds=5).collect(plan)
+            worker.join(timeout=5)
+
+        assert invocation_count.read_text(encoding="utf-8") == "1"
+        assert _collection_artifacts(spool) == ()
+        assert (spool / replay_marker_name(plan.plan_id)).is_file()
+
+        with CollectorBrokerServer(runtime / "collector.sock", policy) as restarted_server:
+            replay_worker = threading.Thread(target=restarted_server.serve_once, daemon=True)
+            replay_worker.start()
+            with pytest.raises(PerfLensError, match="already consumed") as replayed:
+                CollectorBrokerClient(restarted_server.socket_path, timeout_seconds=5).collect(plan)
+            replay_worker.join(timeout=5)
+
+        assert replayed.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+        assert invocation_count.read_text(encoding="utf-8") == "1"
+        assert not worker.is_alive()
+        assert not replay_worker.is_alive()
     finally:
         target.terminate()
         target.wait(timeout=5)
@@ -386,7 +460,7 @@ def test_broker_rejects_collection_when_spool_quota_cannot_reserve_output(
     runtime.mkdir()
     spool.chmod(0o750)
     runtime.chmod(0o750)
-    filler = spool / "existing.perf.data"
+    filler = spool / "plan-00000000000000000001.perf.data"
     filler.write_bytes(b"x")
     target = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(5)"],
@@ -678,7 +752,7 @@ def test_mcp_plans_and_executes_single_use_automatic_collection(tmp_path: Path) 
             worker.join(timeout=5)
 
         assert not worker.is_alive()
-        assert len(list(spool.iterdir())) == 1
+        assert len(_collection_artifacts(spool)) == 1
         assert len(list(artifacts.glob("*.collection.json"))) == 1
     finally:
         target.terminate()
@@ -768,4 +842,4 @@ def test_mcp_launches_exact_project_workload_then_collects_bound_pid(tmp_path: P
     assert not Path(f"/proc/{summary['target_pid']}").exists()
     assert len(list(artifacts.glob("*.project-run.json"))) == 1
     assert len(list(artifacts.glob("*.collection.json"))) == 1
-    assert len(list(spool.iterdir())) == 1
+    assert len(_collection_artifacts(spool)) == 1

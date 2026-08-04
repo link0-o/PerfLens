@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import os
 import pwd
-import re
 import stat
 import tempfile
 import zipfile
@@ -25,6 +24,11 @@ from perflens.admin.deploy import (
     parse_collector_deployment_policy,
 )
 from perflens.artifacts.filesystem import serialize_json
+from perflens.collector_broker.state import (
+    collection_artifact_name,
+    replay_marker,
+    safe_replay_marker_metadata,
+)
 from perflens.contracts.artifacts import (
     CollectorSpoolArchiveArtifact,
     CollectorSpoolArchiveEntry,
@@ -36,9 +40,6 @@ from perflens.domain.errors import ErrorCode, PerfLensError
 
 SPOOL_PRUNE_AUTHORIZATION = "I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE"
 
-_MANAGED_ARTIFACT_NAME = re.compile(
-    r"^plan-[a-f0-9]{20}\.(?:stat\.csv|perf\.data)$"
-)
 _COPY_CHUNK_BYTES = 1 << 20
 _MAX_ARCHIVE_ARTIFACTS = 10_000
 _MAX_ARCHIVE_TOTAL_BYTES = 1 << 40
@@ -616,14 +617,27 @@ def _scan_managed_spool(
     try:
         with os.scandir(descriptor) as entries:
             for entry in entries:
-                if not _MANAGED_ARTIFACT_NAME.fullmatch(entry.name):
+                metadata = entry.stat(follow_symlinks=False)
+                if replay_marker(entry.name):
+                    if not safe_replay_marker_metadata(
+                        metadata,
+                        expected_uid=expected_service_uid,
+                        expected_gid=expected_service_gid,
+                    ):
+                        raise PerfLensError(
+                            ErrorCode.PATH_SAFETY_VIOLATION,
+                            stage,
+                            "Collector spool contains an unsafe replay marker",
+                            details={"entry": entry.name},
+                        )
+                    continue
+                if not collection_artifact_name(entry.name):
                     raise PerfLensError(
                         ErrorCode.PATH_SAFETY_VIOLATION,
                         stage,
                         "Collector spool contains an unmanaged entry",
                         details={"entry": entry.name},
                     )
-                metadata = entry.stat(follow_symlinks=False)
                 _validate_source_metadata(
                     entry.name,
                     metadata,

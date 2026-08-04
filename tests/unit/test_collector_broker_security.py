@@ -22,6 +22,7 @@ from perflens.collector_broker.server import (
     _peer_uid,
     _read_frame,
 )
+from perflens.collector_broker.state import replay_marker_name
 from perflens.contracts.artifacts import CollectionPlanArtifact
 from perflens.domain.errors import ErrorCode, PerfLensError
 
@@ -138,7 +139,7 @@ def test_broker_denies_exhausted_or_unsafe_spool(
     spool = policy.spool_root
     plan = _plan()
 
-    filler = spool / "existing.perf.data"
+    filler = spool / "plan-00000000000000000001.perf.data"
     filler.write_bytes(b"x" * 513)
     byte_limited = replace(
         policy,
@@ -174,10 +175,58 @@ def test_broker_denies_exhausted_or_unsafe_spool(
     assert free_space_error.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
 
     unexpected = spool / "unexpected"
-    unexpected.mkdir()
-    with pytest.raises(PerfLensError) as unsafe_entry:
+    unexpected.write_bytes(b"unmanaged")
+    with pytest.raises(PerfLensError) as unmanaged_entry:
         _broker_with_policy(policy)._authorize_spool_capacity(plan)
-    assert unsafe_entry.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert unmanaged_entry.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    unexpected.unlink()
+
+    unexpected.mkdir()
+    with pytest.raises(PerfLensError) as non_regular_entry:
+        _broker_with_policy(policy)._authorize_spool_capacity(plan)
+    assert non_regular_entry.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_consumed_plan_marker_survives_broker_recreation_and_expires_safely(
+    tmp_path: Path,
+) -> None:
+    policy = _policy(tmp_path)
+    plan = _plan()
+    marker = policy.spool_root / replay_marker_name(plan.plan_id)
+
+    _broker_with_policy(policy)._consume_plan(plan)
+
+    assert marker.is_file()
+    assert marker.stat().st_mode & 0o777 == 0o600
+    assert marker.stat().st_size == 0
+    marker_ignored_by_evidence_quota = replace(
+        policy,
+        max_spool_artifacts=1,
+        min_free_bytes=0,
+    )
+    _broker_with_policy(marker_ignored_by_evidence_quota)._authorize_spool_capacity(plan)
+    with pytest.raises(PerfLensError, match="already consumed") as replayed:
+        _broker_with_policy(policy)._consume_plan(plan)
+    assert replayed.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    expired_timestamp = (datetime.now(tz=UTC) - timedelta(hours=1)).timestamp()
+    os.utime(marker, times=(expired_timestamp, expired_timestamp))
+    next_plan = plan.model_copy(update={"plan_id": "plan-0123456789abcdefabce"})
+    _broker_with_policy(policy)._consume_plan(next_plan)
+
+    assert not marker.exists()
+    assert (policy.spool_root / replay_marker_name(next_plan.plan_id)).is_file()
+
+
+def test_broker_rejects_unsafe_persistent_replay_markers(tmp_path: Path) -> None:
+    policy = _policy(tmp_path)
+    marker = policy.spool_root / replay_marker_name(_plan().plan_id)
+    marker.write_bytes(b"not-empty")
+    marker.chmod(0o600)
+
+    with pytest.raises(PerfLensError, match="unsafe replay marker") as captured:
+        _broker_with_policy(policy)._authorize_spool_capacity(_plan())
+    assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 
 def test_socket_path_and_client_require_safe_existing_socket(tmp_path: Path) -> None:

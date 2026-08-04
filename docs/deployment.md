@@ -87,6 +87,15 @@ health and collection calls can proceed. On `SIGTERM` or `SIGINT`, the service
 stops accepting connections, closes its listener, and removes the socket, so a
 normal systemd stop cannot leave a false-ready socket behind.
 
+Every accepted plan also leaves a hidden `.perflens-consumed-plan-…`
+tombstone in the fixed spool. The Collector atomically creates and fsyncs this
+empty mode-`0600` state before perf starts, so a failed collection or service
+restart cannot make the same plan reusable. Later requests reclaim tombstones
+older than `max_plan_ttl_seconds`. Status, archive, and prune operations verify
+and skip valid tombstones without charging them to evidence quotas; altered
+contents, ownership, modes, or links make the spool unsafe. Do not edit or
+remove these files manually; request a new MCP plan when a retry is needed.
+
 Long-running automatic collection is also bounded by `max_spool_bytes`,
 `max_spool_artifacts`, and `min_free_bytes`. The defaults cap logical artifact
 storage at 10 GiB and 1000 files while reserving 1 GiB on the spool filesystem.
@@ -102,8 +111,9 @@ reservable. It reads `/etc/perflens/collector.toml` by default and never changes
 configuration, artifacts, or collection state. Use `--json` for the complete
 versioned artifact, or `--config /absolute/path/collector.toml` before the
 default system policy is installed. An unsafe status means the direct spool
-contains a directory, symbolic link, or another non-regular entry; the command
-does not follow or remove it. A quota-short-circuited scan reports
+contains an unmanaged file, directory, symbolic link, another non-regular
+entry, or a modified replay tombstone; the command does not follow or remove
+it. A quota-short-circuited scan reports
 `scan_complete = false`, so observed values are lower bounds.
 
 This is a point-in-time inspection, not a reservation. The Collector still
@@ -133,6 +143,8 @@ archived bytes, and each source device/inode/size/mtime/owner/mode/SHA-256 befor
 any removal, then rechecks each source immediately before unlinking. The archive
 is always preserved and repeated execution is idempotent. This is a human
 administrator operation and must not be scheduled by an Agent.
+Valid consumed-plan tombstones are verified, skipped, and preserved; they never
+become ZIP members or prune targets.
 
 To tune collection modes, duration, frequency, events, or storage quotas, do
 not edit the live `/etc/perflens/collector.toml` in place. Copy it to a separate

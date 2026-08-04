@@ -22,6 +22,11 @@ from perflens import __version__
 from perflens.artifacts.filesystem import write_text_atomic
 from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.collector_broker.policy import COLLECTOR_POLICY_VERSION
+from perflens.collector_broker.state import (
+    collection_artifact_name,
+    replay_marker,
+    safe_replay_marker_metadata,
+)
 from perflens.contracts.artifacts import (
     CollectorDeploymentArtifact,
     CollectorPolicyUpdateArtifact,
@@ -892,14 +897,30 @@ def _inspect_spool(
         )
 
     try:
+        spool_metadata = os.fstat(descriptor)
         with os.scandir(descriptor) as entries:
             for entry in entries:
                 try:
+                    metadata = entry.stat(follow_symlinks=False)
+                    if replay_marker(entry.name):
+                        if not safe_replay_marker_metadata(
+                            metadata,
+                            expected_uid=spool_metadata.st_uid,
+                            expected_gid=spool_metadata.st_gid,
+                        ):
+                            issues.append("unsafe_replay_marker")
+                            status = "unsafe"
+                            break
+                        continue
                     if not entry.is_file(follow_symlinks=False):
                         issues.append("unexpected_non_regular_entry")
                         status = "unsafe"
                         break
-                    size = entry.stat(follow_symlinks=False).st_size
+                    if not collection_artifact_name(entry.name):
+                        issues.append("unmanaged_spool_entry")
+                        status = "unsafe"
+                        break
+                    size = metadata.st_size
                 except OSError:
                     issues.append("spool_entry_changed_during_scan")
                     status = "unsafe"

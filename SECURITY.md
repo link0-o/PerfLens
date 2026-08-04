@@ -28,6 +28,14 @@ filesystem free-space floor without deleting existing evidence. Policy bypass,
 cross-UID collection, command execution, spool escape, or quota bypass should be
 reported as a security vulnerability.
 
+Before starting perf, the Collector atomically creates and fsyncs an empty,
+service-private consumed-plan tombstone. It survives collection failure and
+Collector process restarts, so a restart cannot make the same plan executable
+again. Expired tombstones are reclaimed on later requests using the policy's
+maximum plan lifetime. Valid tombstones are excluded from evidence quotas and
+archive/prune selection; unsafe names, ownership, modes, link counts, or sizes
+fail closed. Administrators should not create, edit, or remove this hidden state.
+
 Each Collector instance supports exactly one authorized ordinary UID. Adding
 multiple callers to the shared `perflens` group would expose group-readable
 profiles across users and is deliberately rejected.

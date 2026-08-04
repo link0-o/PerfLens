@@ -72,6 +72,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
+- Single-use Collector plans now persist as atomic, private replay tombstones
+  before perf starts. Failed collections remain consumed across Collector
+  restarts; bounded expiry, spool locking, quota exclusion, archive/prune
+  preservation, and unsafe-marker denial paths are enforced.
 - Collector request frames now have a separate hard five-second completion
   timeout and an exact 64 KiB wire-size limit, preventing an incomplete local
   connection from blocking health and collection operations for the policy's

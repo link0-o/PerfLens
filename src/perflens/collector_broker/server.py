@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import math
 import os
 import shutil
@@ -37,6 +38,12 @@ from perflens.collector_broker.protocol import (
     BrokerCollectRequest,
     BrokerHealthRequest,
     BrokerResponse,
+)
+from perflens.collector_broker.state import (
+    collection_artifact_name,
+    replay_marker,
+    replay_marker_name,
+    safe_replay_marker_metadata,
 )
 from perflens.contracts.artifacts import (
     CollectionArtifact,
@@ -74,7 +81,6 @@ class CollectorBrokerServer:
         self._socket_path = _new_socket_path(socket_path)
         self._request_timeout_seconds = float(request_timeout_seconds)
         self._stop = threading.Event()
-        self._consumed_plans: dict[str, datetime] = {}
         self._socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             self._socket.bind(str(self._socket_path))
@@ -293,13 +299,31 @@ class CollectorBrokerServer:
         artifact_count = 0
         spool_bytes = 0
         try:
+            spool_metadata = self._policy.spool_root.stat(follow_symlinks=False)
             with os.scandir(self._policy.spool_root) as entries:
                 for entry in entries:
-                    if not entry.is_file(follow_symlinks=False):
+                    metadata = entry.stat(follow_symlinks=False)
+                    if replay_marker(entry.name):
+                        if not safe_replay_marker_metadata(
+                            metadata,
+                            expected_uid=spool_metadata.st_uid,
+                            expected_gid=spool_metadata.st_gid,
+                        ):
+                            raise PerfLensError(
+                                ErrorCode.PATH_SAFETY_VIOLATION,
+                                "collector_broker",
+                                "Collector spool contains an unsafe replay marker",
+                                recoverable=True,
+                                details={"entry": entry.name},
+                            )
+                        continue
+                    if not collection_artifact_name(entry.name) or not entry.is_file(
+                        follow_symlinks=False
+                    ):
                         raise PerfLensError(
                             ErrorCode.PATH_SAFETY_VIOLATION,
                             "collector_broker",
-                            "Collector spool contains an unexpected non-regular entry",
+                            "Collector spool contains an unmanaged or non-regular entry",
                             recoverable=True,
                             details={"entry": entry.name},
                         )
@@ -311,7 +335,7 @@ class CollectorBrokerServer:
                             "Collector spool artifact-count quota is exhausted",
                             recoverable=True,
                         )
-                    spool_bytes += entry.stat(follow_symlinks=False).st_size
+                    spool_bytes += metadata.st_size
                     if spool_bytes + plan.max_output_bytes > self._policy.max_spool_bytes:
                         raise PerfLensError(
                             ErrorCode.RESOURCE_LIMIT_EXCEEDED,
@@ -338,28 +362,141 @@ class CollectorBrokerServer:
             )
 
     def _consume_plan(self, plan: CollectionPlanArtifact) -> None:
-        now = datetime.now(tz=UTC)
-        self._consumed_plans = {
-            plan_id: expiration
-            for plan_id, expiration in self._consumed_plans.items()
-            if expiration > now
-        }
-        if plan.plan_id in self._consumed_plans:
+        _persist_consumed_plan(self._policy, plan, now=datetime.now(tz=UTC))
+
+
+def _persist_consumed_plan(
+    policy: CollectorBrokerPolicy,
+    plan: CollectionPlanArtifact,
+    *,
+    now: datetime,
+) -> None:
+    spool_descriptor = -1
+    marker_descriptor = -1
+    marker_name = replay_marker_name(plan.plan_id)
+    try:
+        spool_descriptor = os.open(
+            policy.spool_root,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_DIRECTORY,
+        )
+        spool_metadata = os.fstat(spool_descriptor)
+        path_metadata = policy.spool_root.stat(follow_symlinks=False)
+        if (
+            spool_metadata.st_uid != os.geteuid()
+            or spool_metadata.st_mode & 0o022
+            or (spool_metadata.st_dev, spool_metadata.st_ino)
+            != (path_metadata.st_dev, path_metadata.st_ino)
+        ):
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,
-                "authorization",
-                "Collection plan was already consumed by the collector broker",
+                "collector_broker",
+                "Collector spool identity or permissions changed after policy validation",
                 recoverable=True,
-                details={"plan_id": plan.plan_id},
             )
-        if len(self._consumed_plans) >= _MAX_TRACKED_PLANS:
+        fcntl.flock(spool_descriptor, fcntl.LOCK_EX)
+        active_markers = _prune_replay_markers(
+            spool_descriptor,
+            preserve_name=marker_name,
+            expected_uid=spool_metadata.st_uid,
+            expected_gid=spool_metadata.st_gid,
+            cutoff=now - timedelta(seconds=policy.max_plan_ttl_seconds),
+        )
+        if active_markers >= _MAX_TRACKED_PLANS:
             raise PerfLensError(
                 ErrorCode.RESOURCE_LIMIT_EXCEEDED,
                 "collector_broker",
-                "Collector broker replay cache reached its bounded capacity",
+                "Collector broker replay state reached its bounded capacity",
                 recoverable=True,
             )
-        self._consumed_plans[plan.plan_id] = _plan_expiration(plan)
+        try:
+            marker_descriptor = os.open(
+                marker_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=spool_descriptor,
+            )
+        except FileExistsError as exc:
+            raise _replayed_plan(plan.plan_id) from exc
+        marker_metadata = os.fstat(marker_descriptor)
+        if not safe_replay_marker_metadata(
+            marker_metadata,
+            expected_uid=spool_metadata.st_uid,
+            expected_gid=spool_metadata.st_gid,
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "collector_broker",
+                "Collector could not create a safe replay marker",
+                recoverable=True,
+            )
+        os.fsync(marker_descriptor)
+        os.close(marker_descriptor)
+        marker_descriptor = -1
+        os.fsync(spool_descriptor)
+    except PerfLensError:
+        raise
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.OUTPUT_WRITE_FAILED,
+            "collector_broker",
+            "Collector could not persist single-use plan state",
+            recoverable=True,
+            details={"plan_id": plan.plan_id},
+        ) from exc
+    finally:
+        if marker_descriptor >= 0:
+            os.close(marker_descriptor)
+        if spool_descriptor >= 0:
+            os.close(spool_descriptor)
+
+
+def _prune_replay_markers(
+    spool_descriptor: int,
+    *,
+    preserve_name: str,
+    expected_uid: int,
+    expected_gid: int,
+    cutoff: datetime,
+) -> int:
+    active_markers = 0
+    removed_marker = False
+    with os.scandir(spool_descriptor) as entries:
+        for entry in entries:
+            if not replay_marker(entry.name):
+                continue
+            metadata = entry.stat(follow_symlinks=False)
+            if not safe_replay_marker_metadata(
+                metadata,
+                expected_uid=expected_uid,
+                expected_gid=expected_gid,
+            ):
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "collector_broker",
+                    "Collector spool contains an unsafe replay marker",
+                    recoverable=True,
+                    details={"entry": entry.name},
+                )
+            if entry.name == preserve_name:
+                raise _replayed_plan(preserve_name.removeprefix(".perflens-consumed-"))
+            if metadata.st_mtime_ns <= int(cutoff.timestamp() * 1_000_000_000):
+                os.unlink(entry.name, dir_fd=spool_descriptor)
+                removed_marker = True
+            else:
+                active_markers += 1
+    if removed_marker:
+        os.fsync(spool_descriptor)
+    return active_markers
+
+
+def _replayed_plan(plan_id: str) -> PerfLensError:
+    return PerfLensError(
+        ErrorCode.PATH_SAFETY_VIOLATION,
+        "authorization",
+        "Collection plan was already consumed by the collector broker",
+        recoverable=True,
+        details={"plan_id": plan_id},
+    )
 
 
 def _new_socket_path(path: Path) -> Path:

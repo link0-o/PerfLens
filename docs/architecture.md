@@ -58,6 +58,14 @@ spool bytes, artifact count, and a filesystem free-space floor. Exhaustion
 denies the new collection without deleting old evidence. The MCP server and
 Skill remain unprivileged.
 
+Single-use semantics do not depend on process memory. Before perf starts, the
+Collector locks the fixed spool and atomically creates a mode-`0600`, empty
+consumed-plan tombstone, then syncs both file and directory. The tombstone
+survives failed collection and service restart. Valid tombstones are excluded
+from evidence quotas and archives, expire within the policy TTL bound, and any
+unsafe tombstone makes collection and administrator evidence operations fail
+closed.
+
 For a confirmed current-project workload, an ordinary-user coordinator launches
 one in-project executable, captures the new PID, and uses the same PID-plan path.
 The Collector never receives or starts the workload command. `perflens-admin` is

@@ -21,6 +21,7 @@ from perflens.admin.deploy import (
     update_collector_policy,
     upgrade_collector,
 )
+from perflens.collector_broker.state import replay_marker_name
 from perflens.contracts.artifacts import (
     CollectorDeploymentArtifact,
     CollectorPolicyUpdateArtifact,
@@ -864,10 +865,14 @@ def test_admin_undeploy_cli_emits_versioned_result(
 def test_admin_spool_status_reports_versioned_read_only_capacity(tmp_path: Path) -> None:
     config, _perf, _collector, layout = _deployment_inputs(tmp_path)
     layout.state_directory.mkdir(parents=True)
-    first = layout.state_directory / "first.data"
-    second = layout.state_directory / "second.json"
+    first = layout.state_directory / "plan-00000000000000000002.perf.data"
+    second = layout.state_directory / "plan-00000000000000000003.stat.csv"
     first.write_bytes(b"profile")
     second.write_bytes(b"{}")
+    replay_state = layout.state_directory / replay_marker_name(
+        "plan-00000000000000000001"
+    )
+    replay_state.touch(mode=0o600)
     before = {path.name: path.read_bytes() for path in layout.state_directory.iterdir()}
 
     result = inspect_collector_spool(
@@ -887,6 +892,46 @@ def test_admin_spool_status_reports_versioned_read_only_capacity(tmp_path: Path)
     assert {path.name: path.read_bytes() for path in layout.state_directory.iterdir()} == before
 
 
+def test_admin_spool_status_rejects_unsafe_replay_state(tmp_path: Path) -> None:
+    config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    layout.state_directory.mkdir(parents=True)
+    replay_state = layout.state_directory / replay_marker_name(
+        "plan-00000000000000000001"
+    )
+    replay_state.write_bytes(b"unexpected-content")
+    replay_state.chmod(0o600)
+
+    result = inspect_collector_spool(
+        config,
+        layout=layout,
+        require_root_owned_tools=False,
+    )
+
+    assert result.status == "unsafe"
+    assert result.scan_complete is False
+    assert result.observed_artifact_count == 0
+    assert result.issues == ("unsafe_replay_marker",)
+
+
+def test_admin_spool_status_rejects_unmanaged_regular_files(tmp_path: Path) -> None:
+    config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    layout.state_directory.mkdir(parents=True)
+    unmanaged = layout.state_directory / "administrator-note.txt"
+    unmanaged.write_text("not Collector evidence", encoding="utf-8")
+
+    result = inspect_collector_spool(
+        config,
+        layout=layout,
+        require_root_owned_tools=False,
+    )
+
+    assert result.status == "unsafe"
+    assert result.scan_complete is False
+    assert result.observed_artifact_count == 0
+    assert result.issues == ("unmanaged_spool_entry",)
+    assert unmanaged.read_text(encoding="utf-8") == "not Collector evidence"
+
+
 def test_admin_spool_status_warns_and_reports_exhausted_count(tmp_path: Path) -> None:
     config, _perf, _collector, layout = _deployment_inputs(tmp_path)
     layout.state_directory.mkdir(parents=True)
@@ -896,8 +941,9 @@ def test_admin_spool_status_warns_and_reports_exhausted_count(tmp_path: Path) ->
         .replace("max_spool_artifacts = 1000", "max_spool_artifacts = 2"),
         encoding="utf-8",
     )
-    (layout.state_directory / "large.data").write_bytes(b"")
-    with (layout.state_directory / "large.data").open("r+b") as handle:
+    large = layout.state_directory / "plan-00000000000000000001.perf.data"
+    large.write_bytes(b"")
+    with large.open("r+b") as handle:
         handle.truncate(8 * 1024 * 1024)
 
     warning = inspect_collector_spool(
@@ -909,7 +955,7 @@ def test_admin_spool_status_warns_and_reports_exhausted_count(tmp_path: Path) ->
     assert warning.scan_complete is True
     assert "spool_byte_quota_above_80_percent" in warning.issues
 
-    (layout.state_directory / "second.data").write_bytes(b"x")
+    (layout.state_directory / "plan-00000000000000000002.stat.csv").write_bytes(b"x")
     exhausted = inspect_collector_spool(
         config,
         layout=layout,
@@ -934,7 +980,7 @@ def test_admin_spool_status_reports_byte_exhaustion_and_count_warning(
         .replace("max_spool_artifacts = 1000", "max_spool_artifacts = 5"),
         encoding="utf-8",
     )
-    full = layout.state_directory / "full.data"
+    full = layout.state_directory / "plan-00000000000000000001.perf.data"
     full.write_bytes(b"")
     with full.open("r+b") as handle:
         handle.truncate(1024 * 1024)
@@ -951,7 +997,7 @@ def test_admin_spool_status_reports_byte_exhaustion_and_count_warning(
 
     full.unlink()
     for index in range(4):
-        (layout.state_directory / f"artifact-{index}").write_bytes(b"x")
+        (layout.state_directory / f"plan-{index + 1:020x}.perf.data").write_bytes(b"x")
     warning = inspect_collector_spool(
         config,
         layout=layout,

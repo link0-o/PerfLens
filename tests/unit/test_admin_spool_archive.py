@@ -20,6 +20,7 @@ from perflens.admin.spool import (
     prune_archived_collector_spool,
     verify_collector_spool_archive,
 )
+from perflens.collector_broker.state import replay_marker_name
 from perflens.contracts.artifacts import (
     CollectorSpoolArchiveArtifact,
     CollectorSpoolArchiveVerificationArtifact,
@@ -149,6 +150,10 @@ def test_archive_plan_copy_and_explicit_prune_form_a_verified_lifecycle(
     )
     third = _artifact(layout, 3, b"third", modified_at=now - timedelta(days=8))
     latest = _artifact(layout, 4, b"latest", modified_at=now - timedelta(days=1))
+    replay_state = layout.state_directory / replay_marker_name(
+        "plan-00000000000000000005"
+    )
+    replay_state.touch(mode=0o600)
     output = archive_directory / "evidence.zip"
 
     dry_run = _archive(
@@ -191,6 +196,7 @@ def test_archive_plan_copy_and_explicit_prune_form_a_verified_lifecycle(
     assert archived.manifest == dry_run.manifest
     assert output.stat().st_mode & 0o777 == 0o600
     assert all(path.exists() for path in (oldest, second, third, latest))
+    assert replay_state.is_file()
     with zipfile.ZipFile(output) as bundle:
         assert set(bundle.namelist()) == {
             "manifest.json",
@@ -242,6 +248,7 @@ def test_archive_plan_copy_and_explicit_prune_form_a_verified_lifecycle(
     assert not second.exists()
     assert third.read_bytes() == b"third"
     assert latest.read_bytes() == b"latest"
+    assert replay_state.is_file()
     assert output.exists()
 
     post_prune_verification = _verify(
@@ -282,6 +289,24 @@ def test_archive_refuses_unmanaged_spool_entries_and_output_inside_spool(
     assert unmanaged.read_text(encoding="utf-8") == "keep"
 
     unmanaged.unlink()
+    unsafe_replay_state = layout.state_directory / replay_marker_name(
+        "plan-00000000000000000009"
+    )
+    unsafe_replay_state.write_bytes(b"not-empty")
+    unsafe_replay_state.chmod(0o600)
+    with pytest.raises(PerfLensError, match="unsafe replay marker") as replay_rejected:
+        _archive(
+            archive_directory / "unsafe-replay.zip",
+            config,
+            layout,
+            now,
+            dry_run=True,
+            older_than_days=0,
+            keep_latest=0,
+        )
+    assert replay_rejected.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    unsafe_replay_state.unlink()
+
     with pytest.raises(PerfLensError) as inside:
         _archive(
             layout.state_directory / "archive.zip",
