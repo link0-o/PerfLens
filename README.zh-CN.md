@@ -306,7 +306,8 @@ PerfLens 永远不会自行执行 sudo、修改内核策略或降低主机安全
 
 首次部署和后续升级都会完成只读健康协议往返，并通过内核凭据复核服务 PID/UID；仅
 存在 Socket 文件不会被当作成功，因此旧文件、错误身份或未监听服务会在自动采集前
-暴露出来。
+暴露出来。`perflens-admin deploy` 默认显示中文预检/成功摘要；自动化程序加 `--json`
+可获得完整版本化结果。
 
 安装新版本后使用 `sudo perflens-admin upgrade --dry-run` 预检，再运行
 `sudo perflens-admin upgrade`。它保留管理员策略和历史证据，只更新可信托管 unit，失败

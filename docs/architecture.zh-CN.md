@@ -89,6 +89,11 @@ Collector 资产、Socket、当前登录会话用户组和主机 perf 条件，�
 或启动服务；特权状态只能由管理员随后显式创建，也只能通过验证托管标记的
 `perflens-admin undeploy` 移除。
 
+Debian 的多个命令入口可以共享私有运行时启动器，但 Codex 配置和 systemd 必须保留
+经过验证的 `/usr/bin/perflens-mcp` 与 `/usr/bin/perflens-collector` 入口名，启动器才能
+确定要进入 MCP 或 Collector。只有父目录与解析目标满足相应所有者和不可写检查时，
+引导与部署器才会保留符号链接路径。
+
 ## 依赖方向
 
 ```text

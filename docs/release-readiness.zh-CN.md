@@ -28,8 +28,8 @@
 | 代码规范 | `ruff check .` | 通过 |
 | 严格类型 | `pyright` | 0 错误、0 警告 |
 | Python 3.12 | `pytest -q`，Python 3.12.13 | 上一次完整发布门禁 256 通过；本次未在本机重跑，仍需 CI 门禁 |
-| Python 3.13 | 隔离环境 `pytest -q` | 262 通过 |
-| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.62%，通过 |
+| Python 3.13 | 隔离环境 `pytest -q` | 267 通过 |
+| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.68%，通过 |
 | Skill | Skill 结构和打包测试 | 通过 |
 | Schema | 已提交 Schema 与 Contract 生成结果相等 | 通过 |
 | 依赖锁 | `uv export --locked` | 通过 |
@@ -44,11 +44,11 @@
 | Collector 证据生命周期 | 托管文件选择 → ZIP manifest/哈希 → 独立只读归档/原文件验证 → 显式授权清理 | 默认不删除、root 归档、篡改/身份变化/未知项目拒绝路径通过 |
 | Collector 用户隔离 | 单实例单 UID；策略/资产/部署拒绝多 UID | 拒绝路径和组可读边界已验证 |
 | 项目工作负载 | 普通用户启动 → 内部 PID → Broker → 清理 | 可执行 perf Test Double 端到端通过 |
-| 管理员部署 | 严格 TOML → 内置资产 → 固定命令 → Socket | 成功、回滚和拒绝路径通过 |
+| 管理员部署 | 严格 TOML → 内置资产 → 固定命令 → Socket | 中文预检/成功摘要、显式 JSON、回滚和拒绝路径通过 |
 | 管理员升级 | 固定已部署策略 → unit 哈希比较 → 安全替换/重启 → 失败恢复 | 保留策略/证据、同版重启、更新、恢复和拒绝路径通过 |
 | 策略安全更新 | 独立候选 → 严格验证 → 原子替换/重启/健康检查 → 失败恢复 | UID/spool 固定、注释保留、只读预检和拒绝路径通过 |
 | 管理员撤销部署 | 托管标记/所有者/权限 → 固定停用 → inode 复核 → 删除 unit | 保留数据和拒绝路径通过 |
-| 原生 DEB | Debian 13 主包与 Collector 拆包 | 提取命令冒烟和逐字节重复构建通过 |
+| 原生 DEB | Debian 13 主包与 Collector 拆包 | 本机提取入口/配置冒烟和逐字节重复构建通过；CI 还强制执行安装后部署预检 |
 | 性能 | 可复现 small/medium/large folded 语料 | 已记录基线 |
 
 覆盖率目前只比 85% 门槛高少量余量。后续新增代码应优先补齐安全错误分支测试，而不是降低门槛。

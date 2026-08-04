@@ -4,8 +4,25 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Chinese-first `perflens-admin deploy` dry-run and success summaries with
+  reviewed paths, authorized UID, fixed system commands, safety boundaries,
+  and an exact next action; `--json` preserves the complete versioned artifact
+  for automation.
+
+### Changed
+
+- The default `perflens-admin deploy` output is now the human-readable Chinese
+  summary. Existing automation that consumes deployment JSON must pass
+  `--json` explicitly.
+
 ### Fixed
 
+- Debian onboarding and Collector deployment now preserve the trusted
+  `/usr/bin/perflens-mcp` and `/usr/bin/perflens-collector` entry-point symlinks
+  instead of resolving them to the identity-neutral generic launcher; symlinks
+  in untrusted writable directories remain rejected.
 - `perflens status` now requires a bounded, authenticated Collector health
   handshake before reporting `ready_for_verification`, preventing stale,
   unreachable, malformed, or wrong-identity Unix sockets from producing false

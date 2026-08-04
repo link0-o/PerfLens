@@ -9,6 +9,12 @@ PerfLens publishes two role-separated native packages for Debian 13 `amd64`:
 - `perflens-collector_<version>-1_all.deb` adds the optional administrator and
   Collector entry points and depends on the exact same main-package version.
 
+The root-managed `/usr/bin/perflens-mcp` and `/usr/bin/perflens-collector`
+entry points link to the private runtime launcher. Onboarding and deployment
+verify the links, targets, and parent directories, then preserve the entry-point
+pathnames in Codex configuration or systemd so launcher dispatch retains the
+MCP or Collector identity. Links in writable directories are rejected.
+
 For offline profile analysis, install only the main package:
 
 ```bash
@@ -32,6 +38,9 @@ perflens setup \
 Package installation never enables a service, writes `/etc/perflens`, changes
 sysctl/capabilities, or grants user access. After reviewing the generated policy,
 an administrator explicitly runs `sudo perflens-admin deploy --config <policy>`.
+The command prints a Chinese deployment summary by default and distinguishes a
+read-only dry run from a completed authenticated deployment. Add `--json` for
+the complete versioned artifact.
 After the user's new login session, `perflens status --project <project>` checks
 runtime readiness and `perflens-admin spool-status` reports Collector storage
 headroom. Both are read-only; add `--json` to the latter for a versioned artifact.

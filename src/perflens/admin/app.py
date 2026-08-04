@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 from pathlib import Path
 from typing import Annotated, NoReturn
 
@@ -23,6 +24,7 @@ from perflens.admin.spool import (
     verify_collector_spool_archive,
 )
 from perflens.contracts.artifacts import (
+    CollectorDeploymentArtifact,
     CollectorSpoolArchiveVerificationArtifact,
     CollectorSpoolStatusArtifact,
     ErrorArtifact,
@@ -55,22 +57,26 @@ def root(
 def deploy_command(
     config: Annotated[
         Path,
-        typer.Option("--config", dir_okay=False, help="Reviewed Collector TOML policy."),
+        typer.Option("--config", dir_okay=False, help="已审查的 Collector TOML 策略。"),
     ],
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Validate and print the deployment plan without changes."),
+        typer.Option("--dry-run", help="只校验并显示部署计划; 不修改系统。"),
     ] = False,
     collector_command: Annotated[
         Path | None,
         typer.Option(
             "--collector-command",
             dir_okay=False,
-            help="Trusted installed Collector path; defaults beside perflens-admin.",
+            help="可信的已安装 Collector 路径; 默认与 perflens-admin 位于同一目录。",
         ),
     ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="输出完整的版本化 JSON 结果。"),
+    ] = False,
 ) -> None:
-    """Install and start the fixed Collector service from one data-only config."""
+    """校验或部署 Collector; 默认输出中文摘要。"""
     try:
         result = deploy_collector(
             config,
@@ -79,7 +85,10 @@ def deploy_command(
         )
     except PerfLensError as exc:
         _fail(exc)
-    typer.echo(result.model_dump_json(indent=2))
+    if json_output:
+        typer.echo(result.model_dump_json(indent=2))
+        return
+    _render_deployment_chinese(result)
 
 
 @app.command("undeploy")
@@ -289,6 +298,66 @@ def verify_spool_archive_command(
         typer.echo(result.model_dump_json(indent=2))
         return
     _render_archive_verification_chinese(result)
+
+
+def _render_deployment_chinese(artifact: CollectorDeploymentArtifact) -> None:
+    status_labels = {
+        "dry_run": "预检通过; 尚未修改系统",
+        "deployed": "部署完成; Collector 健康握手通过",
+    }
+    warning_labels = {
+        "Host perf/kernel policy is not changed; a real collection can still be blocked.": (
+            "PerfLens 未修改主机 perf/内核策略; 真实采集仍可能被内核阻止。"
+        ),
+        "Users added to the perflens group must start a new login session.": (
+            "新加入 perflens 组的用户必须重新登录; 当前会话才会获得组权限。"
+        ),
+    }
+    typer.echo("PerfLens Collector 部署")
+    typer.echo(f"状态: {status_labels[artifact.status]}")
+    typer.echo(f"检查的配置: {artifact.config_source}")
+    typer.echo(f"系统策略位置: {artifact.config_path}")
+    typer.echo(f"systemd 服务位置: {artifact.service_path}")
+    typer.echo(f"Collector 程序: {artifact.collector_command}")
+    typer.echo("授权普通用户 UID: " + ", ".join(str(uid) for uid in artifact.allowed_uids))
+    command_label = (
+        "计划执行的固定系统命令"
+        if artifact.status == "dry_run"
+        else "已执行的固定系统命令"
+    )
+    typer.echo(f"{command_label}:")
+    if artifact.planned_commands:
+        for index, command in enumerate(artifact.planned_commands, start=1):
+            typer.echo(f"{index}. {shlex.join(command)}")
+    else:
+        typer.echo("- 无")
+    if artifact.warnings:
+        typer.echo("安全边界与提示:")
+        for warning in artifact.warnings:
+            typer.echo(f"- {warning_labels.get(warning, warning)}")
+    typer.echo("下一步:")
+    if artifact.status == "dry_run":
+        trusted_admin = str(
+            Path(artifact.collector_command).with_name("perflens-admin")
+        )
+        deploy_command = shlex.join(
+            (
+                "sudo",
+                trusted_admin,
+                "deploy",
+                "--config",
+                artifact.config_source,
+                "--collector-command",
+                artifact.collector_command,
+            )
+        )
+        typer.echo("- 确认以上路径、UID 和命令符合预期后; 再执行正式部署:")
+        typer.echo(f"  {deploy_command}")
+    else:
+        typer.echo("- 如果刚被加入 perflens 组; 请退出当前登录会话后重新登录。")
+        typer.echo("- 以授权的普通用户运行真实短时验收:")
+        typer.echo("  perflens accept-collector --authorize-host-acceptance")
+    typer.echo("- 自动化程序需要完整版本化结果时; 给本命令加 --json。")
 
 
 def _render_spool_status_chinese(artifact: CollectorSpoolStatusArtifact) -> None:

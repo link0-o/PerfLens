@@ -8,6 +8,11 @@ PerfLens 为 Debian 13 `amd64` 提供两个职责分离的原生安装包：
 - `perflens-collector_<版本>-1_all.deb`：可选的 `perflens-admin` 与
   `perflens-collector` 入口和部署示例，依赖同版本主包。
 
+包中的 `/usr/bin/perflens-mcp` 和 `/usr/bin/perflens-collector` 是指向私有运行时启动器
+的 root 管理入口。引导与部署器会在验证入口、目标和父目录均可信后，把入口路径原样
+写入 Codex 配置或 systemd；不会解析成无法识别命令身份的通用启动器路径，也拒绝可写
+目录中的符号链接。
+
 只分析已有 Profile、不需要自动采集时，只安装主包：
 
 ```bash
@@ -36,6 +41,9 @@ perflens setup \
 sudo perflens-admin deploy \
   --config /绝对路径/你的项目/perflens-setup/collector-assets/collector.toml
 ```
+
+命令默认输出中文部署摘要，并明确区分“预检通过但尚未修改系统”和“部署完成且健康握手
+通过”。自动化程序需要完整版本化部署结果时加 `--json`。
 
 重新登录后运行：
 

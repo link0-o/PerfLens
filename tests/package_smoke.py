@@ -21,6 +21,13 @@ def main() -> None:
     _run(perflens_mcp, "--version", expected=__version__)
     _run(perflens_collector, "--version", expected=__version__)
     _run(perflens_admin, "--version", expected=__version__)
+    deploy_help = _run(
+        perflens_admin,
+        "deploy",
+        "--help",
+        expected="默认输出中文摘要",
+    )
+    assert "--json" in deploy_help
     _run(
         perflens_admin,
         "undeploy",
@@ -124,9 +131,9 @@ def main() -> None:
         assert setup_payload["schema_version"] == "1.0"
         assert setup_payload["skill_status"] == "existing"
         assert setup_payload["automatic_collection_enabled"] is True
-        assert '"--allow-project-execution"' in (
-            guided_setup / "codex-mcp.toml"
-        ).read_text(encoding="utf-8")
+        generated_mcp = (guided_setup / "codex-mcp.toml").read_text(encoding="utf-8")
+        assert f'command = "{perflens_mcp}"' in generated_mcp
+        assert '"--allow-project-execution"' in generated_mcp
         status = _run(
             perflens,
             "status",

@@ -56,8 +56,10 @@ new or byte-identical files, starts the service, and requires a bounded,
 read-only health round trip. The Collector authenticates the caller UID, while
 the administrator client verifies the server PID/UID with kernel `SO_PEERCRED`
 and requires the dedicated `perflens` UID. A stale or wrong-owner socket cannot
-be mistaken for readiness. It then returns a versioned JSON result. It
-does not alter sysctl/capabilities or run
+be mistaken for readiness. It prints a Chinese summary by default, clearly
+distinguishing dry-run validation from completed deployment and showing the next
+ordinary-user action. Add `--json` for the complete versioned result. It does
+not alter sysctl/capabilities or run
 commands from the config. The staged unit and sysusers files remain audit
 copies; the deployer renders trusted packaged templates.
 

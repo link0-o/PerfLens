@@ -267,7 +267,9 @@ on activation failure, and refuses UID or fixed-spool migration.
 
 Deploy and upgrade require a bounded, read-only Collector health round trip and
 verify the responding PID/UID through kernel credentials. A stale, wrong-owner,
-or unlistened socket pathname is not readiness.
+or unlistened socket pathname is not readiness. `perflens-admin deploy` prints a
+Chinese dry-run or success summary by default; add `--json` for the complete
+versioned artifact.
 
 After installing a new release, run `sudo perflens-admin upgrade --dry-run` and
 then `sudo perflens-admin upgrade`. The explicit flow preserves policy and spool

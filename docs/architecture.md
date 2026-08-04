@@ -84,3 +84,10 @@ package exposes only ordinary-user CLI/MCP entry points, while the exact-version
 `perflens-collector` package adds administrator and Collector entry points.
 Neither package activates a service during installation. Explicit undeployment
 removes only a trusted unit carrying the packaged management marker.
+
+Native command entry points may share the private runtime launcher, but Codex
+configuration and the systemd unit preserve the verified
+`/usr/bin/perflens-mcp` and `/usr/bin/perflens-collector` pathnames so launcher
+dispatch retains the requested identity. A symlink pathname is preserved only
+when its direct parent and resolved target satisfy the corresponding ownership
+and non-writable checks.

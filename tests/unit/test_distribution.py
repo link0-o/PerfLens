@@ -118,6 +118,46 @@ def test_codex_config_uses_canonical_paths_and_optional_process_gate(tmp_path: P
     assert "--allow-active-collection" not in config
 
 
+def test_codex_config_preserves_trusted_shared_launcher_entrypoint(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    tools = tmp_path / "trusted-tools"
+    tools.mkdir(mode=0o755)
+    launcher = tools / "perflens-launcher"
+    launcher.write_text(f"#!{sys.executable}\nraise SystemExit(0)\n", encoding="utf-8")
+    launcher.chmod(0o555)
+    entrypoint = tools / "perflens-mcp"
+    entrypoint.symlink_to(launcher.name)
+
+    config = render_codex_config(workspace, mcp_command=entrypoint)
+
+    assert f'command = "{entrypoint}"' in config
+    assert f'command = "{launcher}"' not in config
+
+
+def test_codex_config_rejects_shared_launcher_link_in_writable_directory(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    tools = tmp_path / "writable-tools"
+    tools.mkdir(mode=0o755)
+    launcher = tools / "perflens-launcher"
+    launcher.write_text(f"#!{sys.executable}\nraise SystemExit(0)\n", encoding="utf-8")
+    launcher.chmod(0o555)
+    entrypoint = tools / "perflens-mcp"
+    entrypoint.symlink_to(launcher.name)
+    tools.chmod(0o777)
+
+    with pytest.raises(PerfLensError) as captured:
+        render_codex_config(workspace, mcp_command=entrypoint)
+
+    assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert "trusted directory" in captured.value.message
+
+
 def test_codex_config_rejects_artifact_root_outside_workspace(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     outside = tmp_path / "outside"

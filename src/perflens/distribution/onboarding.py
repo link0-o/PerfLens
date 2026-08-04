@@ -293,6 +293,10 @@ sudo /opt/perflens/bin/perflens-admin deploy \
   --config {output / 'collector-assets' / 'collector.toml'}
 ```
 
+部署命令默认输出中文摘要：预检会明确说明“尚未修改系统”，正式部署会明确说明健康
+握手是否通过，并给出重新登录和普通用户验收步骤。自动化程序需要完整版本化结果时
+给命令加 `--json`。
+
 正式 DEB/RPM 可把命令安装为 `/usr/bin/perflens-admin`。部署器只接受配置数据，
 不会修改 sysctl；安装后仍要以普通用户运行
 `perflens accept-collector --authorize-host-acceptance`。
@@ -396,7 +400,8 @@ def _english_guide(
         "Administrator-reviewed Collector assets were generated. Validate the TOML with "
         "`/opt/perflens/bin/perflens-admin deploy --config <toml> --dry-run`, then have an "
         "administrator run the same command with sudo and without `--dry-run`. Then run "
-        "`perflens accept-collector --authorize-host-acceptance` as the ordinary user."
+        "`perflens accept-collector --authorize-host-acceptance` as the ordinary user. "
+        "Deployment is Chinese-first; add `--json` for the complete versioned artifact."
         if prepare_collector
         else "No Collector assets were generated; existing-profile analysis needs no privilege."
     )

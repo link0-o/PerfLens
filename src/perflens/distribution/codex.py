@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 from pathlib import Path
 
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -148,14 +149,16 @@ def _mcp_executable(explicit: Path | None) -> Path:
                 "Install PerfLens with pipx or uv tool, or pass --mcp-command explicitly.",
             ),
         )
+    lexical = Path(os.path.abspath(candidate.expanduser()))
     try:
-        resolved = candidate.expanduser().resolve(strict=True)
+        entry_metadata = lexical.lstat()
+        resolved = lexical.resolve(strict=True)
     except OSError as exc:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
             "codex_config",
             "MCP executable does not exist or cannot be resolved",
-            details={"path": str(candidate)},
+            details={"path": str(lexical)},
         ) from exc
     if not resolved.is_file() or not os.access(resolved, os.X_OK):
         raise PerfLensError(
@@ -164,6 +167,32 @@ def _mcp_executable(explicit: Path | None) -> Path:
             "MCP command must be an executable file",
             details={"path": str(resolved)},
         )
+    if stat.S_ISLNK(entry_metadata.st_mode) and resolved.name == "perflens-launcher":
+        parent = lexical.parent
+        try:
+            resolved_parent = parent.resolve(strict=True)
+            parent_metadata = parent.stat()
+            target_metadata = resolved.stat()
+        except OSError as exc:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "codex_config",
+                "MCP launcher entry-point parent cannot be verified safely",
+                details={"path": str(parent)},
+            ) from exc
+        if (
+            resolved_parent != parent
+            or entry_metadata.st_uid != parent_metadata.st_uid
+            or parent_metadata.st_mode & 0o022
+            or target_metadata.st_mode & 0o022
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "codex_config",
+                "MCP launcher symbolic entry point is not in a trusted directory",
+                details={"path": str(lexical), "parent": str(parent)},
+            )
+        return lexical
     return resolved
 
 

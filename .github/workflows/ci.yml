@@ -66,6 +66,17 @@ jobs:
             ./dist/perflens-collector_*_all.deb
           perflens --version
           perflens-admin --version
+          mkdir /tmp/perflens-installed-preflight
+          perflens setup \
+            --project /tmp/perflens-installed-preflight \
+            --prepare-collector \
+            --automatic-collection \
+            --collector-uid 65534 \
+            --collector-command /usr/bin/perflens-collector \
+            --perf-path /usr/bin/true
+          perflens-admin deploy \
+            --config /tmp/perflens-installed-preflight/perflens-setup/collector-assets/collector.toml \
+            --dry-run | grep -F "尚未修改系统"
           test ! -e /etc/perflens/collector.toml
           test ! -e /etc/systemd/system/perflens-collector.service
           apt-get remove --yes perflens-collector perflens

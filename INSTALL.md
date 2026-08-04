@@ -50,7 +50,9 @@ Review the generated policy, validate it with
 `perflens-admin deploy --config <toml> --dry-run`, then have an administrator run
 the same system-package command once with `sudo` and without `--dry-run`. Wheel
 deployments use `/opt/perflens/bin/perflens-admin`. Use only a trusted system or
-administrator-controlled copy.
+administrator-controlled copy. Deployment prints a Chinese summary by default,
+including whether the dry run changed the host, the authenticated health result,
+and the next action. Add `--json` for the complete versioned artifact.
 See [Product deployment](docs/deployment.md) before installing those assets. A
 blocked `perflens doctor` result does not prevent analysis of existing profiles.
 

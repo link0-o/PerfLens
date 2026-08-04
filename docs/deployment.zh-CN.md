@@ -69,7 +69,7 @@ perflens stage-collector-assets \
   --dry-run
 ```
 
-确认 JSON 计划中的 UID、`perf`、Collector 和目标路径无误后，管理员只执行一次：
+确认中文预检摘要中的 UID、`perf`、Collector 和目标路径无误后，管理员只执行一次：
 
 ```bash
 sudo /opt/perflens/bin/perflens-admin deploy \
@@ -82,7 +82,9 @@ Unix Socket 完成一次有界、只读的健康协议往返。Collector 校验�
 peer UID，管理员客户端也通过内核 `SO_PEERCRED` 确认响应进程属于专用 `perflens`
 服务 UID；只有收到身份匹配的版本化 `status: ready` 才会报告成功。遗留但无人监听的
 Socket 文件或错误 UID 的服务不会误判为就绪。
-部署结果是带 `schema_version` 的 JSON。它不执行配置里的命令，
+部署命令默认输出中文摘要，明确区分“预检通过但尚未修改系统”和“部署完成且健康握手
+通过”，并显示下一步操作；自动化程序加 `--json` 可获得带 `schema_version` 的完整
+版本化结果。它不执行配置里的命令，
 不修改 sysctl 或 capability，也不会覆盖内容不同的已有配置。
 
 `perflens-admin` 必须来自管理员控制的系统安装，例如 `/opt/perflens` 或正式

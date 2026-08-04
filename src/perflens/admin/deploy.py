@@ -1087,15 +1087,17 @@ def _collector_command(
     stage: str = "collector_deploy",
 ) -> Path:
     candidate = explicit or Path(sys.executable).resolve().parent / "perflens-collector"
+    lexical = Path(os.path.abspath(candidate.expanduser()))
     try:
-        resolved = candidate.expanduser().resolve(strict=True)
+        entry_metadata = lexical.lstat()
+        resolved = lexical.resolve(strict=True)
         metadata = resolved.stat()
     except OSError as exc:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
             stage,
             "Trusted perflens-collector executable cannot be resolved",
-            details={"path": str(candidate)},
+            details={"path": str(lexical)},
         ) from exc
     expected_owners = {0} if require_root_owner else {os.geteuid()}
     if (
@@ -1111,6 +1113,31 @@ def _collector_command(
             "other",
             details={"path": str(resolved)},
         )
+    if stat.S_ISLNK(entry_metadata.st_mode):
+        parent = lexical.parent
+        try:
+            resolved_parent = parent.resolve(strict=True)
+            parent_metadata = parent.stat()
+        except OSError as exc:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "perflens-collector entry-point parent cannot be verified safely",
+                details={"path": str(parent)},
+            ) from exc
+        if (
+            entry_metadata.st_uid not in expected_owners
+            or resolved_parent != parent
+            or parent_metadata.st_uid not in expected_owners
+            or parent_metadata.st_mode & 0o022
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "perflens-collector symbolic entry point is not in a trusted directory",
+                details={"path": str(lexical), "parent": str(parent)},
+            )
+        return lexical
     return resolved
 
 

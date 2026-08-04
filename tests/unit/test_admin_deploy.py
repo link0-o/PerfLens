@@ -66,7 +66,7 @@ def _deployment_inputs(tmp_path: Path) -> tuple[Path, Path, Path, CollectorSyste
     return config, perf, collector, layout
 
 
-def test_admin_deploy_dry_run_is_read_only_and_cli_reports_versioned_plan(
+def test_admin_deploy_dry_run_is_read_only_and_cli_reports_chinese_or_json(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -95,7 +95,7 @@ def test_admin_deploy_dry_run_is_read_only_and_cli_reports_versioned_plan(
         return result
 
     monkeypatch.setattr("perflens.admin.app.deploy_collector", fake_deploy)
-    cli_result = CliRunner().invoke(
+    summary = CliRunner().invoke(
         app,
         [
             "deploy",
@@ -104,9 +104,33 @@ def test_admin_deploy_dry_run_is_read_only_and_cli_reports_versioned_plan(
             "--dry-run",
         ],
     )
-    assert cli_result.exit_code == 0, cli_result.output
-    assert '"schema_version":"1.0"'.replace(" ", "") in cli_result.output.replace(" ", "")
-    assert '"status":"dry_run"'.replace(" ", "") in cli_result.output.replace(" ", "")
+    assert summary.exit_code == 0, summary.output
+    assert "PerfLens Collector 部署" in summary.output
+    assert "状态: 预检通过; 尚未修改系统" in summary.output
+    assert f"授权普通用户 UID: {os.geteuid()}" in summary.output
+    assert "计划执行的固定系统命令:" in summary.output
+    assert "确认以上路径、UID 和命令符合预期后" in summary.output
+    trusted_admin = collector.with_name("perflens-admin")
+    assert f"sudo {trusted_admin} deploy" in summary.output
+    assert "--collector-command" in summary.output
+    assert "--json" in summary.output
+    assert '"schema_version"' not in summary.output
+
+    json_result = CliRunner().invoke(
+        app,
+        [
+            "deploy",
+            "--config",
+            str(config),
+            "--dry-run",
+            "--json",
+        ],
+    )
+    assert json_result.exit_code == 0, json_result.output
+    assert '"schema_version":"1.0"'.replace(" ", "") in json_result.output.replace(
+        " ", ""
+    )
+    assert '"status":"dry_run"'.replace(" ", "") in json_result.output.replace(" ", "")
 
 
 def test_admin_deploy_installs_fixed_assets_runs_allowlist_and_checks_socket(
@@ -162,6 +186,104 @@ def test_admin_deploy_installs_fixed_assets_runs_allowlist_and_checks_socket(
     assert repeated.status == "deployed"
     assert checked_sockets == [layout.socket_path, layout.socket_path]
     assert checked_service_uids == [os.geteuid(), os.geteuid()]
+
+
+def test_admin_deploy_cli_reports_completed_health_and_acceptance_step(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    dry_run = deploy_collector(
+        config,
+        dry_run=True,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+    )
+    deployed = dry_run.model_copy(update={"status": "deployed"})
+
+    def fake_deploy(
+        _config: Path,
+        *,
+        dry_run: bool = False,
+        collector_command: Path | None = None,
+    ) -> CollectorDeploymentArtifact:
+        del dry_run, collector_command
+        return deployed
+
+    monkeypatch.setattr("perflens.admin.app.deploy_collector", fake_deploy)
+
+    result = CliRunner().invoke(app, ["deploy", "--config", str(config)])
+
+    assert result.exit_code == 0, result.output
+    assert "状态: 部署完成; Collector 健康握手通过" in result.output
+    assert "已执行的固定系统命令:" in result.output
+    assert "请退出当前登录会话后重新登录" in result.output
+    assert "perflens accept-collector --authorize-host-acceptance" in result.output
+    assert '"schema_version"' not in result.output
+
+
+def test_admin_deploy_preserves_trusted_collector_entrypoint_symlink(
+    tmp_path: Path,
+) -> None:
+    config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    tools = tmp_path / "trusted-tools"
+    tools.mkdir(mode=0o755)
+    launcher = tools / "perflens-launcher"
+    launcher.write_text(f"#!{sys.executable}\nraise SystemExit(0)\n", encoding="utf-8")
+    launcher.chmod(0o555)
+    entrypoint = tools / "perflens-collector"
+    entrypoint.symlink_to(launcher.name)
+
+    dry_run = deploy_collector(
+        config,
+        dry_run=True,
+        layout=layout,
+        collector_command=entrypoint,
+        require_root=False,
+    )
+
+    assert dry_run.collector_command == str(entrypoint)
+
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=entrypoint,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+
+    service = layout.service_path.read_text(encoding="utf-8")
+    assert f"ExecStart={entrypoint} " in service
+    assert f"ExecStart={launcher} " not in service
+
+
+def test_admin_deploy_rejects_collector_symlink_in_writable_directory(
+    tmp_path: Path,
+) -> None:
+    config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    tools = tmp_path / "writable-tools"
+    tools.mkdir(mode=0o755)
+    launcher = tools / "perflens-launcher"
+    launcher.write_text(f"#!{sys.executable}\nraise SystemExit(0)\n", encoding="utf-8")
+    launcher.chmod(0o555)
+    entrypoint = tools / "perflens-collector"
+    entrypoint.symlink_to(launcher.name)
+    tools.chmod(0o777)
+
+    with pytest.raises(PerfLensError) as captured:
+        deploy_collector(
+            config,
+            dry_run=True,
+            layout=layout,
+            collector_command=entrypoint,
+            require_root=False,
+        )
+
+    assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert "trusted directory" in captured.value.message
 
 
 def test_admin_deploy_rolls_back_new_files_after_service_failure(tmp_path: Path) -> None:

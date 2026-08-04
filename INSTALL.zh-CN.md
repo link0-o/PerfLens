@@ -146,7 +146,9 @@ sudo perflens-admin deploy \
 ```
 
 第一条只校验并显示计划；第二条才写入系统、添加授权用户组并启动服务，通常只需输入
-一次 root 密码。上面使用 DEB 的系统入口；wheel 管理员环境应改用
+一次 root 密码。部署命令默认显示中文摘要：预检会明确写出“尚未修改系统”，正式部署
+成功时会写出健康握手结论和下一步。脚本需要完整版本化结果时加 `--json`。上面使用
+DEB 的系统入口；wheel 管理员环境应改用
 `/opt/perflens/bin/perflens-admin`。入口必须来自系统包或 `/opt/perflens` 中的受信任
 副本，不要用 `sudo` 运行用户家目录里可修改的脚本。完整内核权限和真实短时验收步骤见
 [《产品部署指南》](docs/deployment.zh-CN.md)。不要让 MCP 或 Agent 以 root 运行。
