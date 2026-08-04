@@ -19,6 +19,12 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
+- `perflens setup --prepare-collector` now safely detects trusted native
+  `/usr/bin` package entry points and writes the matching administrator command
+  into both generated guides and metadata. Wheel/source installs continue to
+  target `/opt/perflens`; a native main package missing its matching Collector
+  package now fails early with an actionable Chinese-first error instead of
+  generating unusable paths.
 - Debian onboarding and Collector deployment now preserve the trusted
   `/usr/bin/perflens-mcp` and `/usr/bin/perflens-collector` entry-point symlinks
   instead of resolving them to the identity-neutral generic launcher; symlinks

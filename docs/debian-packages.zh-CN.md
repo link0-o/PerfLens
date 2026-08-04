@@ -33,6 +33,12 @@ perflens setup \
   --automatic-collection
 ```
 
+`setup` 会验证 root 管理且不可写的系统包入口，然后自动把
+`/usr/bin/perflens-collector` 写入 unit，并把 `/usr/bin/perflens-admin` 写入中英文
+下一步指南，不需要用户判断安装布局或补传路径。如果只安装了主包却要求准备 Collector，
+命令会在写文件前明确提示安装同版本 `perflens-collector` 包。显式
+`--collector-command` 只用于受控的自定义安装布局。
+
 版本号只是示例，应替换为下载文件的实际版本。安装包不会自动启动服务、写入
 `/etc/perflens`、修改 sysctl/capability 或授予用户权限。检查引导生成的双语
 `collector.toml` 后，由管理员明确执行：

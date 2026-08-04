@@ -36,6 +36,10 @@ sudo /opt/perflens/bin/python -m pip install \
 
 普通用户首次安装和项目配置应先按照[《安装与首次使用》](../INSTALL.zh-CN.md)运行 `perflens setup`。本页主要面向需要部署系统 Collector 的管理员。
 
+优先使用 `perflens setup --prepare-collector` 生成当前布局匹配的完整资产和可复制命令。
+正式 DEB 会自动使用 `/usr/bin`；wheel/source 会使用下面的 `/opt/perflens`。只有自定义
+管理员布局才需要手工运行 `stage-collector-assets --collector-command ...`。
+
 获取普通用户 UID：
 
 ```bash

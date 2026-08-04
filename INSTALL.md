@@ -48,9 +48,12 @@ perflens setup \
 
 Review the generated policy, validate it with
 `perflens-admin deploy --config <toml> --dry-run`, then have an administrator run
-the same system-package command once with `sudo` and without `--dry-run`. Wheel
-deployments use `/opt/perflens/bin/perflens-admin`. Use only a trusted system or
-administrator-controlled copy. Deployment prints a Chinese summary by default,
+the same command once with `sudo` and without `--dry-run`. Copy the exact command
+from the generated guide: setup safely detects native `/usr/bin` package entry
+points, while wheel/source layouts target `/opt/perflens/bin`. A native install
+missing the matching Collector package fails before files are generated and
+explains the missing package. Use only a trusted system or administrator-controlled
+copy. Deployment prints a Chinese summary by default,
 including whether the dry run changed the host, the authenticated health result,
 and the next action. Add `--json` for the complete versioned artifact.
 See [Product deployment](docs/deployment.md) before installing those assets. A

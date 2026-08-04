@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from perflens.distribution import onboarding
 from perflens.distribution.onboarding import run_project_setup
 from perflens.domain.errors import ErrorCode, PerfLensError
 
@@ -43,6 +44,7 @@ def test_setup_creates_guided_bundle_and_installs_skill(tmp_path: Path) -> None:
         prepare_collector=True,
         automatic_collection=True,
         collector_uid=os.geteuid(),
+        collector_command=Path("/opt/perflens/bin/perflens-collector"),
     )
     assert repeated.skill_status == "existing"
     assert repeated.automatic_collection_enabled is True
@@ -53,6 +55,97 @@ def test_setup_creates_guided_bundle_and_installs_skill(tmp_path: Path) -> None:
     assert '"--allow-project-execution"' in mcp_config
     guide = (project / "setup-two/下一步.zh-CN.md").read_text(encoding="utf-8")
     assert "用户不需要查找或输入 PID" in guide
+    assert "/opt/perflens/bin/perflens-admin deploy" in guide
+
+
+def test_setup_uses_trusted_native_package_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    def trusted(path: Path) -> bool:
+        return path == Path("/usr/bin/perflens-collector")
+
+    monkeypatch.setattr("perflens.distribution.onboarding._trusted_packaged_entrypoint", trusted)
+    artifact = run_project_setup(
+        project,
+        prepare_collector=True,
+        install_skill=False,
+        perf_path=Path("/bin/true"),
+    )
+
+    assert artifact.collector_assets_path is not None
+    assets = Path(artifact.collector_assets_path)
+    service = (assets / "perflens-collector.service").read_text(encoding="utf-8")
+    chinese = (project / "perflens-setup/下一步.zh-CN.md").read_text(encoding="utf-8")
+    english = (project / "perflens-setup/NEXT_STEPS.md").read_text(encoding="utf-8")
+    assert "ExecStart=/usr/bin/perflens-collector" in service
+    assert "/usr/bin/perflens-admin deploy" in chinese
+    assert "/opt/perflens/bin/perflens-admin" not in chinese
+    assert "/usr/bin/perflens-admin deploy" in english
+
+
+def test_setup_explains_missing_native_collector_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    def trusted(path: Path) -> bool:
+        return path == Path("/usr/bin/perflens")
+
+    monkeypatch.setattr("perflens.distribution.onboarding._trusted_packaged_entrypoint", trusted)
+
+    with pytest.raises(PerfLensError) as missing:
+        run_project_setup(
+            project,
+            prepare_collector=True,
+            install_skill=False,
+            perf_path=Path("/bin/true"),
+        )
+
+    assert missing.value.code is ErrorCode.INVALID_INPUT
+    assert "缺少 Collector" in missing.value.message
+    assert "perflens-collector" in missing.value.suggested_actions[0]
+    assert not (project / "perflens-setup").exists()
+
+
+def test_native_entrypoint_trust_rejects_writable_launcher_or_target(
+    tmp_path: Path,
+) -> None:
+    native_bin = tmp_path / "usr/bin"
+    runtime = tmp_path / "usr/lib/perflens"
+    native_bin.mkdir(parents=True)
+    runtime.mkdir(parents=True)
+    native_bin.chmod(0o755)
+    runtime.chmod(0o755)
+    launcher = runtime / "perflens-launcher"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o555)
+    entrypoint = native_bin / "perflens-collector"
+    entrypoint.symlink_to(launcher)
+    trusted_entrypoint = onboarding._trusted_packaged_entrypoint  # pyright: ignore[reportPrivateUsage]
+
+    assert trusted_entrypoint(
+        entrypoint,
+        native_parent=native_bin,
+        trusted_owner=os.geteuid(),
+    )
+
+    launcher.chmod(0o775)
+    assert not trusted_entrypoint(
+        entrypoint,
+        native_parent=native_bin,
+        trusted_owner=os.geteuid(),
+    )
+    launcher.chmod(0o555)
+    native_bin.chmod(0o777)
+    assert not trusted_entrypoint(
+        entrypoint,
+        native_parent=native_bin,
+        trusted_owner=os.geteuid(),
+    )
 
 
 def test_setup_refuses_overwrite_escape_and_unsafe_existing_skill(tmp_path: Path) -> None:

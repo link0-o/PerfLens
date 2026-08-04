@@ -57,6 +57,8 @@ perflens setup \
 ```
 
 然后打开命令显示的 `下一步.zh-CN.md`。完整新手流程见[《安装与首次使用》](INSTALL.zh-CN.md)。
+引导会自动选择可信 DEB `/usr/bin` 或 wheel `/opt/perflens` 部署入口；直接复制指南中的
+命令即可，不需要记忆或猜测路径。
 
 Debian 13 用户也可以直接安装原生 `.deb`，不需要自己创建 Python 环境。主包与
 可选 Collector 包的选择、安装和安全卸载见[《Debian 安装包》](docs/debian-packages.zh-CN.md)。

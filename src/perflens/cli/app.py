@@ -261,13 +261,16 @@ def setup_command(
         ),
     ] = None,
     collector_command: Annotated[
-        Path,
+        Path | None,
         typer.Option(
             "--collector-command",
             dir_okay=False,
-            help="Future absolute system Collector path used only in staged assets.",
+            help=(
+                "Future absolute Collector path. Auto-detects a trusted /usr/bin package "
+                "entry point; otherwise stages the /opt/perflens wheel layout."
+            ),
         ),
-    ] = Path("/opt/perflens/bin/perflens-collector"),
+    ] = None,
     perf_path: Annotated[
         Path,
         typer.Option("--perf-path", dir_okay=False),

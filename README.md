@@ -60,6 +60,8 @@ perflens setup \
 ```
 
 Follow the generated `NEXT_STEPS.md`. See [Installation and first use](INSTALL.md) for the complete beginner flow.
+Onboarding safely selects the native `/usr/bin` or wheel `/opt/perflens` layout,
+so copy the exact generated deployment command instead of guessing paths.
 
 Debian 13 users can instead install the native, offline `.deb` packages. See
 [Debian packages](docs/debian-packages.md) for the split main/Collector flow.

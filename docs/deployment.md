@@ -10,6 +10,12 @@ Deploy PerfLens as two privilege domains: ordinary-user CLI/MCP/Skill processes 
 
 Ordinary users should complete [Installation and first use](../INSTALL.md) and run `perflens setup` first. This page focuses on administrator-managed Collector deployment.
 
+Prefer `perflens setup --prepare-collector` to generate assets and exact commands
+for the detected installation layout. Native DEBs select trusted `/usr/bin`
+entry points automatically; wheel/source installs select `/opt/perflens`. Use
+the lower-level `stage-collector-assets --collector-command ...` flow only for
+a deliberately managed custom administrator layout.
+
 For the current wheel-based deployment:
 
 1. install the Collector runtime outside user home, for example under `/opt/perflens`;

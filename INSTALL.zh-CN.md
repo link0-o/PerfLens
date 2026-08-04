@@ -145,11 +145,14 @@ sudo perflens-admin deploy \
   --config /绝对路径/perflens-collector-setup/collector-assets/collector.toml
 ```
 
+上面的路径只是 DEB 示例。请直接复制生成的 `下一步.zh-CN.md` 中的命令：`setup` 会
+安全识别 DEB 的 `/usr/bin` 入口；wheel 或源码布局默认生成 `/opt/perflens/bin` 入口。
+如果系统包缺少配套 Collector，`setup` 会直接告诉你应安装哪个包，不会生成错误引导。
+
 第一条只校验并显示计划；第二条才写入系统、添加授权用户组并启动服务，通常只需输入
 一次 root 密码。部署命令默认显示中文摘要：预检会明确写出“尚未修改系统”，正式部署
-成功时会写出健康握手结论和下一步。脚本需要完整版本化结果时加 `--json`。上面使用
-DEB 的系统入口；wheel 管理员环境应改用
-`/opt/perflens/bin/perflens-admin`。入口必须来自系统包或 `/opt/perflens` 中的受信任
+成功时会写出健康握手结论和下一步。脚本需要完整版本化结果时加 `--json`。入口必须
+来自系统包或 `/opt/perflens` 中的受信任
 副本，不要用 `sudo` 运行用户家目录里可修改的脚本。完整内核权限和真实短时验收步骤见
 [《产品部署指南》](docs/deployment.zh-CN.md)。不要让 MCP 或 Agent 以 root 运行。
 

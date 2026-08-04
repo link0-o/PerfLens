@@ -35,6 +35,14 @@ perflens setup \
   --automatic-collection
 ```
 
+`setup` validates the root-managed, non-writable native entry points and
+automatically writes `/usr/bin/perflens-collector` into the unit and
+`/usr/bin/perflens-admin` into both next-step guides. Users do not need to
+select an installation layout. If the main native package is present without
+its matching Collector package, setup stops before writing files and explains
+which package is missing. `--collector-command` remains available for a
+deliberately managed custom layout.
+
 Package installation never enables a service, writes `/etc/perflens`, changes
 sysctl/capabilities, or grants user access. After reviewing the generated policy,
 an administrator explicitly runs `sudo perflens-admin deploy --config <policy>`.

@@ -72,8 +72,11 @@ jobs:
             --prepare-collector \
             --automatic-collection \
             --collector-uid 65534 \
-            --collector-command /usr/bin/perflens-collector \
             --perf-path /usr/bin/true
+          grep -F "ExecStart=/usr/bin/perflens-collector" \
+            /tmp/perflens-installed-preflight/perflens-setup/collector-assets/perflens-collector.service
+          grep -F "/usr/bin/perflens-admin deploy" \
+            /tmp/perflens-installed-preflight/perflens-setup/下一步.zh-CN.md
           perflens-admin deploy \
             --config /tmp/perflens-installed-preflight/perflens-setup/collector-assets/collector.toml \
             --dry-run | grep -F "尚未修改系统"
