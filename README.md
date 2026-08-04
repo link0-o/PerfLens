@@ -77,6 +77,11 @@ finding a PID:
 perflens accept-collector --authorize-host-acceptance
 ```
 
+The default output is a concise Chinese pass summary with the evidence path,
+hash, metric count, and conclusion boundary. Use `--json` for complete
+machine-readable output or `--output ./collector-acceptance.json` to preserve a
+new versioned evidence file.
+
 The wheel installation commands provide `perflens`, `perflens-mcp`, the optional
 `perflens-collector`, and the explicit administrator entry point
 `perflens-admin`. Confirm the release:

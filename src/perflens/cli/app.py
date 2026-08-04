@@ -38,7 +38,12 @@ from perflens.collection.planning import (
     create_collection_plan,
 )
 from perflens.collector_broker.client import CollectorBrokerClient
-from perflens.contracts.artifacts import ErrorArtifact, ErrorBody, RuntimeStatusArtifact
+from perflens.contracts.artifacts import (
+    CollectorAcceptanceArtifact,
+    ErrorArtifact,
+    ErrorBody,
+    RuntimeStatusArtifact,
+)
 from perflens.distribution.acceptance import accept_collector
 from perflens.distribution.codex import render_codex_config
 from perflens.distribution.collector import install_collector_assets
@@ -473,6 +478,10 @@ def accept_collector_command(
         Path | None,
         typer.Option("--output", dir_okay=False, help="Optional new acceptance JSON path."),
     ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the complete versioned acceptance JSON."),
+    ] = False,
     perf_path: Annotated[
         Path | None,
         typer.Option(
@@ -504,9 +513,17 @@ def accept_collector_command(
             return
     except PerfLensError as exc:
         _fail(exc)
-    typer.echo(
-        json.dumps(artifact.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True)
-    )
+    if json_output:
+        typer.echo(
+            json.dumps(
+                artifact.model_dump(mode="json"),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+    _render_collector_acceptance_chinese(artifact)
 
 
 @app.command("analyze-folded")
@@ -1051,6 +1068,44 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
         typer.echo("问题与提示:")
         for issue in issues:
             typer.echo(f"- {issue_labels.get(issue, issue)}")
+
+
+def _render_collector_acceptance_chinese(
+    artifact: CollectorAcceptanceArtifact,
+) -> None:
+    typer.echo("PerfLens Collector 真实采集验收")
+    typer.echo("状态: 通过")
+    typer.echo("测试目标: PerfLens 内置普通用户 CPU 负载")
+    typer.echo(f"验收 ID: {artifact.acceptance_id}")
+    typer.echo(f"Collector Socket: {artifact.socket_path}")
+    typer.echo(f"请求采集时长: {artifact.requested_duration_seconds:g} 秒")
+    typer.echo(f"采集指标数量: {artifact.metric_count}")
+    typer.echo(f"证据文件: {artifact.output_path}")
+    typer.echo(f"证据大小: {_human_bytes(artifact.output_bytes)}")
+    typer.echo(f"证据 SHA-256: {artifact.output_sha256}")
+    typer.echo(f"采集开始: {artifact.started_at}")
+    typer.echo(f"采集结束: {artifact.finished_at}")
+    if artifact.warnings:
+        typer.echo("警告:")
+        for warning in artifact.warnings:
+            typer.echo(f"- {warning}")
+    typer.echo("结论:")
+    typer.echo("- 当前用户、Collector 策略和内核权限已完成一次真实短时采集。")
+    typer.echo("- 此结果只证明本机当前配置。任意项目或采集模式仍需分别验证。")
+    typer.echo("下一步:")
+    typer.echo("- 需要留档时重新运行并使用 --output <新文件.json>。")
+    typer.echo("- 需要机器可读输出时使用 --json。")
+
+
+def _human_bytes(value: int) -> str:
+    units = ("B", "KiB", "MiB", "GiB", "TiB", "PiB")
+    amount = float(value)
+    unit = units[0]
+    for unit in units:
+        if amount < 1024 or unit == units[-1]:
+            break
+        amount /= 1024
+    return f"{amount:.0f} {unit}" if amount.is_integer() else f"{amount:.1f} {unit}"
 
 
 def _fail(error: PerfLensError) -> NoReturn:

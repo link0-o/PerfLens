@@ -165,8 +165,9 @@ Collector 以特权启动用户程序。
 实时采集并非固定 10 秒：自动计划默认 10 秒，用户可以在请求中调整，
 但默认安全上限是 30 秒。部署后以普通用户运行
 `perflens accept-collector --authorize-host-acceptance`，无需输入 PID；该验收默认
-1 秒、最多 5 秒。管理员也可以通过 Collector 独立策略进一步降低允许的模式、事件、
-时长和输出大小。
+1 秒、最多 5 秒，并默认输出带结论边界的中文摘要。自动化程序加 `--json`；需要留档时
+加 `--output ./collector-acceptance.json`。管理员也可以通过 Collector 独立策略进一步
+降低允许的模式、事件、时长和输出大小。
 
 ## 升级
 

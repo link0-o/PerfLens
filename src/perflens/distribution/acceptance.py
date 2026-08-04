@@ -101,6 +101,25 @@ def accept_collector(
                 recoverable=True,
                 details={"socket": str(socket_path)},
             ) from exc
+        measured_metrics = tuple(
+            metric
+            for metric in collection.metrics
+            if metric.status == "measured" and metric.value is not None
+        )
+        if not measured_metrics:
+            raise PerfLensError(
+                ErrorCode.PROFILE_PARSE_FAILED,
+                "collector_acceptance",
+                "Collector acceptance produced no measured perf stat metrics",
+                recoverable=True,
+                details={
+                    "collection_id": collection.collection_id,
+                    "metric_statuses": [metric.status for metric in collection.metrics],
+                },
+                suggested_actions=(
+                    "Inspect perf event support and the Collector journal, then retry.",
+                ),
+            )
 
         identity = "\0".join(
             (

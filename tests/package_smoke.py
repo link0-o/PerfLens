@@ -58,7 +58,14 @@ def main() -> None:
         expected="Prune only exact source files",
     )
     _run(perflens, "verify-collector", "--help", expected="bounded real perf-stat probe")
-    _run(perflens, "accept-collector", "--help", expected="without choosing a PID")
+    acceptance_help = _run(
+        perflens,
+        "accept-collector",
+        "--help",
+        expected="without choosing a PID",
+    )
+    assert "--json" in acceptance_help
+    assert "complete versioned acceptance" in acceptance_help
 
     with tempfile.TemporaryDirectory(prefix="perflens-package-smoke-") as directory:
         root = Path(directory)

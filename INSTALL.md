@@ -63,7 +63,9 @@ Automatic collection defaults to 10 seconds but is user-adjustable within the
 MCP and Collector policy limits (30 seconds by default). Run the deployment
 acceptance as the ordinary user with
 `perflens accept-collector --authorize-host-acceptance`; its built-in probe
-requires no PID, defaults to one second, and is capped at five seconds.
+requires no PID, defaults to one second, and is capped at five seconds. It prints
+a Chinese pass summary by default; add `--json` for the complete versioned artifact
+or `--output ./collector-acceptance.json` to preserve it safely.
 
 To tune collection policy without reinstalling, copy the deployed TOML to a
 separate mode-`0600` candidate, run `perflens-admin update-policy --config

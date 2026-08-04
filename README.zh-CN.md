@@ -73,6 +73,10 @@ perflens status --project /绝对路径/你的项目
 perflens accept-collector --authorize-host-acceptance
 ```
 
+默认输出简洁中文结果，包括证据路径、哈希、指标数量和结论边界。自动化程序使用
+`--json` 获取完整机器可读结果；需要留档时使用
+`--output ./collector-acceptance.json` 写入一个新的版本化证据文件。
+
 上面的 wheel 安装方式会安装 `perflens`、`perflens-mcp`、可选的 `perflens-collector`
 和管理员入口 `perflens-admin`。可以这样确认版本：
 

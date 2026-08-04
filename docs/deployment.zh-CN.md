@@ -247,10 +247,12 @@ PerfLens 会以当前普通用户启动一个固定、隔离、最长约 30 秒�
 都会终止测试进程。Collector 仍然只接收绑定 PID、UID 和启动时间的短期单次计划，
 不会收到任意命令、环境变量或输出路径。
 
-成功时输出带 `schema_version` 和 `status: passed` 的验收 JSON，指标产物写入策略限定
-的 `/var/lib/perflens`。需要留档时使用
-`--output ./perflens-collector-acceptance.json`；输出文件必须是新文件。失败时会返回
-稳定错误，例如 Socket 权限、策略拒绝或内核禁止 perf。
+成功时默认输出中文验收摘要，直接显示证据路径、SHA-256、指标数量，并明确说明它只
+证明本机当前配置。指标产物写入策略限定的 `/var/lib/perflens`。自动化程序加 `--json`
+获取带 `schema_version` 和 `status: passed` 的完整结果；需要留档时使用
+`--output ./perflens-collector-acceptance.json`，且输出必须是新文件。失败时会返回稳定
+错误，例如 Socket 权限、策略拒绝或内核禁止 perf。若所有事件都显示不支持或未计数，
+验收也会失败；至少需要一个有限数值的 `measured` 指标才会显示“通过”。
 
 这是主动采集，不是只读健康检查，所以必须显式传入授权开关。高级用户若要验证自己
 已有且明确授权的进程，仍可使用 `perflens verify-collector --help`，该命令要求 PID

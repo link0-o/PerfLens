@@ -65,6 +65,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   bounded selection, stored ZIP manifests, per-file SHA-256 and source-identity
   verification, root-managed archives, dry-run review, and destructive
   authorization without automatic retention deletion.
+- A Chinese-first `accept-collector` success summary with evidence identity,
+  size, hash, metric count, conclusion boundaries, and explicit `--json` output
+  for automation; acceptance now rejects runs containing no measured metric.
 
 ### Changed
 

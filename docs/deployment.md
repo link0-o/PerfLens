@@ -131,10 +131,14 @@ migration requires a separate stopped-service administrator procedure.
 
 `accept-collector` starts a fixed, self-owned CPU probe and performs a real,
 policy-bounded perf-stat collection of at most five seconds. It always cleans up
-the probe and emits versioned acceptance evidence, so users do not need to find
-a PID. It still requires `--authorize-host-acceptance` because it is not a
-read-only health check. The advanced `verify-collector` command remains
-available for an explicitly authorized existing PID.
+the probe, so users do not need to find a PID. It prints a concise Chinese pass
+summary by default; `--json` emits the complete versioned acceptance artifact and
+`--output` safely preserves it as a new file. It still requires
+`--authorize-host-acceptance` because it is not a read-only health check. The
+command refuses a false pass when perf returns only unsupported or uncounted
+events: at least one finite `measured` metric is required. The advanced
+`verify-collector` command remains available for an explicitly authorized
+existing PID.
 
 Production releases now ship separate `perflens` and `perflens-collector` DEBs.
 They install offline and do not activate the service. Future RPM installers must

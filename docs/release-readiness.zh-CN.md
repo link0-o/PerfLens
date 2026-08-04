@@ -27,9 +27,9 @@
 |---|---|---|
 | 代码规范 | `ruff check .` | 通过 |
 | 严格类型 | `pyright` | 0 错误、0 警告 |
-| Python 3.12 | `pytest -q`，Python 3.12.13 | 253 通过 |
-| Python 3.13 | 隔离环境 `pytest -q` | 253 通过 |
-| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.36%，通过 |
+| Python 3.12 | `pytest -q`，Python 3.12.13 | 256 通过 |
+| Python 3.13 | 隔离环境 `pytest -q` | 256 通过 |
+| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.46%，通过 |
 | Skill | Skill 结构和打包测试 | 通过 |
 | Schema | 已提交 Schema 与 Contract 生成结果相等 | 通过 |
 | 依赖锁 | `uv export --locked` | 通过 |
@@ -38,7 +38,7 @@
 | wheel/sdist | 全新临时目录构建和隔离安装 | 全部通过 |
 | SHA-256 | wheel、sdist、两个 DEB、Skill、SBOM | 六项全部通过 |
 | Collector 健康协议 | 双向内核 peer 凭据 → 只读 `health` → 版本化就绪结果 | 授权、错误服务 UID、拒绝、遗留 Socket 超时及部署等待路径通过 |
-| 部署验收命令 | `accept-collector` → 内置负载 → 授权 stat 计划 → Broker | 可执行 perf Test Double 通过 |
+| 部署验收命令 | `accept-collector` → 内置负载 → 授权 stat 计划 → 至少一个实测指标 | 中文/JSON/文件输出及无实测指标拒绝路径通过可执行 perf Test Double 验证 |
 | Collector 存储边界 | 累计字节/文件数/空闲余量 → 启动 perf 前预留 | 三类拒绝及 Unix Socket 端到端通过 |
 | Collector 存储检查 | `spool-status` → 直接普通文件 → 配额/磁盘余量 | 中文摘要、版本化 JSON 和异常项拒绝通过 |
 | Collector 证据生命周期 | 托管文件选择 → ZIP manifest/哈希 → 双份复核 → 显式授权清理 | 默认不删除、root 归档、篡改/身份变化/未知项目拒绝路径通过 |

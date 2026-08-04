@@ -16,9 +16,9 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 |---|---|---|
 | Lint | `ruff check .` | passed |
 | Strict types | `pyright` | 0 errors, 0 warnings |
-| Python 3.13 | isolated `pytest -q` environment | 253 passed |
-| Python 3.12 | `pytest -q` on 3.12.13 | 253 passed |
-| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.36%, passed |
+| Python 3.13 | isolated `pytest -q` environment | 256 passed |
+| Python 3.12 | `pytest -q` on 3.12.13 | 256 passed |
+| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.46%, passed |
 | Skill | structure and package tests | passed |
 | Schemas | checked-in schema equality test | passed |
 | Dependency lock | `uv export --locked` | passed |
@@ -28,7 +28,7 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 | Active perf denial | real perf 6.12.90, `perf_event_paranoid=3` | structured failure; no residual output |
 | Automatic Broker | MCP plan → authenticated Unix socket → fixed spool | passed with executable perf test double |
 | Collector health protocol | bidirectional kernel peer credentials → read-only `health` | allow, wrong service UID, deny, stale timeout, and deploy wait paths passed |
-| Deployment verification | `accept-collector` → built-in probe → authorized stat plan → Broker | passed with executable perf test double |
+| Deployment verification | `accept-collector` → built-in probe → authorized stat plan → at least one measured metric | Chinese/JSON/file output and no-measured-metric denial pass with executable perf test double |
 | Collector storage bounds | cumulative bytes/files/free-space reserve before perf | three denial classes and Unix-socket end-to-end passed |
 | Collector storage status | `spool-status` → direct regular files → quota/filesystem headroom | Chinese summary, versioned JSON, and unsafe-entry paths passed |
 | Collector evidence lifecycle | managed selection → ZIP manifest/hashes → dual verification → authorized prune | no default deletion, root archive, and tamper/identity/unmanaged denial paths passed |

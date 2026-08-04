@@ -72,7 +72,7 @@ perflens stage-collector-assets \
 
 部署、真实验收、升级和卸载的完整流程见[《产品部署指南》](deployment.zh-CN.md)。
 部署后普通用户运行 `perflens accept-collector --authorize-host-acceptance` 即可用
-内置负载做一次真实短时验收，无需查找 PID。
+内置负载做一次真实短时验收，无需查找 PID。默认显示中文摘要，机器调用时加 `--json`。
 
 ## 管理员一键安装
 
