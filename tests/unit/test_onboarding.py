@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from perflens.contracts.artifacts import SetupArtifact
 from perflens.distribution import onboarding
 from perflens.distribution.onboarding import run_project_setup
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -28,6 +29,9 @@ def test_setup_creates_guided_bundle_and_installs_skill(tmp_path: Path) -> None:
     assert artifact.skill_status == "installed"
     assert artifact.collection_status in {"available", "conditional", "blocked"}
     assert (project / ".agents/skills/perflens-performance-analysis/SKILL.md").is_file()
+    assert (project / ".codex/config.toml").is_file()
+    assert artifact.codex_project_config_status == "installed"
+    assert artifact.codex_project_config_path == str(project / ".codex/config.toml")
     assert (output / "codex-mcp.toml").is_file()
     assert (output / "collection-capabilities.json").is_file()
     assert (output / "下一步.zh-CN.md").is_file()
@@ -47,12 +51,16 @@ def test_setup_creates_guided_bundle_and_installs_skill(tmp_path: Path) -> None:
         collector_command=Path("/opt/perflens/bin/perflens-collector"),
     )
     assert repeated.skill_status == "existing"
+    assert repeated.codex_project_config_status == "updated"
     assert repeated.automatic_collection_enabled is True
     assert repeated.collector_assets_path is not None
     policy = Path(repeated.collector_assets_path) / "collector.toml"
     assert f"allowed_uids = [{os.geteuid()}]" in policy.read_text(encoding="utf-8")
     mcp_config = (project / "setup-two/codex-mcp.toml").read_text(encoding="utf-8")
     assert '"--allow-project-execution"' in mcp_config
+    assert '"--allow-project-execution"' in (project / ".codex/config.toml").read_text(
+        encoding="utf-8"
+    )
     guide = (project / "setup-two/下一步.zh-CN.md").read_text(encoding="utf-8")
     assert "用户不需要查找或输入 PID" in guide
     assert "/opt/perflens/bin/perflens-admin deploy" in guide
@@ -88,6 +96,46 @@ def test_setup_uses_trusted_native_package_layout(
     assert "/usr/bin/perflens-admin deploy" in chinese
     assert "/opt/perflens/bin/perflens-admin" not in chinese
     assert "/usr/bin/perflens-admin deploy" in english
+
+
+def test_setup_can_generate_without_installing_codex_project_config(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    artifact = run_project_setup(
+        project,
+        install_codex_config=False,
+        install_skill=False,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+
+    assert artifact.codex_project_config_status == "skipped"
+    assert artifact.codex_project_config_path is None
+    assert not (project / ".codex").exists()
+    assert (project / "perflens-setup/codex-mcp.toml").is_file()
+    guide = (project / "perflens-setup/下一步.zh-CN.md").read_text(encoding="utf-8")
+    assert "--skip-codex-config" in guide
+
+
+def test_setup_artifact_accepts_payload_before_project_config_fields(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    artifact = run_project_setup(
+        project,
+        install_codex_config=False,
+        install_skill=False,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+    payload = artifact.model_dump()
+    payload.pop("codex_project_config_path")
+    payload.pop("codex_project_config_status")
+
+    restored = SetupArtifact.model_validate(payload)
+
+    assert restored.codex_project_config_path is None
+    assert restored.codex_project_config_status == "skipped"
 
 
 def test_setup_explains_missing_native_collector_package(

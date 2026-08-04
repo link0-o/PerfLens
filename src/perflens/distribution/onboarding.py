@@ -13,7 +13,11 @@ from perflens import __version__
 from perflens.artifacts.filesystem import write_json_new_atomic, write_text_atomic
 from perflens.collection.capabilities import inspect_collection_capabilities
 from perflens.contracts.artifacts import CollectionCapabilityArtifact, SetupArtifact
-from perflens.distribution.codex import render_codex_config
+from perflens.distribution.codex import (
+    CodexConfigInstallPlan,
+    plan_codex_project_config,
+    render_codex_config,
+)
 from perflens.distribution.collector import install_collector_assets
 from perflens.distribution.skill import SKILL_NAME, install_project_skill
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -30,6 +34,7 @@ def run_project_setup(
     *,
     output_directory: Path | None = None,
     install_skill: bool = True,
+    install_codex_config: bool = True,
     allow_process_execution: bool = False,
     mcp_command: Path | None = None,
     prepare_collector: bool = False,
@@ -55,6 +60,9 @@ def run_project_setup(
         allow_project_execution=automatic_collection,
         mcp_command=mcp_command,
     )
+    codex_plan: CodexConfigInstallPlan | None = (
+        plan_codex_project_config(project, configuration) if install_codex_config else None
+    )
     capabilities = inspect_collection_capabilities(perf_path)
     collection_status, blocked_modes = _collection_status(capabilities)
     selected_uid = os.geteuid() if collector_uid is None else collector_uid
@@ -65,6 +73,7 @@ def run_project_setup(
         automatic_collection=automatic_collection,
         collection_status=collection_status,
         admin_command=admin_command,
+        codex_plan=codex_plan,
     )
 
     created = False
@@ -91,6 +100,7 @@ def run_project_setup(
                 automatic_collection,
                 admin_command,
                 selected_collector_command,
+                codex_plan,
             ),
             chinese_guide_path,
             max_output_bytes=_MAX_GUIDE_BYTES,
@@ -104,6 +114,7 @@ def run_project_setup(
                 automatic_collection,
                 admin_command,
                 selected_collector_command,
+                codex_plan,
             ),
             english_guide_path,
             max_output_bytes=_MAX_GUIDE_BYTES,
@@ -128,6 +139,8 @@ def run_project_setup(
             chinese_guide_path,
             english_guide_path,
         ]
+        if codex_plan is not None and codex_plan.status != "existing":
+            generated.append(codex_plan.path)
         if collector_assets_path is not None:
             generated.extend(sorted(collector_assets_path.iterdir()))
         setup_path = output / "setup.json"
@@ -139,6 +152,12 @@ def run_project_setup(
             skill_status=skill_status,
             skill_path=str(skill_path) if skill_path is not None else None,
             mcp_config_path=str(mcp_config_path),
+            codex_project_config_path=(
+                str(codex_plan.path) if codex_plan is not None else None
+            ),
+            codex_project_config_status=(
+                codex_plan.status if codex_plan is not None else "skipped"
+            ),
             capability_report_path=str(capability_path),
             collector_assets_path=(
                 str(collector_assets_path) if collector_assets_path is not None else None
@@ -150,6 +169,8 @@ def run_project_setup(
             next_steps=next_steps,
         )
         write_json_new_atomic(artifact, setup_path, max_output_bytes=_MAX_SETUP_JSON_BYTES)
+        if codex_plan is not None:
+            codex_plan.apply()
         return artifact
     except BaseException:
         if created:
@@ -311,12 +332,19 @@ def _next_steps(
     automatic_collection: bool,
     collection_status: str,
     admin_command: Path,
+    codex_plan: CodexConfigInstallPlan | None,
 ) -> tuple[str, ...]:
     steps = [
         f"Review {output / '下一步.zh-CN.md'}.",
-        f"Merge {output / 'codex-mcp.toml'} into the user's Codex config, then restart Codex.",
         f"Ask the Skill to analyze a profile inside {project}.",
     ]
+    if codex_plan is None:
+        steps.insert(
+            1,
+            f"Merge {output / 'codex-mcp.toml'} into the user's Codex config, then restart Codex.",
+        )
+    else:
+        steps.insert(1, f"Restart Codex; project MCP config is at {codex_plan.path}.")
     if prepare_collector:
         steps.append(
             "Have an administrator review collector-assets/collector.toml, then run "
@@ -344,6 +372,7 @@ def _chinese_guide(
     automatic_collection: bool = False,
     admin_command: Path = Path("/opt/perflens/bin/perflens-admin"),
     collector_command: Path = _WHEEL_COLLECTOR_COMMAND,
+    codex_plan: CodexConfigInstallPlan | None = None,
 ) -> str:
     layout_note = _chinese_layout_note(admin_command, collector_command)
     policy_path = output / "collector-assets" / "collector.toml"
@@ -412,17 +441,27 @@ PID 并交给 Collector。用户不需要查找或输入 PID。
 `perflens setup --automatic-collection`，并先完成 Collector 部署。
 """
     )
+    codex_section = (
+        f"""项目级配置已安全{_codex_status_chinese(codex_plan.status)}到
+`{codex_plan.path}`。PerfLens 只管理带有中英文标记的 MCP 配置块；已有其他 Codex
+设置会保留。现在重启 Codex，再执行 `codex mcp list` 检查 `perflens`。
+
+同时保留了 `{output / 'codex-mcp.toml'}` 作为可检查、可迁移的独立配置片段。
+"""
+        if codex_plan is not None
+        else f"""本次使用了 `--skip-codex-config`，没有修改项目的 Codex 配置。打开
+`{output / 'codex-mcp.toml'}`，复制其中完整的 `[mcp_servers.perflens]` 配置块到
+项目 `.codex/config.toml` 或用户配置；不要覆盖已有设置。保存后重启 Codex，再执行
+`codex mcp list` 检查 `perflens`。
+"""
+    )
     return f"""# PerfLens 安装后的下一步
 
 项目：`{project}`
 
 ## 1. MCP 配置
 
-打开 `{output / 'codex-mcp.toml'}`，复制其中完整的
-`[mcp_servers.perflens]` 配置块。Linux 上的用户配置通常是
-`~/.codex/config.toml`；如果项目已经受信任，也可以放入项目的
-`.codex/config.toml`。不要直接覆盖已有配置，保存后重启 Codex，
-再执行 `codex mcp list` 检查 `perflens`。
+{codex_section}
 
 ## 2. Skill
 
@@ -475,6 +514,10 @@ def _collection_status_chinese(capabilities: CollectionCapabilityArtifact) -> st
     }[status]
 
 
+def _codex_status_chinese(status: str) -> str:
+    return {"installed": "安装", "updated": "更新", "existing": "确认已存在"}[status]
+
+
 def _status_command(project: Path, output: Path) -> str:
     return shlex.join(
         (
@@ -509,6 +552,7 @@ def _english_guide(
     automatic_collection: bool = False,
     admin_command: Path = Path("/opt/perflens/bin/perflens-admin"),
     collector_command: Path = _WHEEL_COLLECTOR_COMMAND,
+    codex_plan: CodexConfigInstallPlan | None = None,
 ) -> str:
     status_command = _status_command(project, output)
     layout = (
@@ -526,12 +570,19 @@ def _english_guide(
         if prepare_collector
         else "No Collector assets were generated; existing-profile analysis needs no privilege."
     )
+    codex = (
+        f"Project MCP configuration was safely {codex_plan.status} at `{codex_plan.path}`; "
+        "restart Codex and run `codex mcp list`. The standalone codex-mcp.toml remains "
+        "available for review and migration."
+        if codex_plan is not None
+        else "No project configuration was changed. Merge codex-mcp.toml manually, restart "
+        "Codex, and run `codex mcp list`."
+    )
     return f"""# PerfLens next steps
 
 Project: `{project}`
 
-1. Merge `{output / 'codex-mcp.toml'}` into the user's Codex
-   configuration without overwriting existing settings, then restart Codex.
+1. {codex}
 2. Use the project Skill at `.agents/skills/{SKILL_NAME}` for evidence-first analysis.
 3. Review `{output / 'collection-capabilities.json'}`; the aggregate status is
    `{_collection_status(capabilities)[0]}` and is not proof of successful sampling.

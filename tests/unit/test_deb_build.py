@@ -14,15 +14,20 @@ _remove_nondeterministic_uv_metadata = cast(
 )
 
 
-def test_deb_builder_removes_uv_timestamp_metadata_and_record_entry(tmp_path: Path) -> None:
+def test_deb_builder_removes_variable_install_metadata_and_record_entries(
+    tmp_path: Path,
+) -> None:
     metadata = tmp_path / "example-1.0.dist-info"
     metadata.mkdir()
     cache = metadata / "uv_cache.json"
     cache.write_text('{"timestamp": 123}\n', encoding="utf-8")
+    direct_url = metadata / "direct_url.json"
+    direct_url.write_text('{"url": "file:///tmp/build-a/package.whl"}\n', encoding="utf-8")
     record = metadata / "RECORD"
     record.write_text(
         "example/__init__.py,sha256=abc,1\n"
         "example-1.0.dist-info/uv_cache.json,sha256=variable,19\n"
+        "example-1.0.dist-info/direct_url.json,sha256=path,44\n"
         "example-1.0.dist-info/RECORD,,\n",
         encoding="utf-8",
     )
@@ -30,6 +35,7 @@ def test_deb_builder_removes_uv_timestamp_metadata_and_record_entry(tmp_path: Pa
     _remove_nondeterministic_uv_metadata(tmp_path)
 
     assert not cache.exists()
+    assert not direct_url.exists()
     assert record.read_text(encoding="utf-8") == (
         "example/__init__.py,sha256=abc,1\n"
         "example-1.0.dist-info/RECORD,,\n"

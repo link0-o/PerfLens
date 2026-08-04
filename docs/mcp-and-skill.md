@@ -19,7 +19,8 @@ perflens setup --project /absolute/path/to/workspace
 ```
 
 It installs the project Skill and creates Chinese and English next steps,
-capability diagnostics, and a copy-ready `codex-mcp.toml` under
+capability diagnostics, a safely managed project `.codex/config.toml` block,
+and a standalone `codex-mcp.toml` under
 `perflens-setup/`. It neither overwrites existing files nor requests
 administrator privileges. See the [installation guide](../INSTALL.md) for the
 complete download-to-first-analysis path.

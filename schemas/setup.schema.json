@@ -18,6 +18,29 @@
       "title": "Capability Report Path",
       "type": "string"
     },
+    "codex_project_config_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Codex Project Config Path"
+    },
+    "codex_project_config_status": {
+      "default": "skipped",
+      "enum": [
+        "installed",
+        "updated",
+        "existing",
+        "skipped"
+      ],
+      "title": "Codex Project Config Status",
+      "type": "string"
+    },
     "collection_status": {
       "enum": [
         "available",

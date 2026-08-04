@@ -14,7 +14,8 @@ default may inspect an older `perflens-setup` bundle and report automatic
 collection as unconfigured. The Chinese summary ends with a state-specific
 recovery or acceptance command.
 
-It checks onboarding, Skill and MCP snippets, staged Collector assets, the Unix
+It checks onboarding, Skill, whether project `.codex/config.toml` matches the
+selected setup, staged Collector assets, the Unix
 socket, current login-group membership, and host perf conditions. It never
 samples or attaches to a process. If those prerequisites pass, it additionally
 performs a 500 ms-bounded, read-only health exchange and authenticates the

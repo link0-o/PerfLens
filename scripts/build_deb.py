@@ -329,23 +329,33 @@ def _normalize_tree(root: Path) -> None:
 
 
 def _remove_nondeterministic_uv_metadata(runtime: Path) -> None:
-    """Drop uv's install timestamp cache and its wheel RECORD entry."""
-    for cache in sorted(runtime.glob("*.dist-info/uv_cache.json")):
-        metadata = cache.parent
+    """Drop installer metadata that embeds timestamps or source wheel paths."""
+    for metadata in sorted(runtime.glob("*.dist-info")):
+        variable_files = tuple(
+            path
+            for name in ("uv_cache.json", "direct_url.json")
+            if (path := metadata / name).is_file()
+        )
+        if not variable_files:
+            continue
         record = metadata / "RECORD"
-        relative_cache = cache.relative_to(runtime).as_posix()
         try:
             lines = record.read_text(encoding="utf-8").splitlines()
         except OSError as exc:
             raise RuntimeError(f"unable to read wheel RECORD for {metadata.name}") from exc
-        retained = [line for line in lines if line.partition(",")[0] != relative_cache]
-        if len(retained) != len(lines) - 1:
-            raise RuntimeError(f"wheel RECORD does not uniquely list {relative_cache}")
+        retained = lines
+        for variable_file in variable_files:
+            relative = variable_file.relative_to(runtime).as_posix()
+            filtered = [line for line in retained if line.partition(",")[0] != relative]
+            if len(filtered) != len(retained) - 1:
+                raise RuntimeError(f"wheel RECORD does not uniquely list {relative}")
+            retained = filtered
         try:
             record.write_text("\n".join(retained) + "\n", encoding="utf-8")
-            cache.unlink()
+            for variable_file in variable_files:
+                variable_file.unlink()
         except OSError as exc:
-            raise RuntimeError(f"unable to normalize uv metadata for {metadata.name}") from exc
+            raise RuntimeError(f"unable to normalize install metadata for {metadata.name}") from exc
 
 
 def _tree_kib(root: Path) -> int:

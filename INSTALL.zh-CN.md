@@ -75,12 +75,16 @@ perflens setup --project /绝对路径/你的项目
 该命令只在所选项目内执行安全操作：
 
 - 安装或识别 PerfLens Performance Analysis Skill；
+- 安全创建或更新项目 `.codex/config.toml` 中由 PerfLens 标记管理的 MCP 配置块；
 - 生成 `perflens-setup/codex-mcp.toml`；
 - 生成只读权限报告 `collection-capabilities.json`；
 - 生成中文 `下一步.zh-CN.md`；
 - 生成带 `schema_version` 的 `setup.json`。
 
-它不会执行 sudo、修改 sysctl/capability、覆盖用户 Codex 配置或启动 Collector。完成后按照终端显示的“请继续阅读”路径操作。
+它不会执行 sudo、修改 sysctl/capability、修改用户级 Codex 配置或启动 Collector。
+已有项目配置中的其他设置会原样保留；用户手写且与生成结果冲突的
+`[mcp_servers.perflens]` 不会被覆盖，而是要求人工检查。只想生成文件、不接入项目配置时
+加 `--skip-codex-config`。完成后按照终端显示的“请继续阅读”路径操作。
 
 如果需要分析 `perf.data` 或进行源码符号化，可以显式开启有界外部工具：
 
@@ -124,10 +128,8 @@ perflens analyze-folded \
   --output analysis.json
 ```
 
-使用 Codex 时，打开引导生成的 `codex-mcp.toml`，把完整配置块复制到
-Linux 用户配置 `~/.codex/config.toml`；也可以在项目已受信任时合并到
-项目的 `.codex/config.toml`。不要覆盖其中已有内容。重启 Codex，执行
-`codex mcp list` 确认 `perflens` 已加载，然后在项目中说：
+使用 Codex 时，`setup` 默认已经接入项目 `.codex/config.toml`，不用再复制长配置。
+重启 Codex，执行 `codex mcp list` 确认 `perflens` 已加载，然后在项目中说：
 
 ```text
 使用 $perflens-performance-analysis 分析这个项目的性能 Profile，
@@ -188,6 +190,10 @@ perflens status \
 Skill 会先识别构建产物和启动参数并向用户确认；PerfLens 再以普通用户启动程序，
 自动取得本次进程 PID 并交给 Collector。它不会随意执行仓库里的脚本，也不会让
 Collector 以特权启动用户程序。
+
+`perflens status` 检查的是项目中真正生效的 `.codex/config.toml`，不是仅检查
+`perflens-setup/codex-mcp.toml` 是否存在；因此未接入、无效 TOML 或不安全符号链接不会
+再被误报为“MCP 已就绪”。
 
 实时采集并非固定 10 秒：自动计划默认 10 秒，用户可以在请求中调整，
 但默认安全上限是 30 秒。部署后以普通用户运行

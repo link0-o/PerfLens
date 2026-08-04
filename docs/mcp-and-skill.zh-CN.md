@@ -20,8 +20,10 @@ Core 和 MCP Server 都不会调用 LLM API。Skill 只是工作流和安全规�
 perflens setup --project /absolute/path/to/workspace
 ```
 
-它会安装项目 Skill，并在工作区的 `perflens-setup/` 中生成中文下一步说明、
-采集能力诊断和可复制的 `codex-mcp.toml`；不会覆盖已有文件，也不会申请管理员权限。
+它会安装项目 Skill、安全创建或更新项目 `.codex/config.toml` 中带标记的 PerfLens
+配置块，并在 `perflens-setup/` 中生成中文下一步说明、采集能力诊断和独立备份片段
+`codex-mcp.toml`；其他 Codex 设置会保留，也不会申请管理员权限。冲突的用户手写
+PerfLens 表会被拒绝覆盖；仅生成文件时使用 `--skip-codex-config`。
 完整的下载、安装和接入步骤见[《中文安装指南》](../INSTALL.zh-CN.md)。
 
 下面两条命令适合需要分别控制步骤的用户：
@@ -31,7 +33,9 @@ perflens install-skill --project /absolute/path/to/workspace
 perflens codex-config --workspace /absolute/path/to/workspace
 ```
 
-第一条命令不会覆盖已有 Skill；第二条命令只把 TOML 输出到终端供你检查，不会自动修改全局或项目配置。需要直接分析 `perf.data` 时，可以在 `codex-config` 后加 `--allow-process-execution`。
+第一条命令不会覆盖已有 Skill；第二条命令只把 TOML 输出到终端供你检查，不会自动修改
+全局或项目配置。日常首次接入优先使用 `setup`，不需要手工复制。需要直接分析
+`perf.data` 时，可以在 `codex-config` 后加 `--allow-process-execution`。
 
 如果从源码仓库运行，则在 PerfLens 仓库根目录执行：
 

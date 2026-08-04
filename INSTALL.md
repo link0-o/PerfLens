@@ -26,7 +26,13 @@ perflens --version
 perflens setup --project /absolute/path/to/project
 ```
 
-`setup` installs or recognizes the bundled Skill and creates `perflens-setup/` inside the selected project with a Codex MCP snippet, a read-only capability report, Chinese and English next steps, and a versioned setup artifact. It never invokes sudo, changes sysctl/capabilities, overwrites user Codex configuration, or starts the privileged Collector.
+`setup` installs or recognizes the bundled Skill, safely creates or updates a
+marked PerfLens block in the project's `.codex/config.toml`, and creates
+`perflens-setup/` with a standalone MCP snippet, capability report, bilingual
+next steps, and versioned setup artifact. Other project settings are preserved;
+a conflicting user-managed PerfLens table is never overwritten. Use
+`--skip-codex-config` for generation only. Setup never changes user-level Codex
+configuration, invokes sudo, changes sysctl/capabilities, or starts the Collector.
 Its completion summary and generated guides include an exact `perflens status`
 command bound to that output directory. Preserve `--setup-directory` whenever
 `--output-directory` was used.
@@ -42,9 +48,10 @@ global option before the subcommand (`perflens --json-errors <command> ...` or
 `perflens-admin --json-errors <command> ...`) or by setting
 `PERFLENS_JSON_ERRORS=1`.
 
-Copy the complete generated MCP block into `~/.codex/config.toml`, or into
-the project's `.codex/config.toml` after trusting that project. Preserve any
-existing configuration, restart Codex, and confirm it with `codex mcp list`.
+After trusting the project, restart Codex and confirm the project configuration
+with `codex mcp list`; no manual MCP block copy is needed by default. `status`
+checks the active project file rather than treating the standalone snippet as
+proof that MCP was configured.
 
 Existing-profile analysis needs no Collector. To stage administrator-reviewed assets for authorized live-PID collection, use a new output directory:
 

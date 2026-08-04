@@ -72,6 +72,52 @@ def write_text_atomic(text: str, output: Path, *, max_output_bytes: int) -> int:
     return _write_bytes_atomic(text.encode("utf-8"), output, max_output_bytes=max_output_bytes)
 
 
+def write_text_new_atomic(text: str, output: Path, *, max_output_bytes: int) -> int:
+    """Publish UTF-8 text atomically while refusing to replace an existing path."""
+    data = text.encode("utf-8")
+    if len(data) > max_output_bytes:
+        raise PerfLensError(
+            ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+            "artifact",
+            "Serialized artifact exceeds max_output_bytes",
+            recoverable=True,
+            details={"actual_bytes": len(data), "max_output_bytes": max_output_bytes},
+        )
+    temporary: Path | None = None
+    try:
+        descriptor, name = tempfile.mkstemp(
+            prefix=f".{output.name}.",
+            suffix=".tmp",
+            dir=output.parent,
+        )
+        temporary = Path(name)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(temporary, output)
+        temporary.unlink()
+        temporary = None
+    except FileExistsError as exc:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "artifact",
+            "Output appeared during execution and was not overwritten",
+            details={"output": str(output)},
+        ) from exc
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.OUTPUT_WRITE_FAILED,
+            "artifact",
+            "Unable to write new text output",
+            details={"output": str(output)},
+        ) from exc
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    return len(data)
+
+
 def _write_bytes_atomic(data: bytes, output: Path, *, max_output_bytes: int) -> int:
     if len(data) > max_output_bytes:
         raise PerfLensError(

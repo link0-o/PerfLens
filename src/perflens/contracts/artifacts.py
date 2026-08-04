@@ -731,7 +731,7 @@ class RuntimeStatusArtifact(ContractModel):
     setup_directory: str
     setup_status: Literal["missing", "incomplete", "ready"]
     skill_status: Literal["missing", "incomplete", "ready"]
-    mcp_config_status: Literal["missing", "ready"]
+    mcp_config_status: Literal["missing", "incomplete", "ready"]
     automatic_collection_requested: bool
     collector_assets_status: Literal["not_requested", "missing", "incomplete", "ready"]
     collector_socket: str
@@ -767,6 +767,10 @@ class SetupArtifact(ContractModel):
     skill_status: Literal["installed", "existing", "skipped"]
     skill_path: str | None = None
     mcp_config_path: str
+    codex_project_config_path: str | None = None
+    codex_project_config_status: Literal[
+        "installed", "updated", "existing", "skipped"
+    ] = "skipped"
     capability_report_path: str
     collector_assets_path: str | None = None
     automatic_collection_enabled: bool = False

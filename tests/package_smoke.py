@@ -208,9 +208,13 @@ def main() -> None:
         assert setup_payload["schema_version"] == "1.0"
         assert setup_payload["skill_status"] == "existing"
         assert setup_payload["automatic_collection_enabled"] is True
+        assert setup_payload["codex_project_config_status"] in {"installed", "updated"}
         generated_mcp = (guided_setup / "codex-mcp.toml").read_text(encoding="utf-8")
         assert f'command = "{perflens_mcp}"' in generated_mcp
         assert '"--allow-project-execution"' in generated_mcp
+        project_mcp = (project / ".codex/config.toml").read_text(encoding="utf-8")
+        assert "BEGIN PerfLens managed MCP configuration" in project_mcp
+        assert '"--allow-project-execution"' in project_mcp
         status = _run(
             perflens,
             "status",
@@ -225,6 +229,7 @@ def main() -> None:
         )
         assert "PerfLens 状态检查 (只读)" in status
         assert "Skill: 就绪" in status
+        assert "Codex 项目 MCP 配置: 已接入" in status
 
         collector_assets = root / "collector-assets"
         _run(

@@ -6,6 +6,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Added
 
+- Safe project-level Codex MCP configuration installation during `perflens
+  setup`. PerfLens creates or updates only its marked block, preserves unrelated
+  settings, refuses conflicting user-managed tables and unsafe paths, and
+  supports generation-only onboarding through `--skip-codex-config`.
 - Chinese-first `verify-collector` summaries for advanced, explicitly authorized
   existing-PID probes, including evidence identity, measured metric count,
   bounded diagnostics, and conclusion limits. `--json` preserves the complete
@@ -45,6 +49,13 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
+- Reproducible Debian builds now remove installer `direct_url.json` metadata
+  and its wheel RECORD entry, preventing the absolute input-wheel path from
+  changing otherwise identical main-package bytes.
+- `perflens status` now checks the active project `.codex/config.toml` instead
+  of treating a standalone generated snippet as proof that MCP is configured.
+  Missing, invalid, oversized, unsafe, or setup-mismatched project
+  configuration can no longer produce false automatic-collection readiness.
 - `perflens setup --prepare-collector` now safely detects trusted native
   `/usr/bin` package entry points and writes the matching administrator command
   into both generated guides and metadata. Wheel/source installs continue to

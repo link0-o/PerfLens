@@ -159,6 +159,7 @@
     "mcp_config_status": {
       "enum": [
         "missing",
+        "incomplete",
         "ready"
       ],
       "title": "Mcp Config Status",

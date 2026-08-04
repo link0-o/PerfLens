@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from perflens.distribution.codex import render_codex_config
+from perflens.distribution.codex import plan_codex_project_config, render_codex_config
 from perflens.distribution.collector import install_collector_assets
 from perflens.distribution.skill import SKILL_NAME, install_project_skill
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -200,3 +200,71 @@ def test_codex_config_generates_complete_project_collection_policy(tmp_path: Pat
             allow_project_execution=True,
             mcp_command=Path(sys.executable),
         )
+
+
+def test_codex_project_config_install_preserves_and_updates_managed_block(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    config_dir = workspace / ".codex"
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "config.toml"
+    config_path.write_text('model = "gpt-existing"\n', encoding="utf-8")
+    basic = render_codex_config(workspace, mcp_command=Path(sys.executable))
+
+    initial = plan_codex_project_config(workspace, basic)
+    assert initial.status == "updated"
+    initial.apply()
+    installed = config_path.read_text(encoding="utf-8")
+    assert 'model = "gpt-existing"' in installed
+    assert installed.count("BEGIN PerfLens managed MCP configuration") == 1
+    assert '"--allow-project-execution"' not in installed
+
+    unchanged = plan_codex_project_config(workspace, basic)
+    assert unchanged.status == "existing"
+    unchanged.apply()
+
+    automatic = render_codex_config(
+        workspace,
+        automatic_collection=True,
+        allow_project_execution=True,
+        mcp_command=Path(sys.executable),
+    )
+    update = plan_codex_project_config(workspace, automatic)
+    assert update.status == "updated"
+    update.apply()
+    updated = config_path.read_text(encoding="utf-8")
+    assert 'model = "gpt-existing"' in updated
+    assert updated.count("BEGIN PerfLens managed MCP configuration") == 1
+    assert '"--allow-project-execution"' in updated
+
+
+def test_codex_project_config_install_refuses_user_table_and_unsafe_path(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    config_dir = workspace / ".codex"
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "config.toml"
+    config_path.write_text(
+        '[mcp_servers.perflens]\ncommand = "/custom/perflens-mcp"\n',
+        encoding="utf-8",
+    )
+    generated = render_codex_config(workspace, mcp_command=Path(sys.executable))
+
+    with pytest.raises(PerfLensError) as conflict:
+        plan_codex_project_config(workspace, generated)
+    assert conflict.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert config_path.read_text(encoding="utf-8").endswith(
+        'command = "/custom/perflens-mcp"\n'
+    )
+
+    config_path.unlink()
+    config_dir.rmdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    config_dir.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(PerfLensError) as escaped:
+        plan_codex_project_config(workspace, generated)
+    assert escaped.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert not (outside / "config.toml").exists()

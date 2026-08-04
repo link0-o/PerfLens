@@ -98,6 +98,40 @@ def test_runtime_status_tracks_generated_automatic_setup(
     assert artifact.automatic_collection_status == "collector_unavailable"
 
 
+def test_runtime_status_requires_active_project_mcp_configuration(tmp_path: Path) -> None:
+    _prepare_automatic_setup(tmp_path)
+    config = tmp_path / ".codex/config.toml"
+    config.unlink()
+
+    missing = inspect_runtime_status(
+        tmp_path,
+        collector_socket=tmp_path / "missing.sock",
+        perf_path=Path("/bin/true"),
+    )
+    assert missing.mcp_config_status == "missing"
+    assert "mcp_project_config_missing" in missing.issues
+    assert missing.automatic_collection_status == "configuration_incomplete"
+
+    config.write_text("not valid = [toml", encoding="utf-8")
+    incomplete = inspect_runtime_status(
+        tmp_path,
+        collector_socket=tmp_path / "missing.sock",
+        perf_path=Path("/bin/true"),
+    )
+    assert incomplete.mcp_config_status == "incomplete"
+    assert "mcp_project_config_incomplete" in incomplete.issues
+
+    generated = (tmp_path / "perflens-setup/codex-mcp.toml").read_text(encoding="utf-8")
+    config.write_text(generated.replace("tool_timeout_sec = 300", "tool_timeout_sec = 301"))
+    mismatched = inspect_runtime_status(
+        tmp_path,
+        collector_socket=tmp_path / "missing.sock",
+        perf_path=Path("/bin/true"),
+    )
+    assert mismatched.mcp_config_status == "incomplete"
+    assert mismatched.automatic_collection_status == "configuration_incomplete"
+
+
 def test_runtime_status_rejects_setup_escape_and_marks_symlink_incomplete(
     tmp_path: Path,
 ) -> None:

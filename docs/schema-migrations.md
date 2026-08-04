@@ -16,6 +16,10 @@ Runtime status schema `1.0` may include optional Collector health, service
 identity, policy, allowed-mode, and spool fields. Readers preserve defaults for
 older status artifacts that predate the authenticated health handshake.
 
+Setup schema `1.0` may include the optional project Codex configuration path
+and install status. Readers treat older setup artifacts as generation-only
+onboarding that skipped project configuration installation.
+
 Collector TOML policies use an independent integer `policy_version`. Generated
 policies currently write version `1`; a missing field is read as legacy version
 1 for compatibility, while unsupported versions are rejected before deployment

@@ -7,10 +7,11 @@ import hashlib
 import os
 import pwd
 import stat
+import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import ValidationError
 
@@ -29,7 +30,7 @@ from perflens.domain.errors import ErrorCode, PerfLensError
 _MAX_SETUP_BYTES = 1 << 20
 SetupStatus = Literal["missing", "incomplete", "ready"]
 SkillStatus = Literal["missing", "incomplete", "ready"]
-McpStatus = Literal["missing", "ready"]
+McpStatus = Literal["missing", "incomplete", "ready"]
 AssetsStatus = Literal["not_requested", "missing", "incomplete", "ready"]
 SocketStatus = Literal["missing", "invalid", "inaccessible", "ready"]
 GroupStatus = Literal["missing", "not_member", "member"]
@@ -64,7 +65,7 @@ def inspect_runtime_status(
     setup = _setup_path(project, setup_directory)
     setup_status, automatic_requested, setup_issues = _inspect_setup(project, setup)
     skill_status = _inspect_skill(project)
-    mcp_status = _regular_file_status(setup / "codex-mcp.toml")
+    mcp_status = _inspect_codex_project_config(project, setup)
     assets_status = _inspect_assets(setup, automatic_requested=automatic_requested)
     socket_status = _inspect_socket(collector_socket)
     group_status = _collector_group_status()
@@ -87,7 +88,7 @@ def inspect_runtime_status(
     if skill_status != "ready":
         issues.append(f"skill_{skill_status}")
     if mcp_status != "ready":
-        issues.append("mcp_config_missing")
+        issues.append(f"mcp_project_config_{mcp_status}")
     if automatic_requested and assets_status != "ready":
         issues.append(f"collector_assets_{assets_status}")
     if automatic_requested and socket_status != "ready":
@@ -102,6 +103,7 @@ def inspect_runtime_status(
     automatic_status = _automatic_status(
         requested=automatic_requested,
         setup_status=setup_status,
+        mcp_status=mcp_status,
         assets_status=assets_status,
         socket_status=socket_status,
         group_status=group_status,
@@ -264,8 +266,48 @@ def _inspect_skill(project: Path) -> SkillStatus:
     return "ready"
 
 
-def _regular_file_status(path: Path) -> McpStatus:
-    return "ready" if path.is_file() and not path.is_symlink() else "missing"
+def _inspect_codex_project_config(project: Path, setup: Path) -> McpStatus:
+    parent = project / ".codex"
+    path = parent / "config.toml"
+    if not path.exists() and not path.is_symlink():
+        return "missing"
+    if (
+        parent.is_symlink()
+        or not parent.is_dir()
+        or path.is_symlink()
+        or not path.is_file()
+    ):
+        return "incomplete"
+    project_status, project_table = _read_perflens_mcp_table(path)
+    if project_status != "ready" or project_table is None:
+        return project_status
+    snippet = setup / "codex-mcp.toml"
+    if snippet.is_symlink() or not snippet.is_file():
+        return "incomplete"
+    expected_status, expected_table = _read_perflens_mcp_table(snippet)
+    if expected_status != "ready":
+        return "incomplete"
+    matches = expected_table is not None and project_table == expected_table
+    return "ready" if matches else "incomplete"
+
+
+def _read_perflens_mcp_table(
+    path: Path,
+) -> tuple[McpStatus, dict[str, object] | None]:
+    try:
+        raw = path.read_bytes()
+        if len(raw) > _MAX_SETUP_BYTES:
+            return "incomplete", None
+        payload = cast(dict[str, object], tomllib.loads(raw.decode("utf-8")))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return "incomplete", None
+    servers = payload.get("mcp_servers")
+    if not isinstance(servers, dict):
+        return "missing", None
+    table = cast(dict[str, object], servers).get("perflens")
+    if not isinstance(table, dict):
+        return "missing", None
+    return "ready", cast(dict[str, object], table)
 
 
 def _inspect_assets(setup: Path, *, automatic_requested: bool) -> AssetsStatus:
@@ -363,6 +405,7 @@ def _automatic_status(
     *,
     requested: bool,
     setup_status: SetupStatus,
+    mcp_status: McpStatus,
     assets_status: AssetsStatus,
     socket_status: SocketStatus,
     group_status: GroupStatus,
@@ -370,7 +413,7 @@ def _automatic_status(
 ) -> AutomaticStatus:
     if not requested:
         return "not_configured"
-    if setup_status != "ready" or assets_status != "ready":
+    if setup_status != "ready" or mcp_status != "ready" or assets_status != "ready":
         return "configuration_incomplete"
     if socket_status in {"missing", "invalid"}:
         return "collector_unavailable"

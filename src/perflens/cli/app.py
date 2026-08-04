@@ -255,6 +255,15 @@ def setup_command(
             help="Install the bundled Skill when it is not already present.",
         ),
     ] = True,
+    install_codex_config: Annotated[
+        bool,
+        typer.Option(
+            "--install-codex-config/--skip-codex-config",
+            help=(
+                "Safely install the generated MCP table in the project's .codex/config.toml."
+            ),
+        ),
+    ] = True,
     allow_process_execution: Annotated[
         bool,
         typer.Option(
@@ -310,6 +319,7 @@ def setup_command(
             project_root,
             output_directory=output_directory,
             install_skill=install_skill,
+            install_codex_config=install_codex_config,
             allow_process_execution=allow_process_execution,
             mcp_command=mcp_command,
             prepare_collector=prepare_collector,
@@ -333,6 +343,15 @@ def setup_command(
     typer.echo("PerfLens 引导文件已经生成。")
     typer.echo(f"项目: {artifact.project_root}")
     typer.echo(f"Skill: {skill_label}")
+    codex_label = {
+        "installed": "已安装",
+        "updated": "已更新 (保留其他设置)",
+        "existing": "已存在且内容一致",
+        "skipped": "已跳过 (需手动合并片段)",
+    }[artifact.codex_project_config_status]
+    typer.echo(f"Codex 项目配置: {codex_label}")
+    if artifact.codex_project_config_path is not None:
+        typer.echo(f"Codex 配置路径: {artifact.codex_project_config_path}")
     typer.echo(f"采集状态: {collection_label}")
     typer.echo(
         f"项目自动运行: {'已启用' if artifact.automatic_collection_enabled else '未启用'}"
@@ -1212,7 +1231,11 @@ def _terminal_text(value: str, *, max_characters: int = 512) -> str:
 def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
     setup_labels = {"missing": "未生成", "incomplete": "不完整/不安全", "ready": "就绪"}
     skill_labels = {"missing": "未安装", "incomplete": "不完整/不安全", "ready": "就绪"}
-    mcp_labels = {"missing": "未生成", "ready": "已生成 (仍需合并到 Codex 配置)"}
+    mcp_labels = {
+        "missing": "未接入",
+        "incomplete": "无效或路径不安全",
+        "ready": "已接入",
+    }
     asset_labels = {
         "not_requested": "未请求",
         "missing": "缺失",
@@ -1248,7 +1271,10 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
         "setup_identity_mismatch": "setup.json 与当前项目或目录不匹配。",
         "skill_missing": "项目 Skill 尚未安装。",
         "skill_incomplete": "项目 Skill 不完整或路径不安全。",
-        "mcp_config_missing": "缺少 Codex MCP 配置片段。",
+        "mcp_project_config_missing": "项目 .codex/config.toml 尚未接入 PerfLens MCP。",
+        "mcp_project_config_incomplete": (
+            "项目 Codex 配置无效、过大、路径不安全; 或与本次引导不匹配。"
+        ),
         "collector_assets_missing": "缺少 Collector 部署资产。",
         "collector_assets_incomplete": "Collector 部署资产不完整或路径不安全。",
         "collector_socket_missing": "Collector Socket 尚未创建。",
@@ -1266,7 +1292,7 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
     typer.echo(f"项目: {artifact.project_root}")
     typer.echo(f"引导目录: {setup_labels[artifact.setup_status]}")
     typer.echo(f"Skill: {skill_labels[artifact.skill_status]}")
-    typer.echo(f"MCP 配置片段: {mcp_labels[artifact.mcp_config_status]}")
+    typer.echo(f"Codex 项目 MCP 配置: {mcp_labels[artifact.mcp_config_status]}")
     typer.echo(f"Collector 资产: {asset_labels[artifact.collector_assets_status]}")
     typer.echo(f"Collector Socket: {socket_labels[artifact.collector_socket_status]}")
     typer.echo(f"perflens 用户组: {group_labels[artifact.collector_group_status]}")

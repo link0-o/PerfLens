@@ -6,9 +6,187 @@ import json
 import os
 import shutil
 import stat
+import tomllib
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, cast
 
+from perflens.artifacts.filesystem import write_text_atomic, write_text_new_atomic
 from perflens.domain.errors import ErrorCode, PerfLensError
+
+_MAX_CODEX_CONFIG_BYTES = 1 << 20
+_MANAGED_BEGIN = "# BEGIN PerfLens managed MCP configuration"
+_MANAGED_END = "# END PerfLens managed MCP configuration"
+CodexConfigInstallStatus = Literal["installed", "updated", "existing"]
+
+
+@dataclass(frozen=True, slots=True)
+class CodexConfigInstallPlan:
+    """A checked, project-local Codex configuration change applied once at setup commit."""
+
+    path: Path
+    status: CodexConfigInstallStatus
+    content: str
+    expected_content: str | None
+
+    def apply(self) -> None:
+        if self.status == "existing":
+            _assert_config_unchanged(self.path, self.expected_content)
+            return
+        parent = self.path.parent
+        if parent.exists() or parent.is_symlink():
+            if parent.is_symlink() or not parent.is_dir():
+                raise _unsafe_codex_path(parent)
+        else:
+            parent.mkdir(mode=0o700)
+        _assert_config_unchanged(self.path, self.expected_content)
+        if self.expected_content is None:
+            write_text_new_atomic(
+                self.content,
+                self.path,
+                max_output_bytes=_MAX_CODEX_CONFIG_BYTES,
+            )
+        else:
+            write_text_atomic(
+                self.content,
+                self.path,
+                max_output_bytes=_MAX_CODEX_CONFIG_BYTES,
+            )
+
+
+def plan_codex_project_config(
+    workspace: Path,
+    configuration: str,
+) -> CodexConfigInstallPlan:
+    """Plan a non-destructive project-level Codex MCP configuration install."""
+    project = _existing_directory(workspace, label="Workspace")
+    target = project / ".codex" / "config.toml"
+    parent = target.parent
+    if parent.exists() or parent.is_symlink():
+        if parent.is_symlink() or not parent.is_dir():
+            raise _unsafe_codex_path(parent)
+        if parent.resolve(strict=True) != parent or not parent.is_relative_to(project):
+            raise _unsafe_codex_path(parent)
+    if target.is_symlink():
+        raise _unsafe_codex_path(target)
+
+    managed = f"{_MANAGED_BEGIN}\n{configuration.rstrip()}\n{_MANAGED_END}\n"
+    expected: str | None = None
+    if target.exists():
+        if not target.is_file():
+            raise _unsafe_codex_path(target)
+        try:
+            raw = target.read_bytes()
+            if len(raw) > _MAX_CODEX_CONFIG_BYTES:
+                raise ValueError("Codex configuration exceeds its size limit")
+            expected = raw.decode("utf-8")
+            parsed = cast(dict[str, object], tomllib.loads(expected))
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError) as exc:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "codex_config",
+                "Existing project Codex configuration is invalid or too large",
+                recoverable=True,
+                details={"path": str(target)},
+                suggested_actions=(
+                    "Repair .codex/config.toml, or rerun setup with --skip-codex-config.",
+                ),
+            ) from exc
+        lines = expected.splitlines(keepends=True)
+        begins = [
+            index
+            for index, line in enumerate(lines)
+            if line.rstrip("\r\n") == _MANAGED_BEGIN
+        ]
+        ends = [
+            index
+            for index, line in enumerate(lines)
+            if line.rstrip("\r\n") == _MANAGED_END
+        ]
+        if begins or ends:
+            if len(begins) != 1 or len(ends) != 1 or begins[0] >= ends[0]:
+                raise _managed_block_error(target)
+            replacement = "".join(lines[: begins[0]]) + managed + "".join(
+                lines[ends[0] + 1 :]
+            )
+            try:
+                tomllib.loads(replacement)
+            except tomllib.TOMLDecodeError as exc:
+                raise _managed_block_error(target) from exc
+            status: CodexConfigInstallStatus = (
+                "existing" if replacement == expected else "updated"
+            )
+            return CodexConfigInstallPlan(target, status, replacement, expected)
+
+        current = parsed.get("mcp_servers")
+        perflens = (
+            cast(dict[str, object], current).get("perflens")
+            if isinstance(current, dict)
+            else None
+        )
+        desired_root = cast(dict[str, object], tomllib.loads(configuration))
+        desired_servers = cast(dict[str, object], desired_root["mcp_servers"])
+        desired = desired_servers["perflens"]
+        if perflens is not None:
+            if perflens == desired:
+                return CodexConfigInstallPlan(target, "existing", expected, expected)
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "codex_config",
+                "Existing user-managed PerfLens MCP configuration will not be overwritten",
+                recoverable=True,
+                details={"path": str(target)},
+                suggested_actions=(
+                    "Review the generated codex-mcp.toml and update the existing table manually.",
+                    "Or rerun setup with --skip-codex-config to generate files only.",
+                ),
+            )
+        separator = "" if not expected else ("" if expected.endswith("\n\n") else "\n")
+        return CodexConfigInstallPlan(
+            target,
+            "updated",
+            f"{expected}{separator}{managed}",
+            expected,
+        )
+    return CodexConfigInstallPlan(target, "installed", managed, None)
+
+
+def _assert_config_unchanged(path: Path, expected: str | None) -> None:
+    if path.is_symlink():
+        raise _unsafe_codex_path(path)
+    try:
+        current = path.read_text(encoding="utf-8") if path.exists() else None
+    except OSError as exc:
+        raise _unsafe_codex_path(path) from exc
+    if current != expected:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "codex_config",
+            "Project Codex configuration changed during setup and was not overwritten",
+            recoverable=True,
+            details={"path": str(path)},
+            suggested_actions=("Review the file and rerun setup in a new output directory.",),
+        )
+
+
+def _unsafe_codex_path(path: Path) -> PerfLensError:
+    return PerfLensError(
+        ErrorCode.PATH_SAFETY_VIOLATION,
+        "codex_config",
+        "Project Codex configuration path is unsafe",
+        details={"path": str(path)},
+    )
+
+
+def _managed_block_error(path: Path) -> PerfLensError:
+    return PerfLensError(
+        ErrorCode.INVALID_INPUT,
+        "codex_config",
+        "PerfLens managed configuration markers are incomplete or duplicated",
+        recoverable=True,
+        details={"path": str(path)},
+        suggested_actions=("Repair the managed block, or use --skip-codex-config.",),
+    )
 
 
 def render_codex_config(

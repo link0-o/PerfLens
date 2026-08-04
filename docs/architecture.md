@@ -73,7 +73,8 @@ with kernel `SO_PEERCRED`, and administrator readiness requires the dedicated
 service UID. A socket pathname alone is never treated as a healthy service.
 
 `perflens status` is a separate read-only diagnostic boundary. It summarizes
-onboarding files, Skill and MCP snippets, staged assets, socket access, current
+onboarding files, Skill, active project MCP configuration against the selected
+setup, staged assets, socket access, current
 login-group membership, and host perf conditions without sampling a target.
 After its configuration and access prerequisites pass, it also performs one
 500 ms-bounded `health` round trip and requires the dedicated service UID plus
