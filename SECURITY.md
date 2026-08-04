@@ -28,6 +28,13 @@ filesystem free-space floor without deleting existing evidence. Policy bypass,
 cross-UID collection, command execution, spool escape, or quota bypass should be
 reported as a security vulnerability.
 
+Collector authentication is bidirectional on every exchange. The client pins
+the socket and parent directory identity, rejects unsafe write/access modes,
+requires kernel `SO_PEERCRED` UID to match the socket owner, and rejects a
+response whose typed envelope, request ID, or collection PID/mode does not match
+the authorized request. A pathname or well-formed JSON response alone is not a
+trusted Collector identity.
+
 Before starting perf, the Collector atomically creates and fsyncs an empty,
 service-private consumed-plan tombstone. It survives collection failure and
 Collector process restarts, so a restart cannot make the same plan executable

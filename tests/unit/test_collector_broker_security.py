@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 # pyright: reportPrivateUsage=false
+import json
 import os
 import socket
 import struct
 import sys
+import threading
+import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,10 +15,20 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from pydantic import ValidationError
 
-from perflens.collector_broker.client import CollectorBrokerClient
+from perflens.collector_broker.client import (
+    CollectorBrokerClient,
+    _read_response_frame,
+    _socket_identity,
+    _validate_connected_peer,
+)
 from perflens.collector_broker.policy import CollectorBrokerPolicy, validate_broker_policy
-from perflens.collector_broker.protocol import MAX_BROKER_MESSAGE_BYTES
+from perflens.collector_broker.protocol import (
+    MAX_BROKER_MESSAGE_BYTES,
+    BrokerError,
+    BrokerResponse,
+)
 from perflens.collector_broker.server import (
     CollectorBrokerServer,
     _new_socket_path,
@@ -23,7 +36,7 @@ from perflens.collector_broker.server import (
     _read_frame,
 )
 from perflens.collector_broker.state import replay_marker_name
-from perflens.contracts.artifacts import CollectionPlanArtifact
+from perflens.contracts.artifacts import CollectionArtifact, CollectionPlanArtifact
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 
@@ -75,6 +88,18 @@ def _broker_with_policy(policy: CollectorBrokerPolicy) -> CollectorBrokerServer:
     broker = object.__new__(CollectorBrokerServer)
     broker._policy = policy
     return broker
+
+
+def _listening_socket(tmp_path: Path, name: str = "collector.sock") -> tuple[socket.socket, Path]:
+    runtime = tmp_path / name
+    runtime.mkdir()
+    runtime.chmod(0o750)
+    socket_path = runtime / "s"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    os.chmod(socket_path, 0o660)
+    listener.listen(1)
+    return listener, socket_path
 
 
 def test_broker_authorization_denies_every_out_of_policy_dimension(tmp_path: Path) -> None:
@@ -259,6 +284,172 @@ def test_socket_path_and_client_require_safe_existing_socket(tmp_path: Path) -> 
         _new_socket_path(occupied)
 
 
+@pytest.mark.parametrize("timeout_seconds", [True, float("nan"), float("inf"), 86_501])
+def test_client_rejects_non_finite_or_ambiguous_timeouts(
+    tmp_path: Path,
+    timeout_seconds: float,
+) -> None:
+    with pytest.raises(ValueError, match="timeout"):
+        CollectorBrokerClient(tmp_path / "missing.sock", timeout_seconds=timeout_seconds)
+
+
+def test_client_rejects_unsafe_socket_permissions_and_replacement(tmp_path: Path) -> None:
+    unsafe_runtime = tmp_path / "unsafe-client-runtime"
+    unsafe_runtime.mkdir()
+    unsafe_runtime.chmod(0o770)
+    unsafe_path = unsafe_runtime / "collector.sock"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        listener.bind(str(unsafe_path))
+        os.chmod(unsafe_path, 0o660)
+        with pytest.raises(ValueError, match="directory is group/world writable"):
+            CollectorBrokerClient(unsafe_path)
+
+    listener, socket_path = _listening_socket(tmp_path, "w")
+    with listener:
+        os.chmod(socket_path, 0o666)  # noqa: S103 - intentionally unsafe test fixture
+        with pytest.raises(ValueError, match="accessible to other users"):
+            CollectorBrokerClient(socket_path)
+
+    first_listener, replacement_path = _listening_socket(tmp_path, "r")
+    identity = _socket_identity(replacement_path)
+    first_listener.close()
+    replacement_path.unlink()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as replacement:
+        replacement.bind(str(replacement_path))
+        os.chmod(replacement_path, 0o660)
+        replacement.listen(1)
+        with pytest.raises(PerfLensError, match="identity changed") as changed:
+            _validate_connected_peer(identity, os.getpid(), os.geteuid())
+    assert changed.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def _broker_error() -> BrokerError:
+    return BrokerError(
+        code=ErrorCode.INVALID_INPUT.value,
+        stage="collector_broker",
+        message="rejected",
+        recoverable=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("ok", "result", "error"),
+    [
+        (True, None, None),
+        (True, {"value": 1}, _broker_error()),
+        (False, None, None),
+        (False, {"value": 1}, _broker_error()),
+    ],
+)
+def test_broker_response_requires_exactly_one_typed_payload(
+    ok: bool,
+    result: dict[str, object] | None,
+    error: BrokerError | None,
+) -> None:
+    with pytest.raises(ValidationError):
+        BrokerResponse(
+            request_id="request-0123456789abcdef",
+            ok=ok,
+            result=result,
+            error=error,
+        )
+
+
+def test_client_rejects_mismatched_response_id_over_real_socket(tmp_path: Path) -> None:
+    listener, socket_path = _listening_socket(tmp_path, "m")
+
+    def respond() -> None:
+        with listener:
+            connection, _ = listener.accept()
+            with connection:
+                request = json.loads(connection.recv(4096).partition(b"\n")[0])
+                assert request["operation"] == "health"
+                response = BrokerResponse(
+                    request_id="unknown",
+                    ok=False,
+                    error=_broker_error(),
+                )
+                connection.sendall(response.model_dump_json().encode("utf-8") + b"\n")
+
+    worker = threading.Thread(target=respond, daemon=True)
+    worker.start()
+    with pytest.raises(PerfLensError, match="request ID does not match") as mismatch:
+        CollectorBrokerClient(socket_path, timeout_seconds=2).health()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert mismatch.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_client_classifies_incomplete_response_timeout(tmp_path: Path) -> None:
+    listener, socket_path = _listening_socket(tmp_path, "t")
+
+    def stall() -> None:
+        with listener:
+            connection, _ = listener.accept()
+            with connection:
+                connection.recv(4096)
+                time.sleep(0.2)
+
+    worker = threading.Thread(target=stall, daemon=True)
+    worker.start()
+    with pytest.raises(PerfLensError, match="timed out") as timed_out:
+        CollectorBrokerClient(socket_path, timeout_seconds=0.05).health()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert timed_out.value.code is ErrorCode.EXTERNAL_TOOL_TIMEOUT
+    assert timed_out.value.recoverable is True
+    assert timed_out.value.retryable is True
+
+
+def test_client_rejects_collection_result_that_does_not_match_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    listener, socket_path = _listening_socket(tmp_path, "x")
+    listener.close()
+    plan = _plan()
+    artifact = CollectionArtifact(
+        collection_id="collection-wrong-target",
+        mode=plan.mode,
+        target_type="pid",
+        target_argument_count=0,
+        target_pid=plan.target_pid + 1,
+        output_path="/var/lib/perflens/wrong.perf.data",
+        output_sha256="a" * 64,
+        output_bytes=1,
+        output_format="perf_data",
+        perf_executable="/usr/bin/perf",
+        started_at="2026-08-04T00:00:00+00:00",
+        finished_at="2026-08-04T00:00:01+00:00",
+        duration_seconds=1,
+        frequency_hz=plan.frequency_hz,
+        call_graph=plan.call_graph,
+    )
+
+    def wrong_exchange(
+        _self: CollectorBrokerClient,
+        _payload: bytes,
+        *,
+        expected_request_id: str,
+    ) -> tuple[BrokerResponse, int, int]:
+        return (
+            BrokerResponse(
+                request_id=expected_request_id,
+                ok=True,
+                result=artifact.model_dump(mode="json"),
+            ),
+            os.getpid(),
+            os.geteuid(),
+        )
+
+    monkeypatch.setattr(CollectorBrokerClient, "_exchange", wrong_exchange)
+    with pytest.raises(PerfLensError, match="does not match") as mismatch:
+        CollectorBrokerClient(socket_path).collect(plan)
+    assert mismatch.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
 @pytest.mark.parametrize("timeout_seconds", [False, 0, -1, 5.01, float("inf"), float("nan")])
 def test_broker_rejects_unbounded_request_frame_timeouts(
     tmp_path: Path,
@@ -308,6 +499,24 @@ def test_broker_frames_are_bounded_and_peer_authenticated() -> None:
     with pytest.raises(PerfLensError) as captured:
         _read_frame(oversized)
     assert captured.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+
+    maximum_response = cast(
+        socket.socket,
+        FakeConnection(b"x" * (MAX_BROKER_MESSAGE_BYTES - 1) + b"\n"),
+    )
+    assert len(_read_response_frame(maximum_response)) == MAX_BROKER_MESSAGE_BYTES - 1
+
+    oversized_response = cast(
+        socket.socket,
+        FakeConnection(b"x" * MAX_BROKER_MESSAGE_BYTES + b"\n"),
+    )
+    with pytest.raises(PerfLensError) as oversized_error:
+        _read_response_frame(oversized_response)
+    assert oversized_error.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+
+    trailing_response = cast(socket.socket, FakeConnection(b"one\ntwo"))
+    with pytest.raises(PerfLensError, match="malformed"):
+        _read_response_frame(trailing_response)
 
     class TimeoutConnection:
         def recv(self, _size: int) -> bytes:

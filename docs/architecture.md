@@ -77,8 +77,12 @@ requires a short-lived, single-use plan bound to PID, UID, and process start
 time. Its separate `health` operation is read-only, peer-authenticated, does not
 run perf or write the spool, and is required by deploy/upgrade readiness checks.
 The server authenticates the caller; the client verifies the responding PID/UID
-with kernel `SO_PEERCRED`, and administrator readiness requires the dedicated
-service UID. A socket pathname alone is never treated as a healthy service.
+with kernel `SO_PEERCRED`, pins the safe socket and parent-directory identity,
+and requires the peer UID to match the socket owner on every exchange.
+Responses are size-bounded typed envelopes tied to the exact request ID, and a
+collection result must match the authorized PID and mode. Administrator
+readiness additionally requires the dedicated service UID. A socket pathname
+alone is never treated as a healthy service.
 
 `perflens status` is a separate read-only diagnostic boundary. It summarizes
 onboarding files, Skill, active project MCP configuration against the selected

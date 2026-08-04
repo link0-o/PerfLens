@@ -80,8 +80,10 @@ Skill 和 Agent 不会调用 sudo 或部署系统服务。
 Collector 协议只有两类有界请求：唯一会产生系统状态的 `collect_pid` 必须携带短期、
 单次、绑定 PID/UID/启动时间的计划；`health` 只返回版本化就绪元数据，不执行 perf、
 不消费计划、不写 spool。服务端校验调用方 peer UID，客户端通过内核 `SO_PEERCRED`
-复核响应 PID/UID，管理员部署还要求专用 `perflens` 服务 UID。部署和升级必须完成
-`health` 往返，不能把遗留 Socket 文件或错误身份进程当成服务就绪。
+复核响应 PID/UID，并在每次往返中固定安全的 Socket/父目录身份、要求 peer UID 与
+Socket 属主一致。响应必须是有大小上限的类型化信封，`request_id` 必须精确对应，
+采集结果的 PID 和模式也必须符合授权计划。管理员部署还要求专用 `perflens` 服务 UID。
+部署和升级必须完成 `health` 往返，不能把遗留 Socket 文件或错误身份进程当成服务就绪。
 
 `perflens status` 是独立的只读诊断边界。它检查项目引导、Skill、项目 MCP 配置是否与
 所选引导一致、Collector 资产、Socket、当前登录会话用户组和主机 perf 条件，但不会

@@ -39,6 +39,11 @@ PerfLens 不会绕过 Linux 的 `perf_event_paranoid`、容器 Capability、LSM 
 
 可选自动 Collector 是独立权限边界：MCP 只生成短期、单次、PID 身份绑定计划；Collector 使用 Unix 对等凭据和独立策略授权，只接受 PID 并写固定 spool。它在启动 perf 前检查累计字节、文件数和文件系统空闲余量，达到边界时拒绝新采集且不删除现有证据。它不接受任意命令、环境、路径或全系统目标。任何漏洞若能绕过这些约束、跨 UID 采集、逃逸 spool 或绕过配额，应按安全问题处理。
 
+每次 Collector 往返都会双向认证。客户端固定 Socket 及其父目录身份，拒绝不安全的
+写入/访问权限，要求内核 `SO_PEERCRED` UID 与 Socket 属主一致，并拒绝结构不合法、
+`request_id` 不匹配或采集 PID/模式偏离授权计划的响应。仅有一个路径或格式正确的 JSON
+不能证明对端是可信 Collector。
+
 Collector 会在启动 perf 前，以原子“不存在才创建”的方式写入仅服务用户可读的零字节
 计划墓碑，并同步文件与目录。墓碑在采集失败和 Collector 重启后仍保留，因此同一计划
 不能靠重启服务再次执行；过期墓碑只会在后续请求中按策略的最长计划有效期回收。合法

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import secrets
 import socket
 import stat
 import struct
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -29,10 +31,16 @@ _PEER_CREDENTIALS = struct.Struct("3i")
 
 class CollectorBrokerClient:
     def __init__(self, socket_path: Path, *, timeout_seconds: float = 310.0) -> None:
-        if timeout_seconds <= 0 or timeout_seconds > 86_500:
+        if (
+            isinstance(timeout_seconds, bool)
+            or not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+            or timeout_seconds > 86_500
+        ):
             raise ValueError("Broker timeout is invalid")
-        self._socket_path = _socket_path(socket_path)
-        self._timeout_seconds = timeout_seconds
+        self._socket = _socket_identity(socket_path)
+        self._socket_path = self._socket.path
+        self._timeout_seconds = float(timeout_seconds)
 
     def collect(self, plan: CollectionPlanArtifact) -> CollectionArtifact:
         identity = f"{plan.plan_id}\0{plan.target_pid}\0{plan.expires_at}"
@@ -41,22 +49,11 @@ class CollectorBrokerClient:
             plan=plan,
         )
         response, _server_pid, _server_uid = self._exchange(
-            request.model_dump_json().encode("utf-8") + b"\n"
+            request.model_dump_json().encode("utf-8") + b"\n",
+            expected_request_id=request.request_id,
         )
         if not response.ok:
-            error = response.error or {}
-            raw_code = error.get("code", ErrorCode.EXTERNAL_TOOL_FAILED.value)
-            try:
-                code = ErrorCode(str(raw_code))
-            except ValueError:
-                code = ErrorCode.EXTERNAL_TOOL_FAILED
-            raise PerfLensError(
-                code,
-                str(error.get("stage", "collector_broker")),
-                str(error.get("message", "Collector broker rejected the request")),
-                recoverable=bool(error.get("recoverable", True)),
-                details={"request_id": request.request_id},
-            )
+            _raise_rejected_response(response, request.request_id)
         if response.result is None:
             raise PerfLensError(
                 ErrorCode.INTERNAL_ERROR,
@@ -64,36 +61,38 @@ class CollectorBrokerClient:
                 "Collector broker returned no result",
             )
         try:
-            return CollectionArtifact.model_validate(response.result)
+            artifact = CollectionArtifact.model_validate(response.result)
         except ValidationError as exc:
             raise PerfLensError(
                 ErrorCode.INTERNAL_ERROR,
                 "collector_broker",
                 "Collector broker returned an invalid collection artifact",
             ) from exc
+        if (
+            artifact.target_type != "pid"
+            or artifact.target_pid != plan.target_pid
+            or artifact.mode != plan.mode
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "collector_broker",
+                "Collector result does not match the authorized collection plan",
+            )
+        return artifact
 
     def health(self, *, expected_service_uid: int | None = None) -> CollectorHealthArtifact:
         """Perform one authenticated, read-only protocol round trip."""
-        if expected_service_uid is not None and expected_service_uid < 0:
+        if expected_service_uid is not None and (
+            isinstance(expected_service_uid, bool) or expected_service_uid < 0
+        ):
             raise ValueError("Expected Collector service UID is invalid")
         request = BrokerHealthRequest(request_id=f"request-{secrets.token_hex(12)}")
         response, server_pid, server_uid = self._exchange(
-            request.model_dump_json().encode("utf-8") + b"\n"
+            request.model_dump_json().encode("utf-8") + b"\n",
+            expected_request_id=request.request_id,
         )
         if not response.ok:
-            error = response.error or {}
-            raw_code = error.get("code", ErrorCode.EXTERNAL_TOOL_FAILED.value)
-            try:
-                code = ErrorCode(str(raw_code))
-            except ValueError:
-                code = ErrorCode.EXTERNAL_TOOL_FAILED
-            raise PerfLensError(
-                code,
-                str(error.get("stage", "collector_broker")),
-                str(error.get("message", "Collector broker rejected the health request")),
-                recoverable=bool(error.get("recoverable", True)),
-                details={"request_id": request.request_id},
-            )
+            _raise_rejected_response(response, request.request_id)
         if response.result is None:
             raise PerfLensError(
                 ErrorCode.INTERNAL_ERROR,
@@ -129,14 +128,18 @@ class CollectorBrokerClient:
             )
         return artifact
 
-    def _exchange(self, payload: bytes) -> tuple[BrokerResponse, int, int]:
+    def _exchange(
+        self,
+        payload: bytes,
+        *,
+        expected_request_id: str,
+    ) -> tuple[BrokerResponse, int, int]:
         if len(payload) > MAX_BROKER_MESSAGE_BYTES:
             raise PerfLensError(
                 ErrorCode.RESOURCE_LIMIT_EXCEEDED,
                 "collector_broker",
                 "Collector broker request exceeds the protocol limit",
             )
-        received = bytearray()
         server_pid = -1
         server_uid = -1
         try:
@@ -149,23 +152,21 @@ class CollectorBrokerClient:
                     _PEER_CREDENTIALS.size,
                 )
                 server_pid, server_uid, _server_gid = _PEER_CREDENTIALS.unpack(credentials)
+                _validate_connected_peer(self._socket, server_pid, server_uid)
                 connection.sendall(payload)
-                while b"\n" not in received:
-                    chunk = connection.recv(
-                        min(16 << 10, MAX_BROKER_MESSAGE_BYTES + 1 - len(received))
-                    )
-                    if not chunk:
-                        break
-                    received.extend(chunk)
-                    if len(received) > MAX_BROKER_MESSAGE_BYTES:
-                        raise PerfLensError(
-                            ErrorCode.RESOURCE_LIMIT_EXCEEDED,
-                            "collector_broker",
-                            "Collector broker response exceeds the protocol limit",
-                        )
+                line = _read_response_frame(connection)
         except PerfLensError:
             raise
-        except (OSError, TimeoutError, struct.error) as exc:
+        except TimeoutError as exc:
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_TIMEOUT,
+                "collector_broker",
+                "Collector broker response timed out before a complete frame",
+                recoverable=True,
+                retryable=True,
+                details={"socket": str(self._socket_path)},
+            ) from exc
+        except (OSError, struct.error) as exc:
             raise PerfLensError(
                 ErrorCode.EXTERNAL_TOOL_FAILED,
                 "collector_broker",
@@ -173,13 +174,6 @@ class CollectorBrokerClient:
                 recoverable=True,
                 details={"socket": str(self._socket_path)},
             ) from exc
-        line, separator, trailing = bytes(received).partition(b"\n")
-        if not separator or trailing:
-            raise PerfLensError(
-                ErrorCode.INTERNAL_ERROR,
-                "collector_broker",
-                "Collector broker returned a malformed response frame",
-            )
         try:
             response = BrokerResponse.model_validate_json(line)
         except ValidationError as exc:
@@ -188,23 +182,138 @@ class CollectorBrokerClient:
                 "collector_broker",
                 "Collector broker returned invalid JSON",
             ) from exc
-        if server_pid <= 0 or server_uid < 0:
+        if response.request_id != expected_request_id:
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,
                 "collector_broker",
-                "Collector Unix peer credentials are invalid",
+                "Collector response request ID does not match the request",
             )
         return response, server_pid, server_uid
 
 
-def _socket_path(path: Path) -> Path:
+@dataclass(frozen=True, slots=True)
+class _SocketIdentity:
+    path: Path
+    device: int
+    inode: int
+    uid: int
+    mode: int
+    parent_device: int
+    parent_inode: int
+    parent_uid: int
+    parent_mode: int
+
+
+def _socket_identity(path: Path) -> _SocketIdentity:
     if not path.expanduser().is_absolute():
         raise ValueError("Collector broker socket path must be absolute")
     try:
         safe_path = path.expanduser().resolve(strict=True)
         metadata = safe_path.stat()
+        parent_metadata = safe_path.parent.stat()
     except OSError as exc:
         raise ValueError("Collector broker socket does not exist") from exc
     if not stat.S_ISSOCK(metadata.st_mode):
         raise ValueError("Collector broker path is not a Unix socket")
-    return safe_path
+    if parent_metadata.st_mode & 0o022:
+        raise ValueError("Collector broker socket directory is group/world writable")
+    if parent_metadata.st_uid not in {0, metadata.st_uid}:
+        raise ValueError("Collector broker socket directory owner is unsafe")
+    if metadata.st_mode & 0o007:
+        raise ValueError("Collector broker socket is accessible to other users")
+    return _SocketIdentity(
+        path=safe_path,
+        device=metadata.st_dev,
+        inode=metadata.st_ino,
+        uid=metadata.st_uid,
+        mode=stat.S_IMODE(metadata.st_mode),
+        parent_device=parent_metadata.st_dev,
+        parent_inode=parent_metadata.st_ino,
+        parent_uid=parent_metadata.st_uid,
+        parent_mode=stat.S_IMODE(parent_metadata.st_mode),
+    )
+
+
+def _validate_connected_peer(identity: _SocketIdentity, server_pid: int, server_uid: int) -> None:
+    if server_pid <= 0 or server_uid < 0 or server_uid != identity.uid:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "collector_broker",
+            "Collector Unix peer credentials do not match the socket owner",
+        )
+    try:
+        metadata = identity.path.stat(follow_symlinks=False)
+        parent_metadata = identity.path.parent.stat()
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "collector_broker",
+            "Collector socket identity changed before the request",
+        ) from exc
+    if (
+        not stat.S_ISSOCK(metadata.st_mode)
+        or (metadata.st_dev, metadata.st_ino, metadata.st_uid, stat.S_IMODE(metadata.st_mode))
+        != (identity.device, identity.inode, identity.uid, identity.mode)
+        or (
+            parent_metadata.st_dev,
+            parent_metadata.st_ino,
+            parent_metadata.st_uid,
+            stat.S_IMODE(parent_metadata.st_mode),
+        )
+        != (
+            identity.parent_device,
+            identity.parent_inode,
+            identity.parent_uid,
+            identity.parent_mode,
+        )
+    ):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "collector_broker",
+            "Collector socket identity changed before the request",
+        )
+
+
+def _read_response_frame(connection: socket.socket) -> bytes:
+    received = bytearray()
+    while b"\n" not in received:
+        remaining = MAX_BROKER_MESSAGE_BYTES - len(received)
+        if remaining <= 0:
+            raise PerfLensError(
+                ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                "collector_broker",
+                "Collector broker response exceeds the protocol limit",
+            )
+        chunk = connection.recv(min(16 << 10, remaining))
+        if not chunk:
+            break
+        received.extend(chunk)
+    line, separator, trailing = bytes(received).partition(b"\n")
+    if not separator or trailing:
+        raise PerfLensError(
+            ErrorCode.INTERNAL_ERROR,
+            "collector_broker",
+            "Collector broker returned a malformed response frame",
+        )
+    return line
+
+
+def _raise_rejected_response(response: BrokerResponse, request_id: str) -> None:
+    error = response.error
+    if error is None:  # Defensive: BrokerResponse validates this invariant.
+        raise PerfLensError(
+            ErrorCode.INTERNAL_ERROR,
+            "collector_broker",
+            "Collector broker returned no error for a rejected request",
+        )
+    try:
+        code = ErrorCode(error.code)
+    except ValueError:
+        code = ErrorCode.EXTERNAL_TOOL_FAILED
+    raise PerfLensError(
+        code,
+        error.stage,
+        error.message,
+        recoverable=error.recoverable,
+        details={"request_id": request_id},
+    )

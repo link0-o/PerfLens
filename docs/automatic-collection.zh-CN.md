@@ -29,6 +29,8 @@ MCP 分析产物并生成报告
 - 计划默认 5 分钟过期；MCP 和运行中的 Broker 都拒绝同一计划再次执行，固定产物路径还会阻止服务重启后的成功产物被覆盖；
 - 支持 `record`、`stat`、`sched`、`lock`、`off_cpu`，实际允许模式由两层策略共同决定；
 - Collector 通过 Unix Socket 的 `SO_PEERCRED` 验证调用 UID；
+- 客户端也会固定安全的 Socket 身份、核对对端 UID 与 Socket 属主，并要求响应
+  `request_id`、采集 PID 和模式与授权请求一致；畸形、超限、超时或错配响应会安全失败；
 - Collector 策略再次限制调用 UID、目标所有者、模式、时长、频率、事件、输出大小；
 - Collector 会再次限制计划最长有效期，并拒绝非 root 所有且可被服务账号修改的 `perf` 文件；
 - 产物只能写入 Collector 配置的固定 spool；

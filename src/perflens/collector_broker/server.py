@@ -39,6 +39,7 @@ from perflens.collector_broker.protocol import (
     BROKER_REQUEST_ADAPTER,
     MAX_BROKER_MESSAGE_BYTES,
     BrokerCollectRequest,
+    BrokerError,
     BrokerHealthRequest,
     BrokerResponse,
 )
@@ -524,12 +525,12 @@ def _error_response(request_id: str, error: PerfLensError) -> BrokerResponse:
     return BrokerResponse(
         request_id=request_id,
         ok=False,
-        error={
-            "code": error.code.value,
-            "stage": error.stage,
-            "message": error.message,
-            "recoverable": error.recoverable,
-        },
+        error=BrokerError(
+            code=error.code.value,
+            stage=error.stage,
+            message=error.message,
+            recoverable=error.recoverable,
+        ),
     )
 
 

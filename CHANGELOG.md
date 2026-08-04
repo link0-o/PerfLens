@@ -6,6 +6,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Added
 
+- Fail-closed Collector client authentication and response correlation. Every
+  exchange now pins safe socket path metadata, requires the kernel peer UID to
+  match the socket owner, bounds and types the response envelope, checks the
+  exact request ID, and verifies collection PID/mode against the authorized plan.
 - Bounded, versioned JSON-lines Collector operational events for startup,
   successful collection, request rejection, shutdown, and startup failure.
   Stable error/request IDs support journal correlation without logging target
