@@ -64,6 +64,15 @@ perflens-collector.service` 审查差异，不要放宽检查。
 应立即检查 unit 内容、`systemctl status perflens-collector.service` 和对应 journal，确认
 当前实际加载的版本后再处理。管理员策略和 spool 证据不会在升级中删除。
 
+## service 已启动但部署仍报告 Socket 失败
+
+部署和升级不会只看 `/run/perflens/collector.sock` 是否存在，而会连接并发送一次只读
+`health` 请求。服务端检查调用方 Unix peer UID，客户端通过内核 `SO_PEERCRED` 复核
+响应 PID/UID，管理员命令还要求专用 `perflens` 服务 UID。若文件存在但无人监听、服务
+身份错误、协议版本不兼容、调用 UID 未授权或响应损坏，命令都会等待后失败；升级时还
+会恢复旧 unit。先检查 `systemctl status` 与 journal，不要手工创建 Socket 文件，也不要
+通过跳过握手把服务标记为成功。
+
 ## `undeploy` 拒绝移除 service
 
 `perflens-admin undeploy` 只删除带 PerfLens 托管标记、所有者可信、且没有组/其他

@@ -71,5 +71,7 @@ Collector 还会在启动 perf 前检查 spool 总字节数、文件数和文件
 后续升级先安装新版本，再运行 `sudo perflens-admin upgrade --dry-run` 和
 `sudo perflens-admin upgrade`。升级器保留管理员策略与历史证据，只替换可信托管 unit，
 失败时尝试恢复；完成后用普通用户重新运行 `accept-collector` 验收。
+部署和升级还会完成一次只读 Collector 健康协议往返，双方身份由内核 peer 凭据复核，
+不会把遗留、无人监听或错误服务 UID 的 Socket 误判为成功。
 
 **Full Changelog**：https://github.com/link0-o/PerfLens/commits/{tag}

@@ -52,6 +52,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - `perflens-admin upgrade` for explicit one-command Collector upgrades that
   preserve administrator policy and evidence, compare unit hashes, replace only
   verified managed units, and attempt rollback after activation failure.
+- A versioned, read-only Collector health operation with bidirectional kernel
+  peer-credential checks, used by deploy and upgrade so stale or wrong-identity
+  sockets cannot produce false readiness.
 
 ### Changed
 

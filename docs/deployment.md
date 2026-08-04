@@ -52,8 +52,12 @@ sudo /opt/perflens/bin/perflens-admin deploy \
 Use the copy installed in an administrator-controlled `/opt/perflens` runtime
 or system package, not a user-writable pipx script. The deployer accepts only a
 strict data policy and runs a fixed allowlist of system commands. It installs
-new or byte-identical files, starts the service, waits for its Unix socket, and
-returns a versioned JSON result. It does not alter sysctl/capabilities or run
+new or byte-identical files, starts the service, and requires a bounded,
+read-only health round trip. The Collector authenticates the caller UID, while
+the administrator client verifies the server PID/UID with kernel `SO_PEERCRED`
+and requires the dedicated `perflens` UID. A stale or wrong-owner socket cannot
+be mistaken for readiness. It then returns a versioned JSON result. It
+does not alter sysctl/capabilities or run
 commands from the config. The staged unit and sysusers files remain audit
 copies; the deployer renders trusted packaged templates.
 
@@ -105,7 +109,8 @@ reads only the fixed deployed policy, compares SHA-256 hashes of the current and
 packaged units, replaces only a verified PerfLens-managed unit, and restarts the
 service to load the new program. Policy and spool data are preserved. A failure
 after unit replacement triggers an attempted atomic unit rollback and service
-reload. Run ordinary-user `perflens accept-collector
+reload; the same rollback applies when the health handshake fails. Run
+ordinary-user `perflens accept-collector
 --authorize-host-acceptance` again after every upgrade.
 
 After deployment and verification, the Skill can confirm and launch one exact

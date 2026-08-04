@@ -72,6 +72,74 @@ def _capabilities() -> CollectionCapabilityArtifact:
     )
 
 
+def test_broker_health_is_authenticated_versioned_and_read_only(tmp_path: Path) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    policy = CollectorBrokerPolicy(
+        spool_root=spool,
+        perf_path=_fake_perf(tmp_path),
+        allowed_uids=(os.geteuid(),),
+        allowed_modes=("record", "stat"),
+    )
+    with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+        worker = threading.Thread(target=server.serve_once, daemon=True)
+        worker.start()
+        health = CollectorBrokerClient(server.socket_path, timeout_seconds=5).health(
+            expected_service_uid=os.geteuid()
+        )
+        worker.join(timeout=5)
+
+        mismatch_worker = threading.Thread(target=server.serve_once, daemon=True)
+        mismatch_worker.start()
+        with pytest.raises(PerfLensError) as mismatch:
+            CollectorBrokerClient(server.socket_path, timeout_seconds=5).health(
+                expected_service_uid=os.geteuid() + 1
+            )
+        mismatch_worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert not mismatch_worker.is_alive()
+    assert mismatch.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert health.schema_version == "1.0"
+    assert health.status == "ready"
+    assert health.policy_version == 1
+    assert health.service_pid == os.getpid()
+    assert health.service_uid == os.geteuid()
+    assert health.peer_uid == os.geteuid()
+    assert health.allowed_modes == ("record", "stat")
+    assert health.spool_root == str(spool.resolve())
+    assert list(spool.iterdir()) == []
+
+
+def test_broker_health_rejects_unauthorized_peer_end_to_end(tmp_path: Path) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    policy = CollectorBrokerPolicy(
+        spool_root=spool,
+        perf_path=_fake_perf(tmp_path),
+        allowed_uids=(os.geteuid() + 1,),
+    )
+    with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+        worker = threading.Thread(target=server.serve_once, daemon=True)
+        worker.start()
+        with pytest.raises(PerfLensError) as denied:
+            CollectorBrokerClient(server.socket_path, timeout_seconds=5).health()
+        worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert denied.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert denied.value.stage == "authorization"
+    assert list(spool.iterdir()) == []
+
+
 def test_broker_collects_verified_pid_to_fixed_spool(tmp_path: Path) -> None:
     spool = tmp_path / "spool"
     runtime = tmp_path / "run"

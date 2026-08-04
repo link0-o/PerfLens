@@ -46,6 +46,13 @@ attempts to restore the old unit and reload systemd. A rollback warning requires
 manual inspection of the unit, service status, and journal before retrying;
 policy and spool evidence are not deleted.
 
+Deploy and upgrade require a bounded `health` round trip, not merely an existing
+socket pathname. The server authenticates the caller, and the client verifies
+the responding PID/UID with kernel `SO_PEERCRED`; administrator readiness also
+requires the dedicated service UID. A stale socket, wrong service identity,
+incompatible protocol, unauthorized peer, malformed response, or timeout is a
+real failure. Inspect service status and the journal; never bypass the handshake.
+
 `perflens-admin undeploy` removes only a fixed unit with the PerfLens management
 marker, trusted ownership, and no group/other write permission. Review rejected
 legacy or manually edited units with `systemctl cat perflens-collector.service`

@@ -29,11 +29,17 @@ from perflens.collector_broker.policy import (
     validate_broker_policy,
 )
 from perflens.collector_broker.protocol import (
+    BROKER_REQUEST_ADAPTER,
     MAX_BROKER_MESSAGE_BYTES,
     BrokerCollectRequest,
+    BrokerHealthRequest,
     BrokerResponse,
 )
-from perflens.contracts.artifacts import CollectionArtifact, CollectionPlanArtifact
+from perflens.contracts.artifacts import (
+    CollectionArtifact,
+    CollectionPlanArtifact,
+    CollectorHealthArtifact,
+)
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _PEER_CREDENTIALS = struct.Struct("3i")
@@ -92,9 +98,12 @@ class CollectorBrokerServer:
         try:
             peer_uid = _peer_uid(connection)
             payload = _read_frame(connection)
-            request = BrokerCollectRequest.model_validate_json(payload)
+            request = BROKER_REQUEST_ADAPTER.validate_json(payload)
             request_id = request.request_id
-            artifact = self._collect(peer_uid, request)
+            if isinstance(request, BrokerHealthRequest):
+                artifact = self._health(peer_uid)
+            else:
+                artifact = self._collect(peer_uid, request)
             response = BrokerResponse(
                 request_id=request_id,
                 ok=True,
@@ -175,6 +184,24 @@ class CollectorBrokerServer:
                 details={"path": artifact.output_path},
             ) from exc
         return artifact
+
+    def _health(self, peer_uid: int) -> CollectorHealthArtifact:
+        if peer_uid != 0 and peer_uid not in self._policy.allowed_uids:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "authorization",
+                "Peer UID is not allowed to inspect Collector health",
+                recoverable=True,
+            )
+        return CollectorHealthArtifact(
+            perflens_version=__version__,
+            policy_version=self._policy.policy_version,
+            service_pid=os.getpid(),
+            service_uid=os.geteuid(),
+            peer_uid=peer_uid,
+            allowed_modes=tuple(self._policy.allowed_modes),
+            spool_root=str(self._policy.spool_root),
+        )
 
     def _authorize(self, peer_uid: int, plan: CollectionPlanArtifact) -> None:
         if peer_uid not in self._policy.allowed_uids:

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import secrets
 import socket
 import stat
+import struct
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -12,10 +14,17 @@ from pydantic import ValidationError
 from perflens.collector_broker.protocol import (
     MAX_BROKER_MESSAGE_BYTES,
     BrokerCollectRequest,
+    BrokerHealthRequest,
     BrokerResponse,
 )
-from perflens.contracts.artifacts import CollectionArtifact, CollectionPlanArtifact
+from perflens.contracts.artifacts import (
+    CollectionArtifact,
+    CollectionPlanArtifact,
+    CollectorHealthArtifact,
+)
 from perflens.domain.errors import ErrorCode, PerfLensError
+
+_PEER_CREDENTIALS = struct.Struct("3i")
 
 
 class CollectorBrokerClient:
@@ -31,7 +40,9 @@ class CollectorBrokerClient:
             request_id=f"request-{hashlib.sha256(identity.encode()).hexdigest()[:24]}",
             plan=plan,
         )
-        response = self._exchange(request.model_dump_json().encode("utf-8") + b"\n")
+        response, _server_pid, _server_uid = self._exchange(
+            request.model_dump_json().encode("utf-8") + b"\n"
+        )
         if not response.ok:
             error = response.error or {}
             raw_code = error.get("code", ErrorCode.EXTERNAL_TOOL_FAILED.value)
@@ -61,7 +72,64 @@ class CollectorBrokerClient:
                 "Collector broker returned an invalid collection artifact",
             ) from exc
 
-    def _exchange(self, payload: bytes) -> BrokerResponse:
+    def health(self, *, expected_service_uid: int | None = None) -> CollectorHealthArtifact:
+        """Perform one authenticated, read-only protocol round trip."""
+        if expected_service_uid is not None and expected_service_uid < 0:
+            raise ValueError("Expected Collector service UID is invalid")
+        request = BrokerHealthRequest(request_id=f"request-{secrets.token_hex(12)}")
+        response, server_pid, server_uid = self._exchange(
+            request.model_dump_json().encode("utf-8") + b"\n"
+        )
+        if not response.ok:
+            error = response.error or {}
+            raw_code = error.get("code", ErrorCode.EXTERNAL_TOOL_FAILED.value)
+            try:
+                code = ErrorCode(str(raw_code))
+            except ValueError:
+                code = ErrorCode.EXTERNAL_TOOL_FAILED
+            raise PerfLensError(
+                code,
+                str(error.get("stage", "collector_broker")),
+                str(error.get("message", "Collector broker rejected the health request")),
+                recoverable=bool(error.get("recoverable", True)),
+                details={"request_id": request.request_id},
+            )
+        if response.result is None:
+            raise PerfLensError(
+                ErrorCode.INTERNAL_ERROR,
+                "collector_broker",
+                "Collector broker returned no health result",
+            )
+        try:
+            artifact = CollectorHealthArtifact.model_validate(response.result)
+        except ValidationError as exc:
+            raise PerfLensError(
+                ErrorCode.INTERNAL_ERROR,
+                "collector_broker",
+                "Collector broker returned an invalid health artifact",
+            ) from exc
+        if artifact.service_pid != server_pid or artifact.service_uid != server_uid:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "collector_broker",
+                "Collector health identity does not match Unix peer credentials",
+                recoverable=True,
+                details={"server_pid": server_pid, "server_uid": server_uid},
+            )
+        if expected_service_uid is not None and server_uid != expected_service_uid:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "collector_broker",
+                "Collector Unix peer UID does not match the dedicated service account",
+                recoverable=True,
+                details={
+                    "server_uid": server_uid,
+                    "expected_service_uid": expected_service_uid,
+                },
+            )
+        return artifact
+
+    def _exchange(self, payload: bytes) -> tuple[BrokerResponse, int, int]:
         if len(payload) > MAX_BROKER_MESSAGE_BYTES:
             raise PerfLensError(
                 ErrorCode.RESOURCE_LIMIT_EXCEEDED,
@@ -69,10 +137,18 @@ class CollectorBrokerClient:
                 "Collector broker request exceeds the protocol limit",
             )
         received = bytearray()
+        server_pid = -1
+        server_uid = -1
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
                 connection.settimeout(self._timeout_seconds)
                 connection.connect(str(self._socket_path))
+                credentials = connection.getsockopt(
+                    socket.SOL_SOCKET,
+                    socket.SO_PEERCRED,
+                    _PEER_CREDENTIALS.size,
+                )
+                server_pid, server_uid, _server_gid = _PEER_CREDENTIALS.unpack(credentials)
                 connection.sendall(payload)
                 while b"\n" not in received:
                     chunk = connection.recv(
@@ -89,7 +165,7 @@ class CollectorBrokerClient:
                         )
         except PerfLensError:
             raise
-        except (OSError, TimeoutError) as exc:
+        except (OSError, TimeoutError, struct.error) as exc:
             raise PerfLensError(
                 ErrorCode.EXTERNAL_TOOL_FAILED,
                 "collector_broker",
@@ -105,13 +181,20 @@ class CollectorBrokerClient:
                 "Collector broker returned a malformed response frame",
             )
         try:
-            return BrokerResponse.model_validate_json(line)
+            response = BrokerResponse.model_validate_json(line)
         except ValidationError as exc:
             raise PerfLensError(
                 ErrorCode.INTERNAL_ERROR,
                 "collector_broker",
                 "Collector broker returned invalid JSON",
             ) from exc
+        if server_pid <= 0 or server_uid < 0:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "collector_broker",
+                "Collector Unix peer credentials are invalid",
+            )
+        return response, server_pid, server_uid
 
 
 def _socket_path(path: Path) -> Path:

@@ -20,6 +20,7 @@ from typing import Any, Literal, cast
 
 from perflens import __version__
 from perflens.artifacts.filesystem import write_text_atomic
+from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.collector_broker.policy import COLLECTOR_POLICY_VERSION
 from perflens.contracts.artifacts import (
     CollectorDeploymentArtifact,
@@ -128,7 +129,6 @@ def deploy_collector(
         )
 
     executor = command_executor or _run_admin_command
-    wait_for_socket = socket_waiter or _wait_for_socket
     identity = service_identity
     staged: Path | None = None
     installed_config = False
@@ -168,7 +168,13 @@ def deploy_collector(
                 executor(group_command)
             executor(commands[-2])
             executor(commands[-1])
-            wait_for_socket(effective_layout.socket_path)
+            if socket_waiter is not None:
+                socket_waiter(effective_layout.socket_path)
+            else:
+                _wait_for_socket(
+                    effective_layout.socket_path,
+                    expected_service_uid=identity[0],
+                )
     except BaseException:
         if installed_service:
             effective_layout.service_path.unlink(missing_ok=True)
@@ -295,7 +301,17 @@ def upgrade_collector(
             )
 
         executor = command_executor or _run_admin_upgrade_command
-        wait_for_socket = socket_waiter or _wait_for_upgrade_socket
+        expected_service_uid: int | None = None
+        if socket_waiter is None:
+            try:
+                expected_service_uid = pwd.getpwnam("perflens").pw_uid
+            except KeyError as exc:
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    stage,
+                    "Dedicated perflens service account does not exist",
+                    suggested_actions=("Deploy the Collector before running upgrade.",),
+                ) from exc
         service_updated = False
         try:
             if update_required:
@@ -308,7 +324,13 @@ def upgrade_collector(
                 )
             for planned in commands:
                 executor(planned)
-            wait_for_socket(effective_layout.socket_path)
+            if socket_waiter is not None:
+                socket_waiter(effective_layout.socket_path)
+            else:
+                _wait_for_upgrade_socket(
+                    effective_layout.socket_path,
+                    expected_service_uid=expected_service_uid,
+                )
         except BaseException as exc:
             rollback_errors: list[str] = []
             if service_updated:
@@ -1142,30 +1164,38 @@ def _run_admin_upgrade_command(command: tuple[str, ...]) -> None:
     _run_admin_command(command, stage="collector_upgrade")
 
 
-def _wait_for_socket(path: Path) -> None:
+def _wait_for_socket(path: Path, *, expected_service_uid: int | None = None) -> None:
     deadline = time.monotonic() + 5.0
+    last_error = "Collector socket has not appeared"
     while time.monotonic() < deadline:
         try:
-            if stat.S_ISSOCK(path.stat().st_mode):
+            health = CollectorBrokerClient(path, timeout_seconds=0.5).health(
+                expected_service_uid=expected_service_uid
+            )
+            if health.status == "ready":
                 return
-        except OSError:
-            pass
+        except (PerfLensError, ValueError) as exc:
+            last_error = str(exc)[:512]
         time.sleep(0.05)
     raise PerfLensError(
         ErrorCode.EXTERNAL_TOOL_FAILED,
         "collector_deploy",
-        "Collector service did not create its Unix socket",
+        "Collector service did not pass its authenticated Unix-socket health check",
         recoverable=True,
-        details={"socket": str(path)},
+        details={"socket": str(path), "last_error": last_error},
         suggested_actions=(
             "Inspect systemctl status and journalctl for perflens-collector.service.",
         ),
     )
 
 
-def _wait_for_upgrade_socket(path: Path) -> None:
+def _wait_for_upgrade_socket(
+    path: Path,
+    *,
+    expected_service_uid: int | None = None,
+) -> None:
     try:
-        _wait_for_socket(path)
+        _wait_for_socket(path, expected_service_uid=expected_service_uid)
     except PerfLensError as exc:
         raise PerfLensError(
             exc.code,

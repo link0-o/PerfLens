@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import os
-import stat
 import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -109,20 +109,28 @@ def test_admin_deploy_dry_run_is_read_only_and_cli_reports_versioned_plan(
 
 def test_admin_deploy_installs_fixed_assets_runs_allowlist_and_checks_socket(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config, _perf, collector, layout = _deployment_inputs(tmp_path)
     commands: list[tuple[str, ...]] = []
     checked_sockets: list[Path] = []
+    checked_service_uids: list[int | None] = []
 
     def execute(command: tuple[str, ...]) -> None:
         commands.append(command)
+
+    def wait_for_socket(path: Path, *, expected_service_uid: int | None = None) -> None:
+        checked_sockets.append(path)
+        checked_service_uids.append(expected_service_uid)
+
+    monkeypatch.setattr(admin_deploy, "_wait_for_socket", wait_for_socket)
+
     result = deploy_collector(
         config,
         layout=layout,
         collector_command=collector,
         require_root=False,
         command_executor=execute,
-        socket_waiter=checked_sockets.append,
         service_identity=(os.geteuid(), os.getegid()),
     )
 
@@ -147,10 +155,11 @@ def test_admin_deploy_installs_fixed_assets_runs_allowlist_and_checks_socket(
         collector_command=collector,
         require_root=False,
         command_executor=execute,
-        socket_waiter=checked_sockets.append,
         service_identity=(os.geteuid(), os.getegid()),
     )
     assert repeated.status == "deployed"
+    assert checked_sockets == [layout.socket_path, layout.socket_path]
+    assert checked_service_uids == [os.geteuid(), os.geteuid()]
 
 
 def test_admin_deploy_rolls_back_new_files_after_service_failure(tmp_path: Path) -> None:
@@ -175,7 +184,10 @@ def test_admin_deploy_rolls_back_new_files_after_service_failure(tmp_path: Path)
     assert not layout.service_path.exists()
 
 
-def test_admin_upgrade_dry_run_and_restart_preserve_policy_and_data(tmp_path: Path) -> None:
+def test_admin_upgrade_dry_run_and_restart_preserve_policy_and_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config, _perf, collector, layout = _deployment_inputs(tmp_path)
     deploy_collector(
         config,
@@ -207,13 +219,32 @@ def test_admin_upgrade_dry_run_and_restart_preserve_policy_and_data(tmp_path: Pa
 
     commands: list[tuple[str, ...]] = []
     sockets: list[Path] = []
+    service_uids: list[int | None] = []
+
+    def service_account(_name: str) -> SimpleNamespace:
+        return SimpleNamespace(pw_uid=os.geteuid())
+
+    def wait_for_upgrade_socket(
+        path: Path,
+        *,
+        expected_service_uid: int | None = None,
+    ) -> None:
+        sockets.append(path)
+        service_uids.append(expected_service_uid)
+
+    monkeypatch.setattr(admin_deploy.pwd, "getpwnam", service_account)
+    monkeypatch.setattr(
+        admin_deploy,
+        "_wait_for_upgrade_socket",
+        wait_for_upgrade_socket,
+    )
+
     restarted = upgrade_collector(
         layout.config_path,
         layout=layout,
         collector_command=collector,
         require_root=False,
         command_executor=commands.append,
-        socket_waiter=sockets.append,
     )
     assert restarted.status == "restarted"
     assert restarted.service_updated is False
@@ -226,6 +257,7 @@ def test_admin_upgrade_dry_run_and_restart_preserve_policy_and_data(tmp_path: Pa
         ("/usr/bin/systemctl", "restart", "perflens-collector.service"),
     ]
     assert sockets == [layout.socket_path]
+    assert service_uids == [os.geteuid()]
 
 
 def test_admin_upgrade_replaces_only_managed_unit_and_cli_is_versioned(
@@ -693,11 +725,61 @@ def test_admin_helpers_reject_commands_and_report_system_failures(
 
     socket_path = tmp_path / "collector.sock"
 
-    def socket_metadata(_path: Path) -> os.stat_result:
-        return os.stat_result((stat.S_IFSOCK | 0o660, 0, 0, 1, 0, 0, 0, 0, 0, 0))
+    class FakeHealth:
+        status = "ready"
 
-    monkeypatch.setattr(Path, "stat", socket_metadata)
+    class FakeClient:
+        def __init__(self, path: Path, *, timeout_seconds: float) -> None:
+            assert path == socket_path
+            assert timeout_seconds == 0.5
+
+        def health(
+            self,
+            *,
+            expected_service_uid: int | None = None,
+        ) -> FakeHealth:
+            assert expected_service_uid is None
+            return FakeHealth()
+
+    monkeypatch.setattr(admin_deploy, "CollectorBrokerClient", FakeClient)
     wait_for_socket(socket_path)
+
+
+def test_admin_socket_waiter_rejects_stale_unresponsive_socket(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wait_for_socket = cast(
+        Callable[[Path], None],
+        vars(admin_deploy)["_wait_for_socket"],
+    )
+    moments = iter((0.0, 0.0, 6.0))
+
+    class FailedClient:
+        def __init__(self, _path: Path, *, timeout_seconds: float) -> None:
+            assert timeout_seconds == 0.5
+
+        def health(self, *, expected_service_uid: int | None = None) -> None:
+            assert expected_service_uid is None
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_FAILED,
+                "collector_broker",
+                "stale socket refused the health handshake",
+            )
+
+    def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(admin_deploy, "CollectorBrokerClient", FailedClient)
+    monkeypatch.setattr(admin_deploy.time, "monotonic", lambda: next(moments))
+    monkeypatch.setattr(admin_deploy.time, "sleep", no_sleep)
+
+    with pytest.raises(PerfLensError) as failed:
+        wait_for_socket(tmp_path / "stale.sock")
+    assert failed.value.code is ErrorCode.EXTERNAL_TOOL_FAILED
+    assert failed.value.details["last_error"] == (
+        "stale socket refused the health handshake"
+    )
 
 
 def test_admin_deploy_rejects_unsafe_policy_and_symlink(tmp_path: Path) -> None:

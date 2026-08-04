@@ -536,6 +536,18 @@ class CollectorAcceptanceArtifact(ContractModel):
     warnings: tuple[str, ...] = ()
 
 
+class CollectorHealthArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    status: Literal["ready"] = "ready"
+    policy_version: int = Field(gt=0)
+    service_pid: int = Field(gt=0)
+    service_uid: int = Field(ge=0)
+    peer_uid: int = Field(ge=0)
+    allowed_modes: tuple[str, ...]
+    spool_root: str
+
+
 class CollectorDeploymentArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     perflens_version: str

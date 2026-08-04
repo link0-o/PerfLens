@@ -64,6 +64,14 @@ The Collector never receives or starts the workload command. `perflens-admin` is
 an explicitly invoked administrator boundary that accepts a versioned data-only
 policy; the MCP server, Skill, and Agent never invoke it.
 
+The bounded Collector protocol has one state-producing operation: `collect_pid`
+requires a short-lived, single-use plan bound to PID, UID, and process start
+time. Its separate `health` operation is read-only, peer-authenticated, does not
+run perf or write the spool, and is required by deploy/upgrade readiness checks.
+The server authenticates the caller; the client verifies the responding PID/UID
+with kernel `SO_PEERCRED`, and administrator readiness requires the dedicated
+service UID. A socket pathname alone is never treated as a healthy service.
+
 `perflens status` is a separate read-only diagnostic boundary. It summarizes
 onboarding files, Skill and MCP snippets, staged assets, socket access, current
 login-group membership, and host perf conditions without sampling a target.

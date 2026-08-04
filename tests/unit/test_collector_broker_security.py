@@ -116,6 +116,22 @@ def test_broker_authorization_denies_every_out_of_policy_dimension(tmp_path: Pat
     )
 
 
+def test_broker_health_allows_root_admin_without_relaxing_user_policy(
+    tmp_path: Path,
+) -> None:
+    policy = _policy(tmp_path)
+    broker = _broker_with_policy(policy)
+
+    root_health = broker._health(0)
+    assert root_health.status == "ready"
+    assert root_health.peer_uid == 0
+    assert root_health.policy_version == policy.policy_version
+
+    with pytest.raises(PerfLensError) as denied:
+        broker._health(os.geteuid() + 1)
+    assert denied.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
 def test_broker_denies_exhausted_or_unsafe_spool(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

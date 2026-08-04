@@ -243,6 +243,10 @@ After deployment, `perflens-admin spool-status` gives a read-only Chinese
 summary of spool usage, filesystem reserve, and currently reservable output;
 add `--json` for the versioned machine-readable artifact.
 
+Deploy and upgrade require a bounded, read-only Collector health round trip and
+verify the responding PID/UID through kernel credentials. A stale, wrong-owner,
+or unlistened socket pathname is not readiness.
+
 After installing a new release, run `sudo perflens-admin upgrade --dry-run` and
 then `sudo perflens-admin upgrade`. The explicit flow preserves policy and spool
 data, replaces only a verified managed unit, restarts the service, and attempts

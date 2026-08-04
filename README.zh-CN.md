@@ -288,6 +288,10 @@ PerfLens 永远不会自行执行 sudo、修改内核策略或降低主机安全
 磁盘保留余量和当前最多可采集数据量；该命令只读，不删除旧证据。机器可读输出使用
 `perflens-admin spool-status --json`。
 
+首次部署和后续升级都会完成只读健康协议往返，并通过内核凭据复核服务 PID/UID；仅
+存在 Socket 文件不会被当作成功，因此旧文件、错误身份或未监听服务会在自动采集前
+暴露出来。
+
 安装新版本后使用 `sudo perflens-admin upgrade --dry-run` 预检，再运行
 `sudo perflens-admin upgrade`。它保留管理员策略和历史证据，只更新可信托管 unit，失败
 时尝试恢复；升级后应重新运行普通用户真实验收。

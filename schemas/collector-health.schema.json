@@ -1,0 +1,63 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "allowed_modes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Modes",
+      "type": "array"
+    },
+    "peer_uid": {
+      "minimum": 0,
+      "title": "Peer Uid",
+      "type": "integer"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "policy_version": {
+      "exclusiveMinimum": 0,
+      "title": "Policy Version",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "service_pid": {
+      "exclusiveMinimum": 0,
+      "title": "Service Pid",
+      "type": "integer"
+    },
+    "service_uid": {
+      "minimum": 0,
+      "title": "Service Uid",
+      "type": "integer"
+    },
+    "spool_root": {
+      "title": "Spool Root",
+      "type": "string"
+    },
+    "status": {
+      "const": "ready",
+      "default": "ready",
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "policy_version",
+    "service_pid",
+    "service_uid",
+    "peer_uid",
+    "allowed_modes",
+    "spool_root"
+  ],
+  "title": "CollectorHealthArtifact",
+  "type": "object"
+}

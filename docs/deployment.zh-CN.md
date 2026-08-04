@@ -78,7 +78,11 @@ sudo /opt/perflens/bin/perflens-admin deploy \
 
 这条命令会完成以下固定操作：创建专用系统账号和目录、安装策略与 systemd unit、
 把策略中的 `allowed_uids` 对应用户加入 `perflens` 组、重载 systemd、启动服务并等待
-Unix Socket。部署结果是带 `schema_version` 的 JSON。它不执行配置里的命令，
+Unix Socket 完成一次有界、只读的健康协议往返。Collector 校验管理员/授权用户的
+peer UID，管理员客户端也通过内核 `SO_PEERCRED` 确认响应进程属于专用 `perflens`
+服务 UID；只有收到身份匹配的版本化 `status: ready` 才会报告成功。遗留但无人监听的
+Socket 文件或错误 UID 的服务不会误判为就绪。
+部署结果是带 `schema_version` 的 JSON。它不执行配置里的命令，
 不修改 sysctl 或 capability，也不会覆盖内容不同的已有配置。
 
 `perflens-admin` 必须来自管理员控制的系统安装，例如 `/opt/perflens` 或正式
@@ -227,7 +231,7 @@ sudo perflens-admin upgrade
 `upgrade` 只读取固定的已部署策略，只更新带 PerfLens 托管标记且所有者、权限可信的
 systemd unit，再执行固定的 `daemon-reload` 和 `restart`。它不会接受项目目录中的替代
 策略，不修改 sysctl/capability，也不删除配置或 `/var/lib/perflens` 证据。若更新 unit
-后重启或 Socket 检查失败，会尝试原子恢复旧 unit 并重新加载；此时应按错误提示检查
+后重启或健康协议握手失败，会尝试原子恢复旧 unit 并重新加载；此时应按错误提示检查
 `systemctl status` 和日志。升级成功后，再以普通用户运行一次：
 
 ```bash

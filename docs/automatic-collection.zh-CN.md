@@ -113,7 +113,8 @@ Debian 的等级 3 会在普通 CAP_PERFMON 范围检查前拒绝 perf。模板�
 
 ## 检查 Collector
 
-`perflens-admin deploy` 已经重载 systemd、启动服务并等待 Socket。管理员可继续检查：
+`perflens-admin deploy` 已经重载 systemd、启动服务，并要求 Socket 完成一次只读健康协议
+往返；仅存在 Socket 文件不算成功。管理员可继续检查：
 
 ```bash
 systemctl status perflens-collector.service
