@@ -19,12 +19,17 @@ from typing import Any, Literal, cast
 from perflens import __version__
 from perflens.artifacts.filesystem import write_text_atomic
 from perflens.collector_broker.policy import COLLECTOR_POLICY_VERSION
-from perflens.contracts.artifacts import CollectorDeploymentArtifact
+from perflens.contracts.artifacts import (
+    CollectorDeploymentArtifact,
+    CollectorUndeploymentArtifact,
+)
 from perflens.distribution.collector import install_collector_assets
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _MAX_CONFIG_BYTES = 256 << 10
+_MAX_SERVICE_BYTES = 256 << 10
 _SUPPORTED_MODES = {"record", "stat", "sched", "lock", "off_cpu"}
+_MANAGED_SERVICE_MARKER = "# Managed by PerfLens."
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +172,53 @@ def deploy_collector(
         warnings,
         next_steps,
     )
+
+
+def undeploy_collector(
+    *,
+    dry_run: bool = False,
+    layout: CollectorSystemLayout | None = None,
+    require_root: bool = True,
+    command_executor: CommandExecutor | None = None,
+) -> CollectorUndeploymentArtifact:
+    """Stop and remove only a verified PerfLens-managed service unit.
+
+    Administrator policy and collected artifacts are intentionally preserved.
+    """
+    effective_layout = layout or CollectorSystemLayout()
+    service = effective_layout.service_path
+    commands = (
+        ("/usr/bin/systemctl", "disable", "--now", "perflens-collector.service"),
+        ("/usr/bin/systemctl", "daemon-reload"),
+    )
+    warnings = (
+        "Collector policy and collected artifacts are preserved.",
+        "The perflens system user and group are preserved for artifact ownership.",
+    )
+    next_steps = (
+        f"Review and remove {effective_layout.config_path} only if its policy is no longer needed.",
+        f"Review {effective_layout.state_directory} before deleting any performance artifacts.",
+    )
+    if not service.exists() and not service.is_symlink():
+        return _undeployment_result(
+            "already_absent", effective_layout, (), warnings, next_steps
+        )
+    _verify_managed_service(service, require_root_owner=require_root)
+    if dry_run:
+        return _undeployment_result("dry_run", effective_layout, commands, warnings, next_steps)
+    if require_root and os.geteuid() != 0:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "collector_undeploy",
+            "Collector removal must be started explicitly by an administrator",
+            recoverable=True,
+            suggested_actions=("Run sudo perflens-admin undeploy.",),
+        )
+    executor = command_executor or _run_admin_undeploy_command
+    executor(commands[0])
+    _unlink_verified_managed_service(service, require_root_owner=require_root)
+    executor(commands[1])
+    return _undeployment_result("removed", effective_layout, commands, warnings, next_steps)
 
 
 def _candidate_config(path: Path) -> _ConfigSource:
@@ -479,13 +531,81 @@ def _install_new_or_identical_text(text: str, destination: Path, *, mode: int) -
     return True
 
 
-def _run_admin_command(command: tuple[str, ...]) -> None:
+def _verify_managed_service(path: Path, *, require_root_owner: bool) -> os.stat_result:
+    candidate = path.expanduser()
+    if candidate.is_symlink():
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "collector_undeploy",
+            "Collector service unit must not be a symbolic link",
+            details={"path": str(candidate)},
+        )
+    descriptor = -1
+    try:
+        descriptor = os.open(candidate, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        metadata = os.fstat(descriptor)
+        raw = os.read(descriptor, _MAX_SERVICE_BYTES + 1)
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "collector_undeploy",
+            "Collector service unit cannot be inspected safely",
+            details={"path": str(candidate)},
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    expected_owners = {0} if require_root_owner else {os.geteuid()}
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid not in expected_owners
+        or metadata.st_mode & 0o022
+        or len(raw) > _MAX_SERVICE_BYTES
+        or not raw.startswith(_MANAGED_SERVICE_MARKER.encode())
+    ):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "collector_undeploy",
+            "Service unit is not a bounded, trusted PerfLens-managed file",
+            details={"path": str(candidate)},
+        )
+    return metadata
+
+
+def _unlink_verified_managed_service(path: Path, *, require_root_owner: bool) -> None:
+    inspected = _verify_managed_service(path, require_root_owner=require_root_owner)
+    try:
+        current = path.stat(follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != (inspected.st_dev, inspected.st_ino):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "collector_undeploy",
+                "Collector service unit changed during removal",
+                details={"path": str(path)},
+            )
+        path.unlink()
+    except PerfLensError:
+        raise
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.OUTPUT_WRITE_FAILED,
+            "collector_undeploy",
+            "Unable to remove the verified Collector service unit",
+            details={"path": str(path)},
+        ) from exc
+
+
+def _run_admin_command(
+    command: tuple[str, ...],
+    *,
+    stage: Literal["collector_deploy", "collector_undeploy"] = "collector_deploy",
+) -> None:
     executable = Path(command[0])
     allowed = {"/usr/bin/systemd-sysusers", "/usr/sbin/usermod", "/usr/bin/systemctl"}
     if command[0] not in allowed:
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
-            "collector_deploy",
+            stage,
             "Administrative command is outside the fixed deployment allowlist",
         )
     try:
@@ -502,14 +622,14 @@ def _run_admin_command(command: tuple[str, ...]) -> None:
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PerfLensError(
             ErrorCode.EXTERNAL_TOOL_FAILED,
-            "collector_deploy",
+            stage,
             "Unable to run a fixed administrative deployment command",
             details={"executable": str(executable)},
         ) from exc
     if completed.returncode != 0:
         raise PerfLensError(
             ErrorCode.EXTERNAL_TOOL_FAILED,
-            "collector_deploy",
+            stage,
             "Administrative deployment command failed",
             recoverable=True,
             details={
@@ -518,6 +638,10 @@ def _run_admin_command(command: tuple[str, ...]) -> None:
                 "stderr": completed.stderr[-4096:],
             },
         )
+
+
+def _run_admin_undeploy_command(command: tuple[str, ...]) -> None:
+    _run_admin_command(command, stage="collector_undeploy")
 
 
 def _wait_for_socket(path: Path) -> None:
@@ -570,6 +694,25 @@ def _result(
         service_path=str(layout.service_path),
         collector_command=str(command),
         allowed_uids=allowed_uids,
+        planned_commands=commands,
+        warnings=warnings,
+        next_steps=next_steps,
+    )
+
+
+def _undeployment_result(
+    status: Literal["dry_run", "removed", "already_absent"],
+    layout: CollectorSystemLayout,
+    commands: tuple[tuple[str, ...], ...],
+    warnings: tuple[str, ...],
+    next_steps: tuple[str, ...],
+) -> CollectorUndeploymentArtifact:
+    return CollectorUndeploymentArtifact(
+        perflens_version=__version__,
+        status=status,
+        service_path=str(layout.service_path),
+        config_path=str(layout.config_path),
+        state_directory=str(layout.state_directory),
         planned_commands=commands,
         warnings=warnings,
         next_steps=next_steps,

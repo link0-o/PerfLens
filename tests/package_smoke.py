@@ -21,6 +21,12 @@ def main() -> None:
     _run(perflens_mcp, "--version", expected=__version__)
     _run(perflens_collector, "--version", expected=__version__)
     _run(perflens_admin, "--version", expected=__version__)
+    _run(
+        perflens_admin,
+        "undeploy",
+        "--help",
+        expected="preserving policy and artifacts",
+    )
     _run(perflens, "verify-collector", "--help", expected="bounded real perf-stat probe")
 
     with tempfile.TemporaryDirectory(prefix="perflens-package-smoke-") as directory:

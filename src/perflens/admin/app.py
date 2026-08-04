@@ -10,7 +10,7 @@ from typing import Annotated, NoReturn
 import typer
 
 from perflens import __version__
-from perflens.admin.deploy import deploy_collector
+from perflens.admin.deploy import deploy_collector, undeploy_collector
 from perflens.contracts.artifacts import ErrorArtifact, ErrorBody
 from perflens.domain.errors import ErrorCode, PerfLensError
 
@@ -61,6 +61,21 @@ def deploy_command(
             dry_run=dry_run,
             collector_command=collector_command,
         )
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(result.model_dump_json(indent=2))
+
+
+@app.command("undeploy")
+def undeploy_command(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Validate the managed unit without changing the host."),
+    ] = False,
+) -> None:
+    """Stop and remove the managed service while preserving policy and artifacts."""
+    try:
+        result = undeploy_collector(dry_run=dry_run)
     except PerfLensError as exc:
         _fail(exc)
     typer.echo(result.model_dump_json(indent=2))

@@ -529,6 +529,20 @@ class CollectorDeploymentArtifact(ContractModel):
     next_steps: tuple[str, ...] = ()
 
 
+class CollectorUndeploymentArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    status: Literal["dry_run", "removed", "already_absent"]
+    service_path: str
+    config_path: str
+    state_directory: str
+    planned_commands: tuple[tuple[str, ...], ...]
+    config_preserved: bool = True
+    state_preserved: bool = True
+    warnings: tuple[str, ...] = ()
+    next_steps: tuple[str, ...] = ()
+
+
 class RuntimeStatusArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     perflens_version: str

@@ -21,6 +21,7 @@ from perflens.contracts.artifacts import (
     ClassificationPage,
     CollectionArtifact,
     CollectorDeploymentArtifact,
+    CollectorUndeploymentArtifact,
     DiagnosisBundle,
     ElfMetadataArtifact,
     Evidence,
@@ -64,6 +65,7 @@ def test_checked_in_json_schemas_match_contract_models() -> None:
         "call-path-page.schema.json": CallPathPage,
         "classification-page.schema.json": ClassificationPage,
         "collector-deployment.schema.json": CollectorDeploymentArtifact,
+        "collector-undeployment.schema.json": CollectorUndeploymentArtifact,
         "benchmark.schema.json": BenchmarkArtifact,
         "benchmark-metric.schema.json": BenchmarkMetric,
         "benchmark-environment.schema.json": BenchmarkEnvironment,
@@ -74,8 +76,8 @@ def test_checked_in_json_schemas_match_contract_models() -> None:
         "call-path-delta.schema.json": CallPathDelta,
         "collection.schema.json": CollectionArtifact,
         "perf-stat-metric.schema.json": PerfStatMetric,
-    "project-run.schema.json": ProjectRunArtifact,
-    "runtime-status.schema.json": RuntimeStatusArtifact,
+        "project-run.schema.json": ProjectRunArtifact,
+        "runtime-status.schema.json": RuntimeStatusArtifact,
         "setup.schema.json": SetupArtifact,
     }
 

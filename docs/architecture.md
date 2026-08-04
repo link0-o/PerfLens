@@ -64,3 +64,9 @@ policy; the MCP server, Skill, and Agent never invoke it.
 `perflens status` is a separate read-only diagnostic boundary. It summarizes
 onboarding files, Skill and MCP snippets, staged assets, socket access, current
 login-group membership, and host perf conditions without sampling a target.
+
+Native Debian distribution preserves the same boundary: the main `perflens`
+package exposes only ordinary-user CLI/MCP entry points, while the exact-version
+`perflens-collector` package adds administrator and Collector entry points.
+Neither package activates a service during installation. Explicit undeployment
+removes only a trusted unit carrying the packaged management marker.

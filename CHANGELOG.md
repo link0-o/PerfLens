@@ -36,6 +36,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   policies, including tunable, fixed-path, and security-sensitive settings.
 - A versioned Collector policy format and Chinese-first `perflens status`
   command for read-only project, MCP, socket, group, and perf readiness checks.
+- Reproducible split Debian 13 packages for the unprivileged toolkit and optional
+  Collector entry points, with no service activation during package installation.
+- `perflens-admin undeploy`, which removes only a verified managed service unit
+  while preserving administrator policy, collected artifacts, users, and groups.
 
 ### Changed
 

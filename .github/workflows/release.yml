@@ -13,7 +13,53 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  debian-package:
+    runs-on: ubuntu-latest
+    container: debian:13-slim
+    timeout-minutes: 30
+    steps:
+      - name: Install Debian build prerequisites
+        run: apt-get update && apt-get install --yes ca-certificates dpkg-dev git python3
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+      - run: uv sync --all-groups --frozen --python /usr/bin/python3
+      - run: uv build --no-sources
+      - run: >-
+          uv run python scripts/build_deb.py
+          --output-directory dist
+          --python /usr/bin/python3
+          --uv "$(command -v uv)"
+      - run: mkdir /tmp/perflens-deb-reproducible
+      - run: >-
+          uv run python scripts/build_deb.py
+          --output-directory /tmp/perflens-deb-reproducible
+          --python /usr/bin/python3
+          --uv "$(command -v uv)"
+          --offline
+      - run: >-
+          uv run python tests/deb_package_smoke.py
+          --directory dist
+          --reproducible-directory /tmp/perflens-deb-reproducible
+      - name: Install and remove DEBs without activating Collector
+        run: |
+          apt-get install --yes --no-install-recommends \
+            ./dist/perflens_*_amd64.deb \
+            ./dist/perflens-collector_*_all.deb
+          perflens --version
+          perflens-admin --version
+          test ! -e /etc/perflens/collector.toml
+          test ! -e /etc/systemd/system/perflens-collector.service
+          apt-get remove --yes perflens-collector perflens
+          test ! -e /usr/bin/perflens
+      - uses: actions/upload-artifact@v7
+        with:
+          name: perflens-debian-packages
+          path: dist/*.deb
+
   github-release:
+    needs: debian-package
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -29,6 +75,10 @@ jobs:
       - run: uv build --no-sources
       - run: uv run --isolated --no-project --with dist/*.whl tests/package_smoke.py
       - run: uv run --isolated --no-project --with dist/*.tar.gz tests/package_smoke.py
+      - uses: actions/download-artifact@v8
+        with:
+          name: perflens-debian-packages
+          path: dist
       - run: >-
           uv export --locked --no-dev --no-emit-project
           --preview-features sbom-export

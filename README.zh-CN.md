@@ -58,13 +58,16 @@ perflens setup \
 
 然后打开命令显示的 `下一步.zh-CN.md`。完整新手流程见[《安装与首次使用》](INSTALL.zh-CN.md)。
 
+Debian 13 用户也可以直接安装原生 `.deb`，不需要自己创建 Python 环境。主包与
+可选 Collector 包的选择、安装和安全卸载见[《Debian 安装包》](docs/debian-packages.zh-CN.md)。
+
 随时可以运行只读状态检查，不需要记住多条排错命令：
 
 ```bash
 perflens status --project /绝对路径/你的项目
 ```
 
-两种方式都会安装 `perflens`、`perflens-mcp`、可选的 `perflens-collector`
+上面的 wheel 安装方式会安装 `perflens`、`perflens-mcp`、可选的 `perflens-collector`
 和管理员入口 `perflens-admin`。可以这样确认版本：
 
 ```bash

@@ -16,9 +16,9 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 |---|---|---|
 | Lint | `ruff check .` | passed |
 | Strict types | `pyright` | 0 errors, 0 warnings |
-| Python 3.13 | isolated `pytest -q` environment | 192 passed |
-| Python 3.12 | `pytest -q` on 3.12.13 | 192 passed |
-| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.37%, passed |
+| Python 3.13 | isolated `pytest -q` environment | 196 passed |
+| Python 3.12 | `pytest -q` on 3.12.13 | 196 passed |
+| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.36%, passed |
 | Skill | structure and package tests | passed |
 | Schemas | checked-in schema equality test | passed |
 | Dependency lock | `uv export --locked` | passed |
@@ -30,11 +30,14 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 | Deployment verification | `verify-collector` → authorized stat plan → Broker | passed with executable perf test double |
 | Project workload | ordinary-user launch → internal PID → Broker → cleanup | passed end to end with executable perf test double |
 | Admin deploy | strict TOML → packaged assets → fixed command allowlist → socket check | success, rollback, and denial paths passed |
+| Admin undeploy | trusted marker/owner/mode → fixed stop → inode recheck → unit removal | preserve-data and denial paths passed |
+| Native DEB | split Debian 13 main/Collector packages | extracted command smoke and byte-for-byte rebuild passed |
 | Performance | reproducible small/medium/large corpus | published in `performance-budget.md` |
 
-Package build, isolated wheel and sdist installation, CLI/MCP/Skill/Collector
-smoke output, and the expected release artifact hashes also passed in fresh local temporary
-directories. The checked-in release workflow repeats these gates. See
+Package build, isolated wheel and sdist installation, split DEB extraction,
+CLI/MCP/Skill/Collector smoke output, deterministic DEB hashes, and the expected
+release artifact hashes also passed in fresh local temporary directories. The
+checked-in release workflow repeats these gates. See
 `docs/releasing.md` for the local and tag-driven procedure.
 
 ## Compatibility evidence

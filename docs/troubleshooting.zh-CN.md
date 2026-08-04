@@ -36,6 +36,13 @@ perflens status \
 读取；其他版本会在部署或服务启动前被拒绝。不要为了绕过错误直接删除未知字段，
 应使用匹配版本的 PerfLens 重新生成配置并审查差异。
 
+## `undeploy` 拒绝移除 service
+
+`perflens-admin undeploy` 只删除带 PerfLens 托管标记、所有者可信、且没有组/其他
+用户写权限的固定 unit。旧版或手工修改过的 unit 会被拒绝，避免管理员命令误删
+未知服务。先用 `systemctl cat perflens-collector.service` 审查内容；确认是旧版 PerfLens
+文件后再按部署文档手工迁移，不要通过放宽权限检查绕过。
+
 ## 主动 perf 采样被拒绝
 
 PerfLens 会把 `perf` 的有限 stderr 作为 `EXTERNAL_TOOL_FAILED` 返回。请检查：

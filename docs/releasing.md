@@ -8,6 +8,8 @@ archive. A release contains:
 - `perflens-<version>-py3-none-any.whl`
 - `perflens-<version>.tar.gz`
 - `perflens-performance-analysis-<version>.zip`
+- `perflens_<version>-1_amd64.deb`
+- `perflens-collector_<version>-1_all.deb`
 - `sbom.cdx.json`
 - `SHA256SUMS`
 
@@ -28,6 +30,11 @@ uv run ruff check .
 uv run pyright
 uv run pytest --cov=perflens --cov-fail-under=85
 uv build --no-sources
+uv run python scripts/build_deb.py \
+  --output-directory dist \
+  --python /usr/bin/python3 \
+  --uv "$(command -v uv)"
+uv run python tests/deb_package_smoke.py --directory dist
 
 uv run --isolated --no-project \
   --with dist/perflens-0.1.0-py3-none-any.whl \
@@ -49,7 +56,9 @@ sha256sum --check dist/SHA256SUMS
 
 Use an empty `dist/` directory. The release-preparation script also rejects
 stale or unexpected files, requires a CycloneDX JSON SBOM, and checksums only
-the intended wheel, sdist, Skill zip, and SBOM.
+the intended wheel, sdist, two DEBs, Skill zip, and SBOM. Official DEBs are
+built on Debian 13 `amd64` with system Python 3.13; permissions and timestamps
+are normalized before extracted-package command smoke tests.
 `render_release_notes.py` renders beginner-oriented installation instructions
 from the checked-in Chinese template. Use that file as the GitHub Release body
 instead of showing generated commit notes alone.
@@ -65,8 +74,8 @@ git push origin v0.1.0
 ```
 
 `.github/workflows/release.yml` checks that the tag matches the package
-version, reruns lint, types, tests, coverage, wheel and sdist smoke tests, then
-creates the GitHub Release with all five artifacts. Do not reuse or move a
+version, reruns lint, types, tests, coverage, wheel, sdist, and DEB smoke tests,
+then creates the GitHub Release. Do not reuse or move a
 published version tag.
 
 ## Optional PyPI publication

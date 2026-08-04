@@ -23,6 +23,11 @@ as legacy version 1; unsupported versions are rejected before deployment or
 Collector startup. Regenerate the policy with a matching PerfLens release rather
 than deleting unfamiliar fields.
 
+`perflens-admin undeploy` removes only a fixed unit with the PerfLens management
+marker, trusted ownership, and no group/other write permission. Review rejected
+legacy or manually edited units with `systemctl cat perflens-collector.service`
+and migrate them explicitly; do not weaken the ownership check.
+
 [简体中文](troubleshooting.zh-CN.md) | English
 
 ## Active perf collection is denied

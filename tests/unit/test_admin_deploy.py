@@ -13,8 +13,15 @@ from typer.testing import CliRunner
 
 import perflens.admin.deploy as admin_deploy
 from perflens.admin.app import app
-from perflens.admin.deploy import CollectorSystemLayout, deploy_collector
-from perflens.contracts.artifacts import CollectorDeploymentArtifact
+from perflens.admin.deploy import (
+    CollectorSystemLayout,
+    deploy_collector,
+    undeploy_collector,
+)
+from perflens.contracts.artifacts import (
+    CollectorDeploymentArtifact,
+    CollectorUndeploymentArtifact,
+)
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 
@@ -161,6 +168,96 @@ def test_admin_deploy_rolls_back_new_files_after_service_failure(tmp_path: Path)
     assert not layout.service_path.exists()
 
 
+def test_admin_undeploy_removes_only_service_and_preserves_data(tmp_path: Path) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+    artifact = layout.state_directory / "collection.json"
+    artifact.write_text("{}", encoding="utf-8")
+    commands: list[tuple[str, ...]] = []
+
+    dry_run = undeploy_collector(
+        dry_run=True,
+        layout=layout,
+        require_root=False,
+        command_executor=commands.append,
+    )
+    assert dry_run.status == "dry_run"
+    assert layout.service_path.exists()
+    assert commands == []
+
+    removed = undeploy_collector(
+        layout=layout,
+        require_root=False,
+        command_executor=commands.append,
+    )
+    assert removed.schema_version == "1.0"
+    assert removed.status == "removed"
+    assert removed.config_preserved is True
+    assert removed.state_preserved is True
+    assert not layout.service_path.exists()
+    assert layout.config_path.exists()
+    assert artifact.exists()
+    assert commands == [
+        ("/usr/bin/systemctl", "disable", "--now", "perflens-collector.service"),
+        ("/usr/bin/systemctl", "daemon-reload"),
+    ]
+
+    absent = undeploy_collector(layout=layout, require_root=False)
+    assert absent.status == "already_absent"
+    assert absent.planned_commands == ()
+
+
+def test_admin_undeploy_rejects_unmanaged_and_symlink_units(tmp_path: Path) -> None:
+    _config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    layout.service_path.parent.mkdir(parents=True)
+    layout.service_path.write_text("[Unit]\nDescription=not managed\n", encoding="utf-8")
+
+    with pytest.raises(PerfLensError) as unmanaged:
+        undeploy_collector(layout=layout, require_root=False)
+    assert unmanaged.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert layout.service_path.exists()
+
+    layout.service_path.unlink()
+    target = tmp_path / "managed.service"
+    target.write_text("# Managed by PerfLens.\n[Unit]\n", encoding="utf-8")
+    layout.service_path.symlink_to(target)
+    with pytest.raises(PerfLensError) as linked:
+        undeploy_collector(layout=layout, require_root=False)
+    assert linked.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_admin_undeploy_cli_emits_versioned_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = CollectorSystemLayout(
+        config_directory=tmp_path / "etc/perflens",
+        config_path=tmp_path / "etc/perflens/collector.toml",
+        service_path=tmp_path / "systemd/perflens-collector.service",
+        state_directory=tmp_path / "var/lib/perflens",
+        socket_path=tmp_path / "run/perflens/collector.sock",
+    )
+    artifact = undeploy_collector(layout=layout, require_root=False)
+
+    def fake_undeploy(*, dry_run: bool = False) -> CollectorUndeploymentArtifact:
+        del dry_run
+        return artifact
+
+    monkeypatch.setattr("perflens.admin.app.undeploy_collector", fake_undeploy)
+    result = CliRunner().invoke(app, ["undeploy", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert '"schema_version": "1.0"' in result.output
+    assert '"status": "already_absent"' in result.output
+
+
 def test_admin_helpers_reject_commands_and_report_system_failures(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -168,6 +265,10 @@ def test_admin_helpers_reject_commands_and_report_system_failures(
     run_admin_command = cast(
         Callable[[tuple[str, ...]], None],
         vars(admin_deploy)["_run_admin_command"],
+    )
+    run_admin_undeploy_command = cast(
+        Callable[[tuple[str, ...]], None],
+        vars(admin_deploy)["_run_admin_undeploy_command"],
     )
     wait_for_socket = cast(
         Callable[[Path], None],
@@ -188,6 +289,11 @@ def test_admin_helpers_reject_commands_and_report_system_failures(
         run_admin_command(("/usr/bin/systemctl", "daemon-reload"))
     assert failed.value.code is ErrorCode.EXTERNAL_TOOL_FAILED
     assert failed.value.details["stderr"] == "bounded failure"
+    with pytest.raises(PerfLensError) as undeploy_failed:
+        run_admin_undeploy_command(
+            ("/usr/bin/systemctl", "disable", "--now", "perflens-collector.service")
+        )
+    assert undeploy_failed.value.stage == "collector_undeploy"
 
     socket_path = tmp_path / "collector.sock"
 

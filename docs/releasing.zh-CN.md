@@ -7,6 +7,8 @@ PerfLens 的正式发布版由不可变的 Python 安装包和独立 Skill 压�
 - `perflens-<版本>-py3-none-any.whl`
 - `perflens-<版本>.tar.gz`
 - `perflens-performance-analysis-<版本>.zip`
+- `perflens_<版本>-1_amd64.deb`
+- `perflens-collector_<版本>-1_all.deb`
 - `sbom.cdx.json`
 - `SHA256SUMS`
 
@@ -25,6 +27,11 @@ uv run ruff check .
 uv run pyright
 uv run pytest --cov=perflens --cov-fail-under=85
 uv build --no-sources
+uv run python scripts/build_deb.py \
+  --output-directory dist \
+  --python /usr/bin/python3 \
+  --uv "$(command -v uv)"
+uv run python tests/deb_package_smoke.py --directory dist
 
 uv run --isolated --no-project \
   --with dist/perflens-0.1.0-py3-none-any.whl \
@@ -45,8 +52,9 @@ sha256sum --check dist/SHA256SUMS
 ```
 
 执行前应确保 `dist/` 为空。发布准备脚本也会拒绝旧文件或非预期文件，
-要求 SBOM 是 CycloneDX JSON，并且只为预期的 wheel、sdist、Skill 压缩包和
-SBOM 生成校验和。
+要求 SBOM 是 CycloneDX JSON，并且只为预期的 wheel、sdist、两个 DEB、Skill
+压缩包和 SBOM 生成校验和。DEB 正式构建环境是 Debian 13 `amd64` 的系统
+Python 3.13；构建器会固定权限和时间戳，CI 会提取包并执行命令冒烟测试。
 `render_release_notes.py` 会从受版本控制的中文模板生成面向普通用户的安装说明；
 正式 Release 正文应使用这份文件，而不是只展示提交记录。
 
@@ -59,7 +67,7 @@ git tag -a v0.1.0 -m "PerfLens v0.1.0"
 git push origin v0.1.0
 ```
 
-`.github/workflows/release.yml` 会检查标签和包版本是否一致，重新运行代码规范、类型、测试、覆盖率、wheel 和 sdist 冒烟测试，然后创建包含五类产物的 GitHub Release。
+`.github/workflows/release.yml` 会检查标签和包版本是否一致，重新运行代码规范、类型、测试、覆盖率、wheel、sdist 和 DEB 冒烟测试，然后创建 GitHub Release。
 
 已经发布的版本标签不要重复使用或移动。如果发现问题，应修复后发布新版本。
 

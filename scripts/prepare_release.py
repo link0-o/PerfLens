@@ -20,6 +20,7 @@ _ZIP_TIMESTAMP = (2020, 1, 1, 0, 0, 0)
 _MAX_SKILL_FILES = 64
 _MAX_SKILL_BYTES = 2 << 20
 _MAX_SBOM_BYTES = 64 << 20
+_MAX_DEB_BYTES = 512 << 20
 
 
 def main() -> None:
@@ -62,8 +63,29 @@ def main() -> None:
             parser.error(f"required distribution is missing: {required.name}")
     _validate_sbom(sbom, parser)
 
+    main_debs = tuple(dist_dir.glob(f"perflens_{__version__}-1_*.deb"))
+    collector = dist_dir / f"perflens-collector_{__version__}-1_all.deb"
+    if len(main_debs) != 1:
+        parser.error("release requires exactly one architecture-specific perflens DEB")
+    main_deb = main_debs[0]
+    for deb in (main_deb, collector):
+        _validate_deb(deb, parser)
+    try:
+        for artifact in (wheel, source, sbom, main_deb, collector):
+            artifact.chmod(0o644)
+    except OSError as exc:
+        parser.error(f"unable to normalize release artifact permissions: {exc}")
+
     archive = dist_dir / f"{SKILL_NAME}-{__version__}.zip"
-    allowed_names = {wheel.name, source.name, sbom.name, archive.name, "SHA256SUMS"}
+    allowed_names = {
+        wheel.name,
+        source.name,
+        sbom.name,
+        main_deb.name,
+        collector.name,
+        archive.name,
+        "SHA256SUMS",
+    }
     unexpected = sorted(
         path.name
         for path in dist_dir.iterdir()
@@ -75,7 +97,7 @@ def main() -> None:
         _write_skill_archive(skill_root, archive)
     except (OSError, ValueError) as exc:
         parser.error(f"unable to build Skill archive: {exc}")
-    _write_checksums(dist_dir, (wheel, source, archive, sbom))
+    _write_checksums(dist_dir, (wheel, source, main_deb, collector, archive, sbom))
     print(archive)
     print(dist_dir / "SHA256SUMS")
 
@@ -180,6 +202,19 @@ def _validate_sbom(path: Path, parser: argparse.ArgumentParser) -> None:
         parser.error(f"SBOM is not valid JSON: {exc}")
     if not isinstance(raw, dict) or raw.get("bomFormat") != "CycloneDX":
         parser.error("SBOM must be a CycloneDX JSON object")
+
+
+def _validate_deb(path: Path, parser: argparse.ArgumentParser) -> None:
+    if path.is_symlink() or not path.is_file():
+        parser.error(f"required Debian package is missing: {path.name}")
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(8)
+        size = path.stat().st_size
+    except OSError as exc:
+        parser.error(f"Debian package cannot be read: {exc}")
+    if header != b"!<arch>\n" or size > _MAX_DEB_BYTES:
+        parser.error(f"invalid or oversized Debian package: {path.name}")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+# Managed by PerfLens. Do not remove this marker from generated service units.
 [Unit]
 Description=PerfLens restricted performance collector
 Documentation=https://github.com/link0-o/PerfLens

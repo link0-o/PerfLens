@@ -49,13 +49,14 @@ perflens doctor --output collection-capabilities.json
 
 ## 暂存安装模板
 
-wheel 同时安装 `perflens-collector` 命令。先把模板复制到普通目录检查：
+原生 DEB 用户先同时安装主包和 Collector 包；wheel 用户需使用管理员控制的
+`/opt/perflens` 环境。先把模板复制到普通目录检查：
 
 ```bash
 perflens stage-collector-assets \
   --output-directory ./collector-assets \
   --allowed-uid 1000 \
-  --collector-command /opt/perflens/bin/perflens-collector \
+  --collector-command /usr/bin/perflens-collector \
   --perf-path /usr/bin/perf
 ```
 
@@ -72,15 +73,16 @@ perflens stage-collector-assets \
 安装前必须检查路径、UID 和组织安全策略。先预检，再由管理员显式执行一次：
 
 ```bash
-/opt/perflens/bin/perflens-admin deploy \
+perflens-admin deploy \
   --config "$PWD/collector-assets/collector.toml" \
   --dry-run
-sudo /opt/perflens/bin/perflens-admin deploy \
+sudo perflens-admin deploy \
   --config "$PWD/collector-assets/collector.toml"
 ```
 
 部署器使用固定系统命令和安装包内置模板，不会执行项目脚本、修改 sysctl 或覆盖
-内容不同的已有策略。必须使用 `/opt/perflens` 或系统包安装的管理员可信副本；MCP、
+内容不同的已有策略。wheel 用户把上面的入口替换为 `/opt/perflens/bin/perflens-admin`。
+必须使用 `/opt/perflens` 或系统包安装的管理员可信副本；MCP、
 Skill 和 Agent 不得调用这条 sudo 命令。
 
 部署前编辑生成的 `collector.toml`：

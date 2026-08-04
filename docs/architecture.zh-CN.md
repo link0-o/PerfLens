@@ -76,6 +76,11 @@ Skill 和 Agent 不会调用 sudo 或部署系统服务。
 Collector 资产、Socket、当前登录会话用户组和主机 perf 条件，但不会采样、连接目标
 进程或宣称真实 Collector 已经通过验收。
 
+原生 Debian 发行同样按权限拆包：`perflens` 主包只暴露普通用户 CLI/MCP，
+`perflens-collector` 包才增加管理员和 Collector 入口。两个包的安装过程都不会部署
+或启动服务；特权状态只能由管理员随后显式创建，也只能通过验证托管标记的
+`perflens-admin undeploy` 移除。
+
 ## 依赖方向
 
 ```text

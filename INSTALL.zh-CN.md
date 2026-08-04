@@ -14,13 +14,24 @@ perflens-0.1.0-py3-none-any.whl
 
 其他 Release 文件的用途：
 
+- `perflens_0.1.0-1_amd64.deb`：Debian 13 普通用户主安装包；
+- `perflens-collector_0.1.0-1_all.deb`：可选 Collector 管理入口，需配合同版本主包；
 - `perflens-0.1.0.tar.gz`：源码发行包；
 - `perflens-performance-analysis-0.1.0.zip`：只包含 Agent Skill；
 - `sbom.cdx.json`：依赖安全清单；
 - `SHA256SUMS`：下载校验和；
 - `Source code`：GitHub 自动生成的源码快照。
 
-## 第一步：安装 wheel
+Debian 13 `amd64` 用户推荐直接安装主 DEB，不需要 pipx：
+
+```bash
+sudo apt install ./perflens_0.1.0-1_amd64.deb
+```
+
+需要自动采集时再安装完全相同版本的 Collector DEB。安装软件包不会自动启动
+特权服务，完整流程见[《Debian 安装包》](docs/debian-packages.zh-CN.md)。
+
+## 第一步：安装 wheel（非 Debian 或不使用 DEB 时）
 
 需要 Linux 和 Python 3.12 或 3.13。推荐使用 pipx 隔离安装：
 
@@ -127,15 +138,16 @@ perflens setup \
 `collector-assets/collector.toml` 后，管理员只需执行一次部署命令：
 
 ```bash
-/opt/perflens/bin/perflens-admin deploy \
+perflens-admin deploy \
   --config /绝对路径/perflens-collector-setup/collector-assets/collector.toml \
   --dry-run
-sudo /opt/perflens/bin/perflens-admin deploy \
+sudo perflens-admin deploy \
   --config /绝对路径/perflens-collector-setup/collector-assets/collector.toml
 ```
 
 第一条只校验并显示计划；第二条才写入系统、添加授权用户组并启动服务，通常只需输入
-一次 root 密码。`perflens-admin` 必须来自安装在 `/opt/perflens` 或系统包目录中的受信任
+一次 root 密码。上面使用 DEB 的系统入口；wheel 管理员环境应改用
+`/opt/perflens/bin/perflens-admin`。入口必须来自系统包或 `/opt/perflens` 中的受信任
 副本，不要用 `sudo` 运行用户家目录里可修改的脚本。完整内核权限和真实短时验收步骤见
 [《产品部署指南》](docs/deployment.zh-CN.md)。不要让 MCP 或 Agent 以 root 运行。
 

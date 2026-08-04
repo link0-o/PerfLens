@@ -2,6 +2,10 @@
 
 简体中文 | [English](deployment.md)
 
+Debian 13 正式用户优先使用拆分的原生安装包，先阅读
+[《Debian 安装包》](debian-packages.zh-CN.md)。下面的 wheel 流程主要用于开发
+验收和其他 Linux 发行版。
+
 PerfLens 应拆成普通用户分析端和系统 Collector 两部分部署：
 
 ```text
@@ -14,7 +18,7 @@ PerfLens 应拆成普通用户分析端和系统 Collector 两部分部署：
 
 ## 从当前 wheel 部署
 
-以下流程适合开发验收和还没有 DEB/RPM 的版本。先在源码目录构建：
+以下流程适合开发验收和不使用正式 DEB 的系统。先在源码目录构建：
 
 ```bash
 .venv/bin/python -m build
@@ -73,8 +77,8 @@ sudo /opt/perflens/bin/perflens-admin deploy \
 Unix Socket。部署结果是带 `schema_version` 的 JSON。它不执行配置里的命令，
 不修改 sysctl 或 capability，也不会覆盖内容不同的已有配置。
 
-`perflens-admin` 必须来自管理员控制的系统安装，例如 `/opt/perflens` 或将来的
-DEB/RPM；不要通过 `sudo` 执行用户家目录里可修改的 pipx 脚本。正式系统包安装后，
+`perflens-admin` 必须来自管理员控制的系统安装，例如 `/opt/perflens` 或正式
+DEB；不要通过 `sudo` 执行用户家目录里可修改的 pipx 脚本。正式系统包安装后，
 命令将简化为 `sudo perflens-admin deploy --config ...`。
 
 生成目录中的 service 和 sysusers 文件用于审查；部署器使用安装包内置的可信模板，
@@ -176,22 +180,31 @@ PerfLens 以普通用户启动该文件并取得新 PID；Collector 只收到 PI
 
 升级时先安装新 wheel/系统包，再检查 unit 与策略差异，然后重启 Collector。不要覆盖管理员维护的 `/etc/perflens/collector.toml`。
 
-卸载顺序应为：停止并禁用服务、移除 unit、卸载 `/opt/perflens` 运行环境。`/var/lib/perflens` 中可能包含性能数据，默认应保留；只有管理员明确确认后才能删除。系统用户和组也不应在仍有产物归属时自动删除。
+先执行：
+
+```bash
+sudo perflens-admin undeploy --dry-run
+sudo perflens-admin undeploy
+```
+
+该命令只停用并删除经过管理标记、所有者和权限校验的 PerfLens unit，不删除
+`/etc/perflens/collector.toml`、`/var/lib/perflens`、系统用户或组。之后再卸载
+DEB 或 `/opt/perflens` 运行环境。性能数据只有管理员明确确认后才能删除。
 
 ## 面向其他用户的正式发行
 
-正式产品建议提供两个包：
+正式产品已经提供两个 DEB：
 
-- `perflens`：普通用户 CLI、MCP、Skill，可通过 wheel/PyPI/pipx/uv 安装；
-- `perflens-collector`：DEB/RPM，安装专用运行环境、sysusers、systemd unit 和默认策略。
+- `perflens`：普通用户 CLI、MCP、Skill 和离线锁定运行依赖；
+- `perflens-collector`：可选管理员与 Collector 入口，依赖完全同版本主包。
 
-DEB/RPM 的安装脚本应满足：
+DEB 满足以下边界，未来 RPM 也应保持一致：
 
 - 不联网下载 Python 依赖，依赖随包提供或由发行版解决；
 - 不静默修改 `perf_event_paranoid`；
 - 不自动授予 `CAP_SYS_ADMIN`；
-- 首次安装生成配置，升级时保留管理员配置；
-- 安装后服务仍默认采用最小模式和短时限；
+- 安装软件包时不生成管理员配置、不启动服务；
+- 部署后采用经管理员审查的最小模式和短时限；
 - 提示管理员把明确的普通用户加入组并配置 `allowed_uids`；
 - 提供 `verify-collector` 作为安装后的显式真实验收，而不是声称服务启动就等于 perf 可用。
 

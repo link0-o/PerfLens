@@ -4,6 +4,12 @@ English | [简体中文](INSTALL.zh-CN.md)
 
 Download `perflens-0.1.0-py3-none-any.whl` for the normal CLI/MCP installation. A wheel is an installable Python package: do not extract it. The extracted `perflens/` and `.dist-info/` directories are modules and metadata, not a graphical launcher.
 
+On Debian 13 `amd64`, the recommended alternative is
+`sudo apt install ./perflens_0.1.0-1_amd64.deb`. Add the exact-version
+`perflens-collector_0.1.0-1_all.deb` only for automatic collection. Package
+installation does not activate a privileged service. See
+[Debian packages](docs/debian-packages.md).
+
 PerfLens requires Linux and Python 3.12 or 3.13. Install the wheel as an isolated tool:
 
 ```bash
@@ -41,9 +47,10 @@ perflens setup \
 ```
 
 Review the generated policy, validate it with
-`/opt/perflens/bin/perflens-admin deploy --config <toml> --dry-run`, then have an
-administrator run the same command once with `sudo` and without `--dry-run`.
-Use only the trusted copy installed under `/opt/perflens` or by a system package.
+`perflens-admin deploy --config <toml> --dry-run`, then have an administrator run
+the same system-package command once with `sudo` and without `--dry-run`. Wheel
+deployments use `/opt/perflens/bin/perflens-admin`. Use only a trusted system or
+administrator-controlled copy.
 See [Product deployment](docs/deployment.md) before installing those assets. A
 blocked `perflens doctor` result does not prevent analysis of existing profiles.
 

@@ -12,18 +12,21 @@ The optional `perflens-collector` is a Unix-socket broker. It authenticates peer
 
 Run `perflens doctor` for a read-only capability report. Stage the packaged service templates with:
 
+The example below uses the native DEB path; wheel deployments should replace it
+with the administrator-controlled `/opt/perflens/bin/perflens-collector`.
+
 ```bash
 perflens stage-collector-assets \
   --output-directory ./collector-assets \
   --allowed-uid 1000 \
-  --collector-command /opt/perflens/bin/perflens-collector \
+  --collector-command /usr/bin/perflens-collector \
   --perf-path /usr/bin/perf
 ```
 
 Review `collector.toml`, `perflens-collector.service`, and `perflens.sysusers`.
-Validate the policy with `/opt/perflens/bin/perflens-admin deploy --config
-<toml> --dry-run`, then run that trusted entry point once with `sudo` and
-without `--dry-run`. The fixed deployer uses packaged templates and never
+Validate the policy with `perflens-admin deploy --config <toml> --dry-run`,
+then run that trusted system-package entry point once with `sudo` and without
+`--dry-run`. Wheel deployments use `/opt/perflens/bin/perflens-admin`. The fixed deployer uses packaged templates and never
 executes project-provided commands or changes sysctl.
 
 On Debian, `perf_event_paranoid=3` blocks perf before the normal CAP_PERFMON path. An administrator must either review and lower that policy for the dedicated collector or design a more privileged isolation boundary. Do not run the MCP server or Agent as root.

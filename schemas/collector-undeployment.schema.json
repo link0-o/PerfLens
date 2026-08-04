@@ -1,0 +1,82 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "config_path": {
+      "title": "Config Path",
+      "type": "string"
+    },
+    "config_preserved": {
+      "default": true,
+      "title": "Config Preserved",
+      "type": "boolean"
+    },
+    "next_steps": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "planned_commands": {
+      "items": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "title": "Planned Commands",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "service_path": {
+      "title": "Service Path",
+      "type": "string"
+    },
+    "state_directory": {
+      "title": "State Directory",
+      "type": "string"
+    },
+    "state_preserved": {
+      "default": true,
+      "title": "State Preserved",
+      "type": "boolean"
+    },
+    "status": {
+      "enum": [
+        "dry_run",
+        "removed",
+        "already_absent"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "status",
+    "service_path",
+    "config_path",
+    "state_directory",
+    "planned_commands"
+  ],
+  "title": "CollectorUndeploymentArtifact",
+  "type": "object"
+}

@@ -4,7 +4,18 @@ PerfLens 是面向 Linux 的确定性性能分析工具，包含 CLI、MCP Serve
 
 ## 第一次下载请看这里
 
-普通用户下载：
+Debian 13 `amd64` 用户优先下载：
+
+```text
+perflens_{version}-1_amd64.deb
+```
+
+```bash
+sudo apt install ./perflens_{version}-1_amd64.deb
+perflens setup --project /绝对路径/你的项目
+```
+
+其他 Linux 用户下载：
 
 ```text
 perflens-{version}-py3-none-any.whl
@@ -32,16 +43,19 @@ uv tool install ./perflens-{version}-py3-none-any.whl
 
 - `perflens-{version}-py3-none-any.whl`：安装 CLI、MCP、Skill、Collector 和
   显式管理员部署入口；
+- `perflens_{version}-1_amd64.deb`：Debian 13 普通用户主安装包；
+- `perflens-collector_{version}-1_all.deb`：可选 Collector 管理入口，必须与
+  同版本主 DEB 一起安装；安装时不会自动启用服务；
 - `perflens-{version}.tar.gz`：Python 源码发行包；
 - `perflens-performance-analysis-{version}.zip`：只安装独立 Skill 时使用；
 - `sbom.cdx.json`：CycloneDX 依赖清单；
-- `SHA256SUMS`：四个正式发行产物的 SHA-256 校验。
+- `SHA256SUMS`：六个正式发行产物的 SHA-256 校验。
 
 ## 自动采集
 
 分析已有 Profile 不需要 root。实时自动采集需要管理员审核并部署独立 Collector；
 Agent 和 MCP 始终保持普通用户权限。检查引导生成的 `collector.toml` 后，可以先执行
-`/opt/perflens/bin/perflens-admin deploy --config <配置> --dry-run`，再由管理员执行一次
+`perflens-admin deploy --config <配置> --dry-run`，再由管理员执行一次
 同样的命令（加 `sudo`、去掉 `--dry-run`）。之后用户可以直接说“优化当前项目的性能”，
 确认具体程序和参数后由 PerfLens 自动取得新 PID。先运行 `perflens doctor`，再阅读
 [产品部署指南](https://github.com/link0-o/PerfLens/blob/{tag}/docs/deployment.zh-CN.md)。

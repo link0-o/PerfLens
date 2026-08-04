@@ -2,6 +2,10 @@
 
 English | [简体中文](deployment.zh-CN.md)
 
+Production Debian 13 users should prefer the split native packages documented
+in [Debian packages](debian-packages.md). The wheel flow below remains useful
+for development acceptance and other Linux distributions.
+
 Deploy PerfLens as two privilege domains: ordinary-user CLI/MCP/Skill processes and a dedicated `perflens-collector` system service with only the host-approved perf capability. The Agent and MCP server must not run as root.
 
 Ordinary users should complete [Installation and first use](../INSTALL.md) and run `perflens setup` first. This page focuses on administrator-managed Collector deployment.
@@ -54,7 +58,11 @@ Collector startup.
 
 `verify-collector` performs a real, policy-bounded perf-stat collection of at most five seconds. It requires both documented authorization tokens and an explicitly selected PID; it is not a read-only health check.
 
-Production releases should ship separate `perflens` and `perflens-collector` packages. DEB/RPM installers must be offline-reproducible, preserve administrator configuration on upgrade, avoid silently changing sysctl, and never grant `CAP_SYS_ADMIN` by default. Host-level Collector plus a controlled Unix socket is preferred over a privileged container.
+Production releases now ship separate `perflens` and `perflens-collector` DEBs.
+They install offline and do not activate the service. Future RPM installers must
+preserve the same boundaries: preserve administrator configuration, avoid
+silently changing sysctl, and never grant `CAP_SYS_ADMIN` by default. Host-level
+Collector plus a controlled Unix socket is preferred over a privileged container.
 
 After deployment and verification, the Skill can confirm and launch one exact
 in-project executable as the ordinary user. PerfLens obtains that new PID and
@@ -62,4 +70,7 @@ sends only a short-lived PID plan to the Collector. This enables natural
 “optimize the current project” requests without giving workload commands to the
 privileged service or requiring the user to discover a PID.
 
-See the [Chinese guide](deployment.zh-CN.md) for complete install, verification, MCP, upgrade, and uninstall commands.
+Before package removal, run `sudo perflens-admin undeploy --dry-run` and then
+`sudo perflens-admin undeploy`. It removes only a verified managed unit while
+preserving policy, collected artifacts, and the system identity. See the
+[Chinese guide](deployment.zh-CN.md) for the complete lifecycle.

@@ -15,6 +15,7 @@
 | Active collection | perf record/stat/sched/lock and sched-switch off-CPU evidence; default off and permission dependent |
 | Automatic collection | Ordinary-user project launcher plus PID-only Linux Collector Broker using `SO_PEERCRED`; systemd template provided |
 | Collector policy | Version 1; missing version is accepted as legacy version 1, unsupported versions are rejected |
+| Native DEB | Debian 13 `amd64`, system Python 3.13; split exact-version Collector package |
 | Artifact schema | 1.0 |
 
 PerfLens does not parse `perf.data` directly. Binary compatibility is delegated

@@ -1,0 +1,31 @@
+PerfLens Debian packages / PerfLens Debian 安装包
+=================================================
+
+The perflens package contains the unprivileged CLI, MCP server, Skill assets,
+and a private locked Python runtime under /usr/lib/perflens. It never starts a
+service during package installation.
+
+perflens 包含普通用户 CLI、MCP Server、Skill 资产，以及位于
+/usr/lib/perflens 的锁定 Python 运行依赖。安装软件包时不会启动系统服务。
+
+The optional perflens-collector package adds perflens-admin and
+perflens-collector entry points. It still does not install a policy, alter
+sysctl/capabilities, or enable the Collector. Generate and review a policy as
+an ordinary user, then explicitly deploy it as an administrator:
+
+可选的 perflens-collector 包会增加 perflens-admin 和 perflens-collector
+入口，但仍不会安装策略、修改 sysctl/capability 或启用 Collector。先由普通
+用户生成并检查策略，再由管理员明确部署：
+
+  perflens setup --project /absolute/project --prepare-collector --automatic-collection
+  sudo perflens-admin deploy --config /absolute/project/perflens-setup/collector-assets/collector.toml
+
+Before removing perflens-collector, stop and remove only the managed unit while
+preserving policy and collected artifacts:
+
+卸载 perflens-collector 前，可先移除托管服务；策略和采集数据默认保留：
+
+  sudo perflens-admin undeploy
+
+Run `perflens status --project /absolute/project` after a new login session.
+重新登录后运行 `perflens status --project /绝对路径/项目` 检查状态。
