@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -33,10 +34,11 @@ from perflens.collector_broker.state import collection_artifact_name, replay_mar
 from perflens.contracts.artifacts import (
     CollectionCapabilityArtifact,
     CollectionModeCapability,
+    CollectionPlanArtifact,
 )
 from perflens.distribution.onboarding import run_project_setup
 from perflens.distribution.status import inspect_runtime_status
-from perflens.domain.errors import ErrorCode, PerfLensError
+from perflens.domain.errors import ErrorCode, PerfLensError, stable_error_id
 from perflens.mcp.server import ServerConfig, create_server
 from perflens.workloads.project import PROJECT_EXECUTION_AUTHORIZATION
 
@@ -229,6 +231,29 @@ def test_collector_process_handles_sigterm_and_removes_socket(tmp_path: Path) ->
         health = CollectorBrokerClient(socket_path, timeout_seconds=2).health(
             expected_service_uid=os.geteuid()
         )
+        denied_plan = CollectionPlanArtifact(
+            plan_id="plan-abcdef012345678abcde",
+            mode="record",
+            target_type="pid",
+            target_pid=99_999_999,
+            target_uid=os.geteuid(),
+            target_start_time_ticks=1,
+            backend="privileged_broker",
+            duration_seconds=0.1,
+            frequency_hz=99,
+            call_graph="dwarf",
+            max_output_bytes=1024,
+            expires_at=(datetime.now(tz=UTC) + timedelta(seconds=30)).isoformat(),
+            policy_status="denied",
+            required_privilege="cap_perfmon",
+        )
+        with pytest.raises(PerfLensError) as typed_rejection:
+            CollectorBrokerClient(socket_path, timeout_seconds=2).collect(denied_plan)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as invalid_client:
+            invalid_client.settimeout(2)
+            invalid_client.connect(str(socket_path))
+            invalid_client.sendall(b"{}\n")
+            invalid_response = json.loads(invalid_client.recv(4096))
         process.send_signal(signal.SIGTERM)
         return_code = process.wait(timeout=5)
         stdout, stderr = process.communicate()
@@ -238,10 +263,85 @@ def test_collector_process_handles_sigterm_and_removes_socket(tmp_path: Path) ->
             process.wait(timeout=5)
 
     assert health.status == "ready"
+    assert invalid_response["ok"] is False
+    assert invalid_response["error"]["code"] == ErrorCode.INVALID_INPUT.value
     assert return_code == 0
     assert stdout == ""
-    assert stderr == ""
     assert not socket_path.exists()
+    events = [json.loads(line) for line in stderr.splitlines()]
+    assert [event["event"] for event in events] == [
+        "collector_started",
+        "request_rejected",
+        "request_rejected",
+        "collector_stopped",
+    ]
+    assert all(event["event_schema_version"] == "1.0" for event in events)
+    assert all(len(line.encode("utf-8")) <= 2048 for line in stderr.splitlines())
+    typed_event = events[1]
+    assert typed_event["severity"] == "warning"
+    assert typed_event["request_id"] == typed_rejection.value.details["request_id"]
+    assert typed_event["error_id"] == stable_error_id(typed_rejection.value)
+    assert typed_event["operation"] == "collect_pid"
+    assert typed_event["plan_id"] == denied_plan.plan_id
+    assert typed_event["peer_uid"] == os.geteuid()
+    assert typed_event["error_code"] == ErrorCode.PATH_SAFETY_VIOLATION.value
+    assert typed_event["stage"] == "authorization"
+    assert typed_event["recoverable"] is True
+    rejection = events[2]
+    assert rejection["severity"] == "warning"
+    assert rejection["request_id"] == "unknown"
+    assert rejection["operation"] == "unknown"
+    assert rejection["peer_uid"] == os.geteuid()
+    assert rejection["error_code"] == ErrorCode.INVALID_INPUT.value
+    assert rejection["stage"] == "collector_broker"
+    assert rejection["recoverable"] is True
+    assert str(denied_plan.target_pid) not in stderr
+    assert str(tmp_path) not in stderr
+    assert "Traceback" not in stderr
+
+
+def test_collector_startup_failure_is_bounded_structured_and_path_free(tmp_path: Path) -> None:
+    runtime = tmp_path / "run"
+    runtime.mkdir()
+    runtime.chmod(0o750)
+    invalid_policy = tmp_path / "invalid-collector.toml"
+    invalid_policy.write_text("[collector]\n", encoding="utf-8")
+    invalid_policy.chmod(0o444)
+    socket_path = runtime / "collector.sock"
+    project_root = Path(__file__).resolve().parents[2]
+
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and module entry point
+        [
+            sys.executable,
+            "-m",
+            "perflens.collector_broker.server",
+            "--socket",
+            str(socket_path),
+            "--policy",
+            str(invalid_policy),
+        ],
+        env={**os.environ, "PYTHONPATH": str(project_root / "src")},
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+    assert completed.returncode == 1
+    assert completed.stdout == ""
+    assert not socket_path.exists()
+    assert "Traceback" not in completed.stderr
+    assert str(tmp_path) not in completed.stderr
+    lines = completed.stderr.splitlines()
+    assert len(lines) == 1
+    assert len(lines[0].encode("utf-8")) <= 2048
+    event = json.loads(lines[0])
+    assert event["event_schema_version"] == "1.0"
+    assert event["event"] == "collector_start_failed"
+    assert event["severity"] == "error"
+    assert event["error_code"] == ErrorCode.INVALID_INPUT.value
+    assert event["stage"] == "collector_policy"
+    assert event["recoverable"] is False
 
 
 def test_runtime_status_requires_authenticated_broker_health(

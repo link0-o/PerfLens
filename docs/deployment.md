@@ -69,6 +69,12 @@ not alter sysctl/capabilities or run
 commands from the config. The staged unit and sysusers files remain audit
 copies; the deployer renders trusted packaged templates.
 
+The service journal is a versioned JSON-lines operational stream with a 2 KiB
+per-event bound. It records correlation IDs, stable codes, and stages without
+target PIDs, commands, profile data, perf stderr, or local paths. See
+[Troubleshooting](troubleshooting.md) and use `journalctl -u
+perflens-collector.service --since today -o cat` for raw events.
+
 After login-group changes, ordinary users can run `perflens status --project
 /absolute/path/to/workspace` for one read-only readiness summary. When the
 configuration, socket, and group checks pass, the command also authenticates a

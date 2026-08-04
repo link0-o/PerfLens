@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -35,3 +36,9 @@ class PerfLensError(Exception):
 
     def __str__(self) -> str:
         return self.message
+
+
+def stable_error_id(error: PerfLensError) -> str:
+    """Return the bounded correlation ID shared by CLI and service transports."""
+    material = f"{error.code}:{error.stage}:{error.message}"
+    return f"err-{hashlib.sha256(material.encode()).hexdigest()[:16]}"

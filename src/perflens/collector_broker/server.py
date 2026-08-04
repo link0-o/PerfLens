@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import json
+import logging
 import math
 import os
 import shutil
 import signal
 import socket
 import struct
+import sys
 import threading
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -50,11 +53,15 @@ from perflens.contracts.artifacts import (
     CollectionPlanArtifact,
     CollectorHealthArtifact,
 )
-from perflens.domain.errors import ErrorCode, PerfLensError
+from perflens.domain.errors import ErrorCode, PerfLensError, stable_error_id
 
 _PEER_CREDENTIALS = struct.Struct("3i")
 _MAX_TRACKED_PLANS = 4096
 _MAX_REQUEST_FRAME_TIMEOUT_SECONDS = 5.0
+_MAX_OPERATIONAL_EVENT_BYTES = 2048
+_LOGGER = logging.getLogger("perflens.collector")
+_LOGGER.addHandler(logging.NullHandler())
+_LOGGER.propagate = False
 
 
 class CollectorBrokerServer:
@@ -126,52 +133,66 @@ class CollectorBrokerServer:
 
     def _handle_connection(self, connection: socket.socket) -> None:
         request_id = "unknown"
+        peer_uid = -1
+        operation = "unknown"
+        plan_id: str | None = None
+        failure: PerfLensError | None = None
         try:
             peer_uid = _peer_uid(connection)
             payload = _read_frame(connection)
             request = BROKER_REQUEST_ADAPTER.validate_json(payload)
             request_id = request.request_id
+            operation = request.operation
             if isinstance(request, BrokerHealthRequest):
                 artifact = self._health(peer_uid)
             else:
+                plan_id = request.plan.plan_id
                 artifact = self._collect(peer_uid, request)
+                _emit_operational_event(
+                    logging.INFO,
+                    "collection_completed",
+                    request_id=request_id,
+                    operation=operation,
+                    plan_id=plan_id,
+                    peer_uid=peer_uid,
+                    mode=artifact.mode,
+                    output_bytes=artifact.output_bytes,
+                )
             response = BrokerResponse(
                 request_id=request_id,
                 ok=True,
                 result=artifact.model_dump(mode="json"),
             )
         except PerfLensError as exc:
-            response = BrokerResponse(
-                request_id=request_id,
-                ok=False,
-                error={
-                    "code": exc.code.value,
-                    "stage": exc.stage,
-                    "message": exc.message,
-                    "recoverable": exc.recoverable,
-                },
-            )
+            failure = exc
+            response = _error_response(request_id, exc)
         except ValidationError:
-            response = BrokerResponse(
-                request_id=request_id,
-                ok=False,
-                error={
-                    "code": ErrorCode.INVALID_INPUT.value,
-                    "stage": "collector_broker",
-                    "message": "Collector broker request failed schema validation",
-                    "recoverable": True,
-                },
+            failure = PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "collector_broker",
+                "Collector broker request failed schema validation",
+                recoverable=True,
             )
+            response = _error_response(request_id, failure)
         except Exception:
-            response = BrokerResponse(
+            failure = PerfLensError(
+                ErrorCode.INTERNAL_ERROR,
+                "collector_broker",
+                "Collector broker encountered an internal error",
+            )
+            response = _error_response(request_id, failure)
+        if failure is not None:
+            _emit_operational_event(
+                logging.ERROR if failure.code is ErrorCode.INTERNAL_ERROR else logging.WARNING,
+                "request_rejected",
                 request_id=request_id,
-                ok=False,
-                error={
-                    "code": ErrorCode.INTERNAL_ERROR.value,
-                    "stage": "collector_broker",
-                    "message": "Collector broker encountered an internal error",
-                    "recoverable": False,
-                },
+                operation=operation,
+                plan_id=plan_id,
+                peer_uid=peer_uid,
+                error_id=stable_error_id(failure),
+                error_code=failure.code.value,
+                stage=failure.stage,
+                recoverable=failure.recoverable,
             )
         encoded = response.model_dump_json().encode("utf-8") + b"\n"
         if len(encoded) <= MAX_BROKER_MESSAGE_BYTES:
@@ -499,6 +520,49 @@ def _replayed_plan(plan_id: str) -> PerfLensError:
     )
 
 
+def _error_response(request_id: str, error: PerfLensError) -> BrokerResponse:
+    return BrokerResponse(
+        request_id=request_id,
+        ok=False,
+        error={
+            "code": error.code.value,
+            "stage": error.stage,
+            "message": error.message,
+            "recoverable": error.recoverable,
+        },
+    )
+
+
+def _configure_operational_logging() -> None:
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    _LOGGER.handlers[:] = [handler]
+    _LOGGER.setLevel(logging.INFO)
+
+
+def _emit_operational_event(level: int, event: str, **fields: object) -> None:
+    payload: dict[str, object] = {
+        "event_schema_version": "1.0",
+        "timestamp": datetime.now(tz=UTC).isoformat(),
+        "severity": logging.getLevelName(level).lower(),
+        "event": event,
+    }
+    payload.update({name: value for name, value in fields.items() if value is not None})
+    encoded = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    if len(encoded.encode("utf-8")) > _MAX_OPERATIONAL_EVENT_BYTES:
+        encoded = json.dumps(
+            {
+                "event_schema_version": "1.0",
+                "timestamp": payload["timestamp"],
+                "severity": "error",
+                "event": "operational_event_truncated",
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    _LOGGER.log(level, encoded)
+
+
 def _new_socket_path(path: Path) -> Path:
     if not path.expanduser().is_absolute():
         raise ValueError("Collector socket path must be absolute")
@@ -585,15 +649,60 @@ def main() -> None:
     parser.add_argument("--socket", type=Path, required=True)
     parser.add_argument("--policy", type=Path, required=True)
     arguments = parser.parse_args()
-    policy = load_broker_policy(arguments.policy)
-    with CollectorBrokerServer(arguments.socket, policy) as server:
+    _configure_operational_logging()
+    started = False
+    try:
+        policy = load_broker_policy(arguments.policy)
+        with CollectorBrokerServer(arguments.socket, policy) as server:
 
-        def close_server(_signum: int, _frame: FrameType | None) -> None:
-            server.close()
+            def close_server(_signum: int, _frame: FrameType | None) -> None:
+                server.close()
 
-        signal.signal(signal.SIGTERM, close_server)
-        signal.signal(signal.SIGINT, close_server)
-        server.serve_forever()
+            signal.signal(signal.SIGTERM, close_server)
+            signal.signal(signal.SIGINT, close_server)
+            started = True
+            _emit_operational_event(
+                logging.INFO,
+                "collector_started",
+                service_pid=os.getpid(),
+                service_uid=os.geteuid(),
+                perflens_version=__version__,
+                policy_version=policy.policy_version,
+            )
+            try:
+                server.serve_forever()
+            finally:
+                server.close()
+                _emit_operational_event(
+                    logging.INFO,
+                    "collector_stopped",
+                    service_pid=os.getpid(),
+                    service_uid=os.geteuid(),
+                )
+    except Exception as exc:
+        if isinstance(exc, PerfLensError):
+            failure = exc
+        elif isinstance(exc, ValueError):
+            failure = PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "collector_startup",
+                "Collector startup validation failed",
+            )
+        else:
+            failure = PerfLensError(
+                ErrorCode.INTERNAL_ERROR,
+                "collector_service" if started else "collector_startup",
+                "Collector service failed unexpectedly" if started else "Collector startup failed",
+            )
+        _emit_operational_event(
+            logging.ERROR,
+            "collector_failed" if started else "collector_start_failed",
+            error_id=stable_error_id(failure),
+            error_code=failure.code.value,
+            stage=failure.stage,
+            recoverable=failure.recoverable,
+        )
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

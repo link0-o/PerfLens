@@ -57,6 +57,26 @@ perflens-admin --json-errors <子命令> ...
 - 用户被加入组后必须重新登录，仅打开一个新子终端可能不会刷新组身份；
 - 不要通过让 MCP 或 Agent 使用 root 来绕过 Socket 权限。
 
+## 用结构化 Collector 日志定位请求
+
+Collector 写到 stderr 的运维事件由 systemd 收入 journal，每行都是独立、有界的 JSON。
+查看原始事件时使用：
+
+```bash
+journalctl -u perflens-collector.service --since today -o cat
+```
+
+`event_schema_version` 当前为 `1.0`。常见 `event` 包括 `collector_started`、
+`collection_completed`、`request_rejected`、`collector_stopped` 和
+`collector_start_failed`。拒绝事件包含 `request_id`、稳定 `error_id`、`error_code`、
+`stage` 和已认证的 `peer_uid`；使用 `--json-errors` 时，客户端错误的 `details.request_id`
+和 `error.error_id` 可与它关联。
+
+日志不会记录目标 PID、命令、环境、Profile 内容、perf stderr、策略路径、spool 路径或
+Python traceback，单条事件最多 2 KiB。`request_id = "unknown"` 表示请求在通过 JSON
+结构校验前已经失败。启动失败只输出一个 `collector_start_failed` 后以非零状态退出；
+结合 `error_code`/`stage` 检查配置和权限，不要为了获得 traceback 放宽服务隔离。
+
 ## Collector 配置版本不支持
 
 生成的 `collector.toml` 包含 `policy_version = 1`。缺少该字段的旧版配置按版本 1

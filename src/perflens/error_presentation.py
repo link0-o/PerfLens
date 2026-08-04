@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from contextvars import ContextVar
 from typing import Final
 
 from perflens.contracts.artifacts import ErrorArtifact, ErrorBody
-from perflens.domain.errors import ErrorCode, PerfLensError
+from perflens.domain.errors import ErrorCode, PerfLensError, stable_error_id
 
 _JSON_ERRORS = ContextVar("perflens_json_errors", default=False)
 
@@ -59,10 +58,9 @@ def json_errors_enabled() -> bool:
 
 
 def error_artifact(error: PerfLensError) -> ErrorArtifact:
-    material = f"{error.code}:{error.stage}:{error.message}"
     return ErrorArtifact(
         error=ErrorBody(
-            error_id=f"err-{hashlib.sha256(material.encode()).hexdigest()[:16]}",
+            error_id=stable_error_id(error),
             code=error.code.value,
             stage=error.stage,
             message=error.message,

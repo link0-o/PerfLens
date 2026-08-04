@@ -36,6 +36,11 @@ maximum plan lifetime. Valid tombstones are excluded from evidence quotas and
 archive/prune selection; unsafe names, ownership, modes, link counts, or sizes
 fail closed. Administrators should not create, edit, or remove this hidden state.
 
+Collector operational logs are versioned JSON lines bounded to 2 KiB each.
+They contain event type, correlation IDs, stable error code/stage, and the
+authenticated peer UID, but never target PIDs, commands/environments, profiles,
+perf stderr, policy/spool paths, or Python tracebacks.
+
 Each Collector instance supports exactly one authorized ordinary UID. Adding
 multiple callers to the shared `perflens` group would expose group-readable
 profiles across users and is deliberately rejected.

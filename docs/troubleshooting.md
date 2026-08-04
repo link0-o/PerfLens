@@ -39,6 +39,21 @@ If the socket is missing or inaccessible, inspect the service and journal,
 confirm the socket belongs to the `perflens` group, and start a new login session
 after group membership changes. Do not run the Agent or MCP server as root.
 
+Collector stderr is a versioned, bounded JSON-lines operational stream captured
+by systemd. Use `journalctl -u perflens-collector.service --since today -o cat`.
+Events include `collector_started`, `collection_completed`,
+`request_rejected`, `collector_stopped`, and `collector_start_failed`.
+Rejections carry the request ID, stable error ID, error code, stage, and
+authenticated peer UID. A client invoked with `--json-errors` exposes the same
+error ID and its request ID under `details` for correlation.
+
+No event includes the target PID, command, environment, profile contents, perf
+stderr, policy/spool paths, or a Python traceback, and each line is limited to
+2 KiB. An `unknown` request ID means validation failed before a typed request
+was available. Startup failures emit one `collector_start_failed` event and
+exit nonzero; use its code and stage instead of weakening service isolation to
+obtain a traceback.
+
 Generated policies contain `policy_version = 1`. A missing version is accepted
 as legacy version 1; unsupported versions are rejected before deployment or
 Collector startup. Regenerate the policy with a matching PerfLens release rather

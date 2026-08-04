@@ -6,6 +6,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Added
 
+- Bounded, versioned JSON-lines Collector operational events for startup,
+  successful collection, request rejection, shutdown, and startup failure.
+  Stable error/request IDs support journal correlation without logging target
+  PIDs, commands, profiles, tool stderr, local paths, or tracebacks.
 - Chinese-first `perflens detach` project lifecycle cleanup with dry-run,
   versioned JSON evidence, exact managed-block ownership checks, and explicit
   preservation of Skill, onboarding, results, and Collector data.

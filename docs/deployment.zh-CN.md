@@ -106,6 +106,11 @@ ls -l /run/perflens/collector.sock
 journalctl -u perflens-collector.service --since today
 ```
 
+Collector journal 每行都是最多 2 KiB 的版本化 JSON 运维事件，不包含目标 PID、命令、
+Profile 内容、perf stderr 或本地路径。需要关联客户端错误时，加 `-o cat` 查看
+`request_id`、`error_id`、`error_code` 和 `stage`；完整字段说明见
+[《故障排查》](troubleshooting.zh-CN.md#用结构化-collector-日志定位请求)。
+
 普通用户可以用一条只读命令汇总检查这些状态：
 
 ```bash
