@@ -65,6 +65,11 @@ acceptance as the ordinary user with
 `perflens accept-collector --authorize-host-acceptance`; its built-in probe
 requires no PID, defaults to one second, and is capped at five seconds.
 
+To tune collection policy without reinstalling, copy the deployed TOML to a
+separate mode-`0600` candidate, run `perflens-admin update-policy --config
+<candidate> --dry-run`, then repeat with `sudo`. It restarts, health-checks, and
+rolls back on failure while preserving the authorized UID and fixed spool.
+
 For upgrades, install the new wheel or matching DEBs first, then run `sudo
 perflens-admin upgrade --dry-run` and `sudo perflens-admin upgrade`. Policy and
 spool evidence are preserved; rerun ordinary-user `accept-collector` afterward.

@@ -580,6 +580,26 @@ class CollectorUpgradeArtifact(ContractModel):
     next_steps: tuple[str, ...] = ()
 
 
+class CollectorPolicyUpdateArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    status: Literal["dry_run", "unchanged", "updated"]
+    candidate_source: str
+    config_path: str
+    previous_policy_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    candidate_policy_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    policy_change_required: bool
+    policy_updated: bool
+    service_restarted: bool
+    allowed_uid: int = Field(gt=0)
+    allowed_modes: tuple[str, ...]
+    planned_commands: tuple[tuple[str, ...], ...]
+    service_unit_preserved: bool = True
+    state_preserved: bool = True
+    warnings: tuple[str, ...] = ()
+    next_steps: tuple[str, ...] = ()
+
+
 class CollectorUndeploymentArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     perflens_version: str

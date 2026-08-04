@@ -47,6 +47,19 @@ perflens-admin spool-status
 第一条检查项目、MCP、Socket 和权限是否就绪；第二条用中文汇总 Collector 存储配额和
 剩余空间。两条命令都只读。需要留存第二条命令的版本化 JSON 时加 `--json`。
 
+后续调整采集时长、模式、事件或配额时，复制当前策略并编辑带中英文注释的候选文件，
+不要直接改正在使用的文件：
+
+```bash
+cp /etc/perflens/collector.toml ./collector.next.toml
+chmod 600 ./collector.next.toml
+perflens-admin update-policy --config "$PWD/collector.next.toml" --dry-run
+sudo perflens-admin update-policy --config "$PWD/collector.next.toml"
+```
+
+该命令会重启并验证服务，失败时恢复原策略；不会改变授权 UID、固定 spool、unit 或
+历史产物。候选与当前配置相同时不写入也不重启。
+
 ## 升级与卸载
 
 使用 `sudo apt install ./新版本.deb` 升级。系统包不会覆盖管理员策略，也不会自行重启

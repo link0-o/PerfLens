@@ -1,0 +1,118 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "allowed_modes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Modes",
+      "type": "array"
+    },
+    "allowed_uid": {
+      "exclusiveMinimum": 0,
+      "title": "Allowed Uid",
+      "type": "integer"
+    },
+    "candidate_policy_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Candidate Policy Sha256",
+      "type": "string"
+    },
+    "candidate_source": {
+      "title": "Candidate Source",
+      "type": "string"
+    },
+    "config_path": {
+      "title": "Config Path",
+      "type": "string"
+    },
+    "next_steps": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "planned_commands": {
+      "items": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "title": "Planned Commands",
+      "type": "array"
+    },
+    "policy_change_required": {
+      "title": "Policy Change Required",
+      "type": "boolean"
+    },
+    "policy_updated": {
+      "title": "Policy Updated",
+      "type": "boolean"
+    },
+    "previous_policy_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Previous Policy Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "service_restarted": {
+      "title": "Service Restarted",
+      "type": "boolean"
+    },
+    "service_unit_preserved": {
+      "default": true,
+      "title": "Service Unit Preserved",
+      "type": "boolean"
+    },
+    "state_preserved": {
+      "default": true,
+      "title": "State Preserved",
+      "type": "boolean"
+    },
+    "status": {
+      "enum": [
+        "dry_run",
+        "unchanged",
+        "updated"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "status",
+    "candidate_source",
+    "config_path",
+    "previous_policy_sha256",
+    "candidate_policy_sha256",
+    "policy_change_required",
+    "policy_updated",
+    "service_restarted",
+    "allowed_uid",
+    "allowed_modes",
+    "planned_commands"
+  ],
+  "title": "CollectorPolicyUpdateArtifact",
+  "type": "object"
+}

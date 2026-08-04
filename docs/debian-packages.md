@@ -36,6 +36,12 @@ After the user's new login session, `perflens status --project <project>` checks
 runtime readiness and `perflens-admin spool-status` reports Collector storage
 headroom. Both are read-only; add `--json` to the latter for a versioned artifact.
 
+To tune an existing policy, copy it to a mode-`0600` candidate and run
+`perflens-admin update-policy --config ./collector.next.toml --dry-run`, then
+repeat with `sudo` and without `--dry-run`. The command preserves the authorized
+UID, fixed spool, unit, and evidence, and rolls back the policy if activation
+fails.
+
 To upgrade, install both matching new packages, run `sudo perflens-admin upgrade
 --dry-run`, then `sudo perflens-admin upgrade`. This preserves the deployed policy
 and spool, updates only a verified managed unit, restarts the new program, and

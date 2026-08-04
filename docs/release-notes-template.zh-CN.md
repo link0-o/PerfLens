@@ -74,4 +74,8 @@ Collector 还会在启动 perf 前检查 spool 总字节数、文件数和文件
 部署和升级还会完成一次只读 Collector 健康协议往返，双方身份由内核 peer 凭据复核，
 不会把遗留、无人监听或错误服务 UID 的 Socket 误判为成功。
 
+需要调整模式、时长、事件或存储配额时，把当前 TOML 复制为权限 `0600` 的独立候选，
+先运行 `perflens-admin update-policy --config <候选> --dry-run`，再由管理员加 `sudo`
+应用。它自动重启、健康检查并在失败时恢复原策略，同时拒绝迁移授权 UID 或固定 spool。
+
 **Full Changelog**：https://github.com/link0-o/PerfLens/commits/{tag}

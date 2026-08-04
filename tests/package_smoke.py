@@ -39,6 +39,12 @@ def main() -> None:
         "--help",
         expected="Read-only Chinese summary",
     )
+    _run(
+        perflens_admin,
+        "update-policy",
+        "--help",
+        expected="Safely update policy",
+    )
     _run(perflens, "verify-collector", "--help", expected="bounded real perf-stat probe")
     _run(perflens, "accept-collector", "--help", expected="without choosing a PID")
 

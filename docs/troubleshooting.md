@@ -46,6 +46,14 @@ attempts to restore the old unit and reload systemd. A rollback warning requires
 manual inspection of the unit, service status, and journal before retrying;
 policy and spool evidence are not deleted.
 
+`perflens-admin update-policy` requires a separate trusted, non-group-writable,
+bounded UTF-8 TOML candidate. It rejects the live deployed path, unknown or
+unbounded values, UID changes, fixed-spool migration, symlinks, and untrusted
+perf paths. Run `--dry-run` first. If restart or authenticated health checking
+fails after replacement, it restores the exact prior policy and restarts again.
+If rollback itself fails, stop retrying and inspect the current policy,
+`systemctl status`, and journal.
+
 Deploy and upgrade require a bounded `health` round trip, not merely an existing
 socket pathname. The server authenticates the caller, and the client verifies
 the responding PID/UID with kernel `SO_PEERCRED`; administrator readiness also

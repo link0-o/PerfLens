@@ -143,6 +143,34 @@ perflens-admin spool-status --json
 这是时点检查，不会替下一次采集预留空间；最终仍以 Collector 启动 perf 前的独立
 配额复核为准，并发产生的新证据可能让后续采集被安全拒绝。
 
+## 一条命令安全更新策略
+
+需要调整采集模式、最大时长、频率、事件或存储配额时，不要直接编辑正在使用的
+`/etc/perflens/collector.toml`。先复制成独立候选文件，以普通用户编辑并收紧权限：
+
+```bash
+cp /etc/perflens/collector.toml ./collector.next.toml
+chmod 600 ./collector.next.toml
+# 使用你熟悉的编辑器修改带中英文注释的参数
+perflens-admin update-policy --config "$PWD/collector.next.toml" --dry-run
+```
+
+确认版本化 JSON 中的哈希、`allowed_modes` 和计划命令后，只需管理员执行：
+
+```bash
+sudo perflens-admin update-policy --config "$PWD/collector.next.toml"
+```
+
+命令会严格解析候选 TOML，原子替换固定策略，重启一次 Collector，并通过内核 peer
+凭据完成健康握手。候选内容与当前策略逐字节相同时返回 `unchanged`，不会要求 root、
+写文件或重启。重启或健康检查失败时会恢复原配置，再重启并验证旧配置；如果恢复本身
+失败则返回稳定错误，要求管理员人工检查。
+
+此入口只用于参数调整：不允许改变唯一授权 UID 或固定 spool，也不会修改 service
+unit、历史产物、用户/组、sysctl 或 capability。候选文件中的中英文注释会原样保留。
+若确实需要迁移用户身份或存储目录，应作为单独的停机管理员流程处理，不能借
+`update-policy` 绕过隔离边界。
+
 ## 内核权限
 
 先运行：

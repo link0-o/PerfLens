@@ -27,9 +27,9 @@
 |---|---|---|
 | 代码规范 | `ruff check .` | 通过 |
 | 严格类型 | `pyright` | 0 错误、0 警告 |
-| Python 3.12 | `pytest -q`，Python 3.12.13 | 234 通过 |
-| Python 3.13 | 隔离环境 `pytest -q` | 234 通过 |
-| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.55%，通过 |
+| Python 3.12 | `pytest -q`，Python 3.12.13 | 239 通过 |
+| Python 3.13 | 隔离环境 `pytest -q` | 239 通过 |
+| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.47%，通过 |
 | Skill | Skill 结构和打包测试 | 通过 |
 | Schema | 已提交 Schema 与 Contract 生成结果相等 | 通过 |
 | 依赖锁 | `uv export --locked` | 通过 |
@@ -45,6 +45,7 @@
 | 项目工作负载 | 普通用户启动 → 内部 PID → Broker → 清理 | 可执行 perf Test Double 端到端通过 |
 | 管理员部署 | 严格 TOML → 内置资产 → 固定命令 → Socket | 成功、回滚和拒绝路径通过 |
 | 管理员升级 | 固定已部署策略 → unit 哈希比较 → 安全替换/重启 → 失败恢复 | 保留策略/证据、同版重启、更新、恢复和拒绝路径通过 |
+| 策略安全更新 | 独立候选 → 严格验证 → 原子替换/重启/健康检查 → 失败恢复 | UID/spool 固定、注释保留、只读预检和拒绝路径通过 |
 | 管理员撤销部署 | 托管标记/所有者/权限 → 固定停用 → inode 复核 → 删除 unit | 保留数据和拒绝路径通过 |
 | 原生 DEB | Debian 13 主包与 Collector 拆包 | 提取命令冒烟和逐字节重复构建通过 |
 | 性能 | 可复现 small/medium/large folded 语料 | 已记录基线 |

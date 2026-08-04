@@ -64,6 +64,18 @@ perflens-collector.service` 审查差异，不要放宽检查。
 应立即检查 unit 内容、`systemctl status perflens-collector.service` 和对应 journal，确认
 当前实际加载的版本后再处理。管理员策略和 spool 证据不会在升级中删除。
 
+## `update-policy` 拒绝配置或更新后恢复
+
+`perflens-admin update-policy` 要求一个独立、属主可信、组和其他用户不可写、最大
+256 KiB 的 UTF-8 TOML 候选文件；不要直接把
+`/etc/perflens/collector.toml` 作为候选。先执行 `--dry-run`。它会拒绝未知字段、越界
+参数、改变唯一授权 UID、迁移固定 spool、符号链接或不可信的 `perf` 路径。
+
+如果候选已写入但重启或身份验证健康检查失败，命令会原子恢复原策略并再次重启。
+看到 “previous policy could not be fully restored” 时不要连续重试；检查当前配置哈希、
+`systemctl status perflens-collector.service` 和 journal。历史产物与 service unit 不会被
+该命令修改。
+
 ## service 已启动但部署仍报告 Socket 失败
 
 部署和升级不会只看 `/run/perflens/collector.sock` 是否存在，而会连接并发送一次只读

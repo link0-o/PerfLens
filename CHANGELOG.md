@@ -55,6 +55,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - A versioned, read-only Collector health operation with bidirectional kernel
   peer-credential checks, used by deploy and upgrade so stale or wrong-identity
   sockets cannot produce false readiness.
+- `perflens-admin update-policy` for strict dry-run validation and atomic
+  application of a separate policy candidate, with authenticated health checks,
+  rollback on activation failure, and immutable UID/spool boundaries.
 
 ### Changed
 

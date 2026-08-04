@@ -243,6 +243,12 @@ After deployment, `perflens-admin spool-status` gives a read-only Chinese
 summary of spool usage, filesystem reserve, and currently reservable output;
 add `--json` for the versioned machine-readable artifact.
 
+Administrators can tune the bilingual policy without memorizing a manual
+restart sequence: copy it to a separate mode-`0600` candidate, run
+`perflens-admin update-policy --config <candidate> --dry-run`, then repeat with
+`sudo`. The command atomically applies and health-checks the policy, rolls back
+on activation failure, and refuses UID or fixed-spool migration.
+
 Deploy and upgrade require a bounded, read-only Collector health round trip and
 verify the responding PID/UID through kernel credentials. A stale, wrong-owner,
 or unlistened socket pathname is not readiness.

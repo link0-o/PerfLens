@@ -24,6 +24,7 @@ from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.collector_broker.policy import COLLECTOR_POLICY_VERSION
 from perflens.contracts.artifacts import (
     CollectorDeploymentArtifact,
+    CollectorPolicyUpdateArtifact,
     CollectorSpoolStatusArtifact,
     CollectorUndeploymentArtifact,
     CollectorUpgradeArtifact,
@@ -63,6 +64,7 @@ class _DeploymentPolicy:
 class _ConfigSource:
     path: Path
     raw_text: str
+    metadata: os.stat_result
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,6 +390,212 @@ def upgrade_collector(
     )
 
 
+def update_collector_policy(
+    config_path: Path,
+    *,
+    dry_run: bool = False,
+    layout: CollectorSystemLayout | None = None,
+    require_root: bool = True,
+    command_executor: CommandExecutor | None = None,
+    socket_waiter: SocketWaiter | None = None,
+) -> CollectorPolicyUpdateArtifact:
+    """Validate and atomically apply a bounded Collector policy update."""
+    stage = "collector_policy_update"
+    effective_layout = layout or CollectorSystemLayout()
+    candidate = _candidate_config(config_path, stage=stage)
+    current = _candidate_config(effective_layout.config_path, stage=stage)
+    if candidate.path == current.path:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Collector policy update requires a separate candidate file",
+            recoverable=True,
+            details={"config_path": str(current.path)},
+            suggested_actions=(
+                "Copy the deployed policy, edit the copy, then pass that copy to --config.",
+            ),
+        )
+    if require_root and current.metadata.st_uid != 0:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Deployed Collector policy must be root owned",
+            details={"config_path": str(current.path)},
+        )
+    current_policy = _parse_deployment_policy(
+        current.raw_text,
+        expected_spool=effective_layout.state_directory,
+        require_root_owned_tools=require_root,
+        stage=stage,
+    )
+    candidate_policy = _parse_deployment_policy(
+        candidate.raw_text,
+        expected_spool=effective_layout.state_directory,
+        require_root_owned_tools=require_root,
+        stage=stage,
+    )
+    if candidate_policy.allowed_uids != current_policy.allowed_uids:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Collector policy update cannot change the authorized user UID",
+            recoverable=True,
+            details={
+                "deployed_allowed_uids": current_policy.allowed_uids,
+                "candidate_allowed_uids": candidate_policy.allowed_uids,
+            },
+            suggested_actions=(
+                "Use an explicit administrator identity-migration procedure instead.",
+            ),
+        )
+    _verify_managed_service(
+        effective_layout.service_path,
+        require_root_owner=require_root,
+        stage=stage,
+    )
+    previous_raw = current.raw_text.encode("utf-8")
+    candidate_raw = candidate.raw_text.encode("utf-8")
+    change_required = previous_raw != candidate_raw
+    commands = (("/usr/bin/systemctl", "restart", "perflens-collector.service"),)
+    warnings = (
+        "Authorized UID, fixed spool, service unit, and retained artifacts are preserved.",
+        "Host perf/kernel policy is not changed.",
+    )
+    next_steps = (
+        "Run perflens-admin spool-status after changing storage quotas.",
+        "Run perflens accept-collector --authorize-host-acceptance as an ordinary user.",
+    )
+    if dry_run:
+        return _policy_update_result(
+            "dry_run",
+            candidate,
+            current.path,
+            previous_raw,
+            candidate_raw,
+            candidate_policy,
+            change_required=change_required,
+            policy_updated=False,
+            service_restarted=False,
+            commands=commands if change_required else (),
+            warnings=warnings,
+            next_steps=next_steps,
+        )
+    if not change_required:
+        return _policy_update_result(
+            "unchanged",
+            candidate,
+            current.path,
+            previous_raw,
+            candidate_raw,
+            candidate_policy,
+            change_required=False,
+            policy_updated=False,
+            service_restarted=False,
+            commands=(),
+            warnings=warnings,
+            next_steps=next_steps,
+        )
+    if require_root and os.geteuid() != 0:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Collector policy update must be started explicitly by an administrator",
+            recoverable=True,
+            suggested_actions=(
+                "Run sudo perflens-admin update-policy --config <reviewed-candidate>.",
+            ),
+        )
+
+    executor = command_executor or _run_admin_policy_update_command
+    expected_service_uid: int | None = None
+    if socket_waiter is None:
+        try:
+            expected_service_uid = pwd.getpwnam("perflens").pw_uid
+        except KeyError as exc:
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_FAILED,
+                stage,
+                "Dedicated perflens service account does not exist",
+                suggested_actions=("Deploy the Collector before updating its policy.",),
+            ) from exc
+
+    replacement_attempted = False
+    try:
+        replacement_attempted = True
+        _replace_verified_config(
+            current.path,
+            current,
+            candidate_raw,
+            stage=stage,
+        )
+        executor(commands[0])
+        if socket_waiter is not None:
+            socket_waiter(effective_layout.socket_path)
+        else:
+            _wait_for_policy_update_socket(
+                effective_layout.socket_path,
+                expected_service_uid=expected_service_uid,
+            )
+    except BaseException as exc:
+        rollback_errors: list[str] = []
+        if replacement_attempted:
+            try:
+                deployed_candidate = _candidate_config(current.path, stage=stage)
+                deployed_raw = deployed_candidate.raw_text.encode("utf-8")
+                if deployed_raw != previous_raw:
+                    if deployed_raw != candidate_raw:
+                        raise PerfLensError(
+                            ErrorCode.PATH_SAFETY_VIOLATION,
+                            stage,
+                            "Collector policy changed before update rollback",
+                        )
+                    _replace_verified_config(
+                        current.path,
+                        deployed_candidate,
+                        previous_raw,
+                        stage=stage,
+                        mode=stat.S_IMODE(current.metadata.st_mode),
+                    )
+                    executor(commands[0])
+                    if socket_waiter is not None:
+                        socket_waiter(effective_layout.socket_path)
+                    else:
+                        _wait_for_policy_update_socket(
+                            effective_layout.socket_path,
+                            expected_service_uid=expected_service_uid,
+                        )
+            except BaseException as rollback_exc:
+                rollback_errors.append(type(rollback_exc).__name__)
+        if rollback_errors:
+            raise PerfLensError(
+                ErrorCode.OUTPUT_WRITE_FAILED,
+                stage,
+                "Collector policy update failed and the previous policy could not be "
+                "fully restored",
+                recoverable=True,
+                details={"rollback_errors": rollback_errors},
+                suggested_actions=(
+                    "Inspect the policy, systemctl status, and journal before retrying.",
+                ),
+            ) from exc
+        raise
+
+    return _policy_update_result(
+        "updated",
+        candidate,
+        current.path,
+        previous_raw,
+        candidate_raw,
+        candidate_policy,
+        change_required=True,
+        policy_updated=True,
+        service_restarted=True,
+        commands=commands,
+        warnings=warnings,
+        next_steps=next_steps,
+    )
+
+
 def undeploy_collector(
     *,
     dry_run: bool = False,
@@ -514,7 +722,7 @@ def _candidate_config(
             stage,
             "Collector deployment config exceeds its size limit",
         )
-    return _ConfigSource(path=resolved, raw_text=text)
+    return _ConfigSource(path=resolved, raw_text=text, metadata=metadata)
 
 
 def _parse_deployment_policy(
@@ -1109,11 +1317,48 @@ def _replace_verified_managed_service(
         ) from exc
 
 
+def _replace_verified_config(
+    path: Path,
+    inspected: _ConfigSource,
+    replacement: bytes,
+    *,
+    stage: str,
+    mode: int = 0o644,
+) -> None:
+    try:
+        current = path.stat(follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != (
+            inspected.metadata.st_dev,
+            inspected.metadata.st_ino,
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "Collector policy changed during update",
+                details={"path": str(path)},
+            )
+        text = replacement.decode("utf-8")
+        write_text_atomic(text, path, max_output_bytes=_MAX_CONFIG_BYTES)
+        os.chmod(path, mode)
+    except PerfLensError:
+        raise
+    except (OSError, UnicodeDecodeError) as exc:
+        raise PerfLensError(
+            ErrorCode.OUTPUT_WRITE_FAILED,
+            stage,
+            "Unable to replace the verified Collector policy",
+            details={"path": str(path)},
+        ) from exc
+
+
 def _run_admin_command(
     command: tuple[str, ...],
     *,
     stage: Literal[
-        "collector_deploy", "collector_undeploy", "collector_upgrade"
+        "collector_deploy",
+        "collector_undeploy",
+        "collector_upgrade",
+        "collector_policy_update",
     ] = "collector_deploy",
 ) -> None:
     executable = Path(command[0])
@@ -1164,6 +1409,10 @@ def _run_admin_upgrade_command(command: tuple[str, ...]) -> None:
     _run_admin_command(command, stage="collector_upgrade")
 
 
+def _run_admin_policy_update_command(command: tuple[str, ...]) -> None:
+    _run_admin_command(command, stage="collector_policy_update")
+
+
 def _wait_for_socket(path: Path, *, expected_service_uid: int | None = None) -> None:
     deadline = time.monotonic() + 5.0
     last_error = "Collector socket has not appeared"
@@ -1200,6 +1449,24 @@ def _wait_for_upgrade_socket(
         raise PerfLensError(
             exc.code,
             "collector_upgrade",
+            exc.message,
+            recoverable=exc.recoverable,
+            details=exc.details,
+            suggested_actions=exc.suggested_actions,
+        ) from exc
+
+
+def _wait_for_policy_update_socket(
+    path: Path,
+    *,
+    expected_service_uid: int | None = None,
+) -> None:
+    try:
+        _wait_for_socket(path, expected_service_uid=expected_service_uid)
+    except PerfLensError as exc:
+        raise PerfLensError(
+            exc.code,
+            "collector_policy_update",
             exc.message,
             recoverable=exc.recoverable,
             details=exc.details,
@@ -1285,6 +1552,39 @@ def _undeployment_result(
         service_path=str(layout.service_path),
         config_path=str(layout.config_path),
         state_directory=str(layout.state_directory),
+        planned_commands=commands,
+        warnings=warnings,
+        next_steps=next_steps,
+    )
+
+
+def _policy_update_result(
+    status: Literal["dry_run", "unchanged", "updated"],
+    candidate: _ConfigSource,
+    config_path: Path,
+    previous: bytes,
+    candidate_raw: bytes,
+    policy: _DeploymentPolicy,
+    *,
+    change_required: bool,
+    policy_updated: bool,
+    service_restarted: bool,
+    commands: tuple[tuple[str, ...], ...],
+    warnings: tuple[str, ...],
+    next_steps: tuple[str, ...],
+) -> CollectorPolicyUpdateArtifact:
+    return CollectorPolicyUpdateArtifact(
+        perflens_version=__version__,
+        status=status,
+        candidate_source=str(candidate.path),
+        config_path=str(config_path),
+        previous_policy_sha256=hashlib.sha256(previous).hexdigest(),
+        candidate_policy_sha256=hashlib.sha256(candidate_raw).hexdigest(),
+        policy_change_required=change_required,
+        policy_updated=policy_updated,
+        service_restarted=service_restarted,
+        allowed_uid=policy.allowed_uids[0],
+        allowed_modes=policy.allowed_modes,
         planned_commands=commands,
         warnings=warnings,
         next_steps=next_steps,

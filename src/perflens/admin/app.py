@@ -14,6 +14,7 @@ from perflens.admin.deploy import (
     deploy_collector,
     inspect_collector_spool,
     undeploy_collector,
+    update_collector_policy,
     upgrade_collector,
 )
 from perflens.contracts.artifacts import CollectorSpoolStatusArtifact, ErrorArtifact, ErrorBody
@@ -136,6 +137,29 @@ def spool_status_command(
         typer.echo(result.model_dump_json(indent=2))
         return
     _render_spool_status_chinese(result)
+
+
+@app.command("update-policy")
+def update_policy_command(
+    config: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            dir_okay=False,
+            help="Separate reviewed candidate Collector TOML policy.",
+        ),
+    ],
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Validate and compare policy without changes."),
+    ] = False,
+) -> None:
+    """Safely update policy, restart, health-check, and roll back on failure."""
+    try:
+        result = update_collector_policy(config, dry_run=dry_run)
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(result.model_dump_json(indent=2))
 
 
 def _render_spool_status_chinese(artifact: CollectorSpoolStatusArtifact) -> None:

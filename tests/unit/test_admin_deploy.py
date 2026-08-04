@@ -18,10 +18,12 @@ from perflens.admin.deploy import (
     deploy_collector,
     inspect_collector_spool,
     undeploy_collector,
+    update_collector_policy,
     upgrade_collector,
 )
 from perflens.contracts.artifacts import (
     CollectorDeploymentArtifact,
+    CollectorPolicyUpdateArtifact,
     CollectorSpoolStatusArtifact,
     CollectorUndeploymentArtifact,
     CollectorUpgradeArtifact,
@@ -374,6 +376,259 @@ def test_admin_upgrade_rejects_alternate_policy_and_unmanaged_unit(tmp_path: Pat
             require_root=False,
         )
     assert unmanaged.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_admin_policy_update_dry_run_and_unchanged_are_read_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+    candidate = tmp_path / "candidate.toml"
+    candidate.write_bytes(layout.config_path.read_bytes())
+    candidate.chmod(0o600)
+    before = layout.config_path.read_bytes()
+
+    dry_run = update_collector_policy(
+        candidate,
+        dry_run=True,
+        layout=layout,
+        require_root=False,
+    )
+    assert dry_run.schema_version == "1.0"
+    assert dry_run.status == "dry_run"
+    assert dry_run.policy_change_required is False
+    assert dry_run.policy_updated is False
+    assert dry_run.service_restarted is False
+    assert dry_run.planned_commands == ()
+
+    unchanged = update_collector_policy(
+        candidate,
+        layout=layout,
+        require_root=False,
+    )
+    assert unchanged.status == "unchanged"
+    assert unchanged.previous_policy_sha256 == unchanged.candidate_policy_sha256
+    assert layout.config_path.read_bytes() == before
+
+    def fake_update(
+        _config: Path,
+        *,
+        dry_run: bool = False,
+    ) -> CollectorPolicyUpdateArtifact:
+        del dry_run
+        return unchanged
+
+    monkeypatch.setattr("perflens.admin.app.update_collector_policy", fake_update)
+    cli_result = CliRunner().invoke(
+        app,
+        ["update-policy", "--config", str(candidate), "--dry-run"],
+    )
+    assert cli_result.exit_code == 0, cli_result.output
+    assert '"schema_version": "1.0"' in cli_result.output
+    assert '"status": "unchanged"' in cli_result.output
+
+
+def test_admin_policy_update_applies_tunables_and_preserves_service_and_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+    artifact = layout.state_directory / "retained.data"
+    artifact.write_bytes(b"evidence")
+    service_before = layout.service_path.read_bytes()
+    candidate = tmp_path / "candidate.toml"
+    candidate.write_text(
+        layout.config_path.read_text(encoding="utf-8")
+        .replace('allowed_modes = ["record", "stat"]', 'allowed_modes = ["stat"]')
+        .replace("max_duration_seconds = 30.0", "max_duration_seconds = 12.5"),
+        encoding="utf-8",
+    )
+    candidate.chmod(0o600)
+    commands: list[tuple[str, ...]] = []
+    sockets: list[tuple[Path, int | None]] = []
+
+    def service_account(_name: str) -> SimpleNamespace:
+        return SimpleNamespace(pw_uid=os.geteuid())
+
+    def wait_for_policy_socket(
+        path: Path,
+        *,
+        expected_service_uid: int | None = None,
+    ) -> None:
+        sockets.append((path, expected_service_uid))
+
+    monkeypatch.setattr(admin_deploy.pwd, "getpwnam", service_account)
+    monkeypatch.setattr(
+        admin_deploy,
+        "_wait_for_policy_update_socket",
+        wait_for_policy_socket,
+    )
+
+    result = update_collector_policy(
+        candidate,
+        layout=layout,
+        require_root=False,
+        command_executor=commands.append,
+    )
+
+    assert result.status == "updated"
+    assert result.policy_change_required is True
+    assert result.policy_updated is True
+    assert result.service_restarted is True
+    assert result.allowed_modes == ("stat",)
+    assert layout.config_path.read_bytes() == candidate.read_bytes()
+    assert layout.service_path.read_bytes() == service_before
+    assert artifact.read_bytes() == b"evidence"
+    assert commands == [
+        ("/usr/bin/systemctl", "restart", "perflens-collector.service")
+    ]
+    assert sockets == [(layout.socket_path, os.geteuid())]
+
+
+def test_admin_policy_update_rolls_back_exact_policy_after_health_failure(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+    previous = layout.config_path.read_bytes()
+    previous_mode = layout.config_path.stat().st_mode & 0o777
+    candidate = tmp_path / "candidate.toml"
+    candidate.write_text(
+        previous.decode("utf-8").replace("max_frequency_hz = 99", "max_frequency_hz = 49"),
+        encoding="utf-8",
+    )
+    candidate.chmod(0o600)
+    commands: list[tuple[str, ...]] = []
+    health_attempts = 0
+
+    def health(_path: Path) -> None:
+        nonlocal health_attempts
+        health_attempts += 1
+        if health_attempts == 1:
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_FAILED,
+                "test",
+                "candidate health failed",
+            )
+
+    with pytest.raises(PerfLensError) as failed:
+        update_collector_policy(
+            candidate,
+            layout=layout,
+            require_root=False,
+            command_executor=commands.append,
+            socket_waiter=health,
+        )
+    assert failed.value.message == "candidate health failed"
+    assert layout.config_path.read_bytes() == previous
+    assert layout.config_path.stat().st_mode & 0o777 == previous_mode
+    assert commands == [
+        ("/usr/bin/systemctl", "restart", "perflens-collector.service"),
+        ("/usr/bin/systemctl", "restart", "perflens-collector.service"),
+    ]
+    assert health_attempts == 2
+
+
+def test_admin_policy_update_reports_failed_service_recovery(tmp_path: Path) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+    previous = layout.config_path.read_bytes()
+    candidate = tmp_path / "candidate.toml"
+    candidate.write_text(
+        previous.decode("utf-8").replace("max_frequency_hz = 99", "max_frequency_hz = 49"),
+        encoding="utf-8",
+    )
+    candidate.chmod(0o600)
+
+    def fail_restart(_command: tuple[str, ...]) -> None:
+        raise PerfLensError(ErrorCode.EXTERNAL_TOOL_FAILED, "test", "restart failed")
+
+    with pytest.raises(PerfLensError) as failed:
+        update_collector_policy(
+            candidate,
+            layout=layout,
+            require_root=False,
+            command_executor=fail_restart,
+            socket_waiter=lambda _path: None,
+        )
+    assert failed.value.code is ErrorCode.OUTPUT_WRITE_FAILED
+    assert failed.value.stage == "collector_policy_update"
+    assert failed.value.details["rollback_errors"] == ["PerfLensError"]
+    assert layout.config_path.read_bytes() == previous
+
+
+def test_admin_policy_update_rejects_in_place_edit_and_uid_change(tmp_path: Path) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+    with pytest.raises(PerfLensError) as in_place:
+        update_collector_policy(
+            layout.config_path,
+            dry_run=True,
+            layout=layout,
+            require_root=False,
+        )
+    assert in_place.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    candidate = tmp_path / "candidate.toml"
+    candidate.write_text(
+        layout.config_path.read_text(encoding="utf-8").replace(
+            f"allowed_uids = [{os.geteuid()}]",
+            f"allowed_uids = [{os.geteuid() + 1}]",
+        ),
+        encoding="utf-8",
+    )
+    candidate.chmod(0o600)
+    with pytest.raises(PerfLensError) as changed_uid:
+        update_collector_policy(
+            candidate,
+            dry_run=True,
+            layout=layout,
+            require_root=False,
+        )
+    assert changed_uid.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert "cannot change the authorized user UID" in changed_uid.value.message
 
 
 def test_admin_undeploy_removes_only_service_and_preserves_data(tmp_path: Path) -> None:

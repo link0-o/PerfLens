@@ -90,6 +90,24 @@ This is a point-in-time inspection, not a reservation. The Collector still
 rechecks capacity immediately before starting perf, and concurrent artifacts
 may cause a later collection to be safely denied.
 
+To tune collection modes, duration, frequency, events, or storage quotas, do
+not edit the live `/etc/perflens/collector.toml` in place. Copy it to a separate
+candidate, set mode `0600`, edit the bilingual comments, and run:
+
+```bash
+perflens-admin update-policy --config "$PWD/collector.next.toml" --dry-run
+sudo perflens-admin update-policy --config "$PWD/collector.next.toml"
+```
+
+The command strictly validates both policies, atomically replaces only the
+fixed deployed policy, restarts the Collector, and completes the authenticated
+health handshake. Byte-identical input returns `unchanged` without mutation or
+restart. Activation failure restores the exact previous policy and verifies it
+after another restart. This command cannot change the authorized UID or fixed
+spool and never changes the unit, retained artifacts, users/groups, sysctl, or
+capabilities. Candidate comments are preserved verbatim. Identity or spool
+migration requires a separate stopped-service administrator procedure.
+
 `accept-collector` starts a fixed, self-owned CPU probe and performs a real,
 policy-bounded perf-stat collection of at most five seconds. It always cleans up
 the probe and emits versioned acceptance evidence, so users do not need to find

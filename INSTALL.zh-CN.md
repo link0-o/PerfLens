@@ -170,6 +170,18 @@ Collector 以特权启动用户程序。
 
 ## 升级
 
+只调整采集模式、时长、事件或配额时，无需重新部署或升级软件包。复制当前配置并编辑
+独立候选文件，然后执行：
+
+```bash
+cp /etc/perflens/collector.toml ./collector.next.toml
+chmod 600 ./collector.next.toml
+perflens-admin update-policy --config "$PWD/collector.next.toml" --dry-run
+sudo perflens-admin update-policy --config "$PWD/collector.next.toml"
+```
+
+它会自动重启、健康检查并在失败时恢复原配置，但拒绝改变授权 UID 和固定 spool。
+
 先安装新 wheel 或同版本配套的两个新 DEB，再由管理员运行：
 
 ```bash
