@@ -355,6 +355,7 @@ def test_admin_deploy_rejects_unsafe_policy_and_symlink(tmp_path: Path) -> None:
         "policy_version = true\n",
         "unknown = true\n",
         "allowed_uids = [0]\n",
+        "allowed_uids = [1000, 1001]\n",
         'socket_mode = "0666"\n',
         "max_duration_seconds = nan\n",
         "max_spool_bytes = 1\n",

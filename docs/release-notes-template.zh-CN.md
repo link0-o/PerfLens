@@ -64,5 +64,6 @@ Agent 和 MCP 始终保持普通用户权限。检查引导生成的 `collector.
 
 Collector 还会在启动 perf 前检查 spool 总字节数、文件数和文件系统空闲余量；达到
 管理员配置的边界时拒绝新采集，但不会自动删除旧证据。
+每套 Collector 只允许一个普通用户 UID，避免共享 `perflens` 组导致 Profile 跨用户泄露。
 
 **Full Changelog**：https://github.com/link0-o/PerfLens/commits/{tag}

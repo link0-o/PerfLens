@@ -52,7 +52,11 @@ perflens stage-collector-assets \
   --perf-path /usr/bin/perf
 ```
 
-多个被授权用户需要重复传入 `--allowed-uid`。该命令只生成可检查文件，不执行 sudo、不写 `/etc`、不启动服务。
+一套 Collector 当前必须且只能配置一个普通用户 UID。因为产物需要通过 `perflens` 组
+提供给 MCP 读取，多个调用用户共享同一组和 spool 会造成跨用户 Profile 泄露，所以
+策略、资产生成和一键部署都会拒绝多个 UID。需要多用户的服务器暂不应共享这一实例；
+未来应采用每 UID 独立 service/socket/spool 或带身份校验的 Broker 读取协议。该命令
+只生成可检查文件，不执行 sudo、不写 `/etc`、不启动服务。
 
 ## 管理员一键安装
 

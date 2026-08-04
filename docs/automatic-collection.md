@@ -28,6 +28,9 @@ perflens stage-collector-assets \
 ```
 
 Review `collector.toml`, `perflens-collector.service`, and `perflens.sysusers`.
+Configure exactly one `allowed_uids` entry. Multiple callers sharing the
+`perflens` group could read each other's group-readable profiles, so policy and
+deployment reject shared multi-user instances.
 Validate the policy with `perflens-admin deploy --config <toml> --dry-run`,
 then run that trusted system-package entry point once with `sudo` and without
 `--dry-run`. Wheel deployments use `/opt/perflens/bin/perflens-admin`. The fixed deployer uses packaged templates and never

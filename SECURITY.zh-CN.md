@@ -39,6 +39,9 @@ PerfLens 不会绕过 Linux 的 `perf_event_paranoid`、容器 Capability、LSM 
 
 可选自动 Collector 是独立权限边界：MCP 只生成短期、单次、PID 身份绑定计划；Collector 使用 Unix 对等凭据和独立策略授权，只接受 PID 并写固定 spool。它在启动 perf 前检查累计字节、文件数和文件系统空闲余量，达到边界时拒绝新采集且不删除现有证据。它不接受任意命令、环境、路径或全系统目标。任何漏洞若能绕过这些约束、跨 UID 采集、逃逸 spool 或绕过配额，应按安全问题处理。
 
+每套 Collector 只允许一个普通用户 UID。多个调用者共享 `perflens` 组会互相看到组可读
+Profile，因此策略和部署会明确拒绝多 UID，管理员也不应手工把额外用户加入该组。
+
 ## 处理不可信输入
 
 Profile、Benchmark JSON、ELF 文件、源码路径和持久化产物都应视为不可信输入。相关代码必须：

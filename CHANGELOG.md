@@ -49,6 +49,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Changed
 
+- Collector deployment now requires exactly one authorized ordinary UID per
+  instance, preventing group-readable profiles from leaking across callers.
 - Release preparation now requires a CycloneDX JSON SBOM, rejects stale or
   unexpected files in `dist/`, and checksums only the six intended assets.
 - CI and release jobs now have explicit timeouts and concurrency controls.

@@ -34,6 +34,13 @@ The staged policy is `collector-assets/collector.toml`. It includes bilingual
 field-by-field guidance for tunable, fixed, and security-sensitive settings. Validate it without
 changes, then run one explicit administrator command:
 
+One Collector instance requires exactly one authorized ordinary UID. Collected
+profiles must be group-readable by that caller; placing multiple callers in the
+same `perflens` group would expose profiles across users. Policy loading, asset
+staging, and one-command deployment therefore reject multiple UIDs. Do not share
+this instance on a multi-user host; future support requires isolated
+service/socket/spool instances per UID or an authenticated artifact-read protocol.
+
 ```bash
 /opt/perflens/bin/perflens-admin deploy \
   --config "$PWD/collector-assets/collector.toml" \

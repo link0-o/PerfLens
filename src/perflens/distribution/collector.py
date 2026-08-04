@@ -111,11 +111,11 @@ def _deployment_values(
     perf_path: Path,
 ) -> tuple[str, str, str]:
     unique_uids = tuple(sorted(set(allowed_uids)))
-    if not unique_uids or len(unique_uids) > 64 or any(uid < 0 for uid in unique_uids):
+    if len(unique_uids) != 1 or any(uid < 0 for uid in unique_uids):
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
             "collector_assets",
-            "Collector assets require between 1 and 64 non-negative allowed UIDs",
+            "Collector assets require exactly one non-negative allowed UID",
         )
     collector_text = str(collector_command.expanduser())
     perf_text = str(perf_path.expanduser())

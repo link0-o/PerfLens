@@ -314,14 +314,14 @@ def stage_collector_assets_command(
             help="New directory that will receive inspectable service templates.",
         ),
     ],
-    allowed_uids: Annotated[
-        list[int] | None,
+    allowed_uid: Annotated[
+        int,
         typer.Option(
             "--allowed-uid",
             min=0,
-            help="Repeat for each ordinary UID permitted by the staged policy.",
+            help="The one ordinary UID permitted by this Collector instance.",
         ),
-    ] = None,
+    ] = 1000,
     collector_command: Annotated[
         Path,
         typer.Option(
@@ -343,7 +343,7 @@ def stage_collector_assets_command(
     try:
         target = install_collector_assets(
             output_directory,
-            allowed_uids=tuple(allowed_uids or (1000,)),
+            allowed_uids=(allowed_uid,),
             collector_command=collector_command,
             perf_path=perf_path,
         )

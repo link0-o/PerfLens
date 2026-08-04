@@ -375,8 +375,7 @@ def _parse_deployment_policy(
         or perf_candidate.name != "perf"
         or perf_metadata.st_uid not in ({0} if require_root_owned_tools else {os.geteuid()})
         or perf_metadata.st_mode & 0o022
-        or not uids
-        or len(uids) > 64
+        or len(uids) != 1
         or any(uid <= 0 for uid in uids)
         or not modes
         or any(mode not in _SUPPORTED_MODES for mode in modes)

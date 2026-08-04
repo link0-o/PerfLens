@@ -120,8 +120,9 @@ def main() -> None:
         assert f"allowed_uids = [{os.geteuid()}]" in policy_text
         assert "policy_version = 1" in policy_text
         assert "max_spool_bytes = 10737418240" in policy_text
-        assert "允许连接 Collector 的普通用户 UID" in policy_text
-        assert "Ordinary-user UIDs allowed to call the Collector" in policy_text
+        assert "exactly one UID is supported" in policy_text
+        assert "允许连接 Collector 的唯一普通用户 UID" in policy_text
+        assert "The only ordinary-user UID allowed to call this Collector" in policy_text
         assert f"ExecStart={perflens_collector} " in service_text
 
         config = _run(

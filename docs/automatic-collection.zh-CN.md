@@ -91,14 +91,14 @@ Skill 和 Agent 不得调用这条 sudo 命令。
 
 部署前编辑生成的 `collector.toml`：
 
-- 把 `allowed_uids` 改成实际允许调用的普通用户 UID；
+- 把 `allowed_uids` 改成唯一允许调用的普通用户 UID；当前不能填写多个；
 - 确认 `perf_path` 与本机一致；
 - 从 `record`、`stat` 开始，确认需要后再开放调度类模式；
 - 保持 `allow_other_target_uids = false`；
 - 不要把策略文件改成组可写或其他用户可写。
 
-部署器会把 `allowed_uids` 对应的用户加入 `perflens` 组；这些用户仍需重新登录，
-组身份才会生效。
+部署器会把这个唯一用户加入 `perflens` 组；该用户仍需重新登录，组身份才会生效。
+不要把多个用户手工加入该组来绕过策略，否则他们可读取同一 spool 中的组可读 Profile。
 
 模板服务使用独立 `perflens` 用户、`CAP_PERFMON`、只读系统目录、固定 `/run/perflens` 与 `/var/lib/perflens` 可写路径。它不会给 MCP Server capability。
 

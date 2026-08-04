@@ -20,9 +20,10 @@ spool_root = "/var/lib/perflens"
 # Absolute system perf executable. Usually unchanged; use `command -v perf` to locate it.
 perf_path = "/usr/bin/perf"
 
-# 允许连接 Collector 的普通用户 UID。用 id -u <用户名> 查询；可填写多个 UID。
-# Ordinary-user UIDs allowed to call the Collector. Use `id -u <user>`; multiple UIDs are allowed.
-# 示例 / Example: allowed_uids = [1000, 1001]
+# 允许连接 Collector 的唯一普通用户 UID。用 id -u <用户名> 查询；当前只允许一个 UID。
+# The only ordinary-user UID allowed to call this Collector. Use `id -u <user>`; exactly one UID is supported.
+# 多个用户共享同一 spool 会泄露组可读 Profile，因此共享实例会被拒绝。
+# A shared instance is rejected because group-readable profiles would leak across users.
 allowed_uids = [1000]
 
 # 允许的采集模式。建议先只开放 stat 和 record，确有需要后再增加其他模式。

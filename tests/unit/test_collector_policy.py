@@ -154,6 +154,7 @@ def test_broker_policy_limit_validation(tmp_path: Path) -> None:
         replace(base, policy_version=True),
         replace(base, allowed_uids=()),
         replace(base, allowed_uids=(-1,)),
+        replace(base, allowed_uids=(1000, 1001)),
         replace(base, allowed_modes=()),
         replace(base, max_duration_seconds=0),
         replace(base, max_duration_seconds=float("nan")),

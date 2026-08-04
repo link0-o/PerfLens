@@ -70,10 +70,10 @@ def validate_broker_policy(policy: CollectorBrokerPolicy) -> CollectorBrokerPoli
             f"Unsupported Collector policy version: {policy.policy_version}; "
             f"expected {COLLECTOR_POLICY_VERSION}"
         )
-    if not policy.allowed_uids or any(
+    if len(policy.allowed_uids) != 1 or any(
         not _is_integer(uid) or uid < 0 for uid in policy.allowed_uids
     ):
-        raise ValueError("Collector policy requires at least one non-negative allowed UID")
+        raise ValueError("Collector policy requires exactly one non-negative allowed UID")
     if not policy.allowed_modes or any(
         not _is_string(mode) or mode not in supported_modes
         for mode in policy.allowed_modes

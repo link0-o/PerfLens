@@ -27,3 +27,7 @@ fixed spool. It reserves against cumulative spool bytes, artifact count, and a
 filesystem free-space floor without deleting existing evidence. Policy bypass,
 cross-UID collection, command execution, spool escape, or quota bypass should be
 reported as a security vulnerability.
+
+Each Collector instance supports exactly one authorized ordinary UID. Adding
+multiple callers to the shared `perflens` group would expose group-readable
+profiles across users and is deliberately rejected.

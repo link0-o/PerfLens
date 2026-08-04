@@ -49,7 +49,7 @@ def test_project_skill_install_rejects_parent_symlink_escape(tmp_path: Path) -> 
 def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
     target = install_collector_assets(
         tmp_path / "collector-assets",
-        allowed_uids=(1001, 1000, 1001),
+        allowed_uids=(1000, 1000),
         collector_command=Path("/opt/perflens/bin/perflens-collector"),
         perf_path=Path("/usr/lib/linux-tools/perf"),
     )
@@ -60,15 +60,16 @@ def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
     }
     policy = (target / "collector.toml").read_text(encoding="utf-8")
     service = (target / "perflens-collector.service").read_text(encoding="utf-8")
-    assert "allowed_uids = [1000,1001]" in policy
+    assert "allowed_uids = [1000]" in policy
     assert "policy_version = 1" in policy
     assert 'perf_path = "/usr/lib/linux-tools/perf"' in policy
-    assert "允许连接 Collector 的普通用户 UID" in policy
-    assert "Ordinary-user UIDs allowed to call the Collector" in policy
+    assert "允许连接 Collector 的唯一普通用户 UID" in policy
+    assert "The only ordinary-user UID allowed to call this Collector" in policy
     assert "强烈建议保持 false" in policy
     assert "Security-sensitive; keep false" in policy
     assert "max_spool_bytes = 10737418240" in policy
     assert "PerfLens never deletes old evidence automatically" in policy
+    assert "exactly one UID is supported" in policy
     assert "ExecStart=/opt/perflens/bin/perflens-collector " in service
     with pytest.raises(PerfLensError) as captured:
         install_collector_assets(target)
@@ -78,6 +79,11 @@ def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
 def test_collector_asset_rendering_rejects_unsafe_deployment_values(tmp_path: Path) -> None:
     with pytest.raises(PerfLensError):
         install_collector_assets(tmp_path / "empty", allowed_uids=())
+    with pytest.raises(PerfLensError):
+        install_collector_assets(
+            tmp_path / "multiple-users",
+            allowed_uids=(1000, 1001),
+        )
     with pytest.raises(PerfLensError):
         install_collector_assets(
             tmp_path / "relative",
