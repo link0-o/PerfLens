@@ -80,6 +80,10 @@ git push origin v0.1.1
 每周检查 Action 固定版本和 uv 锁文件，但它创建的 PR 仍需正常审查并通过全部 CI，不能
 自动绕过门禁。
 
+发布用 wheel 和源码包会以源码提交时间作为 `SOURCE_DATE_EPOCH` 独立构建两次，再由
+`scripts/verify_python_reproducibility.py` 逐字节比较。只要任一包不同，Release 就会
+停止。遇到差异应检查构建输入、时间戳和构建后端，不能删掉比较步骤强行发布。
+
 已经发布的版本标签不要重复使用或移动。如果发现问题，应修复后发布新版本。
 
 ## 可选：发布到 PyPI

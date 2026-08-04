@@ -27,8 +27,8 @@
 |---|---|---|
 | 代码规范 | `ruff check .` | 通过 |
 | 严格类型 | `pyright` | 0 错误、0 警告 |
-| Python 3.12 | `pytest -q`，Python 3.12.13 | 上一次完整发布门禁 256 通过；本次未在本机重跑，仍需 CI 门禁 |
-| Python 3.13 | 隔离环境 `pytest -q` | 300 通过 |
+| Python 3.12 | 隔离环境 `pytest -q`，Python 3.12.13 | 309 通过 |
+| Python 3.13 | 隔离环境 `pytest -q` | 309 通过 |
 | 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.24%，通过 |
 | Skill | Skill 结构和打包测试 | 通过 |
 | Schema | 已提交 Schema 与 Contract 生成结果相等 | 通过 |
@@ -36,7 +36,7 @@
 | 漏洞扫描 | 对完全锁定运行依赖执行 `pip-audit` | 未发现已知漏洞 |
 | SBOM | uv CycloneDX 1.5 导出 | 通过 |
 | 工作流供应链 | Action 不可变固定 + 只读构建 + 隔离发布任务回归 | 通过 |
-| wheel/sdist | 全新临时目录构建和隔离安装 | 全部通过 |
+| wheel/sdist | 同一提交时间戳下独立构建两次、逐字节比较并隔离安装 | 可复现，全部通过 |
 | SHA-256 | wheel、sdist、两个 DEB、Skill、SBOM | 六项全部通过 |
 | Collector 健康协议 | 双向内核 peer 凭据 → 只读 `health` → 版本化就绪结果 | 授权、错误服务 UID、拒绝、遗留 Socket、部署等待和普通用户状态路径通过 |
 | 部署验收命令 | `accept-collector` → 内置负载 → 授权 stat 计划 → 至少一个实测指标 | 中文/JSON/文件输出及无实测指标拒绝路径通过可执行 perf Test Double 验证 |

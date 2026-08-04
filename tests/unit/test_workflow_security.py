@@ -134,3 +134,35 @@ def test_dependabot_monitors_action_pins_and_uv_lockfile() -> None:
         assert schedule.get("timezone") == "Asia/Shanghai"
         limit = update.get("open-pull-requests-limit")
         assert isinstance(limit, int) and 1 <= limit <= 10
+
+
+def test_published_python_packages_are_rebuilt_and_compared() -> None:
+    targets = (
+        ("ci.yml", "package"),
+        ("release.yml", "build-release-assets"),
+    )
+    workflows = _workflows()
+    for workflow_name, job_name in targets:
+        jobs = _jobs(workflows[workflow_name], label=workflow_name)
+        steps = _steps(jobs[job_name], label=f"{workflow_name}.{job_name}")
+        commands = tuple(step["run"] for step in steps if isinstance(step.get("run"), str))
+        builds = tuple(
+            command
+            for command in commands
+            if isinstance(command, str) and "uv build --no-sources" in command
+        )
+        assert len(builds) == 2
+        assert all(
+            'SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"' in command
+            for command in builds
+        )
+        assert "--out-dir dist" in builds[0]
+        assert "--out-dir /tmp/perflens-python-reproducible" in builds[1]
+        verifier_indexes = tuple(
+            index
+            for index, command in enumerate(commands)
+            if isinstance(command, str)
+            and "scripts/verify_python_reproducibility.py" in command
+        )
+        assert len(verifier_indexes) == 1
+        assert commands.index(builds[1]) < verifier_indexes[0]

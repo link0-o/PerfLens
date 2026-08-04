@@ -43,6 +43,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   permissions, then passes one named bundle to a separate publisher job whose
   only write-capable operation is `gh release create`. Weekly Dependabot checks
   now propose reviewed updates for immutable Action pins and the uv lockfile.
+- CI and Release now build wheel and source distributions twice with the source
+  commit timestamp as `SOURCE_DATE_EPOCH`, then reject the build unless both
+  copies are byte-for-byte identical. The comparison tool rejects symlink,
+  missing, empty, and oversized package inputs.
 - `perflens --help`, every user subcommand, and `perflens-admin --help` are now
   Chinese-first. Previously undocumented analysis limits and administrator
   archive controls now explain their units and safety boundaries; command and

@@ -108,7 +108,19 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
       - run: uv sync --all-groups --frozen
-      - run: uv build --no-sources
+      - name: Build deterministic Python packages
+        run: >-
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          uv build --no-sources --out-dir dist
+      - name: Rebuild Python packages independently
+        run: >-
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          uv build --no-sources --out-dir /tmp/perflens-python-reproducible
+      - name: Verify reproducible wheel and source distribution
+        run: >-
+          uv run python scripts/verify_python_reproducibility.py
+          --directory dist
+          --reproducible-directory /tmp/perflens-python-reproducible
       - run: >-
           uv export --locked --no-dev --no-emit-project
           --format requirements.txt --output-file build/runtime-requirements.txt

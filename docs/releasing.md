@@ -89,6 +89,12 @@ with a branch or movable major-version tag. Dependabot checks Action pins and
 the uv lockfile weekly, but its pull requests still require the normal review
 and full CI gates.
 
+The published wheel and source distribution are each built twice with the
+source commit timestamp supplied through `SOURCE_DATE_EPOCH`. The release stops
+unless `scripts/verify_python_reproducibility.py` confirms byte-for-byte
+identity. Treat a mismatch as a build-input or build-backend defect; do not skip
+the comparison to publish.
+
 ## Optional PyPI publication
 
 Configure a protected `pypi` GitHub environment and a PyPI Trusted Publisher

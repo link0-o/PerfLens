@@ -40,4 +40,5 @@ permission. The only `contents: write` job does not check out or run repository
 code; it downloads the verified same-run bundle with a pinned official Action
 and invokes `gh release create`. A regression test enforces these boundaries.
 Dependabot proposes weekly Action-pin and uv-lock updates for review; it does
-not auto-merge them.
+not auto-merge them. Published wheel and source distributions are independently
+rebuilt with the source commit timestamp and must be byte-for-byte identical.
