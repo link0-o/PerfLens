@@ -88,6 +88,15 @@ ls -l /run/perflens/collector.sock
 journalctl -u perflens-collector.service --since today
 ```
 
+普通用户可以用一条只读命令汇总检查这些状态：
+
+```bash
+perflens status --project /绝对路径/工作区
+```
+
+`collector.toml` 的 `policy_version = 1` 用于未来安全升级；缺失时兼容读取为版本 1，
+不支持的版本会在部署和服务启动前拒绝。
+
 正式策略默认位于 `/etc/perflens/collector.toml`。保持 `allow_other_target_uids = false`，先只开放 `stat` 和 `record`，并保持短时长、低频率和固定 spool。
 
 ## 内核权限

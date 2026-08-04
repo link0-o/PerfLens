@@ -36,6 +36,7 @@ from perflens.contracts.artifacts import (
     ProfileHotspotDelta,
     ProfileMetadata,
     ProjectRunArtifact,
+    RuntimeStatusArtifact,
     SetupArtifact,
     SourceContextArtifact,
     SourceResolutionArtifact,
@@ -76,6 +77,7 @@ MODELS = {
     "collection-plan.schema.json": CollectionPlanArtifact,
     "perf-stat-metric.schema.json": PerfStatMetric,
     "project-run.schema.json": ProjectRunArtifact,
+    "runtime-status.schema.json": RuntimeStatusArtifact,
     "setup.schema.json": SetupArtifact,
 }
 

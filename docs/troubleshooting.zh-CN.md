@@ -2,6 +2,40 @@
 
 简体中文 | [English](troubleshooting.md)
 
+## 先运行统一状态检查
+
+不确定问题出在哪一层时，先运行：
+
+```bash
+perflens status --project /绝对路径/你的项目
+```
+
+这条命令只读检查引导目录、Skill、MCP 配置片段、Collector 资产、Socket、当前登录
+会话的 `perflens` 组身份和本机 perf 条件。它不会采样或附加进程；显示“可进行真实
+短时验收”也不等于 perf 已经采集成功，仍需执行明确授权的 `verify-collector`。
+
+需要保存机器可读结果时使用：
+
+```bash
+perflens status \
+  --project /绝对路径/你的项目 \
+  --output perflens-status.json
+```
+
+## Collector Socket 不存在或当前用户不可访问
+
+- 确认管理员已经执行 `perflens-admin deploy`；
+- 使用 `systemctl status perflens-collector.service` 和 `journalctl` 查看服务错误；
+- 确认 `/run/perflens/collector.sock` 存在且属于 `perflens` 组；
+- 用户被加入组后必须重新登录，仅打开一个新子终端可能不会刷新组身份；
+- 不要通过让 MCP 或 Agent 使用 root 来绕过 Socket 权限。
+
+## Collector 配置版本不支持
+
+生成的 `collector.toml` 包含 `policy_version = 1`。缺少该字段的旧版配置按版本 1
+读取；其他版本会在部署或服务启动前被拒绝。不要为了绕过错误直接删除未知字段，
+应使用匹配版本的 PerfLens 重新生成配置并审查差异。
+
 ## 主动 perf 采样被拒绝
 
 PerfLens 会把 `perf` 的有限 stderr 作为 `EXTERNAL_TOOL_FAILED` 返回。请检查：
@@ -115,4 +149,3 @@ Skill 位于仓库的：
 ```
 
 Skill 和 MCP 是独立组件。发现 Skill 不代表 MCP 已经连接；请另外用 `codex mcp list` 检查名为 `perflens` 的 MCP Server。
-

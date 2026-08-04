@@ -77,6 +77,20 @@ def main() -> None:
         assert '"--allow-project-execution"' in (
             guided_setup / "codex-mcp.toml"
         ).read_text(encoding="utf-8")
+        status = _run(
+            perflens,
+            "status",
+            "--project",
+            str(project),
+            "--setup-directory",
+            "guided-setup",
+            "--collector-socket",
+            str(root / "missing.sock"),
+            "--perf-path",
+            "/bin/true",
+        )
+        assert "PerfLens 状态检查 (只读)" in status
+        assert "Skill: 就绪" in status
 
         collector_assets = root / "collector-assets"
         _run(
@@ -97,6 +111,7 @@ def main() -> None:
             encoding="utf-8"
         )
         assert f"allowed_uids = [{os.geteuid()}]" in policy_text
+        assert "policy_version = 1" in policy_text
         assert "允许连接 Collector 的普通用户 UID" in policy_text
         assert "Ordinary-user UIDs allowed to call the Collector" in policy_text
         assert f"ExecStart={perflens_collector} " in service_text

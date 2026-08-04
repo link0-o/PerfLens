@@ -34,6 +34,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   only a PID-bound plan to the Collector.
 - Bilingual Chinese/English field guidance in generated `collector.toml`
   policies, including tunable, fixed-path, and security-sensitive settings.
+- A versioned Collector policy format and Chinese-first `perflens status`
+  command for read-only project, MCP, socket, group, and perf readiness checks.
 
 ### Changed
 

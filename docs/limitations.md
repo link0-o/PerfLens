@@ -19,12 +19,14 @@ perf 6.12.90 and leaves no output; successful record/stat/sched/lock/off-CPU
 integration uses an executable test double. PerfLens never requests sudo or
 changes perf security policy.
 
-Automatic collection currently accepts PID targets only. It deliberately does not
-let a privileged Collector start user-provided commands, accept arbitrary output
-paths, or perform system-wide sampling. The Unix-socket plan/peer/policy/spool path
-is integration-tested with an executable perf test double; successful privileged
-sampling still requires an administrator-approved host configuration and a real
-acceptance run.
+The privileged Collector accepts PID targets only. For a confirmed current-project
+workload, an ordinary-user coordinator may launch one in-project executable, obtain
+its PID internally, and submit the same PID-only plan. The Collector never receives
+or launches that command. Interactive programs, arbitrary environments, system-wide
+sampling, and daemonizing workloads without a foreground mode remain unsupported.
+The Unix-socket plan/peer/policy/spool path is integration-tested with an executable
+perf test double; successful privileged sampling still requires an
+administrator-approved host configuration and a real acceptance run.
 
 Symbolization requires a verified module offset and a matching module or debug
 file. PerfLens does not guess PIE/ASLR relocation from a runtime address. The

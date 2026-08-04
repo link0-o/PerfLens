@@ -22,6 +22,10 @@ perflens setup --project /absolute/path/to/project
 
 `setup` installs or recognizes the bundled Skill and creates `perflens-setup/` inside the selected project with a Codex MCP snippet, a read-only capability report, Chinese and English next steps, and a versioned setup artifact. It never invokes sudo, changes sysctl/capabilities, overwrites user Codex configuration, or starts the privileged Collector.
 
+Run `perflens status --project /absolute/path/to/project` for a read-only
+Chinese-first summary of onboarding, MCP, Collector, group, socket, and perf
+readiness. It does not sample a target or modify the host.
+
 Copy the complete generated MCP block into `~/.codex/config.toml`, or into
 the project's `.codex/config.toml` after trusting that project. Preserve any
 existing configuration, restart Codex, and confirm it with `codex mcp list`.

@@ -18,6 +18,7 @@ from typing import Any, Literal, cast
 
 from perflens import __version__
 from perflens.artifacts.filesystem import write_text_atomic
+from perflens.collector_broker.policy import COLLECTOR_POLICY_VERSION
 from perflens.contracts.artifacts import CollectorDeploymentArtifact
 from perflens.distribution.collector import install_collector_assets
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -257,6 +258,7 @@ def _parse_deployment_policy(
         )
     values = cast(dict[str, Any], section)
     allowed_keys = {
+        "policy_version",
         "spool_root",
         "perf_path",
         "allowed_uids",
@@ -278,6 +280,9 @@ def _parse_deployment_policy(
             details={"fields": sorted(set(values) - allowed_keys)},
         )
     try:
+        policy_version = values.get("policy_version", COLLECTOR_POLICY_VERSION)
+        if isinstance(policy_version, bool) or not isinstance(policy_version, int):
+            raise TypeError("policy_version must be an integer")
         spool = Path(str(values["spool_root"])).expanduser().resolve(strict=False)
         perf_candidate = Path(str(values["perf_path"])).expanduser()
         perf = perf_candidate.resolve(strict=True)
@@ -309,7 +314,8 @@ def _parse_deployment_policy(
     perf_metadata = perf.stat()
     allow_other = values.get("allow_other_target_uids", False)
     if (
-        spool != expected_spool.resolve(strict=False)
+        policy_version != COLLECTOR_POLICY_VERSION
+        or spool != expected_spool.resolve(strict=False)
         or not perf.is_file()
         or not os.access(perf, os.X_OK)
         or perf_candidate.name != "perf"

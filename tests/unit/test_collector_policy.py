@@ -43,6 +43,7 @@ def test_policy_must_be_immutable_to_non_root_service_owner(tmp_path: Path) -> N
 
     policy_path.chmod(0o444)
     policy = load_broker_policy(policy_path)
+    assert policy.policy_version == 1
     assert policy.allowed_uids == (os.geteuid(),)
     assert policy.allowed_modes == ("record", "stat")
 
@@ -93,6 +94,7 @@ def test_policy_loader_rejects_invalid_field_types(tmp_path: Path) -> None:
         'spool_root = "/tmp"\n'
         'perf_path = "/bin/true"\n'
         'allowed_uids = ["not-an-integer"]\n'
+        'policy_version = "1"\n'
         'allow_other_target_uids = "false"\n',
         encoding="utf-8",
     )
@@ -111,6 +113,7 @@ def test_broker_policy_limit_validation(tmp_path: Path) -> None:
         allowed_uids=(os.geteuid(),),
     )
     invalid_policies = (
+        replace(base, policy_version=2),
         replace(base, allowed_uids=()),
         replace(base, allowed_uids=(-1,)),
         replace(base, allowed_modes=()),

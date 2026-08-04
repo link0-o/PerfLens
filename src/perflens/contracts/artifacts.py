@@ -529,6 +529,34 @@ class CollectorDeploymentArtifact(ContractModel):
     next_steps: tuple[str, ...] = ()
 
 
+class RuntimeStatusArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    status_id: str = Field(pattern=r"^status-[a-f0-9]{16}$")
+    checked_at: str
+    project_root: str
+    setup_directory: str
+    setup_status: Literal["missing", "incomplete", "ready"]
+    skill_status: Literal["missing", "incomplete", "ready"]
+    mcp_config_status: Literal["missing", "ready"]
+    automatic_collection_requested: bool
+    collector_assets_status: Literal["not_requested", "missing", "incomplete", "ready"]
+    collector_socket: str
+    collector_socket_status: Literal["missing", "invalid", "inaccessible", "ready"]
+    collector_group_status: Literal["missing", "not_member", "member"]
+    capability_id: str
+    host_collection_status: Literal["available", "conditional", "blocked"]
+    automatic_collection_status: Literal[
+        "not_configured",
+        "configuration_incomplete",
+        "collector_unavailable",
+        "access_denied",
+        "ready_for_verification",
+    ]
+    issues: tuple[str, ...] = ()
+    next_steps: tuple[str, ...] = ()
+
+
 class SetupArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     perflens_version: str

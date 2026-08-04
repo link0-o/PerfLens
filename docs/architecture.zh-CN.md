@@ -11,7 +11,9 @@ ProfileAdapter/ProfileStream ─→ 轻量领域聚合
 Benchmark/Metric Adapter       ─→ 确定性比较
 Symbol Provider                ─→ 已验证的源码定位
 手工采集服务                   ─→ 有界命令执行器 ─→ 系统 perf
+普通用户项目启动器 ─→ 新 PID ─┐
 自动 PID 计划 ─→ Unix Socket ─→ 受限 Collector ─→ 固定 spool
+管理员显式部署 ─→ 版本化 TOML ─→ perflens-admin ─→ systemd
 ```
 
 ## Core 与边界层
@@ -64,6 +66,15 @@ MCP 在服务端分别控制允许根目录、产物写入、进程执行、主�
 `perf stat` 输出由独立 Metric Adapter 处理，不混入栈 ProfileAdapter 层级。
 
 自动采集采用不同的权限边界：MCP 生成短期、单次、绑定 PID 所有者和启动时间的计划；可选 Collector 通过 Unix Socket 对等凭据和独立只读策略再次校验，只接受 PID，且只能写固定 spool。Collector 不接受 shell、任意命令、任意输出路径或全系统目标。MCP 与 Skill 始终保持普通用户权限。
+
+当前项目自动优化时，普通用户启动器可以在用户确认后启动一个项目内可执行文件，
+内部取得新 PID，再走同一条 PID 计划链路。Collector 不会收到或启动项目命令。
+`perflens-admin` 只由管理员显式调用，读取版本化、数据化的 Collector TOML；MCP、
+Skill 和 Agent 不会调用 sudo 或部署系统服务。
+
+`perflens status` 是独立的只读诊断边界。它检查项目引导、Skill、MCP 配置片段、
+Collector 资产、Socket、当前登录会话用户组和主机 perf 条件，但不会采样、连接目标
+进程或宣称真实 Collector 已经通过验收。
 
 ## 依赖方向
 

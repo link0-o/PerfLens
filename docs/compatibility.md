@@ -13,7 +13,8 @@
 | MCP | Official Python SDK 2.x, local stdio transport |
 | Skill | Repository skill under `.agents/skills`, validated by `skill-creator` |
 | Active collection | perf record/stat/sched/lock and sched-switch off-CPU evidence; default off and permission dependent |
-| Automatic collection | Linux Unix socket with `SO_PEERCRED`; PID-only Collector Broker; systemd template provided |
+| Automatic collection | Ordinary-user project launcher plus PID-only Linux Collector Broker using `SO_PEERCRED`; systemd template provided |
+| Collector policy | Version 1; missing version is accepted as legacy version 1, unsupported versions are rejected |
 | Artifact schema | 1.0 |
 
 PerfLens does not parse `perf.data` directly. Binary compatibility is delegated
@@ -26,3 +27,9 @@ The Collector Broker integration is tested end-to-end with a real Unix socket an
 an executable perf test double. This host still cannot prove a successful real
 privileged sample because `perf_event_paranoid=3` and no approved Collector service
 has been installed.
+
+Run `perflens status --project /absolute/path/to/project` for a read-only summary
+of onboarding files, Skill, generated MCP configuration, Collector assets,
+socket access, group membership, and host perf capability. A ready status means
+the system is ready for an explicit real probe, not that sampling success has
+already been proven.

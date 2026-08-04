@@ -1,0 +1,155 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "automatic_collection_requested": {
+      "title": "Automatic Collection Requested",
+      "type": "boolean"
+    },
+    "automatic_collection_status": {
+      "enum": [
+        "not_configured",
+        "configuration_incomplete",
+        "collector_unavailable",
+        "access_denied",
+        "ready_for_verification"
+      ],
+      "title": "Automatic Collection Status",
+      "type": "string"
+    },
+    "capability_id": {
+      "title": "Capability Id",
+      "type": "string"
+    },
+    "checked_at": {
+      "title": "Checked At",
+      "type": "string"
+    },
+    "collector_assets_status": {
+      "enum": [
+        "not_requested",
+        "missing",
+        "incomplete",
+        "ready"
+      ],
+      "title": "Collector Assets Status",
+      "type": "string"
+    },
+    "collector_group_status": {
+      "enum": [
+        "missing",
+        "not_member",
+        "member"
+      ],
+      "title": "Collector Group Status",
+      "type": "string"
+    },
+    "collector_socket": {
+      "title": "Collector Socket",
+      "type": "string"
+    },
+    "collector_socket_status": {
+      "enum": [
+        "missing",
+        "invalid",
+        "inaccessible",
+        "ready"
+      ],
+      "title": "Collector Socket Status",
+      "type": "string"
+    },
+    "host_collection_status": {
+      "enum": [
+        "available",
+        "conditional",
+        "blocked"
+      ],
+      "title": "Host Collection Status",
+      "type": "string"
+    },
+    "issues": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Issues",
+      "type": "array"
+    },
+    "mcp_config_status": {
+      "enum": [
+        "missing",
+        "ready"
+      ],
+      "title": "Mcp Config Status",
+      "type": "string"
+    },
+    "next_steps": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "project_root": {
+      "title": "Project Root",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "setup_directory": {
+      "title": "Setup Directory",
+      "type": "string"
+    },
+    "setup_status": {
+      "enum": [
+        "missing",
+        "incomplete",
+        "ready"
+      ],
+      "title": "Setup Status",
+      "type": "string"
+    },
+    "skill_status": {
+      "enum": [
+        "missing",
+        "incomplete",
+        "ready"
+      ],
+      "title": "Skill Status",
+      "type": "string"
+    },
+    "status_id": {
+      "pattern": "^status-[a-f0-9]{16}$",
+      "title": "Status Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "status_id",
+    "checked_at",
+    "project_root",
+    "setup_directory",
+    "setup_status",
+    "skill_status",
+    "mcp_config_status",
+    "automatic_collection_requested",
+    "collector_assets_status",
+    "collector_socket",
+    "collector_socket_status",
+    "collector_group_status",
+    "capability_id",
+    "host_collection_status",
+    "automatic_collection_status"
+  ],
+  "title": "RuntimeStatusArtifact",
+  "type": "object"
+}

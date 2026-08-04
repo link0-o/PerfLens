@@ -11,7 +11,9 @@ ProfileAdapter/ProfileStream ─→ lightweight domain aggregation
 Benchmark/Metric adapters      ─→ deterministic comparison
 Symbol providers               ─→ verified source resolution
 Manual collection service      ─→ bounded command runner ─→ system perf
+Ordinary-user project launcher ─→ new PID ─┐
 Automatic PID plan ─→ Unix socket ─→ restricted Collector ─→ fixed spool
+Explicit admin deploy ─→ versioned TOML ─→ perflens-admin ─→ systemd
 ```
 
 The domain layer uses frozen/slotted records, integer Frame IDs, and standard
@@ -52,3 +54,13 @@ short-lived, single-use plan bound to PID owner and process start time. The opti
 Collector revalidates it using Unix peer credentials and an independent immutable
 policy. It accepts no shell, arbitrary command, environment, output path, or
 system-wide target. The MCP server and Skill remain unprivileged.
+
+For a confirmed current-project workload, an ordinary-user coordinator launches
+one in-project executable, captures the new PID, and uses the same PID-plan path.
+The Collector never receives or starts the workload command. `perflens-admin` is
+an explicitly invoked administrator boundary that accepts a versioned data-only
+policy; the MCP server, Skill, and Agent never invoke it.
+
+`perflens status` is a separate read-only diagnostic boundary. It summarizes
+onboarding files, Skill and MCP snippets, staged assets, socket access, current
+login-group membership, and host perf conditions without sampling a target.

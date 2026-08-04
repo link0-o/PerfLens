@@ -82,6 +82,15 @@ perflens setup \
 
 每次引导必须使用一个不存在的新输出目录，已有文件不会被覆盖。
 
+运行统一的只读状态检查：
+
+```bash
+perflens status --project /绝对路径/你的项目
+```
+
+它会用中文指出引导、Skill、MCP、Collector 资产、Socket、用户组或 perf 权限中
+尚未完成的部分，不会执行采样或修改系统。
+
 ## 第三步：开始分析
 
 只使用 CLI 分析 folded Profile：

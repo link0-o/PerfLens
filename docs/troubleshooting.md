@@ -1,5 +1,28 @@
 # Troubleshooting
 
+## Start with one read-only status command
+
+Run:
+
+```bash
+perflens status --project /absolute/path/to/project
+```
+
+It checks onboarding, Skill and MCP snippets, staged Collector assets, the Unix
+socket, current login-group membership, and host perf conditions. It never
+samples or attaches to a process. `ready_for_verification` means an explicit
+real `verify-collector` probe is the next step, not that sampling has already
+succeeded.
+
+If the socket is missing or inaccessible, inspect the service and journal,
+confirm the socket belongs to the `perflens` group, and start a new login session
+after group membership changes. Do not run the Agent or MCP server as root.
+
+Generated policies contain `policy_version = 1`. A missing version is accepted
+as legacy version 1; unsupported versions are rejected before deployment or
+Collector startup. Regenerate the policy with a matching PerfLens release rather
+than deleting unfamiliar fields.
+
 [简体中文](troubleshooting.zh-CN.md) | English
 
 ## Active perf collection is denied

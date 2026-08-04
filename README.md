@@ -61,6 +61,12 @@ perflens setup \
 
 Follow the generated `NEXT_STEPS.md`. See [Installation and first use](INSTALL.md) for the complete beginner flow.
 
+Run a read-only readiness summary at any time:
+
+```bash
+perflens status --project /absolute/path/to/project
+```
+
 Both commands install `perflens`, `perflens-mcp`, the optional
 `perflens-collector`, and the explicit administrator entry point
 `perflens-admin`. Confirm the release:

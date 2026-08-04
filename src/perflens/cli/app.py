@@ -38,11 +38,12 @@ from perflens.collection.planning import (
     create_collection_plan,
 )
 from perflens.collector_broker.client import CollectorBrokerClient
-from perflens.contracts.artifacts import ErrorArtifact, ErrorBody
+from perflens.contracts.artifacts import ErrorArtifact, ErrorBody, RuntimeStatusArtifact
 from perflens.distribution.codex import render_codex_config
 from perflens.distribution.collector import install_collector_assets
 from perflens.distribution.onboarding import run_project_setup
 from perflens.distribution.skill import install_project_skill
+from perflens.distribution.status import inspect_runtime_status
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.domain.models import ResourceLimits
 from perflens.reporting.diff import render_benchmark_comparison, render_profile_comparison
@@ -148,6 +149,51 @@ def doctor_command(
     typer.echo(
         json.dumps(artifact.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True)
     )
+
+
+@app.command("status")
+def status_command(
+    project_root: Annotated[
+        Path,
+        typer.Option("--project", file_okay=False, help="Project root to inspect."),
+    ] = Path("."),
+    setup_directory: Annotated[
+        Path,
+        typer.Option(
+            "--setup-directory",
+            file_okay=False,
+            help="Setup directory inside the project.",
+        ),
+    ] = Path("perflens-setup"),
+    collector_socket: Annotated[
+        Path,
+        typer.Option("--collector-socket", dir_okay=False),
+    ] = Path("/run/perflens/collector.sock"),
+    perf_path: Annotated[
+        Path | None,
+        typer.Option("--perf-path", dir_okay=False, help="Explicit system perf executable."),
+    ] = None,
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Optional new JSON output path."),
+    ] = None,
+) -> None:
+    """Read-only Chinese-first project and Collector readiness summary."""
+    try:
+        artifact = inspect_runtime_status(
+            project_root,
+            setup_directory=setup_directory,
+            collector_socket=collector_socket,
+            perf_path=perf_path,
+        )
+        if output_path is not None:
+            safe_output = validate_new_output_file(output_path)
+            write_json_new_atomic(artifact, safe_output, max_output_bytes=1 << 20)
+            typer.echo(str(safe_output))
+            return
+    except PerfLensError as exc:
+        _fail(exc)
+    _render_status_chinese(artifact)
 
 
 @app.command("setup")
@@ -888,6 +934,67 @@ def _parse_address(value: str, field: str) -> int:
             details={"field": field},
         )
     return parsed
+
+
+def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
+    setup_labels = {"missing": "未生成", "incomplete": "不完整/不安全", "ready": "就绪"}
+    skill_labels = {"missing": "未安装", "incomplete": "不完整/不安全", "ready": "就绪"}
+    mcp_labels = {"missing": "未生成", "ready": "已生成 (仍需合并到 Codex 配置)"}
+    asset_labels = {
+        "not_requested": "未请求",
+        "missing": "缺失",
+        "incomplete": "不完整/不安全",
+        "ready": "就绪",
+    }
+    socket_labels = {
+        "missing": "不存在",
+        "invalid": "不是安全 Unix Socket",
+        "inaccessible": "当前用户不可访问",
+        "ready": "可访问",
+    }
+    group_labels = {"missing": "系统组不存在", "not_member": "当前会话未加入", "member": "已加入"}
+    host_labels = {"available": "可用", "conditional": "部分受限", "blocked": "当前受阻"}
+    automatic_labels = {
+        "not_configured": "未配置",
+        "configuration_incomplete": "配置不完整",
+        "collector_unavailable": "Collector 尚不可用",
+        "access_denied": "当前会话无权访问 Collector",
+        "ready_for_verification": "可进行真实短时验收 (尚未证明采集成功)",
+    }
+    issue_labels = {
+        "setup_missing": "尚未生成项目引导文件。",
+        "setup_unsafe": "引导目录是符号链接或不是目录。",
+        "setup_artifact_missing": "缺少 setup.json。",
+        "setup_artifact_invalid": "setup.json 无效或超过大小限制。",
+        "setup_identity_mismatch": "setup.json 与当前项目或目录不匹配。",
+        "skill_missing": "项目 Skill 尚未安装。",
+        "skill_incomplete": "项目 Skill 不完整或路径不安全。",
+        "mcp_config_missing": "缺少 Codex MCP 配置片段。",
+        "collector_assets_missing": "缺少 Collector 部署资产。",
+        "collector_assets_incomplete": "Collector 部署资产不完整或路径不安全。",
+        "collector_socket_missing": "Collector Socket 尚未创建。",
+        "collector_socket_invalid": "Collector Socket 路径无效。",
+        "collector_socket_inaccessible": "当前用户无法访问 Collector Socket。",
+        "collector_group_missing": "perflens 系统组尚未创建。",
+        "collector_group_not_member": "当前登录会话尚未加入 perflens 组。",
+        "host_collection_conditional": "本机普通用户 perf 权限仍需真实验收。",
+        "host_collection_blocked": "本机普通用户 perf 权限诊断为受阻; Collector 权限需另行验收。",
+    }
+    typer.echo("PerfLens 状态检查 (只读)")
+    typer.echo(f"项目: {artifact.project_root}")
+    typer.echo(f"引导目录: {setup_labels[artifact.setup_status]}")
+    typer.echo(f"Skill: {skill_labels[artifact.skill_status]}")
+    typer.echo(f"MCP 配置片段: {mcp_labels[artifact.mcp_config_status]}")
+    typer.echo(f"Collector 资产: {asset_labels[artifact.collector_assets_status]}")
+    typer.echo(f"Collector Socket: {socket_labels[artifact.collector_socket_status]}")
+    typer.echo(f"perflens 用户组: {group_labels[artifact.collector_group_status]}")
+    typer.echo(f"本机 perf 权限: {host_labels[artifact.host_collection_status]}")
+    typer.echo(f"自动采集: {automatic_labels[artifact.automatic_collection_status]}")
+    issues = artifact.issues
+    if issues:
+        typer.echo("问题与提示:")
+        for issue in issues:
+            typer.echo(f"- {issue_labels.get(issue, issue)}")
 
 
 def _fail(error: PerfLensError) -> NoReturn:

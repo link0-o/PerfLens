@@ -242,6 +242,8 @@ def test_admin_deploy_rejects_unsafe_policy_and_symlink(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "replacement",
     [
+        "policy_version = 2\n",
+        "policy_version = true\n",
         "unknown = true\n",
         "allowed_uids = [0]\n",
         'socket_mode = "0666"\n',

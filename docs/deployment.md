@@ -46,6 +46,12 @@ returns a versioned JSON result. It does not alter sysctl/capabilities or run
 commands from the config. The staged unit and sysusers files remain audit
 copies; the deployer renders trusted packaged templates.
 
+After login-group changes, ordinary users can run `perflens status --project
+/absolute/path/to/workspace` for one read-only readiness summary. Generated
+policies carry `policy_version = 1`; a missing field is treated as legacy
+version 1, while unsupported versions are rejected before deployment and
+Collector startup.
+
 `verify-collector` performs a real, policy-bounded perf-stat collection of at most five seconds. It requires both documented authorization tokens and an explicitly selected PID; it is not a read-only health check.
 
 Production releases should ship separate `perflens` and `perflens-collector` packages. DEB/RPM installers must be offline-reproducible, preserve administrator configuration on upgrade, avoid silently changing sysctl, and never grant `CAP_SYS_ADMIN` by default. Host-level Collector plus a controlled Unix socket is preferred over a privileged container.

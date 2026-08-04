@@ -61,6 +61,7 @@ def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
     policy = (target / "collector.toml").read_text(encoding="utf-8")
     service = (target / "perflens-collector.service").read_text(encoding="utf-8")
     assert "allowed_uids = [1000,1001]" in policy
+    assert "policy_version = 1" in policy
     assert 'perf_path = "/usr/lib/linux-tools/perf"' in policy
     assert "允许连接 Collector 的普通用户 UID" in policy
     assert "Ordinary-user UIDs allowed to call the Collector" in policy

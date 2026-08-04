@@ -2,11 +2,11 @@
 
 [简体中文](release-readiness.zh-CN.md) | English
 
-This record maps the final implementation to the planning document's Definition of Done. It records commands that were actually run locally through 2026-08-02; CI configuration is not presented as a completed remote CI run.
+This record maps the final implementation to the planning document's Definition of Done. It records commands that were actually run locally through 2026-08-04; CI configuration is not presented as a completed remote CI run.
 
 ## Functional scope
 
-Milestones 0 through 10 are implemented: folded/perf-script/perf.data analysis, exact Self/Inclusive and call paths, ELF/DWARF providers, candidate-only evidence, JSON/Markdown reporting, typed MCP, repository Skill, Profile/Benchmark comparisons, supported benchmark adapters, explicitly authorized active collection, and policy-bounded automatic PID collection through a separate Collector Broker.
+Milestones 0 through 10 are implemented: folded/perf-script/perf.data analysis, exact Self/Inclusive and call paths, ELF/DWARF providers, candidate-only evidence, JSON/Markdown reporting, typed MCP, repository Skill, Profile/Benchmark comparisons, supported benchmark adapters, explicitly authorized active collection, and policy-bounded automatic PID collection through a separate Collector Broker. Project onboarding now also includes a versioned Collector policy and a read-only runtime-readiness status artifact.
 
 The intentionally excluded product areas remain excluded: LLM APIs, custom agent loops, Web UI, source patching, a benchmark runner, production monitoring, direct perf.data parsing, and application-specific rules.
 
@@ -16,9 +16,9 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 |---|---|---|
 | Lint | `ruff check .` | passed |
 | Strict types | `pyright` | 0 errors, 0 warnings |
-| Python 3.13 | isolated `pytest -q` environment | 177 passed |
-| Python 3.12 | `pytest -q` on 3.12.13 | 177 passed |
-| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.04%, passed |
+| Python 3.13 | isolated `pytest -q` environment | 192 passed |
+| Python 3.12 | `pytest -q` on 3.12.13 | 192 passed |
+| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.37%, passed |
 | Skill | structure and package tests | passed |
 | Schemas | checked-in schema equality test | passed |
 | Dependency lock | `uv export --locked` | passed |

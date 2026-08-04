@@ -118,6 +118,43 @@ def test_cli_analyzes_folded_profile(fixture_root: Path, tmp_path: Path) -> None
     assert payload["hotspots"][0]["symbol"] == "compute"
 
 
+def test_cli_status_is_chinese_first_and_can_write_json(tmp_path: Path) -> None:
+    displayed = runner.invoke(
+        app,
+        [
+            "status",
+            "--project",
+            str(tmp_path),
+            "--collector-socket",
+            str(tmp_path / "missing.sock"),
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+    assert displayed.exit_code == 0, displayed.output
+    assert "PerfLens 状态检查 (只读)" in displayed.output
+    assert "引导目录: 未生成" in displayed.output
+    assert "自动采集: 未配置" in displayed.output
+
+    output = tmp_path / "status.json"
+    written = runner.invoke(
+        app,
+        [
+            "status",
+            "--project",
+            str(tmp_path),
+            "--collector-socket",
+            str(tmp_path / "missing.sock"),
+            "--perf-path",
+            "/bin/true",
+            "--output",
+            str(output),
+        ],
+    )
+    assert written.exit_code == 0, written.output
+    assert json.loads(output.read_text(encoding="utf-8"))["schema_version"] == "1.0"
+
+
 def test_cli_refuses_to_overwrite_source(tmp_path: Path) -> None:
     source = tmp_path / "input.folded"
     source.write_text("main 1\n")

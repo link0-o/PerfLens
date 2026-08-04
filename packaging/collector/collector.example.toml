@@ -8,6 +8,10 @@
 
 [collector]
 
+# 策略格式版本。用于拒绝尚不支持的新格式；通常不要修改。
+# Policy format version. Used to reject unsupported future formats; usually unchanged.
+policy_version = 1
+
 # 采集产物的固定保存目录。一键部署目前要求保持此值，不要随意修改。
 # Fixed output spool. The one-command deployer currently requires this exact value.
 spool_root = "/var/lib/perflens"

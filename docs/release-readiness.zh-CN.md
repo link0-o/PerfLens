@@ -2,7 +2,7 @@
 
 简体中文 | [English](release-readiness.md)
 
-本文把最终实现与项目 Definition of Done 对应起来。表中的本地验证更新到 2026-08-02；工作流配置本身不等于远程 GitHub Actions 已经成功运行。
+本文把最终实现与项目 Definition of Done 对应起来。表中的本地验证更新到 2026-08-04；工作流配置本身不等于远程 GitHub Actions 已经成功运行。
 
 ## 功能范围
 
@@ -17,6 +17,7 @@
 - Profile/Benchmark 比较及常见 Benchmark JSON Adapter；
 - 默认关闭、必须明确授权的主动采集。
 - 通过独立 Collector Broker 执行的、策略约束的自动 PID 采集。
+- 带版本的 Collector 策略，以及不执行采集、不修改系统的运行就绪状态报告。
 
 项目仍然明确不包含：LLM API、自研 Agent 循环、Web UI、自动修改源码、Benchmark 执行器、生产监控、直接解析 `perf.data` 二进制以及面向特定应用的规则。
 
@@ -26,9 +27,9 @@
 |---|---|---|
 | 代码规范 | `ruff check .` | 通过 |
 | 严格类型 | `pyright` | 0 错误、0 警告 |
-| Python 3.12 | `pytest -q`，Python 3.12.13 | 177 通过 |
-| Python 3.13 | 隔离环境 `pytest -q` | 177 通过 |
-| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.04%，通过 |
+| Python 3.12 | `pytest -q`，Python 3.12.13 | 192 通过 |
+| Python 3.13 | 隔离环境 `pytest -q` | 192 通过 |
+| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.37%，通过 |
 | Skill | Skill 结构和打包测试 | 通过 |
 | Schema | 已提交 Schema 与 Contract 生成结果相等 | 通过 |
 | 依赖锁 | `uv export --locked` | 通过 |

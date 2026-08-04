@@ -11,12 +11,15 @@ from typing import Any, cast
 from perflens.collection.collector import DEFAULT_STAT_EVENTS, CollectionMode
 from perflens.domain.errors import ErrorCode, PerfLensError
 
+COLLECTOR_POLICY_VERSION = 1
+
 
 @dataclass(frozen=True, slots=True)
 class CollectorBrokerPolicy:
     spool_root: Path
     perf_path: Path
     allowed_uids: tuple[int, ...]
+    policy_version: int = COLLECTOR_POLICY_VERSION
     allowed_modes: tuple[CollectionMode, ...] = ("record", "stat")
     allow_other_target_uids: bool = False
     max_duration_seconds: float = 30.0
@@ -55,6 +58,11 @@ def validate_broker_policy(policy: CollectorBrokerPolicy) -> CollectorBrokerPoli
     spool_root = _secure_spool_root(policy.spool_root)
     perf_path = _executable(policy.perf_path)
     supported_modes = {"record", "stat", "sched", "lock", "off_cpu"}
+    if policy.policy_version != COLLECTOR_POLICY_VERSION:
+        raise ValueError(
+            f"Unsupported Collector policy version: {policy.policy_version}; "
+            f"expected {COLLECTOR_POLICY_VERSION}"
+        )
     if not policy.allowed_uids or any(uid < 0 for uid in policy.allowed_uids):
         raise ValueError("Collector policy requires at least one non-negative allowed UID")
     if not policy.allowed_modes or any(
@@ -93,6 +101,7 @@ def validate_broker_policy(policy: CollectorBrokerPolicy) -> CollectorBrokerPoli
         spool_root=spool_root,
         perf_path=perf_path,
         allowed_uids=tuple(sorted(set(policy.allowed_uids))),
+        policy_version=policy.policy_version,
         allowed_modes=tuple(dict.fromkeys(policy.allowed_modes)),
         allow_other_target_uids=policy.allow_other_target_uids,
         max_duration_seconds=policy.max_duration_seconds,
@@ -107,6 +116,7 @@ def validate_broker_policy(policy: CollectorBrokerPolicy) -> CollectorBrokerPoli
 
 def _parse_policy(section: dict[str, Any]) -> CollectorBrokerPolicy:
     allowed_keys = {
+        "policy_version",
         "spool_root",
         "perf_path",
         "allowed_uids",
@@ -141,6 +151,9 @@ def _parse_policy(section: dict[str, Any]) -> CollectorBrokerPolicy:
             if isinstance(artifact_mode_raw, str)
             else int(artifact_mode_raw)
         )
+        policy_version = section.get("policy_version", COLLECTOR_POLICY_VERSION)
+        if isinstance(policy_version, bool) or not isinstance(policy_version, int):
+            raise TypeError("policy_version must be an integer")
         allow_other = section.get("allow_other_target_uids", False)
         if not isinstance(allow_other, bool):
             raise TypeError("allow_other_target_uids must be boolean")
@@ -148,6 +161,7 @@ def _parse_policy(section: dict[str, Any]) -> CollectorBrokerPolicy:
             spool_root=Path(str(section["spool_root"])),
             perf_path=Path(str(section["perf_path"])),
             allowed_uids=tuple(int(uid) for uid in section["allowed_uids"]),
+            policy_version=policy_version,
             allowed_modes=cast(tuple[CollectionMode, ...], raw_modes),
             allow_other_target_uids=allow_other,
             max_duration_seconds=float(section.get("max_duration_seconds", 30.0)),
