@@ -347,6 +347,7 @@ def _chinese_guide(
 ) -> str:
     layout_note = _chinese_layout_note(admin_command, collector_command)
     policy_path = output / "collector-assets" / "collector.toml"
+    status_command = _status_command(project, output)
     dry_run_command = shlex.join(
         (str(admin_command), "deploy", "--config", str(policy_path), "--dry-run")
     )
@@ -390,7 +391,7 @@ perflens setup --project <项目> --prepare-collector --automatic-collection
     )
     project_section = (
         f"""
-## 4. 直接优化当前项目
+## 5. 直接优化当前项目
 
 MCP 配置已包含自动采集和普通用户项目执行能力。Collector 部署并验收后，可以说：
 
@@ -405,7 +406,7 @@ PID 并交给 Collector。用户不需要查找或输入 PID。
 """
         if automatic_collection
         else """
-## 4. 直接优化当前项目
+## 5. 直接优化当前项目
 
 本次 MCP 配置没有开启项目自动运行。需要该能力时，请使用一个新的输出目录重新运行
 `perflens setup --automatic-collection`，并先完成 Collector 部署。
@@ -437,14 +438,25 @@ PerfLens Skill 位于项目的 `.agents/skills/{SKILL_NAME}`。可以对 Codex �
 
 综合状态：`{_collection_status_chinese(capabilities)}`。这只是权限诊断，不是成功采样证明。
 {collector_section}
+## 4. 一条命令检查当前状态
+
+以后不需要重新记住部署排错命令，直接运行本次引导对应的只读检查：
+
+```bash
+{status_command}
+```
+
+如果运行 setup 时使用了自定义输出目录，必须保留这里的 `--setup-directory`，否则可能
+检查到另一次旧引导。该命令不会运行 perf、修改系统或写入 Collector spool。
+
 {project_section}
-## 5. 采集时长
+## 6. 采集时长
 
 实时采集不是固定 10 秒。自动计划默认 10 秒，用户可以在请求中调整，
 但 MCP 和 Collector 都会执行各自的时长上限；当前默认上限是 30 秒。
 `accept-collector` 使用内置测试负载完成部署验收，不需要输入 PID；默认 1 秒且最多 5 秒。
 
-## 6. 获取帮助
+## 7. 获取帮助
 
 ```bash
 perflens --help
@@ -461,6 +473,19 @@ def _collection_status_chinese(capabilities: CollectionCapabilityArtifact) -> st
         "conditional": "部分受限",
         "blocked": "当前不可用",
     }[status]
+
+
+def _status_command(project: Path, output: Path) -> str:
+    return shlex.join(
+        (
+            "perflens",
+            "status",
+            "--project",
+            str(project),
+            "--setup-directory",
+            str(output),
+        )
+    )
 
 
 def _chinese_layout_note(admin_command: Path, collector_command: Path) -> str:
@@ -485,6 +510,7 @@ def _english_guide(
     admin_command: Path = Path("/opt/perflens/bin/perflens-admin"),
     collector_command: Path = _WHEEL_COLLECTOR_COMMAND,
 ) -> str:
+    status_command = _status_command(project, output)
     layout = (
         "A trusted native package layout was detected."
         if collector_command == _NATIVE_COLLECTOR_COMMAND
@@ -513,6 +539,8 @@ Project: `{project}`
 5. Project workload execution is {'enabled' if automatic_collection else 'disabled'} in the
    generated MCP configuration. It always runs as the ordinary MCP user and still requires
    per-call authorization.
+6. Recheck this exact onboarding bundle with `{status_command}`. Keep
+   `--setup-directory` when a custom output directory was used; the command is read-only.
 
 Run `perflens --help`, `perflens doctor`, or `perflens setup --help` for command help.
 """

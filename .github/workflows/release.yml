@@ -60,6 +60,9 @@ jobs:
             /tmp/perflens-installed-preflight/perflens-setup/collector-assets/perflens-collector.service
           grep -F "/usr/bin/perflens-admin deploy" \
             /tmp/perflens-installed-preflight/perflens-setup/下一步.zh-CN.md
+          grep -F -- \
+            "--setup-directory /tmp/perflens-installed-preflight/perflens-setup" \
+            /tmp/perflens-installed-preflight/perflens-setup/下一步.zh-CN.md
           perflens-admin deploy \
             --config /tmp/perflens-installed-preflight/perflens-setup/collector-assets/collector.toml \
             --dry-run | grep -F "尚未修改系统"

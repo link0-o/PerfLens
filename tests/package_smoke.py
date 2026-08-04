@@ -124,7 +124,8 @@ def main() -> None:
             "--automatic-collection",
         )
         guided_setup = project / "guided-setup"
-        assert (guided_setup / "下一步.zh-CN.md").is_file()
+        chinese_guide = (guided_setup / "下一步.zh-CN.md").read_text(encoding="utf-8")
+        assert f"--setup-directory {guided_setup}" in chinese_guide
         setup_payload = json.loads(
             (guided_setup / "setup.json").read_text(encoding="utf-8")
         )

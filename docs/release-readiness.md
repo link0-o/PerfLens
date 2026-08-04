@@ -16,9 +16,9 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 |---|---|---|
 | Lint | `ruff check .` | passed |
 | Strict types | `pyright` | 0 errors, 0 warnings |
-| Python 3.13 | isolated `pytest -q` environment | 267 passed |
+| Python 3.13 | isolated `pytest -q` environment | 274 passed |
 | Python 3.12 | `pytest -q` on 3.12.13 | previous full release gate: 256 passed; not locally rerun for this change, so CI remains required |
-| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.68%, passed |
+| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.76%, passed |
 | Skill | structure and package tests | passed |
 | Schemas | checked-in schema equality test | passed |
 | Dependency lock | `uv export --locked` | passed |
@@ -38,7 +38,7 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 | Admin deploy | strict TOML → packaged assets → fixed command allowlist → socket check | Chinese dry-run/success summaries, explicit JSON, rollback, and denial paths passed |
 | Admin upgrade | fixed deployed policy → unit hashes → safe replace/restart → rollback | preserve, restart, update, rollback, and denial paths passed |
 | Admin undeploy | trusted marker/owner/mode → fixed stop → inode recheck → unit removal | preserve-data and denial paths passed |
-| Native DEB | split Debian 13 main/Collector packages | extracted entry-point/config smoke and byte-for-byte rebuild passed locally; installed deploy preflight is also enforced in CI |
+| Native DEB | split Debian 13 main/Collector packages | extracted entry-point/config smoke and byte-for-byte rebuild passed locally; CI also enforces installed layout detection, the exact status command, and deployment preflight |
 | Performance | reproducible small/medium/large corpus | published in `performance-budget.md` |
 
 Package build, isolated wheel and sdist installation, split DEB extraction,

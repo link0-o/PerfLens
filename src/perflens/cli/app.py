@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 from pathlib import Path
 from typing import Annotated, Literal, NoReturn
 
@@ -310,6 +311,19 @@ def setup_command(
         f"项目自动运行: {'已启用' if artifact.automatic_collection_enabled else '未启用'}"
     )
     typer.echo(f"请继续阅读: {Path(artifact.output_directory) / '下一步.zh-CN.md'}")
+    typer.echo(
+        "检查当前状态: "
+        + shlex.join(
+            (
+                "perflens",
+                "status",
+                "--project",
+                artifact.project_root,
+                "--setup-directory",
+                artifact.output_directory,
+            )
+        )
+    )
 
 
 @app.command("stage-collector-assets")
@@ -1092,6 +1106,80 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
         typer.echo("问题与提示:")
         for issue in issues:
             typer.echo(f"- {issue_labels.get(issue, issue)}")
+    next_steps = _runtime_next_steps_chinese(artifact)
+    if next_steps:
+        typer.echo("下一步:")
+        for step in next_steps:
+            typer.echo(f"- {step}")
+
+
+def _runtime_next_steps_chinese(artifact: RuntimeStatusArtifact) -> tuple[str, ...]:
+    project = Path(artifact.project_root)
+    setup = Path(artifact.setup_directory)
+    status_command = shlex.join(
+        (
+            "perflens",
+            "status",
+            "--project",
+            str(project),
+            "--setup-directory",
+            str(setup),
+            "--collector-socket",
+            artifact.collector_socket,
+        )
+    )
+    setup_command = [
+        "perflens",
+        "setup",
+        "--project",
+        str(project),
+        "--output-directory",
+        _unused_setup_directory_name(project, artifact.status_id),
+    ]
+
+    steps: list[str] = []
+    if (
+        artifact.setup_status != "ready"
+        or artifact.skill_status != "ready"
+        or artifact.mcp_config_status != "ready"
+    ):
+        if artifact.automatic_collection_requested:
+            setup_command.extend(("--prepare-collector", "--automatic-collection"))
+        steps.append(
+            "用一个尚不存在的新目录重新生成完整引导 (不会覆盖旧文件): "
+            f"`{shlex.join(setup_command)}`"
+        )
+    elif artifact.automatic_collection_status == "configuration_incomplete":
+        setup_command.extend(("--prepare-collector", "--automatic-collection"))
+        steps.append(f"重新生成完整自动采集资产: `{shlex.join(setup_command)}`")
+    elif artifact.automatic_collection_status == "collector_unavailable":
+        steps.append(
+            f"打开 `{setup / '下一步.zh-CN.md'}`, 让管理员执行其中生成的部署/排错命令。"
+        )
+    elif artifact.automatic_collection_status == "access_denied":
+        steps.append("退出当前 Linux 登录会话并重新登录, 使 perflens 用户组生效。")
+        steps.append(f"重新登录后再次检查: `{status_command}`")
+    elif artifact.automatic_collection_status == "ready_for_verification":
+        acceptance_command = shlex.join(
+            (
+                "perflens",
+                "accept-collector",
+                "--socket",
+                artifact.collector_socket,
+                "--authorize-host-acceptance",
+            )
+        )
+        steps.append(f"执行一次 1 秒真实短时采集验收: `{acceptance_command}`")
+    return tuple(steps)
+
+
+def _unused_setup_directory_name(project: Path, status_id: str) -> str:
+    for index in range(1, 101):
+        name = "perflens-setup-new" if index == 1 else f"perflens-setup-new-{index}"
+        candidate = project / name
+        if not candidate.exists() and not candidate.is_symlink():
+            return name
+    return f"perflens-setup-{status_id.removeprefix('status-')}"
 
 
 def _render_collector_acceptance_chinese(

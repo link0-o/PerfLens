@@ -6,6 +6,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Added
 
+- Generated onboarding guides and the setup completion summary now include an
+  exact, shell-quoted `perflens status` command bound to that setup directory.
+  The Chinese status view prints state-specific, copyable recovery or real
+  acceptance steps instead of stopping at issue labels.
 - Chinese-first `perflens-admin deploy` dry-run and success summaries with
   reviewed paths, authorized UID, fixed system commands, safety boundaries,
   and an exact next action; `--json` preserves the complete versioned artifact

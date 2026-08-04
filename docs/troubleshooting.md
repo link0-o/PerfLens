@@ -8,6 +8,12 @@ Run:
 perflens status --project /absolute/path/to/project
 ```
 
+If setup used `--output-directory`, preserve the exact generated
+`--setup-directory /absolute/path/to/project/<bundle>` argument. Otherwise the
+default may inspect an older `perflens-setup` bundle and report automatic
+collection as unconfigured. The Chinese summary ends with a state-specific
+recovery or acceptance command.
+
 It checks onboarding, Skill and MCP snippets, staged Collector assets, the Unix
 socket, current login-group membership, and host perf conditions. It never
 samples or attaches to a process. If those prerequisites pass, it additionally

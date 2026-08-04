@@ -27,6 +27,9 @@ perflens setup --project /absolute/path/to/project
 ```
 
 `setup` installs or recognizes the bundled Skill and creates `perflens-setup/` inside the selected project with a Codex MCP snippet, a read-only capability report, Chinese and English next steps, and a versioned setup artifact. It never invokes sudo, changes sysctl/capabilities, overwrites user Codex configuration, or starts the privileged Collector.
+Its completion summary and generated guides include an exact `perflens status`
+command bound to that output directory. Preserve `--setup-directory` whenever
+`--output-directory` was used.
 
 Run `perflens status --project /absolute/path/to/project` for a read-only
 Chinese-first summary of onboarding, MCP, Collector, group, socket, and perf
@@ -58,6 +61,10 @@ including whether the dry run changed the host, the authenticated health result,
 and the next action. Add `--json` for the complete versioned artifact.
 See [Product deployment](docs/deployment.md) before installing those assets. A
 blocked `perflens doctor` result does not prevent analysis of existing profiles.
+After deployment and a new login, check this specific bundle with `perflens
+status --project /absolute/path/to/project --setup-directory
+/absolute/path/to/project/perflens-collector-setup`; the Chinese summary prints
+the next recovery or real-acceptance command.
 
 After verification, a user may ask the Skill to optimize the current project.
 The Skill confirms an exact executable and arguments; PerfLens launches it as

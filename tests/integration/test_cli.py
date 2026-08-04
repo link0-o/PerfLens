@@ -5,7 +5,9 @@ import os
 import stat
 import sys
 from pathlib import Path
+from typing import Literal
 
+import pytest
 from typer.testing import CliRunner
 
 from perflens import __version__
@@ -13,6 +15,7 @@ from perflens.application.analyze import analyze_folded
 from perflens.artifacts.filesystem import write_json_atomic
 from perflens.cli.app import app
 from perflens.collection.collector import ACTIVE_COLLECTION_AUTHORIZATION
+from perflens.contracts.artifacts import RuntimeStatusArtifact
 from perflens.distribution.skill import SKILL_NAME
 
 runner = CliRunner()
@@ -95,6 +98,8 @@ def test_cli_exposes_version_and_release_setup_commands(tmp_path: Path) -> None:
     assert "Skill: 已安装" in guided.output
     assert "采集状态:" in guided.output
     assert "项目自动运行: 已启用" in guided.output
+    assert "检查当前状态: perflens status" in guided.output
+    assert f"--setup-directory {guided_project / 'perflens-setup'}" in guided.output
     assert (guided_project / "perflens-setup/下一步.zh-CN.md").is_file()
     assert (guided_project / ".agents/skills/perflens-performance-analysis/SKILL.md").is_file()
     generated_config = (guided_project / "perflens-setup/codex-mcp.toml").read_text(
@@ -140,6 +145,8 @@ def test_cli_status_is_chinese_first_and_can_write_json(tmp_path: Path) -> None:
     assert "引导目录: 未生成" in displayed.output
     assert "Collector 健康握手: 未执行 (前置条件未满足)" in displayed.output
     assert "自动采集: 未配置" in displayed.output
+    assert "下一步:" in displayed.output
+    assert "perflens setup --project" in displayed.output
 
     output = tmp_path / "status.json"
     written = runner.invoke(
@@ -158,6 +165,59 @@ def test_cli_status_is_chinese_first_and_can_write_json(tmp_path: Path) -> None:
     )
     assert written.exit_code == 0, written.output
     assert json.loads(output.read_text(encoding="utf-8"))["schema_version"] == "1.0"
+
+
+@pytest.mark.parametrize(
+    ("automatic_status", "expected"),
+    [
+        ("configuration_incomplete", "重新生成完整自动采集资产"),
+        ("collector_unavailable", "下一步.zh-CN.md"),
+        ("access_denied", "退出当前 Linux 登录会话并重新登录"),
+        ("ready_for_verification", "accept-collector --socket"),
+    ],
+)
+def test_cli_status_prints_copyable_state_specific_next_step(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    automatic_status: Literal[
+        "configuration_incomplete",
+        "collector_unavailable",
+        "access_denied",
+        "ready_for_verification",
+    ],
+    expected: str,
+) -> None:
+    artifact = RuntimeStatusArtifact(
+        perflens_version="test",
+        status_id="status-0123456789abcdef",
+        checked_at="2026-08-04T00:00:00+00:00",
+        project_root=str(tmp_path),
+        setup_directory=str(tmp_path / "custom-setup"),
+        setup_status="ready",
+        skill_status="ready",
+        mcp_config_status="ready",
+        automatic_collection_requested=True,
+        collector_assets_status="ready",
+        collector_socket="/run/perflens/custom.sock",
+        collector_socket_status="ready",
+        collector_group_status="member",
+        capability_id="capability-test",
+        host_collection_status="conditional",
+        automatic_collection_status=automatic_status,
+    )
+
+    def reported_status(*_args: object, **_kwargs: object) -> RuntimeStatusArtifact:
+        return artifact
+
+    monkeypatch.setattr("perflens.cli.app.inspect_runtime_status", reported_status)
+    displayed = runner.invoke(app, ["status", "--project", str(tmp_path)])
+
+    assert displayed.exit_code == 0, displayed.output
+    assert "下一步:" in displayed.output
+    assert expected in displayed.output
+    if automatic_status == "configuration_incomplete":
+        assert displayed.output.count("--prepare-collector") == 1
+        assert displayed.output.count("--automatic-collection") == 1
 
 
 def test_cli_refuses_to_overwrite_source(tmp_path: Path) -> None:

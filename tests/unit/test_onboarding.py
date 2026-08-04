@@ -56,6 +56,10 @@ def test_setup_creates_guided_bundle_and_installs_skill(tmp_path: Path) -> None:
     guide = (project / "setup-two/下一步.zh-CN.md").read_text(encoding="utf-8")
     assert "用户不需要查找或输入 PID" in guide
     assert "/opt/perflens/bin/perflens-admin deploy" in guide
+    assert (
+        f"perflens status --project {project} --setup-directory {project / 'setup-two'}"
+        in guide
+    )
 
 
 def test_setup_uses_trusted_native_package_layout(

@@ -92,6 +92,8 @@ perflens setup \
 ```
 
 每次引导必须使用一个不存在的新输出目录，已有文件不会被覆盖。
+`setup` 完成时和生成的 `下一步.zh-CN.md` 都会显示绑定本次输出目录的精确状态命令；
+如果使用了 `--output-directory`，请直接复制该命令，不要遗漏 `--setup-directory`。
 
 运行统一的只读状态检查：
 
@@ -148,6 +150,16 @@ sudo perflens-admin deploy \
 上面的路径只是 DEB 示例。请直接复制生成的 `下一步.zh-CN.md` 中的命令：`setup` 会
 安全识别 DEB 的 `/usr/bin` 入口；wheel 或源码布局默认生成 `/opt/perflens/bin` 入口。
 如果系统包缺少配套 Collector，`setup` 会直接告诉你应安装哪个包，不会生成错误引导。
+
+部署并重新登录后，检查这次自动采集引导，而不是最早生成的默认目录：
+
+```bash
+perflens status \
+  --project /绝对路径/你的项目 \
+  --setup-directory /绝对路径/你的项目/perflens-collector-setup
+```
+
+状态摘要会直接显示下一条恢复或真实验收命令。
 
 第一条只校验并显示计划；第二条才写入系统、添加授权用户组并启动服务，通常只需输入
 一次 root 密码。部署命令默认显示中文摘要：预检会明确写出“尚未修改系统”，正式部署

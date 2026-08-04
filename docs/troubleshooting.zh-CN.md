@@ -10,6 +10,11 @@
 perflens status --project /绝对路径/你的项目
 ```
 
+如果 `setup` 使用过 `--output-directory`，请复制该次引导显示的完整命令，或同时传入
+`--setup-directory /绝对路径/你的项目/对应引导目录`。否则默认值可能检查到更早的
+`perflens-setup`，从而把已经配置的自动采集显示成“未配置”。状态摘要底部会给出当前
+场景对应的下一条恢复或验收命令。
+
 这条命令只读检查引导目录、Skill、MCP 配置片段、Collector 资产、Socket、当前登录
 会话的 `perflens` 组身份和本机 perf 条件。前置条件通过后，它还会执行一次最长
 500 毫秒的只读健康握手，并通过内核 `SO_PEERCRED` 复核专用服务身份；遗留 Socket、
