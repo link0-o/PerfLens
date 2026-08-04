@@ -22,6 +22,7 @@
 | Benchmark 格式 | 自研薄 Adapter | 把文档化的 pyperf、Google Benchmark 和 hyperfine JSON 规范化为一个带版本 Contract；不自研 Benchmark Runner。 |
 | 统计比较 | 自研保守的标准库实现 | 重复均值使用明确标注为近似值的正态区间，并结合实际影响和可比性检查；结果仍然只是候选。 |
 | 主动采集 | 复用系统 perf | 薄且默认关闭的封装覆盖 record/stat/sched/lock/tracepoint。PerfLens 负责授权、资源边界、诊断和不可变输出，不重新实现内核探针。 |
+| Release 来源证明 | 复用官方 `actions/attest` | 由 GitHub Actions 的短时 OIDC 身份签发 SLSA Provenance；只用于标签发布工作流，固定到完整提交 SHA，不成为运行依赖。签发任务与项目代码执行及 Release 写权限隔离。 |
 
 没有复制任何第三方实现。运行依赖设置了版本范围，并锁定在 `uv.lock`。修改支持的依赖
 范围前，依赖升级必须先通过 Schema 测试和 Golden 测试。

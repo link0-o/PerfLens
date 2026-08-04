@@ -42,3 +42,11 @@ and invokes `gh release create`. A regression test enforces these boundaries.
 Dependabot proposes weekly Action-pin and uv-lock updates for review; it does
 not auto-merge them. Published wheel and source distributions are independently
 rebuilt with the source commit timestamp and must be byte-for-byte identical.
+
+Tag releases issue SLSA provenance for every downloadable asset. The attestation
+job has only read-only repository access plus short-lived OIDC and attestation
+write permissions; it does not check out or execute repository code and cannot
+publish a Release. The Release publisher waits for successful attestation but
+does not receive OIDC or attestation credentials. Consumers should verify both
+the repository and `.github/workflows/release.yml` signer identity with GitHub
+CLI before installing an asset.

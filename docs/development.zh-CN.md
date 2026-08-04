@@ -175,6 +175,8 @@ uv run pip-audit \
 - 所有 checkout 都保持 `persist-credentials: false`；
 - 普通 CI 和 Release 构建默认只有 `contents: read`；
 - `contents: write` 只允许出现在不 checkout、不运行项目代码的最终发布任务；
+- `id-token: write` 和 `attestations: write` 只允许出现在不 checkout、不含 `run:` 的
+  Release 来源证明任务，最终发布任务必须依赖它成功；
 - 上传产物必须在文件缺失时失败，并设置不超过 7 天的中间保留期；
 - 修改工作流后运行 `uv run pytest tests/unit/test_workflow_security.py`。
 

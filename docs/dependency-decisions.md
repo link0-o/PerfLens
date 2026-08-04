@@ -22,6 +22,7 @@
 | Benchmark formats | Build thin adapters | Normalize documented pyperf, Google Benchmark, and hyperfine JSON into one versioned contract; no benchmark runner is built. |
 | Statistical comparison | Build conservative stdlib implementation | Repeated means use an explicitly approximate normal interval plus practical-impact and comparability checks; results remain candidates. |
 | Active collection | Reuse system perf | Thin, default-off wrappers cover record/stat/sched/lock/tracepoint collection. PerfLens owns authorization, bounds, diagnostics, and immutable output, not kernel instrumentation. |
+| Release provenance | Reuse official `actions/attest` | Issues SLSA provenance from short-lived GitHub Actions OIDC identity. It is tag-workflow-only, pinned to a full commit SHA, and never a runtime dependency. Signing is isolated from project-code execution and Release-write permission. |
 
 No third-party implementation is copied. Runtime dependencies are version
 bounded and locked in `uv.lock`. Dependency upgrades require schema and golden

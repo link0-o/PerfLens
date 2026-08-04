@@ -47,6 +47,11 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   commit timestamp as `SOURCE_DATE_EPOCH`, then reject the build unless both
   copies are byte-for-byte identical. The comparison tool rejects symlink,
   missing, empty, and oversized package inputs.
+- Tag releases now generate SLSA provenance for every downloadable asset in an
+  isolated `actions/attest` job. Its OIDC and attestation credentials cannot
+  access checked-out project code or publish a Release, and the publisher runs
+  only after attestation succeeds. Installation and release notes include
+  Chinese-first checksum and signer-workflow verification commands.
 - `perflens --help`, every user subcommand, and `perflens-admin --help` are now
   Chinese-first. Previously undocumented analysis limits and administrator
   archive controls now explain their units and safety boundaries; command and

@@ -56,6 +56,11 @@ Dependabot 每周提出 Action 固定版本与 uv 锁文件更新，但不会自
 审查并通过完整 CI。发布用 wheel 和源码包使用源码提交时间独立构建两次，只有逐字节
 一致时才允许继续发布。
 
+版本标签发布会为每个可下载资产签发 SLSA Provenance。证明任务只有仓库只读、短时
+OIDC 和 Attestation 写权限，不 checkout、不执行仓库代码，也不能创建 Release；发布
+任务必须等待证明成功，而且拿不到证明凭据。用户安装前应通过 GitHub CLI 同时校验仓库
+和 `.github/workflows/release.yml` 签发身份。
+
 ## 处理不可信输入
 
 Profile、Benchmark JSON、ELF 文件、源码路径和持久化产物都应视为不可信输入。相关代码必须：

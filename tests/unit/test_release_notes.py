@@ -30,6 +30,9 @@ def test_release_notes_explain_wheel_installation(tmp_path: Path) -> None:
     assert ".whl` 不要解压" in rendered
     assert f"blob/v{__version__}/INSTALL.zh-CN.md" in rendered
     assert "perflens-admin spool-status" in rendered
+    assert "gh attestation verify" in rendered
+    assert "--signer-workflow link0-o/PerfLens/.github/workflows/release.yml" in rendered
+    assert "--deny-self-hosted-runners" in rendered
     assert "{version}" not in rendered
     assert "{tag}" not in rendered
 

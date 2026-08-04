@@ -92,7 +92,11 @@ def test_release_write_token_is_isolated_from_checkout_and_project_code() -> Non
 
     assert write_jobs == ["github-release"]
     publisher = _mapping(jobs["github-release"], label="release.yml.github-release")
-    assert publisher.get("needs") == "build-release-assets"
+    assert publisher.get("needs") == "attest-release-assets"
+    assert _mapping(
+        publisher.get("permissions"),
+        label="release.yml.github-release.permissions",
+    ) == {"contents": "write"}
     steps = _steps(publisher, label="release.yml.github-release")
     action_steps = tuple(step for step in steps if "uses" in step)
     run_steps = tuple(step for step in steps if "run" in step)
@@ -108,6 +112,47 @@ def test_release_write_token_is_isolated_from_checkout_and_project_code() -> Non
     assert all(
         not str(step.get("uses", "")).startswith("actions/checkout@") for step in steps
     )
+
+
+def test_release_attestation_credentials_are_isolated_from_project_code() -> None:
+    release = _workflows()["release.yml"]
+    jobs = _jobs(release, label="release.yml")
+    credential_jobs: list[str] = []
+    for job_name, job in jobs.items():
+        job_mapping = _mapping(job, label=f"release.yml.{job_name}")
+        permissions = _mapping(
+            job_mapping.get("permissions", {}),
+            label=f"release.yml.{job_name}.permissions",
+        )
+        if permissions.get("id-token") == "write" or permissions.get("attestations") == "write":
+            credential_jobs.append(job_name)
+
+    assert credential_jobs == ["attest-release-assets"]
+    attester = _mapping(
+        jobs["attest-release-assets"],
+        label="release.yml.attest-release-assets",
+    )
+    assert attester.get("needs") == "build-release-assets"
+    assert _mapping(
+        attester.get("permissions"),
+        label="release.yml.attest-release-assets.permissions",
+    ) == {
+        "contents": "read",
+        "id-token": "write",
+        "attestations": "write",
+    }
+    steps = _steps(attester, label="release.yml.attest-release-assets")
+    assert len(steps) == 2
+    assert all("run" not in step for step in steps)
+    assert str(steps[0].get("uses", "")).startswith("actions/download-artifact@")
+    assert str(steps[1].get("uses", "")).startswith("actions/attest@")
+    download = _mapping(steps[0].get("with"), label="attestation download.with")
+    assert download == {
+        "name": "perflens-release-bundle",
+        "path": "release-bundle",
+    }
+    attestation = _mapping(steps[1].get("with"), label="attestation.with")
+    assert attestation == {"subject-path": "release-bundle/dist/*"}
 
 
 def test_dependabot_monitors_action_pins_and_uv_lockfile() -> None:

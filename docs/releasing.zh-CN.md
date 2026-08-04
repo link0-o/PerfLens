@@ -26,7 +26,14 @@ uv sync --all-groups --frozen
 uv run ruff check .
 uv run pyright
 uv run pytest --cov=perflens --cov-fail-under=85
-uv build --no-sources
+perflens_source_epoch="$(git log -1 --format=%ct)"
+perflens_repro_dir="$(mktemp -d)"
+SOURCE_DATE_EPOCH="$perflens_source_epoch" uv build --no-sources --out-dir dist
+SOURCE_DATE_EPOCH="$perflens_source_epoch" uv build \
+  --no-sources --out-dir "$perflens_repro_dir"
+uv run python scripts/verify_python_reproducibility.py \
+  --directory dist \
+  --reproducible-directory "$perflens_repro_dir"
 uv run python scripts/build_deb.py \
   --output-directory dist \
   --python /usr/bin/python3 \
@@ -83,6 +90,18 @@ git push origin v0.1.1
 发布用 wheel 和源码包会以源码提交时间作为 `SOURCE_DATE_EPOCH` 独立构建两次，再由
 `scripts/verify_python_reproducibility.py` 逐字节比较。只要任一包不同，Release 就会
 停止。遇到差异应检查构建输入、时间戳和构建后端，不能删掉比较步骤强行发布。
+
+随后，独立证明任务只下载已验证 Bundle，使用固定提交的 `actions/attest` 为每个正式
+发行文件签发 SLSA Provenance；它拥有短时 OIDC 与 Attestation 写权限，但不 checkout、
+不运行项目代码，也不拥有 Release 写权限。只有证明成功后，另一个隔离任务才创建
+GitHub Release。发布完成后至少抽查一个资产：
+
+```bash
+gh attestation verify ./dist/perflens-0.1.1-py3-none-any.whl \
+  --repo link0-o/PerfLens \
+  --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
+  --deny-self-hosted-runners
+```
 
 已经发布的版本标签不要重复使用或移动。如果发现问题，应修复后发布新版本。
 

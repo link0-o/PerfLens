@@ -51,6 +51,26 @@ uv tool install ./perflens-{version}-py3-none-any.whl
 - `sbom.cdx.json`：CycloneDX 依赖清单；
 - `SHA256SUMS`：六个正式发行产物的 SHA-256 校验。
 
+## 下载后先验证
+
+只下载了部分资源时可以忽略缺失项，但自己下载的每个文件都必须显示 `OK`：
+
+```bash
+sha256sum --ignore-missing --check SHA256SUMS
+```
+
+安装了 GitHub CLI 时，建议再验证文件内容与官方 Release 工作流身份：
+
+```bash
+gh attestation verify ./perflens-{version}-py3-none-any.whl \
+  --repo link0-o/PerfLens \
+  --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
+  --deny-self-hosted-runners
+```
+
+DEB、源码包、Skill、SBOM 和 `SHA256SUMS` 也可以这样验证。校验失败时不要安装；GitHub
+自动生成的两个 `Source code` 快照不属于 PerfLens 构建资产，不在证明范围内。
+
 ## 自动采集
 
 分析已有 Profile 不需要 root。实时自动采集需要管理员审核并部署独立 Collector；

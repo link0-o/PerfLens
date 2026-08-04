@@ -29,7 +29,14 @@ uv sync --all-groups --frozen
 uv run ruff check .
 uv run pyright
 uv run pytest --cov=perflens --cov-fail-under=85
-uv build --no-sources
+perflens_source_epoch="$(git log -1 --format=%ct)"
+perflens_repro_dir="$(mktemp -d)"
+SOURCE_DATE_EPOCH="$perflens_source_epoch" uv build --no-sources --out-dir dist
+SOURCE_DATE_EPOCH="$perflens_source_epoch" uv build \
+  --no-sources --out-dir "$perflens_repro_dir"
+uv run python scripts/verify_python_reproducibility.py \
+  --directory dist \
+  --reproducible-directory "$perflens_repro_dir"
 uv run python scripts/build_deb.py \
   --output-directory dist \
   --python /usr/bin/python3 \
@@ -94,6 +101,20 @@ source commit timestamp supplied through `SOURCE_DATE_EPOCH`. The release stops
 unless `scripts/verify_python_reproducibility.py` confirms byte-for-byte
 identity. Treat a mismatch as a build-input or build-backend defect; do not skip
 the comparison to publish.
+
+An isolated attestation job then downloads only the verified bundle and uses a
+pinned `actions/attest` to issue SLSA provenance for every downloadable asset.
+It receives short-lived OIDC and attestation-write permissions, but has no
+checkout, project-code execution, or Release-write permission. The separate
+publisher runs only after attestation succeeds. After publication, spot-check
+at least one asset:
+
+```bash
+gh attestation verify ./dist/perflens-0.1.1-py3-none-any.whl \
+  --repo link0-o/PerfLens \
+  --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
+  --deny-self-hosted-runners
+```
 
 ## Optional PyPI publication
 

@@ -22,6 +22,26 @@ perflens-0.1.1-py3-none-any.whl
 - `SHA256SUMS`：下载校验和；
 - `Source code`：GitHub 自动生成的源码快照。
 
+下载正式发行文件后，至少先校验 SHA-256。只下载了部分文件时使用
+`--ignore-missing`，但必须看到自己下载的文件显示 `OK`：
+
+```bash
+sha256sum --ignore-missing --check SHA256SUMS
+```
+
+如果已经安装 GitHub CLI，还可以验证文件内容和签发工作流身份。下面以 wheel 为例；
+DEB、源码包、Skill、SBOM 和 `SHA256SUMS` 也可以用相同命令验证：
+
+```bash
+gh attestation verify ./perflens-0.1.1-py3-none-any.whl \
+  --repo link0-o/PerfLens \
+  --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
+  --deny-self-hosted-runners
+```
+
+如果任一校验失败，不要安装该文件，应从 PerfLens 官方 GitHub Release 重新下载。GitHub
+自动生成的两个 `Source code` 快照不属于 PerfLens 构建资产，不在上述证明范围内。
+
 Debian 13 `amd64` 用户推荐直接安装主 DEB，不需要 pipx：
 
 ```bash

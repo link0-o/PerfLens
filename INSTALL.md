@@ -10,6 +10,24 @@ On Debian 13 `amd64`, the recommended alternative is
 installation does not activate a privileged service. See
 [Debian packages](docs/debian-packages.md).
 
+Verify downloaded release files before installation. `--ignore-missing` allows
+checking only the assets you downloaded, but each selected file must report
+`OK`:
+
+```bash
+sha256sum --ignore-missing --check SHA256SUMS
+gh attestation verify ./perflens-0.1.1-py3-none-any.whl \
+  --repo link0-o/PerfLens \
+  --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
+  --deny-self-hosted-runners
+```
+
+The second command requires GitHub CLI and verifies both the artifact digest
+and the signing workflow identity. It also works for the DEBs, source archive,
+Skill, SBOM, and `SHA256SUMS`. Do not install a file if either applicable check
+fails. GitHub-generated `Source code` snapshots are not PerfLens build assets
+and are outside this attestation set.
+
 PerfLens requires Linux and Python 3.12 or 3.13. Install the wheel as an isolated tool:
 
 ```bash
