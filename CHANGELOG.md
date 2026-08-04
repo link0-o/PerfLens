@@ -10,6 +10,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 - Chinese maintainer documentation for development, architecture, security,
   and release-readiness workflows.
+- Simplified Chinese counterparts and bidirectional language navigation for
+  compatibility, limitations, real-world acceptance, profile semantics,
+  performance budgets, schema migration, and dependency decisions.
 - Read-only `perflens doctor` capability diagnostics for perf/kernel policy,
   process and file capabilities, tracefs, and every collection mode.
 - Short-lived, single-use automatic collection plans bound to PID owner and

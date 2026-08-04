@@ -1,5 +1,7 @@
 # Real-world profile acceptance
 
+[简体中文](real-world-acceptance.zh-CN.md) | English
+
 The final acceptance run uses a profile supplied by an upstream project, not a PerfLens-generated test fixture.
 
 ## Provenance

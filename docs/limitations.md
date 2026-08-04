@@ -1,5 +1,7 @@
 # Limitations
 
+[简体中文](limitations.zh-CN.md) | English
+
 Folded text cannot recover process, thread, CPU, event, DSO, address, timestamp,
 or source information absent from that format. `perf script` and `perf.data`
 can preserve those fields, but their completeness depends on the recording and

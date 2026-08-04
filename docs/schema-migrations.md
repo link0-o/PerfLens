@@ -1,5 +1,7 @@
 # Artifact schema compatibility
 
+[简体中文](schema-migrations.zh-CN.md) | English
+
 Artifacts use semantic schema versions.
 
 - Patch changes clarify documentation or relax compatible validation.

@@ -1,5 +1,7 @@
 # Folded profile model
 
+[简体中文](profile-model.zh-CN.md) | English
+
 One non-empty folded line is one logical stack record with a positive integer
 weight. `frames[0]` is the root and `frames[-1]` is the leaf.
 

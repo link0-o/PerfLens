@@ -373,8 +373,13 @@ operational failure guidance.
 Chinese maintainer documentation is available in the
 [development guide](docs/development.zh-CN.md),
 [architecture guide](docs/architecture.zh-CN.md),
+[compatibility matrix](docs/compatibility.zh-CN.md),
+[known limitations](docs/limitations.zh-CN.md),
+[real-world acceptance record](docs/real-world-acceptance.zh-CN.md),
 [security policy](SECURITY.zh-CN.md), and
-[release-readiness record](docs/release-readiness.zh-CN.md).
+[release-readiness record](docs/release-readiness.zh-CN.md). Every document under
+`docs/` that has an English version now links to a corresponding Simplified
+Chinese version.
 
 ## Known limitations
 

@@ -1,5 +1,7 @@
 # Build vs. reuse decisions
 
+[简体中文](dependency-decisions.zh-CN.md) | English
+
 ## Milestones 0–5
 
 | Capability | Decision | Rationale and boundary |

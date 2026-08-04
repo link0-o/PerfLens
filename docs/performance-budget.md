@@ -1,5 +1,7 @@
 # Performance budget
 
+[简体中文](performance-budget.zh-CN.md) | English
+
 Milestone 1 establishes measured baselines rather than promising unmeasured
 absolute throughput. The reproducible harness generates folded records in a
 temporary file, analyzes them through the public application service, and

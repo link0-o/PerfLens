@@ -27,8 +27,8 @@
 |---|---|---|
 | 代码规范 | `ruff check .` | 通过 |
 | 严格类型 | `pyright` | 0 错误、0 警告 |
-| Python 3.12 | `pytest -q`，Python 3.12.13 | 252 通过 |
-| Python 3.13 | 隔离环境 `pytest -q` | 252 通过 |
+| Python 3.12 | `pytest -q`，Python 3.12.13 | 253 通过 |
+| Python 3.13 | 隔离环境 `pytest -q` | 253 通过 |
 | 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.36%，通过 |
 | Skill | Skill 结构和打包测试 | 通过 |
 | Schema | 已提交 Schema 与 Contract 生成结果相等 | 通过 |
@@ -62,7 +62,8 @@
 - LLVM symbolizer：本机未安装，JSON 协议和长驻进程生命周期通过 Test Double 验证；
 - MCP：使用官方 Python SDK 2.x 完成客户端/服务端端到端测试。
 
-完整兼容范围见 `docs/compatibility.md`。遇到跨主机 `perf.data` 时，仍可能需要匹配的 perf、DSO、Build ID、调试文件和挂载命名空间数据。
+完整兼容范围见[《PerfLens 兼容范围》](compatibility.zh-CN.md)。遇到跨主机
+`perf.data` 时，仍可能需要匹配的 perf、DSO、Build ID、调试文件和挂载命名空间数据。
 
 ## 安全验证
 

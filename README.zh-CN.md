@@ -347,6 +347,13 @@ uv run pip-audit
 
 - [中文开发指南](docs/development.zh-CN.md)
 - [架构说明](docs/architecture.zh-CN.md)
+- [兼容范围](docs/compatibility.zh-CN.md)
+- [已知限制与结论边界](docs/limitations.zh-CN.md)
+- [真实世界 Profile 验收记录](docs/real-world-acceptance.zh-CN.md)
+- [Folded Profile 数据模型](docs/profile-model.zh-CN.md)
+- [性能预算与已记录基线](docs/performance-budget.zh-CN.md)
+- [产物 Schema 兼容与迁移](docs/schema-migrations.zh-CN.md)
+- [自研与依赖复用决策](docs/dependency-decisions.zh-CN.md)
 - [MCP 与 Skill 使用指南](docs/mcp-and-skill.zh-CN.md)
 - [自动采集与 Collector Broker](docs/automatic-collection.zh-CN.md)
 - [产品部署、验收、升级与卸载](docs/deployment.zh-CN.md)

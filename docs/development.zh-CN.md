@@ -119,7 +119,8 @@ uv run pytest tests/unit/test_contract_schemas.py
 - Minor：增加可选字段，并加入旧产物兼容测试；
 - Major：改变语义，需要明确的迁移工具。
 
-确定性字段或聚合语义变化还必须更新分析指纹，避免旧缓存被当成新结果。原始规则见 `docs/schema-migrations.md`。
+确定性字段或聚合语义变化还必须更新分析指纹，避免旧缓存被当成新结果。原始规则见
+[《产物 Schema 兼容与迁移》](schema-migrations.zh-CN.md)。
 
 ## 如何新增 MCP 工具
 
@@ -164,7 +165,8 @@ uv run pip-audit \
   --no-deps --disable-pip --strict
 ```
 
-为什么选择或自研某项能力，记录在 `docs/dependency-decisions.md`。安全报告和默认权限见[《安全策略》](../SECURITY.zh-CN.md)。
+为什么选择或自研某项能力，记录在[《自研与复用决策》](dependency-decisions.zh-CN.md)。
+安全报告和默认权限见[《安全策略》](../SECURITY.zh-CN.md)。
 
 ## 提交与发布建议
 

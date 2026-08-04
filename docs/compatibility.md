@@ -1,5 +1,7 @@
 # Compatibility
 
+[简体中文](compatibility.zh-CN.md) | English
+
 | Component | Supported |
 |---|---|
 | Python | 3.12 and 3.13 |
