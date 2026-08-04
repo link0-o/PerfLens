@@ -72,6 +72,13 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
+- Collector request frames now have a separate hard five-second completion
+  timeout and an exact 64 KiB wire-size limit, preventing an incomplete local
+  connection from blocking health and collection operations for the policy's
+  full collection duration.
+- The Collector now handles `SIGTERM` and `SIGINT` as graceful shutdown
+  requests, tolerates listener-close races, and removes its Unix Socket before
+  a normal process exit.
 - `perflens status` now revalidates the configured MCP executable instead of
   reporting readiness for a removed, non-executable, moved, or no-longer-trusted
   entry point that merely remains in matching TOML.

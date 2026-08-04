@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
+import socket
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -135,6 +138,107 @@ def test_broker_health_is_authenticated_versioned_and_read_only(tmp_path: Path) 
     assert list(spool.iterdir()) == []
 
 
+def test_broker_times_out_incomplete_frames_and_remains_available(tmp_path: Path) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    policy = CollectorBrokerPolicy(
+        spool_root=spool,
+        perf_path=_fake_perf(tmp_path),
+        allowed_uids=(os.geteuid(),),
+    )
+    with CollectorBrokerServer(
+        runtime / "collector.sock",
+        policy,
+        request_timeout_seconds=0.05,
+    ) as server:
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stalled_client:
+            stalled_client.settimeout(2)
+            stalled_client.connect(str(server.socket_path))
+            stalled_client.sendall(b'{"type":"health"')
+            response = json.loads(stalled_client.recv(4096))
+
+        health = CollectorBrokerClient(server.socket_path, timeout_seconds=2).health(
+            expected_service_uid=os.geteuid()
+        )
+
+    worker.join(timeout=2)
+    assert response["ok"] is False
+    assert response["error"]["code"] == ErrorCode.INVALID_INPUT.value
+    assert response["error"]["recoverable"] is True
+    assert "timed out" in response["error"]["message"]
+    assert health.status == "ready"
+    assert not worker.is_alive()
+    assert not server.socket_path.exists()
+
+
+def test_collector_process_handles_sigterm_and_removes_socket(tmp_path: Path) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    fake_perf = _fake_perf(tmp_path)
+    policy_path = tmp_path / "collector.toml"
+    policy_path.write_text(
+        "[collector]\n"
+        f'spool_root = "{spool}"\n'
+        f'perf_path = "{fake_perf}"\n'
+        f"allowed_uids = [{os.geteuid()}]\n",
+        encoding="utf-8",
+    )
+    policy_path.chmod(0o444)
+    socket_path = runtime / "collector.sock"
+    project_root = Path(__file__).resolve().parents[2]
+    process = subprocess.Popen(  # noqa: S603 - fixed interpreter and module entry point
+        [
+            sys.executable,
+            "-m",
+            "perflens.collector_broker.server",
+            "--socket",
+            str(socket_path),
+            "--policy",
+            str(policy_path),
+        ],
+        env={**os.environ, "PYTHONPATH": str(project_root / "src")},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not socket_path.exists():
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                pytest.fail(f"Collector exited during startup: {stdout=} {stderr=}")
+            if time.monotonic() >= deadline:
+                pytest.fail("Collector did not create its Unix socket within five seconds")
+            time.sleep(0.01)
+
+        health = CollectorBrokerClient(socket_path, timeout_seconds=2).health(
+            expected_service_uid=os.geteuid()
+        )
+        process.send_signal(signal.SIGTERM)
+        return_code = process.wait(timeout=5)
+        stdout, stderr = process.communicate()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+    assert health.status == "ready"
+    assert return_code == 0
+    assert stdout == ""
+    assert stderr == ""
+    assert not socket_path.exists()
+
+
 def test_runtime_status_requires_authenticated_broker_health(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -154,13 +258,9 @@ def test_runtime_status_requires_authenticated_broker_health(
         allowed_uids=(os.geteuid(),),
         allowed_modes=("record", "stat"),
     )
-    monkeypatch.setattr(
-        "perflens.distribution.status._collector_group_status", lambda: "member"
-    )
+    monkeypatch.setattr("perflens.distribution.status._collector_group_status", lambda: "member")
     with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
-        monkeypatch.setattr(
-            "perflens.distribution.status._collector_service_uid", os.geteuid
-        )
+        monkeypatch.setattr("perflens.distribution.status._collector_service_uid", os.geteuid)
         worker = threading.Thread(target=server.serve_once, daemon=True)
         worker.start()
         accepted = inspect_runtime_status(

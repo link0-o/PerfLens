@@ -116,6 +116,12 @@ perflens status --project /绝对路径/工作区
 握手，并用专用服务 UID 和内核 peer credentials 复核 Collector 身份；它不会运行 perf，
 也不会写入 spool。Socket 文件仅仅存在不代表服务就绪。
 
+Collector 的请求读取和采集时长是两个独立边界。每条换行分隔的 JSON 请求（包含换行符）
+最多 64 KiB，而且必须在最多 5 秒内完整送达；`max_duration_seconds` 只能限制一次 perf
+采集，不能放宽这项协议超时。未完成的慢连接会收到可恢复错误并被关闭，后续健康检查和
+采集仍可继续。服务收到 `SIGTERM` 或 `SIGINT` 时会停止接受新连接、关闭监听器并删除
+Socket；systemd 管理的正常停止不会因为遗留 Socket 被误判为仍然就绪。
+
 `collector.toml` 的 `policy_version = 1` 用于未来安全升级；缺失时兼容读取为版本 1，
 不支持的版本会在部署和服务启动前拒绝。
 

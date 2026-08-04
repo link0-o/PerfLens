@@ -78,6 +78,15 @@ policies carry `policy_version = 1`; a missing field is treated as legacy
 version 1, while unsupported versions are rejected before deployment and
 Collector startup.
 
+Request framing and collection duration have independent bounds. One
+newline-delimited JSON request, including its newline, may occupy at most 64
+KiB and must arrive completely within five seconds. `max_duration_seconds`
+limits perf collection only and cannot expand this protocol timeout. An
+incomplete slow connection receives a recoverable error and is closed so later
+health and collection calls can proceed. On `SIGTERM` or `SIGINT`, the service
+stops accepting connections, closes its listener, and removes the socket, so a
+normal systemd stop cannot leave a false-ready socket behind.
+
 Long-running automatic collection is also bounded by `max_spool_bytes`,
 `max_spool_artifacts`, and `min_free_bytes`. The defaults cap logical artifact
 storage at 10 GiB and 1000 files while reserving 1 GiB on the spool filesystem.

@@ -90,9 +90,7 @@ def test_broker_authorization_denies_every_out_of_policy_dimension(tmp_path: Pat
         (
             os.geteuid(),
             base.model_copy(
-                update={
-                    "expires_at": (datetime.now(tz=UTC) + timedelta(minutes=10)).isoformat()
-                }
+                update={"expires_at": (datetime.now(tz=UTC) + timedelta(minutes=10)).isoformat()}
             ),
         ),
         (
@@ -212,6 +210,19 @@ def test_socket_path_and_client_require_safe_existing_socket(tmp_path: Path) -> 
         _new_socket_path(occupied)
 
 
+@pytest.mark.parametrize("timeout_seconds", [False, 0, -1, 5.01, float("inf"), float("nan")])
+def test_broker_rejects_unbounded_request_frame_timeouts(
+    tmp_path: Path,
+    timeout_seconds: float,
+) -> None:
+    with pytest.raises(ValueError, match="request timeout"):
+        CollectorBrokerServer(
+            tmp_path / "collector.sock",
+            _policy(tmp_path),
+            request_timeout_seconds=timeout_seconds,
+        )
+
+
 def test_broker_frames_are_bounded_and_peer_authenticated() -> None:
     class FakePeer:
         def getsockopt(self, _level: int, _option: int, _size: int) -> bytes:
@@ -231,14 +242,30 @@ def test_broker_frames_are_bounded_and_peer_authenticated() -> None:
     valid = cast(socket.socket, FakeConnection(b'{"ok":true}\n'))
     assert _read_frame(valid) == b'{"ok":true}'
 
+    maximum = cast(
+        socket.socket,
+        FakeConnection(b"x" * (MAX_BROKER_MESSAGE_BYTES - 1) + b"\n"),
+    )
+    assert len(_read_frame(maximum)) == MAX_BROKER_MESSAGE_BYTES - 1
+
     trailing = cast(socket.socket, FakeConnection(b"one\ntwo"))
     with pytest.raises(PerfLensError, match="exactly one"):
         _read_frame(trailing)
 
     oversized = cast(
         socket.socket,
-        FakeConnection(b"x" * (MAX_BROKER_MESSAGE_BYTES + 1)),
+        FakeConnection(b"x" * MAX_BROKER_MESSAGE_BYTES + b"\n"),
     )
     with pytest.raises(PerfLensError) as captured:
         _read_frame(oversized)
     assert captured.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+
+    class TimeoutConnection:
+        def recv(self, _size: int) -> bytes:
+            raise TimeoutError
+
+    timed_out = cast(socket.socket, TimeoutConnection())
+    with pytest.raises(PerfLensError, match="timed out") as timeout:
+        _read_frame(timed_out)
+    assert timeout.value.code is ErrorCode.INVALID_INPUT
+    assert timeout.value.recoverable is True

@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import shutil
+import signal
 import socket
 import struct
 import threading
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import FrameType
 
 from pydantic import ValidationError
 
@@ -44,14 +47,32 @@ from perflens.domain.errors import ErrorCode, PerfLensError
 
 _PEER_CREDENTIALS = struct.Struct("3i")
 _MAX_TRACKED_PLANS = 4096
+_MAX_REQUEST_FRAME_TIMEOUT_SECONDS = 5.0
 
 
 class CollectorBrokerServer:
     """Sequential broker whose only mutating operation is collect a verified PID."""
 
-    def __init__(self, socket_path: Path, policy: CollectorBrokerPolicy) -> None:
+    def __init__(
+        self,
+        socket_path: Path,
+        policy: CollectorBrokerPolicy,
+        *,
+        request_timeout_seconds: float = _MAX_REQUEST_FRAME_TIMEOUT_SECONDS,
+    ) -> None:
+        if (
+            isinstance(request_timeout_seconds, bool)
+            or not math.isfinite(request_timeout_seconds)
+            or request_timeout_seconds <= 0
+            or request_timeout_seconds > _MAX_REQUEST_FRAME_TIMEOUT_SECONDS
+        ):
+            raise ValueError(
+                "Collector request timeout must be finite, positive, and no greater than "
+                f"{_MAX_REQUEST_FRAME_TIMEOUT_SECONDS:g} seconds"
+            )
         self._policy = validate_broker_policy(policy)
         self._socket_path = _new_socket_path(socket_path)
+        self._request_timeout_seconds = float(request_timeout_seconds)
         self._stop = threading.Event()
         self._consumed_plans: dict[str, datetime] = {}
         self._socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -78,8 +99,12 @@ class CollectorBrokerServer:
             connection, _ = self._socket.accept()
         except TimeoutError:
             return
+        except OSError:
+            if self._stop.is_set():
+                return
+            raise
         with connection:
-            connection.settimeout(self._policy.max_duration_seconds + 15)
+            connection.settimeout(self._request_timeout_seconds)
             self._handle_connection(connection)
 
     def close(self) -> None:
@@ -247,9 +272,7 @@ class CollectorBrokerServer:
                 recoverable=True,
             )
         expires_at = _plan_expiration(plan)
-        if expires_at > datetime.now(tz=UTC) + timedelta(
-            seconds=self._policy.max_plan_ttl_seconds
-        ):
+        if expires_at > datetime.now(tz=UTC) + timedelta(seconds=self._policy.max_plan_ttl_seconds):
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,
                 "authorization",
@@ -371,14 +394,22 @@ def _peer_uid(connection: socket.socket) -> int:
 def _read_frame(connection: socket.socket) -> bytes:
     received = bytearray()
     while b"\n" not in received:
-        remaining = MAX_BROKER_MESSAGE_BYTES + 1 - len(received)
+        remaining = MAX_BROKER_MESSAGE_BYTES - len(received)
         if remaining <= 0:
             raise PerfLensError(
                 ErrorCode.RESOURCE_LIMIT_EXCEEDED,
                 "collector_broker",
                 "Collector broker request exceeds the protocol limit",
             )
-        chunk = connection.recv(min(16 << 10, remaining))
+        try:
+            chunk = connection.recv(min(16 << 10, remaining))
+        except TimeoutError as exc:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "collector_broker",
+                "Collector broker request timed out before a complete frame",
+                recoverable=True,
+            ) from exc
         if not chunk:
             break
         received.extend(chunk)
@@ -418,7 +449,13 @@ def main() -> None:
     parser.add_argument("--policy", type=Path, required=True)
     arguments = parser.parse_args()
     policy = load_broker_policy(arguments.policy)
-    with CollectorBrokerServer(arguments.socket, policy) as server, suppress(KeyboardInterrupt):
+    with CollectorBrokerServer(arguments.socket, policy) as server:
+
+        def close_server(_signum: int, _frame: FrameType | None) -> None:
+            server.close()
+
+        signal.signal(signal.SIGTERM, close_server)
+        signal.signal(signal.SIGINT, close_server)
         server.serve_forever()
 
 
