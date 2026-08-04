@@ -39,6 +39,7 @@ from perflens.collection.planning import (
 )
 from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.contracts.artifacts import (
+    CollectionCapabilityArtifact,
     CollectorAcceptanceArtifact,
     RuntimeStatusArtifact,
 )
@@ -155,8 +156,12 @@ def doctor_command(
         Path | None,
         typer.Option("--perf-path", dir_okay=False, help="Explicit system perf executable."),
     ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the complete versioned capability JSON."),
+    ] = False,
 ) -> None:
-    """Inspect collection permissions without sampling or attaching to a process."""
+    """Show a read-only Chinese collection-permission summary."""
     try:
         artifact = inspect_collection_capabilities(perf_path)
         if output_path is not None:
@@ -166,9 +171,17 @@ def doctor_command(
             return
     except PerfLensError as exc:
         _fail(exc)
-    typer.echo(
-        json.dumps(artifact.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True)
-    )
+    if json_output:
+        typer.echo(
+            json.dumps(
+                artifact.model_dump(mode="json"),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+    _render_doctor_chinese(artifact)
 
 
 @app.command("status")
@@ -1037,6 +1050,150 @@ def _parse_address(value: str, field: str) -> int:
             details={"field": field},
         )
     return parsed
+
+
+def _render_doctor_chinese(artifact: CollectionCapabilityArtifact) -> None:
+    status_labels = {"available": "可用", "conditional": "需要真实验收", "blocked": "受阻"}
+    privilege_labels = {
+        "none": "无需额外权限",
+        "cap_perfmon": "需要受限 perf 采集权限",
+        "cap_sys_admin_or_policy_change": "需要管理员审查内核策略或 Collector 权限",
+    }
+    reason_labels = {
+        "The system perf executable is unavailable.": "系统中没有找到可执行的 perf。",
+        (
+            "perf_event_paranoid is greater than 2; this Debian-style policy blocks "
+            "unprivileged perf_event_open before normal CAP_PERFMON scope checks."
+        ): "perf_event_paranoid 大于 2, 普通用户直接采集会被内核策略阻止。",
+        "The current credential has a perf monitoring privilege.": (
+            "当前进程具备 perf 监控权限; 仍需真实短时验收。"
+        ),
+        "Own-process user-space collection depends on the selected events and kernel policy.": (
+            "自有进程的用户态采集取决于事件类型和本机内核策略。"
+        ),
+        "Perf monitoring privilege and readable sched tracepoint metadata are present.": (
+            "已有 perf 监控权限, 并且 sched tracepoint 元数据可读。"
+        ),
+        "Perf monitoring privilege is present, but tracefs metadata is not readable.": (
+            "已有 perf 监控权限, 但 tracefs 元数据不可读。"
+        ),
+        "The tracepoint appears readable, but a real bounded probe is still required.": (
+            "tracepoint 看起来可读, 但仍需有界真实采集验收。"
+        ),
+        "Tracepoint collection requires CAP_PERFMON or an equivalent host policy.": (
+            "tracepoint 采集需要 CAP_PERFMON 或等效的主机策略。"
+        ),
+    }
+    warning_labels = {
+        "System perf executable was not found.": "未找到系统 perf 可执行文件。",
+        "Configured perf executable cannot be resolved.": "指定的 perf 路径无法解析。",
+        "Configured perf path is not an executable regular file.": (
+            "指定的 perf 路径不是可执行普通文件。"
+        ),
+        "Unable to query the selected perf version.": "无法读取所选 perf 的版本。",
+        "Unable to inspect effective process capabilities.": "无法检查当前进程 capability。",
+        "Unable to inspect perf file capabilities.": "无法检查 perf 文件 capability。",
+        "Unable to read /proc/sys/kernel/perf_event_paranoid.": (
+            "无法读取内核 perf_event_paranoid。"
+        ),
+        "Unable to read /proc/sys/kernel/kptr_restrict.": "无法读取内核 kptr_restrict。",
+        "Unable to read /proc/sys/kernel/yama/ptrace_scope.": (
+            "无法读取内核 ptrace_scope。"
+        ),
+    }
+    recommendation_labels = {
+        "Install a perf build matching the running Linux kernel.": (
+            "安装与当前运行内核匹配的 perf。"
+        ),
+        "Have an administrator review perf_event_paranoid; do not weaken it automatically.": (
+            "让管理员按主机威胁模型审查 perf_event_paranoid; 不要自动降低安全策略。"
+        ),
+        (
+            "Prefer a dedicated collector service with a narrow policy over running the MCP "
+            "server as root."
+        ): "优先部署权限收窄的专用 Collector; 不要让 MCP 或 Agent 以 root 运行。",
+        "Run a short authorized real probe before claiming a mode is operational.": (
+            "宣称采集可用前, 必须执行一次明确授权的短时真实验收。"
+        ),
+    }
+    statuses = {mode.status for mode in artifact.modes}
+    overall = (
+        "全部模式可进入真实验收"
+        if statuses == {"available"}
+        else "所有模式当前受阻"
+        if statuses == {"blocked"}
+        else "部分模式受限"
+    )
+    typer.echo("PerfLens 采集能力检查 (只读)")
+    typer.echo(
+        f"系统: {_terminal_text(artifact.platform)} {_terminal_text(artifact.kernel_release)}"
+    )
+    typer.echo(f"当前用户 UID: {artifact.effective_uid}")
+    typer.echo(f"perf: {_terminal_text(artifact.perf_executable or '未找到')}")
+    typer.echo(f"perf 版本: {_terminal_text(artifact.perf_version or '未知')}")
+    typer.echo(
+        "内核策略: "
+        f"perf_event_paranoid={_optional_integer(artifact.perf_event_paranoid)}, "
+        f"kptr_restrict={_optional_integer(artifact.kptr_restrict)}, "
+        f"ptrace_scope={_optional_integer(artifact.ptrace_scope)}"
+    )
+    typer.echo(f"tracefs: {'可读' if artifact.tracefs_accessible else '不可读/未挂载'}")
+    typer.echo(
+        "当前进程 capability: "
+        + (_terminal_text(", ".join(artifact.effective_capabilities)) or "无")
+    )
+    typer.echo(
+        "perf 文件 capability: "
+        + (_terminal_text(", ".join(artifact.perf_file_capabilities)) or "无")
+    )
+    typer.echo(f"综合结论: {overall}")
+    typer.echo("采集模式:")
+    for mode in artifact.modes:
+        typer.echo(
+            f"- {mode.mode}: {status_labels[mode.status]}; "
+            f"{privilege_labels[mode.required_privilege]}"
+        )
+        typer.echo(f"  说明: {_terminal_text(reason_labels.get(mode.reason, mode.reason))}")
+    if artifact.warnings:
+        typer.echo("检查提示:")
+        for warning in artifact.warnings:
+            typer.echo(f"- {_terminal_text(warning_labels.get(warning, warning))}")
+    if artifact.recommendations:
+        typer.echo("建议:")
+        for recommendation in artifact.recommendations:
+            typer.echo(
+                f"- {_terminal_text(recommendation_labels.get(recommendation, recommendation))}"
+            )
+    typer.echo("结论边界:")
+    typer.echo("- 本命令没有运行 perf、附加 PID、写入 spool 或修改主机配置。")
+    typer.echo("- 可用/需要验收只代表前置条件; 真实采集必须另行短时验收。")
+    typer.echo("下一步:")
+    typer.echo("- 只分析已有 Profile 时可以直接继续, 不需要 root 或 Collector。")
+    if "blocked" in statuses:
+        typer.echo(
+            "- 需要自动采集时运行 `perflens setup --prepare-collector "
+            "--automatic-collection`, 再按生成的中文指南让管理员部署。"
+        )
+    else:
+        typer.echo(
+            "- Collector 已部署时运行 "
+            "`perflens accept-collector --authorize-host-acceptance`。"
+        )
+    typer.echo("- 完整机器结果使用 `perflens doctor --json` 或 `--output <新文件.json>`。")
+
+
+def _optional_integer(value: int | None) -> str:
+    return "未知" if value is None else str(value)
+
+
+def _terminal_text(value: str, *, max_characters: int = 512) -> str:
+    visible = "".join(
+        character if character.isprintable() and character != "\x1b" else "?"
+        for character in value
+    )
+    if len(visible) <= max_characters:
+        return visible
+    return f"{visible[:max_characters]}..."
 
 
 def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:

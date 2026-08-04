@@ -46,10 +46,14 @@ MCP 分析产物并生成报告
 
 ```bash
 perflens doctor
+perflens doctor --json
 perflens doctor --output collection-capabilities.json
 ```
 
-它报告 `perf_event_paranoid`、当前 capability、perf 文件 capability、tracefs 可见性及五种模式的 `available`、`conditional` 或 `blocked` 状态。`conditional` 不是成功证明，正式发布仍应运行短时真实验收。
+第一条默认显示中文摘要；第二条把完整版本化 Artifact 输出到终端，适合自动化；第三条
+安全写入一个尚不存在的 JSON 文件。它报告 `perf_event_paranoid`、当前 capability、
+perf 文件 capability、tracefs 可见性及五种模式的 `available`、`conditional` 或
+`blocked` 状态。`conditional` 不是成功证明，正式发布仍应运行短时真实验收。
 
 ## 暂存安装模板
 

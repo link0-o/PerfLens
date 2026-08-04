@@ -251,3 +251,5 @@ pipx uninstall perflens
 ### `doctor` 显示 blocked
 
 普通 Profile 分析仍可使用。实时采集需要管理员部署受限 Collector 并审核主机 perf 策略。
+`doctor` 默认显示中文摘要；自动化读取完整能力 Artifact 时使用 `perflens doctor --json`，
+需要留档时使用 `--output <尚不存在的文件.json>`。

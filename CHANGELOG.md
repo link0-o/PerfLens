@@ -6,6 +6,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Added
 
+- Chinese-first `perflens doctor` capability summaries with mode-by-mode status,
+  kernel controls, privilege boundaries, translated recommendations, and exact
+  next actions. `--json` keeps console automation and `--output` safely writes
+  the unchanged versioned capability artifact.
 - Chinese-first terminal error summaries for `perflens` and `perflens-admin`,
   including stable error IDs, code-specific recovery guidance, and the original
   bounded technical detail. `--json-errors` and `PERFLENS_JSON_ERRORS=1`
@@ -21,6 +25,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Changed
 
+- `perflens doctor` now defaults to a human-readable Chinese summary. Existing
+  automation that parsed stdout must add `--json`; `--output` behavior and the
+  `CollectionCapabilityArtifact` schema are unchanged.
 - CLI domain errors now default to a human-readable Chinese summary. Automation
   that parses errors must place the global `--json-errors` option before the
   subcommand or set `PERFLENS_JSON_ERRORS=1`; exit codes and the versioned JSON

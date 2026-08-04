@@ -16,9 +16,9 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 |---|---|---|
 | Lint | `ruff check .` | passed |
 | Strict types | `pyright` | 0 errors, 0 warnings |
-| Python 3.13 | isolated `pytest -q` environment | 283 passed |
+| Python 3.13 | isolated `pytest -q` environment | 284 passed |
 | Python 3.12 | `pytest -q` on 3.12.13 | previous full release gate: 256 passed; not locally rerun for this change, so CI remains required |
-| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.79%, passed |
+| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.91%, passed |
 | Skill | structure and package tests | passed |
 | Schemas | checked-in schema equality test | passed |
 | Dependency lock | `uv export --locked` | passed |

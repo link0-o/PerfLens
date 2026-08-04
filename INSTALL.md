@@ -68,6 +68,8 @@ including whether the dry run changed the host, the authenticated health result,
 and the next action. Add `--json` for the complete versioned artifact.
 See [Product deployment](docs/deployment.md) before installing those assets. A
 blocked `perflens doctor` result does not prevent analysis of existing profiles.
+`doctor` is Chinese-first; use `perflens doctor --json` for the versioned stdout
+artifact or `--output <new-file.json>` to preserve it safely.
 After deployment and a new login, check this specific bundle with `perflens
 status --project /absolute/path/to/project --setup-directory
 /absolute/path/to/project/perflens-collector-setup`; the Chinese summary prints

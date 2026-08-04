@@ -15,7 +15,11 @@ from perflens.application.analyze import analyze_folded
 from perflens.artifacts.filesystem import write_json_atomic
 from perflens.cli.app import app
 from perflens.collection.collector import ACTIVE_COLLECTION_AUTHORIZATION
-from perflens.contracts.artifacts import RuntimeStatusArtifact
+from perflens.contracts.artifacts import (
+    CollectionCapabilityArtifact,
+    CollectionModeCapability,
+    RuntimeStatusArtifact,
+)
 from perflens.distribution.skill import SKILL_NAME
 
 runner = CliRunner()
@@ -51,7 +55,14 @@ def test_cli_exposes_version_and_release_setup_commands(tmp_path: Path) -> None:
 
     doctor = runner.invoke(app, ["doctor"])
     assert doctor.exit_code == 0, doctor.output
-    doctor_payload = json.loads(doctor.output)
+    assert "PerfLens 采集能力检查 (只读)" in doctor.output
+    assert "综合结论:" in doctor.output
+    assert "采集模式:" in doctor.output
+    assert "本命令没有运行 perf" in doctor.output
+
+    doctor_json = runner.invoke(app, ["doctor", "--json"])
+    assert doctor_json.exit_code == 0, doctor_json.output
+    doctor_payload = json.loads(doctor_json.output)
     assert doctor_payload["schema_version"] == "1.0"
     assert {item["mode"] for item in doctor_payload["modes"]} == {
         "record",
@@ -60,6 +71,11 @@ def test_cli_exposes_version_and_release_setup_commands(tmp_path: Path) -> None:
         "lock",
         "off_cpu",
     }
+    doctor_output = tmp_path / "doctor.json"
+    doctor_written = runner.invoke(app, ["doctor", "--output", str(doctor_output)])
+    assert doctor_written.exit_code == 0, doctor_written.output
+    assert doctor_written.output.strip() == str(doctor_output)
+    assert json.loads(doctor_output.read_text(encoding="utf-8"))["schema_version"] == "1.0"
 
     denied_probe = runner.invoke(
         app,
@@ -106,6 +122,64 @@ def test_cli_exposes_version_and_release_setup_commands(tmp_path: Path) -> None:
         encoding="utf-8"
     )
     assert '"--allow-project-execution"' in generated_config
+
+
+def test_doctor_translates_mode_reasons_warnings_and_recommendations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = CollectionCapabilityArtifact(
+        capability_id="capability-doctor-summary",
+        platform="Linux",
+        kernel_release="test",
+        effective_uid=1000,
+        perf_executable=None,
+        perf_version="malicious\x1b[31m\nversion",
+        tracefs_accessible=False,
+        modes=(
+            CollectionModeCapability(
+                mode="record",
+                status="available",
+                required_privilege="none",
+                reason="The current credential has a perf monitoring privilege.",
+            ),
+            CollectionModeCapability(
+                mode="stat",
+                status="conditional",
+                required_privilege="cap_perfmon",
+                reason=(
+                    "Own-process user-space collection depends on the selected events and "
+                    "kernel policy."
+                ),
+            ),
+            CollectionModeCapability(
+                mode="sched",
+                status="blocked",
+                required_privilege="cap_sys_admin_or_policy_change",
+                reason="The system perf executable is unavailable.",
+            ),
+        ),
+        warnings=("Unable to read /proc/sys/kernel/perf_event_paranoid.",),
+        recommendations=(
+            "Prefer a dedicated collector service with a narrow policy over running the MCP "
+            "server as root.",
+        ),
+    )
+
+    def inspected(_path: Path | None = None) -> CollectionCapabilityArtifact:
+        return artifact
+
+    monkeypatch.setattr("perflens.cli.app.inspect_collection_capabilities", inspected)
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0, result.output
+    assert "record: 可用; 无需额外权限" in result.output
+    assert "stat: 需要真实验收; 需要受限 perf 采集权限" in result.output
+    assert "sched: 受阻; 需要管理员审查内核策略或 Collector 权限" in result.output
+    assert "无法读取内核 perf_event_paranoid" in result.output
+    assert "不要让 MCP 或 Agent 以 root 运行" in result.output
+    assert "The system perf executable" not in result.output
+    assert "\x1b" not in result.output
+    assert "malicious?[31m?version" in result.output
 
 
 def test_cli_analyzes_folded_profile(fixture_root: Path, tmp_path: Path) -> None:

@@ -18,7 +18,9 @@ Evidence retention is a separate human-administrator archive-then-prune flow.
 Archives have a dedicated read-only verifier; the MCP, Skill, and Collector
 protocol expose no automatic deletion operation.
 
-Run `perflens doctor` for a read-only capability report. Stage the packaged service templates with:
+Run `perflens doctor` for a Chinese-first, read-only capability summary. Use
+`perflens doctor --json` for the complete versioned stdout artifact or
+`--output <new-file.json>` to preserve it safely. Stage the packaged service templates with:
 
 The example below uses the native DEB path; wheel deployments should replace it
 with the administrator-controlled `/opt/perflens/bin/perflens-collector`.

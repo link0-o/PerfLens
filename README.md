@@ -80,6 +80,8 @@ wrong-identity sockets instead of declaring them ready.
 Domain failures are Chinese-first for people. Automation should use the global
 `perflens --json-errors <command> ...` option or set
 `PERFLENS_JSON_ERRORS=1` to preserve the versioned JSON error artifact.
+`perflens doctor` follows the same human-first principle: add `--json` for its
+versioned capability artifact or `--output <new-file.json>` to save it safely.
 
 After administrator deployment and a fresh login, verify the Collector without
 finding a PID:

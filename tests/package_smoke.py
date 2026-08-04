@@ -23,6 +23,21 @@ def main() -> None:
     _run(perflens_admin, "--version", expected=__version__)
     assert "--json-errors" in _run(perflens, "--help")
     assert "--json-errors" in _run(perflens_admin, "--help")
+    doctor_help = _run(perflens, "doctor", "--help")
+    assert "--json" in doctor_help
+    assert "--output" in doctor_help
+    doctor_summary = _run(
+        perflens,
+        "doctor",
+        "--perf-path",
+        "/bin/true",
+        expected="PerfLens 采集能力检查 (只读)",
+    )
+    assert "采集模式:" in doctor_summary
+    doctor_payload = json.loads(
+        _run(perflens, "doctor", "--perf-path", "/bin/true", "--json")
+    )
+    assert doctor_payload["schema_version"] == "1.0"
     deploy_help = _run(
         perflens_admin,
         "deploy",
@@ -89,6 +104,17 @@ def main() -> None:
         project = root / "project"
         profile.write_text("main;worker 7\nmain;compute 13\n", encoding="utf-8")
         project.mkdir()
+
+        doctor_output = root / "doctor.json"
+        _run(
+            perflens,
+            "doctor",
+            "--perf-path",
+            "/bin/true",
+            "--output",
+            str(doctor_output),
+        )
+        assert json.loads(doctor_output.read_text(encoding="utf-8"))["schema_version"] == "1.0"
 
         _run(
             perflens,
