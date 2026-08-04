@@ -78,6 +78,11 @@ Run a read-only readiness summary at any time:
 perflens status --project /absolute/path/to/project
 ```
 
+Human-facing command help is Chinese-first as well. Run `perflens --help`,
+`perflens setup --help`, or `perflens-admin --help` when needed. Stable English
+command and option names are unchanged, and subcommand help documents duration,
+resource, archive-selection, and authorization boundaries.
+
 When automatic collection is configured and local access is available, this
 also performs a bounded, read-only health handshake. It verifies the Collector
 PID/UID with kernel peer credentials and reports stale, unreachable, or

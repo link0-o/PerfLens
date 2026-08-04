@@ -36,6 +36,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Changed
 
+- `perflens --help`, every user subcommand, and `perflens-admin --help` are now
+  Chinese-first. Previously undocumented analysis limits and administrator
+  archive controls now explain their units and safety boundaries; command and
+  option names remain unchanged for script compatibility.
 - `verify-collector` now defaults to a human-readable Chinese summary. Existing
   automation that parsed its stdout must add `--json`; authorization phrases,
   exit codes, Collector policy checks, and the artifact schema are unchanged.

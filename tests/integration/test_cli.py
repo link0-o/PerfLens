@@ -25,6 +25,29 @@ from perflens.distribution.skill import SKILL_NAME
 runner = CliRunner()
 
 
+def test_cli_help_is_chinese_first_without_changing_public_command_names() -> None:
+    root_help = runner.invoke(app, ["--help"])
+    assert root_help.exit_code == 0, root_help.output
+    assert "基于证据的 Linux 性能分析工具" in root_help.output
+    assert "setup" in root_help.output
+    assert "为一个项目生成安全、中文优先的安装引导" in root_help.output
+    assert "accept-collector" in root_help.output
+    assert "无需选择 PID" in root_help.output
+    assert "Evidence-driven Linux performance analysis" not in root_help.output
+
+    setup_help = runner.invoke(app, ["setup", "--help"])
+    assert setup_help.exit_code == 0, setup_help.output
+    assert "用于安装 Skill 和引导文件的现有项目" in setup_help.output
+    assert "不会安装或提权" in setup_help.output
+    assert "可信 perflens-mcp 入口路径" in setup_help.output
+
+    collection_help = runner.invoke(app, ["collect-profile", "--help"])
+    assert collection_help.exit_code == 0, collection_help.output
+    assert "每次明确授权后才执行有界 perf 采集" in collection_help.output
+    assert "PID 附加的完整显式授权短语" in collection_help.output
+    assert "--duration-seconds" in collection_help.output
+
+
 def test_cli_exposes_version_and_release_setup_commands(tmp_path: Path) -> None:
     version = runner.invoke(app, ["--version"])
     assert version.exit_code == 0, version.output

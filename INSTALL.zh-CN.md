@@ -108,6 +108,10 @@ perflens status --project /绝对路径/你的项目
 它会用中文指出引导、Skill、MCP、Collector 资产、Socket、用户组或 perf 权限中
 尚未完成的部分，不会执行采样或修改系统。
 
+不用背诵所有参数。`perflens --help`、`perflens <子命令> --help` 和
+`perflens-admin --help` 现在均以中文说明用途、安全边界、单位和默认值；命令名及参数名
+仍保持英文和向后兼容。例如忘记自动采集开关时可直接运行 `perflens setup --help`。
+
 普通命令失败时同样默认显示中文摘要，包括稳定错误代码、错误 ID、有限技术信息和
 下一步。自动化程序需要解析完整版本化错误 JSON 时，把全局选项放在子命令前：
 

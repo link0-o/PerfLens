@@ -21,7 +21,8 @@ def main() -> None:
     _run(perflens_mcp, "--version", expected=__version__)
     _run(perflens_collector, "--version", expected=__version__)
     _run(perflens_admin, "--version", expected=__version__)
-    assert "--json-errors" in _run(perflens, "--help")
+    root_help = _run(perflens, "--help", expected="基于证据的 Linux 性能分析工具")
+    assert "--json-errors" in root_help
     detach_help = _run(perflens, "detach", "--help")
     assert "--dry-run" in detach_help
     assert "--json" in detach_help
@@ -52,46 +53,46 @@ def main() -> None:
         perflens_admin,
         "undeploy",
         "--help",
-        expected="preserving policy and artifacts",
+        expected="停止并移除托管服务",
     )
     _run(
         perflens_admin,
         "upgrade",
         "--help",
-        expected="Safely upgrade and restart",
+        expected="安全升级并重启 Collector",
     )
     _run(
         perflens_admin,
         "spool-status",
         "--help",
-        expected="Read-only Chinese summary",
+        expected="只读显示 spool 使用量",
     )
     _run(
         perflens_admin,
         "update-policy",
         "--help",
-        expected="Safely update policy",
+        expected="安全更新策略",
     )
     _run(
         perflens_admin,
         "archive-spool",
         "--help",
-        expected="Archive old managed spool evidence",
+        expected="归档旧的托管 spool 证据",
     )
     _run(
         perflens_admin,
         "prune-archived-spool",
         "--help",
-        expected="Prune only exact source files",
+        expected="只清理已经由归档 manifest 精确证明的源文件",
     )
     _run(
         perflens_admin,
         "verify-spool-archive",
         "--help",
-        expected="without pruning any evidence",
+        expected="不清理任何证据",
     )
     verification_help = _run(
-        perflens, "verify-collector", "--help", expected="bounded real perf-stat probe"
+        perflens, "verify-collector", "--help", expected="有界真实 perf stat 验收"
     )
     assert "--json" in verification_help
     assert "--output" in verification_help
@@ -99,10 +100,10 @@ def main() -> None:
         perflens,
         "accept-collector",
         "--help",
-        expected="without choosing a PID",
+        expected="无需选择 PID",
     )
     assert "--json" in acceptance_help
-    assert "complete versioned acceptance" in acceptance_help
+    assert "完整、带版本的验收 JSON" in acceptance_help
 
     with tempfile.TemporaryDirectory(prefix="perflens-package-smoke-") as directory:
         root = Path(directory)

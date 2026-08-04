@@ -37,7 +37,7 @@ from perflens.error_presentation import (
 
 app = typer.Typer(
     name="perflens-admin",
-    help="Explicit administrator operations for the optional PerfLens Collector.",
+    help="用于可选 PerfLens Collector 的显式管理员操作。",
     no_args_is_help=True,
     pretty_exceptions_enable=False,
     rich_markup_mode=None,
@@ -48,7 +48,7 @@ app = typer.Typer(
 def root(
     version: Annotated[
         bool,
-        typer.Option("--version", help="Show the PerfLens version and exit.", is_eager=True),
+        typer.Option("--version", help="显示 PerfLens 版本并退出。", is_eager=True),
     ] = False,
     json_errors: Annotated[
         bool,
@@ -107,10 +107,10 @@ def deploy_command(
 def undeploy_command(
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Validate the managed unit without changing the host."),
+        typer.Option("--dry-run", help="只验证托管 unit, 不修改主机。"),
     ] = False,
 ) -> None:
-    """Stop and remove the managed service while preserving policy and artifacts."""
+    """停止并移除托管服务, 同时保留策略和采集产物。"""
     try:
         result = undeploy_collector(dry_run=dry_run)
     except PerfLensError as exc:
@@ -122,18 +122,18 @@ def undeploy_command(
 def upgrade_command(
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Validate and compare the managed unit without changes."),
+        typer.Option("--dry-run", help="只验证并比较托管 unit, 不修改系统。"),
     ] = False,
     collector_command: Annotated[
         Path | None,
         typer.Option(
             "--collector-command",
             dir_okay=False,
-            help="Trusted upgraded Collector path; defaults beside perflens-admin.",
+            help="可信的新 Collector 路径; 默认与 perflens-admin 位于同一目录。",
         ),
     ] = None,
 ) -> None:
-    """Safely upgrade and restart the Collector while preserving policy and artifacts."""
+    """安全升级并重启 Collector, 同时保留策略和采集产物。"""
     try:
         result = upgrade_collector(
             dry_run=dry_run,
@@ -151,15 +151,15 @@ def spool_status_command(
         typer.Option(
             "--config",
             dir_okay=False,
-            help="Deployed Collector TOML policy to inspect.",
+            help="需要检查的已部署 Collector TOML 策略。",
         ),
     ] = Path("/etc/perflens/collector.toml"),
     json_output: Annotated[
         bool,
-        typer.Option("--json", help="Emit the complete versioned JSON artifact."),
+        typer.Option("--json", help="输出完整、带版本的 JSON 产物。"),
     ] = False,
 ) -> None:
-    """Read-only Chinese summary of spool usage and remaining capacity."""
+    """只读显示 spool 使用量与剩余容量的中文摘要。"""
     try:
         result = inspect_collector_spool(config)
     except PerfLensError as exc:
@@ -177,15 +177,15 @@ def update_policy_command(
         typer.Option(
             "--config",
             dir_okay=False,
-            help="Separate reviewed candidate Collector TOML policy.",
+            help="已经单独审查的候选 Collector TOML 策略。",
         ),
     ],
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Validate and compare policy without changes."),
+        typer.Option("--dry-run", help="只验证并比较策略, 不修改系统。"),
     ] = False,
 ) -> None:
-    """Safely update policy, restart, health-check, and roll back on failure."""
+    """安全更新策略、重启并健康检查, 失败时自动恢复。"""
     try:
         result = update_collector_policy(config, dry_run=dry_run)
     except PerfLensError as exc:
@@ -197,34 +197,39 @@ def update_policy_command(
 def archive_spool_command(
     output: Annotated[
         Path,
-        typer.Option("--output", dir_okay=False, help="New absolute ZIP archive path."),
+        typer.Option("--output", dir_okay=False, help="新 ZIP 归档的绝对路径。"),
     ],
     config: Annotated[
         Path,
-        typer.Option("--config", dir_okay=False, help="Deployed Collector TOML policy."),
+        typer.Option("--config", dir_okay=False, help="已部署的 Collector TOML 策略。"),
     ] = Path("/etc/perflens/collector.toml"),
     older_than_days: Annotated[
         int,
-        typer.Option("--older-than-days", min=0, max=36_500),
+        typer.Option(
+            "--older-than-days",
+            min=0,
+            max=36_500,
+            help="只选择早于该天数的产物。",
+        ),
     ] = 7,
     keep_latest: Annotated[
         int,
-        typer.Option("--keep-latest", min=0, max=10_000),
+        typer.Option("--keep-latest", min=0, max=10_000, help="始终保留的最新产物数量。"),
     ] = 20,
     max_artifacts: Annotated[
         int,
-        typer.Option("--max-artifacts", min=1, max=10_000),
+        typer.Option("--max-artifacts", min=1, max=10_000, help="单次最多归档的产物数量。"),
     ] = 1000,
     max_total_bytes: Annotated[
         int,
-        typer.Option("--max-total-bytes", min=1, max=1 << 40),
+        typer.Option("--max-total-bytes", min=1, max=1 << 40, help="单次归档的最大逻辑字节数。"),
     ] = 10 << 30,
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Hash and plan without creating an archive."),
+        typer.Option("--dry-run", help="只计算哈希并显示计划, 不创建归档。"),
     ] = False,
 ) -> None:
-    """Archive old managed spool evidence without deleting source files."""
+    """归档旧的托管 spool 证据, 不删除源文件。"""
     try:
         result = archive_collector_spool(
             output,
@@ -244,25 +249,25 @@ def archive_spool_command(
 def prune_archived_spool_command(
     archive: Annotated[
         Path,
-        typer.Option("--archive", dir_okay=False, help="Verified archive ZIP path."),
+        typer.Option("--archive", dir_okay=False, help="已经验证的归档 ZIP 路径。"),
     ],
     config: Annotated[
         Path,
-        typer.Option("--config", dir_okay=False, help="Deployed Collector TOML policy."),
+        typer.Option("--config", dir_okay=False, help="已部署的 Collector TOML 策略。"),
     ] = Path("/etc/perflens/collector.toml"),
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Verify archive and sources without deletion."),
+        typer.Option("--dry-run", help="只验证归档和源文件, 不执行删除。"),
     ] = False,
     authorization: Annotated[
         str | None,
         typer.Option(
             "--authorization",
-            help="Exact destructive-operation authorization phrase.",
+            help="破坏性清理操作要求的完整授权短语。",
         ),
     ] = None,
 ) -> None:
-    """Prune only exact source files proven by a verified archive manifest."""
+    """只清理已经由归档 manifest 精确证明的源文件。"""
     try:
         result = prune_archived_collector_spool(
             archive,
@@ -279,25 +284,25 @@ def prune_archived_spool_command(
 def verify_spool_archive_command(
     archive: Annotated[
         Path,
-        typer.Option("--archive", dir_okay=False, help="Root-managed archive ZIP path."),
+        typer.Option("--archive", dir_okay=False, help="由 root 管理的归档 ZIP 路径。"),
     ],
     config: Annotated[
         Path,
-        typer.Option("--config", dir_okay=False, help="Deployed Collector TOML policy."),
+        typer.Option("--config", dir_okay=False, help="已部署的 Collector TOML 策略。"),
     ] = Path("/etc/perflens/collector.toml"),
     verify_sources: Annotated[
         bool,
         typer.Option(
             "--verify-sources",
-            help="Also verify every still-present source artifact without deleting it.",
+            help="同时验证仍存在的所有源产物, 但不删除。",
         ),
     ] = False,
     json_output: Annotated[
         bool,
-        typer.Option("--json", help="Emit the complete versioned JSON artifact."),
+        typer.Option("--json", help="输出完整、带版本的 JSON 产物。"),
     ] = False,
 ) -> None:
-    """Verify archive structure and hashes without pruning any evidence."""
+    """验证归档结构和哈希, 不清理任何证据。"""
     try:
         result = verify_collector_spool_archive(
             archive,

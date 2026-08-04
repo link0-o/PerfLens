@@ -66,7 +66,7 @@ from perflens.security.paths import validate_new_output_file, validate_output_fi
 
 app = typer.Typer(
     name="perflens",
-    help="Evidence-driven Linux performance analysis.",
+    help="基于证据的 Linux 性能分析工具。",
     no_args_is_help=True,
     pretty_exceptions_enable=False,
     rich_markup_mode=None,
@@ -77,18 +77,18 @@ app = typer.Typer(
 def root(
     version: Annotated[
         bool,
-        typer.Option("--version", help="Show the PerfLens version and exit.", is_eager=True),
+        typer.Option("--version", help="显示 PerfLens 版本并退出。", is_eager=True),
     ] = False,
     json_errors: Annotated[
         bool,
         typer.Option(
             "--json-errors",
-            help="Output the complete versioned JSON error artifact for automation.",
+            help="为自动化程序输出完整、带版本的 JSON 错误。",
             envvar="PERFLENS_JSON_ERRORS",
         ),
     ] = False,
 ) -> None:
-    """Run deterministic PerfLens analysis commands."""
+    """运行确定性的 PerfLens 分析命令。"""
     configure_json_errors(json_errors)
     if version:
         typer.echo(__version__)
@@ -102,11 +102,11 @@ def install_skill_command(
         typer.Option(
             "--project",
             file_okay=False,
-            help="Existing project root that will receive .agents/skills.",
+            help="用于安装 .agents/skills 的现有项目根目录。",
         ),
     ] = Path("."),
 ) -> None:
-    """Install the bundled Performance Analysis Skill into a project."""
+    """把内置的性能分析 Skill 安装到项目中。"""
     try:
         target = install_project_skill(project_root)
     except PerfLensError as exc:
@@ -118,25 +118,25 @@ def install_skill_command(
 def codex_config_command(
     workspace: Annotated[
         Path,
-        typer.Option("--workspace", file_okay=False, help="Allowed workspace root."),
+        typer.Option("--workspace", file_okay=False, help="允许访问的工作区根目录。"),
     ] = Path("."),
     artifact_root: Annotated[
         Path | None,
-        typer.Option("--artifact-root", file_okay=False),
+        typer.Option("--artifact-root", file_okay=False, help="MCP 产物保存目录。"),
     ] = None,
     allow_process_execution: Annotated[
         bool,
         typer.Option(
             "--allow-process-execution",
-            help="Allow bounded perf.data conversion and source symbolization.",
+            help="允许有界的 perf.data 转换和源码符号化。",
         ),
     ] = False,
     mcp_command: Annotated[
         Path | None,
-        typer.Option("--mcp-command", dir_okay=False),
+        typer.Option("--mcp-command", dir_okay=False, help="可信 perflens-mcp 入口路径。"),
     ] = None,
 ) -> None:
-    """Print a project-scoped Codex MCP TOML configuration snippet."""
+    """输出项目级 Codex MCP TOML 配置片段。"""
     try:
         configuration = render_codex_config(
             workspace,
@@ -153,18 +153,18 @@ def codex_config_command(
 def doctor_command(
     output_path: Annotated[
         Path | None,
-        typer.Option("--output", dir_okay=False, help="Optional new JSON output path."),
+        typer.Option("--output", dir_okay=False, help="可选的新 JSON 输出路径。"),
     ] = None,
     perf_path: Annotated[
         Path | None,
-        typer.Option("--perf-path", dir_okay=False, help="Explicit system perf executable."),
+        typer.Option("--perf-path", dir_okay=False, help="明确指定系统 perf 程序。"),
     ] = None,
     json_output: Annotated[
         bool,
-        typer.Option("--json", help="Print the complete versioned capability JSON."),
+        typer.Option("--json", help="输出完整、带版本的能力 JSON。"),
     ] = False,
 ) -> None:
-    """Show a read-only Chinese collection-permission summary."""
+    """显示只读的中文采集权限摘要。"""
     try:
         artifact = inspect_collection_capabilities(perf_path)
         if output_path is not None:
@@ -191,30 +191,30 @@ def doctor_command(
 def status_command(
     project_root: Annotated[
         Path,
-        typer.Option("--project", file_okay=False, help="Project root to inspect."),
+        typer.Option("--project", file_okay=False, help="需要检查的项目根目录。"),
     ] = Path("."),
     setup_directory: Annotated[
         Path,
         typer.Option(
             "--setup-directory",
             file_okay=False,
-            help="Setup directory inside the project.",
+            help="项目中的 setup 引导目录。",
         ),
     ] = Path("perflens-setup"),
     collector_socket: Annotated[
         Path,
-        typer.Option("--collector-socket", dir_okay=False),
+        typer.Option("--collector-socket", dir_okay=False, help="Collector Unix Socket 路径。"),
     ] = Path("/run/perflens/collector.sock"),
     perf_path: Annotated[
         Path | None,
-        typer.Option("--perf-path", dir_okay=False, help="Explicit system perf executable."),
+        typer.Option("--perf-path", dir_okay=False, help="明确指定系统 perf 程序。"),
     ] = None,
     output_path: Annotated[
         Path | None,
-        typer.Option("--output", dir_okay=False, help="Optional new JSON output path."),
+        typer.Option("--output", dir_okay=False, help="可选的新 JSON 输出路径。"),
     ] = None,
 ) -> None:
-    """Read-only Chinese-first project and Collector readiness summary."""
+    """只读检查项目与 Collector 是否就绪, 并输出中文摘要。"""
     try:
         artifact = inspect_runtime_status(
             project_root,
@@ -239,7 +239,7 @@ def setup_command(
         typer.Option(
             "--project",
             file_okay=False,
-            help="Existing project that will receive the Skill and onboarding files.",
+            help="用于安装 Skill 和引导文件的现有项目。",
         ),
     ] = Path("."),
     output_directory: Annotated[
@@ -247,14 +247,14 @@ def setup_command(
         typer.Option(
             "--output-directory",
             file_okay=False,
-            help="New directory inside the project; defaults to perflens-setup.",
+            help="项目内的新引导目录; 默认是 perflens-setup。",
         ),
     ] = None,
     install_skill: Annotated[
         bool,
         typer.Option(
             "--install-skill/--skip-skill",
-            help="Install the bundled Skill when it is not already present.",
+            help="尚未安装时安装内置 Skill。",
         ),
     ] = True,
     install_codex_config: Annotated[
@@ -262,7 +262,7 @@ def setup_command(
         typer.Option(
             "--install-codex-config/--skip-codex-config",
             help=(
-                "Safely install the generated MCP table in the project's .codex/config.toml."
+                "把生成的 MCP 表安全接入项目 .codex/config.toml。"
             ),
         ),
     ] = True,
@@ -270,25 +270,25 @@ def setup_command(
         bool,
         typer.Option(
             "--allow-process-execution",
-            help="Include bounded perf.data conversion and symbolization in the MCP snippet.",
+            help="在 MCP 配置中开放有界 perf.data 转换和符号化。",
         ),
     ] = False,
     mcp_command: Annotated[
         Path | None,
-        typer.Option("--mcp-command", dir_okay=False),
+        typer.Option("--mcp-command", dir_okay=False, help="可信 perflens-mcp 入口路径。"),
     ] = None,
     prepare_collector: Annotated[
         bool,
         typer.Option(
             "--prepare-collector",
-            help="Stage administrator-reviewed Collector assets; never install or elevate.",
+            help="生成供管理员审查的 Collector 资产; 不会安装或提权。",
         ),
     ] = False,
     automatic_collection: Annotated[
         bool,
         typer.Option(
             "--automatic-collection",
-            help="Generate MCP policy for authorized unprivileged project launch and collection.",
+            help="为已授权的普通用户项目运行和采集生成 MCP 策略。",
         ),
     ] = False,
     collector_uid: Annotated[
@@ -296,7 +296,7 @@ def setup_command(
         typer.Option(
             "--collector-uid",
             min=0,
-            help="Ordinary UID to place in staged Collector policy; defaults to current UID.",
+            help="写入 Collector 策略的普通用户 UID; 默认是当前 UID。",
         ),
     ] = None,
     collector_command: Annotated[
@@ -305,17 +305,17 @@ def setup_command(
             "--collector-command",
             dir_okay=False,
             help=(
-                "Future absolute Collector path. Auto-detects a trusted /usr/bin package "
-                "entry point; otherwise stages the /opt/perflens wheel layout."
+                "未来使用的 Collector 绝对路径。优先识别可信 /usr/bin 包入口; "
+                "否则生成 /opt/perflens wheel 部署布局。"
             ),
         ),
     ] = None,
     perf_path: Annotated[
         Path,
-        typer.Option("--perf-path", dir_okay=False),
+        typer.Option("--perf-path", dir_okay=False, help="系统 perf 程序的绝对路径。"),
     ] = Path("/usr/bin/perf"),
 ) -> None:
-    """Generate a safe Chinese-first onboarding bundle for one project."""
+    """为一个项目生成安全、中文优先的安装引导。"""
     try:
         artifact = run_project_setup(
             project_root,
@@ -381,23 +381,23 @@ def detach_command(
         typer.Option(
             "--project",
             file_okay=False,
-            help="Project whose PerfLens-managed Codex MCP block will be removed.",
+            help="需要移除 PerfLens 托管 Codex MCP 配置块的项目。",
         ),
     ] = Path("."),
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Inspect the exact managed block without changing it."),
+        typer.Option("--dry-run", help="只检查将移除的托管块, 不修改文件。"),
     ] = False,
     json_output: Annotated[
         bool,
-        typer.Option("--json", help="Print the complete versioned detachment artifact."),
+        typer.Option("--json", help="输出完整、带版本的解除接入结果。"),
     ] = False,
     output_path: Annotated[
         Path | None,
-        typer.Option("--output", dir_okay=False, help="Optional new JSON evidence path."),
+        typer.Option("--output", dir_okay=False, help="可选的新 JSON 证据路径。"),
     ] = None,
 ) -> None:
-    """Detach project MCP configuration while preserving Skill, setup, and results."""
+    """解除项目 MCP 接入, 同时保留 Skill、引导文件和分析结果。"""
     try:
         safe_output = (
             validate_new_output_file(output_path) if output_path is not None else None
@@ -420,7 +420,7 @@ def stage_collector_assets_command(
         typer.Option(
             "--output-directory",
             file_okay=False,
-            help="New directory that will receive inspectable service templates.",
+            help="用于保存可检查服务模板的新目录。",
         ),
     ],
     allowed_uid: Annotated[
@@ -428,7 +428,7 @@ def stage_collector_assets_command(
         typer.Option(
             "--allowed-uid",
             min=0,
-            help="The one ordinary UID permitted by this Collector instance.",
+            help="此 Collector 实例唯一允许的普通用户 UID。",
         ),
     ] = 1000,
     collector_command: Annotated[
@@ -436,7 +436,7 @@ def stage_collector_assets_command(
         typer.Option(
             "--collector-command",
             dir_okay=False,
-            help="Absolute perflens-collector path for the staged systemd unit.",
+            help="写入 systemd unit 的 perflens-collector 绝对路径。",
         ),
     ] = Path("/usr/bin/perflens-collector"),
     perf_path: Annotated[
@@ -444,11 +444,11 @@ def stage_collector_assets_command(
         typer.Option(
             "--perf-path",
             dir_okay=False,
-            help="Absolute perf path for the staged Collector policy.",
+            help="写入 Collector 策略的 perf 绝对路径。",
         ),
     ] = Path("/usr/bin/perf"),
 ) -> None:
-    """Stage Collector policy/systemd templates without installing or using sudo."""
+    """生成 Collector 策略和 systemd 模板, 不安装也不调用 sudo。"""
     try:
         target = install_collector_assets(
             output_directory,
@@ -465,46 +465,52 @@ def stage_collector_assets_command(
 def verify_collector_command(
     socket_path: Annotated[
         Path,
-        typer.Option("--socket", dir_okay=False, help="Existing Collector Unix socket."),
+        typer.Option("--socket", dir_okay=False, help="现有 Collector Unix Socket。"),
     ],
-    pid: Annotated[int, typer.Option("--pid", min=1, help="Owned live PID used for the probe.")],
+    pid: Annotated[int, typer.Option("--pid", min=1, help="用于验收且归当前用户所有的实时 PID。")],
     duration_seconds: Annotated[
         float,
         typer.Option(
             "--duration-seconds",
             min=0.1,
             max=5.0,
-            help="Short perf-stat probe duration; capped at five seconds.",
+            help="短时 perf stat 验收时长; 最多 5 秒。",
         ),
     ] = 1.0,
     output_path: Annotated[
         Path | None,
-        typer.Option("--output", dir_okay=False, help="Optional new JSON metadata path."),
+        typer.Option("--output", dir_okay=False, help="可选的新 JSON 元数据路径。"),
     ] = None,
     json_output: Annotated[
         bool,
-        typer.Option("--json", help="Print the complete versioned collection JSON."),
+        typer.Option("--json", help="输出完整、带版本的采集 JSON。"),
     ] = False,
     perf_path: Annotated[
         Path | None,
         typer.Option(
             "--perf-path",
             dir_okay=False,
-            help="Optional local perf path used only for the capability snapshot.",
+            help="可选本机 perf 路径; 只用于生成能力快照。",
         ),
     ] = None,
     authorize_target: Annotated[
         bool,
-        typer.Option("--authorize-target", help="Confirm the bounded observation impact."),
+        typer.Option("--authorize-target", help="确认已接受有界观测影响。"),
     ] = False,
-    authorization: Annotated[str, typer.Option("--authorization")] = "",
+    authorization: Annotated[
+        str,
+        typer.Option("--authorization", help="目标采集的完整显式授权短语。"),
+    ] = "",
     authorize_pid_attach: Annotated[
         bool,
-        typer.Option("--authorize-pid-attach", help="Separately confirm attachment to --pid."),
+        typer.Option("--authorize-pid-attach", help="单独确认允许附加到 --pid。"),
     ] = False,
-    pid_authorization: Annotated[str, typer.Option("--pid-authorization")] = "",
+    pid_authorization: Annotated[
+        str,
+        typer.Option("--pid-authorization", help="PID 附加的完整显式授权短语。"),
+    ] = "",
 ) -> None:
-    """Run one bounded real perf-stat probe through an installed Collector."""
+    """通过已安装 Collector 执行一次有界真实 perf stat 验收。"""
     try:
         if not authorize_target or authorization != ACTIVE_COLLECTION_AUTHORIZATION:
             raise PerfLensError(
@@ -579,7 +585,7 @@ def verify_collector_command(
 def accept_collector_command(
     socket_path: Annotated[
         Path,
-        typer.Option("--socket", dir_okay=False, help="Installed Collector Unix socket."),
+        typer.Option("--socket", dir_okay=False, help="已安装 Collector 的 Unix Socket。"),
     ] = Path("/run/perflens/collector.sock"),
     duration_seconds: Annotated[
         float,
@@ -587,34 +593,34 @@ def accept_collector_command(
             "--duration-seconds",
             min=0.1,
             max=5.0,
-            help="Built-in CPU probe duration; capped at five seconds.",
+            help="内置 CPU 测试负载的采集时长; 最多 5 秒。",
         ),
     ] = 1.0,
     output_path: Annotated[
         Path | None,
-        typer.Option("--output", dir_okay=False, help="Optional new acceptance JSON path."),
+        typer.Option("--output", dir_okay=False, help="可选的新验收 JSON 路径。"),
     ] = None,
     json_output: Annotated[
         bool,
-        typer.Option("--json", help="Print the complete versioned acceptance JSON."),
+        typer.Option("--json", help="输出完整、带版本的验收 JSON。"),
     ] = False,
     perf_path: Annotated[
         Path | None,
         typer.Option(
             "--perf-path",
             dir_okay=False,
-            help="Optional local perf path used only for the capability snapshot.",
+            help="可选本机 perf 路径; 只用于生成能力快照。",
         ),
     ] = None,
     authorize_host_acceptance: Annotated[
         bool,
         typer.Option(
             "--authorize-host-acceptance",
-            help="Authorize profiling PerfLens's fixed, self-owned test workload.",
+            help="授权采集 PerfLens 固定且归自身所有的测试负载。",
         ),
     ] = False,
 ) -> None:
-    """Test an installed Collector end to end without choosing a PID."""
+    """无需选择 PID, 端到端验收已安装的 Collector。"""
     try:
         artifact = accept_collector(
             socket_path,
@@ -646,24 +652,44 @@ def accept_collector_command(
 def analyze_folded_command(
     input_path: Annotated[
         Path,
-        typer.Option("--input", exists=False, dir_okay=False, help="Folded stack input."),
+        typer.Option("--input", exists=False, dir_okay=False, help="Folded 栈输入文件。"),
     ],
     output_path: Annotated[
         Path,
-        typer.Option("--output", dir_okay=False, help="Versioned JSON artifact."),
+        typer.Option("--output", dir_okay=False, help="带版本的 JSON 输出产物。"),
     ],
-    max_input_bytes: Annotated[int, typer.Option(min=1)] = 1 << 30,
-    max_records: Annotated[int, typer.Option(min=1)] = 10_000_000,
-    max_line_chars: Annotated[int, typer.Option(min=16)] = 1 << 20,
-    max_stack_depth: Annotated[int, typer.Option(min=1)] = 4_096,
-    max_unique_frames: Annotated[int, typer.Option(min=1)] = 2_000_000,
-    max_unique_call_paths: Annotated[int, typer.Option(min=1)] = 1_000_000,
-    max_warnings: Annotated[int, typer.Option(min=0)] = 100,
-    top_n: Annotated[int, typer.Option("--top-n", min=1)] = 10_000,
-    call_path_limit: Annotated[int, typer.Option(min=1)] = 1_000,
-    max_output_bytes: Annotated[int, typer.Option(min=1)] = 128 << 20,
+    max_input_bytes: Annotated[
+        int, typer.Option(min=1, help="允许读取的最大输入字节数。")
+    ] = 1 << 30,
+    max_records: Annotated[
+        int, typer.Option(min=1, help="允许解析的最大样本记录数。")
+    ] = 10_000_000,
+    max_line_chars: Annotated[
+        int, typer.Option(min=16, help="单行允许的最大字符数。")
+    ] = 1 << 20,
+    max_stack_depth: Annotated[
+        int, typer.Option(min=1, help="单条调用栈允许的最大深度。")
+    ] = 4_096,
+    max_unique_frames: Annotated[
+        int, typer.Option(min=1, help="允许保留的最大唯一栈帧数。")
+    ] = 2_000_000,
+    max_unique_call_paths: Annotated[
+        int, typer.Option(min=1, help="允许保留的最大唯一调用路径数。")
+    ] = 1_000_000,
+    max_warnings: Annotated[
+        int, typer.Option(min=0, help="产物中最多保留的解析警告数。")
+    ] = 100,
+    top_n: Annotated[
+        int, typer.Option("--top-n", min=1, help="最多输出的热点数量。")
+    ] = 10_000,
+    call_path_limit: Annotated[
+        int, typer.Option(min=1, help="最多输出的调用路径数量。")
+    ] = 1_000,
+    max_output_bytes: Annotated[
+        int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")
+    ] = 128 << 20,
 ) -> None:
-    """Analyze standard FlameGraph folded stacks."""
+    """分析标准 FlameGraph folded 栈。"""
     limits = ResourceLimits(
         max_input_bytes=max_input_bytes,
         max_records=max_records,
@@ -692,24 +718,44 @@ def analyze_folded_command(
 def analyze_perf_script_command(
     input_path: Annotated[
         Path,
-        typer.Option("--input", exists=False, dir_okay=False, help="perf script text input."),
+        typer.Option("--input", exists=False, dir_okay=False, help="perf script 文本输入。"),
     ],
     output_path: Annotated[
         Path,
-        typer.Option("--output", dir_okay=False, help="Versioned JSON artifact."),
+        typer.Option("--output", dir_okay=False, help="带版本的 JSON 输出产物。"),
     ],
-    max_input_bytes: Annotated[int, typer.Option(min=1)] = 1 << 30,
-    max_records: Annotated[int, typer.Option(min=1)] = 10_000_000,
-    max_line_chars: Annotated[int, typer.Option(min=16)] = 1 << 20,
-    max_stack_depth: Annotated[int, typer.Option(min=1)] = 4_096,
-    max_unique_frames: Annotated[int, typer.Option(min=1)] = 2_000_000,
-    max_unique_call_paths: Annotated[int, typer.Option(min=1)] = 1_000_000,
-    max_warnings: Annotated[int, typer.Option(min=0)] = 100,
-    top_n: Annotated[int, typer.Option("--top-n", min=1)] = 10_000,
-    call_path_limit: Annotated[int, typer.Option(min=1)] = 1_000,
-    max_output_bytes: Annotated[int, typer.Option(min=1)] = 128 << 20,
+    max_input_bytes: Annotated[
+        int, typer.Option(min=1, help="允许读取的最大输入字节数。")
+    ] = 1 << 30,
+    max_records: Annotated[
+        int, typer.Option(min=1, help="允许解析的最大样本记录数。")
+    ] = 10_000_000,
+    max_line_chars: Annotated[
+        int, typer.Option(min=16, help="单行允许的最大字符数。")
+    ] = 1 << 20,
+    max_stack_depth: Annotated[
+        int, typer.Option(min=1, help="单条调用栈允许的最大深度。")
+    ] = 4_096,
+    max_unique_frames: Annotated[
+        int, typer.Option(min=1, help="允许保留的最大唯一栈帧数。")
+    ] = 2_000_000,
+    max_unique_call_paths: Annotated[
+        int, typer.Option(min=1, help="允许保留的最大唯一调用路径数。")
+    ] = 1_000_000,
+    max_warnings: Annotated[
+        int, typer.Option(min=0, help="产物中最多保留的解析警告数。")
+    ] = 100,
+    top_n: Annotated[
+        int, typer.Option("--top-n", min=1, help="最多输出的热点数量。")
+    ] = 10_000,
+    call_path_limit: Annotated[
+        int, typer.Option(min=1, help="最多输出的调用路径数量。")
+    ] = 1_000,
+    max_output_bytes: Annotated[
+        int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")
+    ] = 128 << 20,
 ) -> None:
-    """Analyze text from the documented PerfLens perf script field set."""
+    """分析 PerfLens 约定字段格式的 perf script 文本。"""
     limits = ResourceLimits(
         max_input_bytes=max_input_bytes,
         max_records=max_records,
@@ -738,29 +784,51 @@ def analyze_perf_script_command(
 def analyze_perf_data_command(
     input_path: Annotated[
         Path,
-        typer.Option("--input", exists=False, dir_okay=False, help="perf.data input."),
+        typer.Option("--input", exists=False, dir_okay=False, help="perf.data 输入文件。"),
     ],
     output_path: Annotated[
         Path,
-        typer.Option("--output", dir_okay=False, help="Versioned JSON artifact."),
+        typer.Option("--output", dir_okay=False, help="带版本的 JSON 输出产物。"),
     ],
     perf_path: Annotated[
         Path | None,
-        typer.Option("--perf-path", dir_okay=False, help="Explicit perf executable path."),
+        typer.Option("--perf-path", dir_okay=False, help="明确指定 perf 程序路径。"),
     ] = None,
-    timeout_seconds: Annotated[float, typer.Option(min=0.1)] = 300.0,
-    max_input_bytes: Annotated[int, typer.Option(min=1)] = 1 << 30,
-    max_records: Annotated[int, typer.Option(min=1)] = 10_000_000,
-    max_line_chars: Annotated[int, typer.Option(min=16)] = 1 << 20,
-    max_stack_depth: Annotated[int, typer.Option(min=1)] = 4_096,
-    max_unique_frames: Annotated[int, typer.Option(min=1)] = 2_000_000,
-    max_unique_call_paths: Annotated[int, typer.Option(min=1)] = 1_000_000,
-    max_warnings: Annotated[int, typer.Option(min=0)] = 100,
-    top_n: Annotated[int, typer.Option("--top-n", min=1)] = 10_000,
-    call_path_limit: Annotated[int, typer.Option(min=1)] = 1_000,
-    max_output_bytes: Annotated[int, typer.Option(min=1)] = 128 << 20,
+    timeout_seconds: Annotated[
+        float, typer.Option(min=0.1, help="perf 转换超时秒数。")
+    ] = 300.0,
+    max_input_bytes: Annotated[
+        int, typer.Option(min=1, help="允许读取的最大输入字节数。")
+    ] = 1 << 30,
+    max_records: Annotated[
+        int, typer.Option(min=1, help="允许解析的最大样本记录数。")
+    ] = 10_000_000,
+    max_line_chars: Annotated[
+        int, typer.Option(min=16, help="单行允许的最大字符数。")
+    ] = 1 << 20,
+    max_stack_depth: Annotated[
+        int, typer.Option(min=1, help="单条调用栈允许的最大深度。")
+    ] = 4_096,
+    max_unique_frames: Annotated[
+        int, typer.Option(min=1, help="允许保留的最大唯一栈帧数。")
+    ] = 2_000_000,
+    max_unique_call_paths: Annotated[
+        int, typer.Option(min=1, help="允许保留的最大唯一调用路径数。")
+    ] = 1_000_000,
+    max_warnings: Annotated[
+        int, typer.Option(min=0, help="产物中最多保留的解析警告数。")
+    ] = 100,
+    top_n: Annotated[
+        int, typer.Option("--top-n", min=1, help="最多输出的热点数量。")
+    ] = 10_000,
+    call_path_limit: Annotated[
+        int, typer.Option(min=1, help="最多输出的调用路径数量。")
+    ] = 1_000,
+    max_output_bytes: Annotated[
+        int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")
+    ] = 128 << 20,
 ) -> None:
-    """Analyze perf.data through the system perf script adapter."""
+    """通过系统 perf script 适配器分析 perf.data。"""
     limits = ResourceLimits(
         max_input_bytes=max_input_bytes,
         max_records=max_records,
@@ -792,11 +860,17 @@ def analyze_perf_data_command(
 
 @app.command("inspect-elf")
 def inspect_elf_command(
-    input_path: Annotated[Path, typer.Option("--input", dir_okay=False)],
-    output_path: Annotated[Path, typer.Option("--output", dir_okay=False)],
-    max_output_bytes: Annotated[int, typer.Option(min=1)] = 8 << 20,
+    input_path: Annotated[
+        Path, typer.Option("--input", dir_okay=False, help="需要检查的 ELF 文件。")
+    ],
+    output_path: Annotated[
+        Path, typer.Option("--output", dir_okay=False, help="带版本的 JSON 输出产物。")
+    ],
+    max_output_bytes: Annotated[
+        int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")
+    ] = 8 << 20,
 ) -> None:
-    """Inspect ELF identity, Build ID, and debug capabilities."""
+    """检查 ELF 身份、Build ID 和调试信息能力。"""
     try:
         artifact = inspect_elf(input_path)
         safe_output = validate_output_file(output_path, input_path=Path(artifact.path))
@@ -808,17 +882,28 @@ def inspect_elf_command(
 
 @app.command("resolve-source")
 def resolve_source_command(
-    binary_path: Annotated[Path, typer.Option("--binary", dir_okay=False)],
-    module_offset: Annotated[str, typer.Option("--module-offset")],
-    output_path: Annotated[Path, typer.Option("--output", dir_okay=False)],
-    runtime_address: Annotated[str | None, typer.Option("--runtime-address")] = None,
+    binary_path: Annotated[
+        Path, typer.Option("--binary", dir_okay=False, help="已验证的 ELF 二进制文件。")
+    ],
+    module_offset: Annotated[
+        str, typer.Option("--module-offset", help="已验证的模块相对偏移, 例如 0x1234。")
+    ],
+    output_path: Annotated[
+        Path, typer.Option("--output", dir_okay=False, help="带版本的 JSON 输出产物。")
+    ],
+    runtime_address: Annotated[
+        str | None,
+        typer.Option("--runtime-address", help="可选运行时地址, 仅作为证据记录。"),
+    ] = None,
     addr2line_path: Annotated[
         Path | None,
-        typer.Option("--addr2line-path", dir_okay=False),
+        typer.Option("--addr2line-path", dir_okay=False, help="可信 addr2line 程序路径。"),
     ] = None,
-    max_output_bytes: Annotated[int, typer.Option(min=1)] = 8 << 20,
+    max_output_bytes: Annotated[
+        int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")
+    ] = 8 << 20,
 ) -> None:
-    """Resolve a verified module-relative offset to source frames."""
+    """把已验证的模块相对偏移解析为源码栈帧。"""
     try:
         artifact = resolve_source(
             binary_path,
@@ -839,15 +924,27 @@ def resolve_source_command(
 
 @app.command("source-context")
 def source_context_command(
-    source_path: Annotated[Path, typer.Option("--file", dir_okay=False)],
-    line: Annotated[int, typer.Option(min=1)],
-    workspace_root: Annotated[Path, typer.Option("--workspace", file_okay=False)],
-    output_path: Annotated[Path, typer.Option("--output", dir_okay=False)],
-    before: Annotated[int, typer.Option(min=0, max=200)] = 20,
-    after: Annotated[int, typer.Option(min=0, max=200)] = 20,
-    max_output_bytes: Annotated[int, typer.Option(min=1)] = 8 << 20,
+    source_path: Annotated[
+        Path, typer.Option("--file", dir_okay=False, help="需要读取上下文的源码文件。")
+    ],
+    line: Annotated[int, typer.Option(min=1, help="目标源码行号。")],
+    workspace_root: Annotated[
+        Path, typer.Option("--workspace", file_okay=False, help="允许访问的工作区根目录。")
+    ],
+    output_path: Annotated[
+        Path, typer.Option("--output", dir_okay=False, help="带版本的 JSON 输出产物。")
+    ],
+    before: Annotated[
+        int, typer.Option(min=0, max=200, help="目标行之前读取的行数。")
+    ] = 20,
+    after: Annotated[
+        int, typer.Option(min=0, max=200, help="目标行之后读取的行数。")
+    ] = 20,
+    max_output_bytes: Annotated[
+        int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")
+    ] = 8 << 20,
 ) -> None:
-    """Read bounded source context inside an allowed workspace."""
+    """在允许的工作区内有界读取源码上下文。"""
     try:
         artifact = get_source_context(
             source_path,
@@ -865,12 +962,20 @@ def source_context_command(
 
 @app.command("classify")
 def classify_command(
-    analysis_path: Annotated[Path, typer.Option("--analysis", dir_okay=False)],
-    output_path: Annotated[Path, typer.Option("--output", dir_okay=False)],
-    max_input_bytes: Annotated[int, typer.Option(min=1)] = 128 << 20,
-    max_output_bytes: Annotated[int, typer.Option(min=1)] = 128 << 20,
+    analysis_path: Annotated[
+        Path, typer.Option("--analysis", dir_okay=False, help="Profile 分析 JSON。")
+    ],
+    output_path: Annotated[
+        Path, typer.Option("--output", dir_okay=False, help="诊断 JSON 输出路径。")
+    ],
+    max_input_bytes: Annotated[
+        int, typer.Option(min=1, help="允许读取的最大输入字节数。")
+    ] = 128 << 20,
+    max_output_bytes: Annotated[
+        int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")
+    ] = 128 << 20,
 ) -> None:
-    """Build a candidate-only evidence and diagnosis bundle."""
+    """生成只包含候选结论的证据与诊断产物。"""
     try:
         artifact = classify_analysis(analysis_path, max_input_bytes=max_input_bytes)
         safe_output = validate_output_file(output_path, input_path=analysis_path)
@@ -882,14 +987,26 @@ def classify_command(
 
 @app.command("report")
 def report_command(
-    analysis_path: Annotated[Path, typer.Option("--analysis", dir_okay=False)],
-    output_path: Annotated[Path, typer.Option("--output", dir_okay=False)],
-    problem_statement: Annotated[str, typer.Option("--problem")] = "Not supplied.",
-    target_metric: Annotated[str, typer.Option("--metric")] = "Not supplied.",
-    max_input_bytes: Annotated[int, typer.Option(min=1)] = 128 << 20,
-    max_output_bytes: Annotated[int, typer.Option(min=1)] = 128 << 20,
+    analysis_path: Annotated[
+        Path, typer.Option("--analysis", dir_okay=False, help="Profile 分析 JSON。")
+    ],
+    output_path: Annotated[
+        Path, typer.Option("--output", dir_okay=False, help="Markdown 报告输出路径。")
+    ],
+    problem_statement: Annotated[
+        str, typer.Option("--problem", help="需要调查的性能问题描述。")
+    ] = "Not supplied.",
+    target_metric: Annotated[
+        str, typer.Option("--metric", help="关注的性能指标名称。")
+    ] = "Not supplied.",
+    max_input_bytes: Annotated[
+        int, typer.Option(min=1, help="允许读取的最大输入字节数。")
+    ] = 128 << 20,
+    max_output_bytes: Annotated[
+        int, typer.Option(min=1, help="Markdown 产物允许的最大字节数。")
+    ] = 128 << 20,
 ) -> None:
-    """Render an evidence-constrained Markdown performance report."""
+    """生成受证据约束的 Markdown 性能报告。"""
     try:
         report = report_analysis(
             analysis_path,
@@ -906,17 +1023,27 @@ def report_command(
 
 @app.command("normalize-benchmark")
 def normalize_benchmark_command(
-    input_path: Annotated[Path, typer.Option("--input", dir_okay=False)],
-    output_path: Annotated[Path, typer.Option("--output", dir_okay=False)],
+    input_path: Annotated[
+        Path, typer.Option("--input", dir_okay=False, help="第三方 Benchmark JSON。")
+    ],
+    output_path: Annotated[
+        Path, typer.Option("--output", dir_okay=False, help="标准化 JSON 输出路径。")
+    ],
     source_format: Annotated[
         Literal["auto", "perflens", "pyperf", "google_benchmark", "hyperfine"],
-        typer.Option("--format"),
+        typer.Option("--format", help="输入格式; auto 会自动识别。"),
     ] = "auto",
-    benchmark_name: Annotated[str | None, typer.Option("--benchmark-name")] = None,
-    max_input_bytes: Annotated[int, typer.Option(min=1)] = 64 << 20,
-    max_output_bytes: Annotated[int, typer.Option(min=1)] = 64 << 20,
+    benchmark_name: Annotated[
+        str | None, typer.Option("--benchmark-name", help="多 Benchmark 文件中的目标名称。")
+    ] = None,
+    max_input_bytes: Annotated[
+        int, typer.Option(min=1, help="允许读取的最大输入字节数。")
+    ] = 64 << 20,
+    max_output_bytes: Annotated[
+        int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")
+    ] = 64 << 20,
 ) -> None:
-    """Normalize supported third-party benchmark JSON."""
+    """标准化受支持的第三方 Benchmark JSON。"""
     try:
         artifact = normalize_benchmark(
             input_path,
@@ -933,15 +1060,30 @@ def normalize_benchmark_command(
 
 @app.command("compare-profiles")
 def compare_profiles_command(
-    baseline_path: Annotated[Path, typer.Option("--baseline", dir_okay=False)],
-    candidate_path: Annotated[Path, typer.Option("--candidate", dir_okay=False)],
-    output_path: Annotated[Path, typer.Option("--output", dir_okay=False)],
-    markdown_output: Annotated[Path | None, typer.Option("--markdown-output")] = None,
-    minimum_delta_percent: Annotated[float, typer.Option(min=0)] = 1.0,
-    max_input_bytes: Annotated[int, typer.Option(min=1)] = 128 << 20,
-    max_output_bytes: Annotated[int, typer.Option(min=1)] = 128 << 20,
+    baseline_path: Annotated[
+        Path, typer.Option("--baseline", dir_okay=False, help="优化前的分析 JSON。")
+    ],
+    candidate_path: Annotated[
+        Path, typer.Option("--candidate", dir_okay=False, help="优化后的分析 JSON。")
+    ],
+    output_path: Annotated[
+        Path, typer.Option("--output", dir_okay=False, help="比较 JSON 输出路径。")
+    ],
+    markdown_output: Annotated[
+        Path | None,
+        typer.Option("--markdown-output", dir_okay=False, help="可选 Markdown 比较报告。"),
+    ] = None,
+    minimum_delta_percent: Annotated[
+        float, typer.Option(min=0, help="报告变化所需的最小百分点差值。")
+    ] = 1.0,
+    max_input_bytes: Annotated[
+        int, typer.Option(min=1, help="每个输入允许读取的最大字节数。")
+    ] = 128 << 20,
+    max_output_bytes: Annotated[
+        int, typer.Option(min=1, help="每个输出允许的最大字节数。")
+    ] = 128 << 20,
 ) -> None:
-    """Compare two PerfLens profile analysis artifacts."""
+    """比较两个 PerfLens Profile 分析产物。"""
     try:
         artifact = compare_analysis_files(
             baseline_path,
@@ -967,20 +1109,37 @@ def compare_profiles_command(
 
 @app.command("compare-benchmarks")
 def compare_benchmarks_command(
-    baseline_path: Annotated[Path, typer.Option("--baseline", dir_okay=False)],
-    candidate_path: Annotated[Path, typer.Option("--candidate", dir_okay=False)],
-    output_path: Annotated[Path, typer.Option("--output", dir_okay=False)],
-    markdown_output: Annotated[Path | None, typer.Option("--markdown-output")] = None,
+    baseline_path: Annotated[
+        Path, typer.Option("--baseline", dir_okay=False, help="优化前 Benchmark JSON。")
+    ],
+    candidate_path: Annotated[
+        Path, typer.Option("--candidate", dir_okay=False, help="优化后 Benchmark JSON。")
+    ],
+    output_path: Annotated[
+        Path, typer.Option("--output", dir_okay=False, help="比较 JSON 输出路径。")
+    ],
+    markdown_output: Annotated[
+        Path | None,
+        typer.Option("--markdown-output", dir_okay=False, help="可选 Markdown 比较报告。"),
+    ] = None,
     source_format: Annotated[
         Literal["auto", "perflens", "pyperf", "google_benchmark", "hyperfine"],
-        typer.Option("--format"),
+        typer.Option("--format", help="输入格式; auto 会自动识别。"),
     ] = "auto",
-    benchmark_name: Annotated[str | None, typer.Option("--benchmark-name")] = None,
-    minimum_practical_impact_percent: Annotated[float, typer.Option(min=0)] = 1.0,
-    max_input_bytes: Annotated[int, typer.Option(min=1)] = 64 << 20,
-    max_output_bytes: Annotated[int, typer.Option(min=1)] = 64 << 20,
+    benchmark_name: Annotated[
+        str | None, typer.Option("--benchmark-name", help="多 Benchmark 文件中的目标名称。")
+    ] = None,
+    minimum_practical_impact_percent: Annotated[
+        float, typer.Option(min=0, help="判定实际影响所需的最小百分比。")
+    ] = 1.0,
+    max_input_bytes: Annotated[
+        int, typer.Option(min=1, help="每个输入允许读取的最大字节数。")
+    ] = 64 << 20,
+    max_output_bytes: Annotated[
+        int, typer.Option(min=1, help="每个输出允许的最大字节数。")
+    ] = 64 << 20,
 ) -> None:
-    """Compare two normalized or supported third-party benchmark files."""
+    """比较两个标准化或受支持的第三方 Benchmark 文件。"""
     try:
         artifact = compare_benchmark_files(
             baseline_path,
@@ -1008,44 +1167,71 @@ def compare_benchmarks_command(
 
 @app.command("collect-profile")
 def collect_profile_command(
-    data_output: Annotated[Path, typer.Option("--data-output", dir_okay=False)],
-    metadata_output: Annotated[Path, typer.Option("--metadata-output", dir_okay=False)],
+    data_output: Annotated[
+        Path, typer.Option("--data-output", dir_okay=False, help="原始采集数据的新输出路径。")
+    ],
+    metadata_output: Annotated[
+        Path,
+        typer.Option("--metadata-output", dir_okay=False, help="采集元数据的新 JSON 路径。"),
+    ],
     mode: Annotated[
         Literal["record", "stat", "sched", "lock", "off_cpu"],
-        typer.Option("--mode"),
+        typer.Option("--mode", help="采集模式。"),
     ] = "record",
     executable: Annotated[
         Path | None,
-        typer.Option("--executable", dir_okay=False, help="Absolute target executable."),
+        typer.Option("--executable", dir_okay=False, help="目标程序的绝对路径。"),
     ] = None,
     target_arguments: Annotated[
         list[str] | None,
-        typer.Option("--target-arg", help="Repeat for each target argument."),
+        typer.Option("--target-arg", help="目标程序的一个参数; 多个参数可重复传入。"),
     ] = None,
-    pid: Annotated[int | None, typer.Option("--pid", min=1)] = None,
-    duration_seconds: Annotated[float | None, typer.Option("--duration-seconds", min=0.01)] = None,
-    perf_path: Annotated[Path | None, typer.Option("--perf-path", dir_okay=False)] = None,
-    frequency_hz: Annotated[int, typer.Option("--frequency-hz", min=1, max=10_000)] = 99,
-    call_graph: Annotated[Literal["fp", "dwarf", "lbr"], typer.Option("--call-graph")] = "dwarf",
+    pid: Annotated[
+        int | None, typer.Option("--pid", min=1, help="需要附加的现有进程 PID。")
+    ] = None,
+    duration_seconds: Annotated[
+        float | None, typer.Option("--duration-seconds", min=0.01, help="采集时长 (秒)。")
+    ] = None,
+    perf_path: Annotated[
+        Path | None, typer.Option("--perf-path", dir_okay=False, help="明确指定 perf 程序。")
+    ] = None,
+    frequency_hz: Annotated[
+        int,
+        typer.Option("--frequency-hz", min=1, max=10_000, help="record 采样频率 (Hz)。"),
+    ] = 99,
+    call_graph: Annotated[
+        Literal["fp", "dwarf", "lbr"],
+        typer.Option("--call-graph", help="record 调用栈采集方式。"),
+    ] = "dwarf",
     events: Annotated[
         list[str] | None,
-        typer.Option("--event", help="Repeat to override default perf-stat events."),
+        typer.Option("--event", help="perf stat 事件; 重复传入可覆盖默认事件。"),
     ] = None,
-    timeout_seconds: Annotated[float, typer.Option("--timeout-seconds", min=0.1)] = 300.0,
-    max_data_bytes: Annotated[int, typer.Option("--max-data-bytes", min=1)] = 1 << 30,
-    max_metadata_bytes: Annotated[int, typer.Option("--max-metadata-bytes", min=1)] = 8 << 20,
+    timeout_seconds: Annotated[
+        float, typer.Option("--timeout-seconds", min=0.1, help="整个采集命令的超时秒数。")
+    ] = 300.0,
+    max_data_bytes: Annotated[
+        int, typer.Option("--max-data-bytes", min=1, help="原始采集数据最大字节数。")
+    ] = 1 << 30,
+    max_metadata_bytes: Annotated[
+        int, typer.Option("--max-metadata-bytes", min=1, help="元数据 JSON 最大字节数。")
+    ] = 8 << 20,
     authorize_target: Annotated[
         bool,
-        typer.Option("--authorize-target", help="Confirm target execution or observation impact."),
+        typer.Option("--authorize-target", help="确认已接受目标运行或观测影响。"),
     ] = False,
-    authorization: Annotated[str, typer.Option("--authorization")] = "",
+    authorization: Annotated[
+        str, typer.Option("--authorization", help="目标采集的完整显式授权短语。")
+    ] = "",
     authorize_pid_attach: Annotated[
         bool,
-        typer.Option("--authorize-pid-attach", help="Separately confirm attachment to --pid."),
+        typer.Option("--authorize-pid-attach", help="单独确认允许附加到 --pid。"),
     ] = False,
-    pid_authorization: Annotated[str, typer.Option("--pid-authorization")] = "",
+    pid_authorization: Annotated[
+        str, typer.Option("--pid-authorization", help="PID 附加的完整显式授权短语。")
+    ] = "",
 ) -> None:
-    """Collect bounded perf data only after explicit, per-invocation authorization."""
+    """每次明确授权后才执行有界 perf 采集。"""
     try:
         if not authorize_target:
             raise PerfLensError(

@@ -41,6 +41,11 @@ Run `perflens status --project /absolute/path/to/project` for a read-only
 Chinese-first summary of onboarding, MCP, Collector, group, socket, and perf
 readiness. It does not sample a target or modify the host.
 
+Human-facing help is Chinese-first too: use `perflens --help`, `perflens
+<command> --help`, or `perflens-admin --help`. Stable English command and option
+names remain compatible with existing scripts, while the help text explains
+units, defaults, authorization, and resource boundaries.
+
 Command failures are Chinese-first by default and include a stable code, error
 ID, bounded technical detail, and recovery action. Automation can preserve the
 complete versioned `ErrorArtifact` and unchanged exit codes by placing the

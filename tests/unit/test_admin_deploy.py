@@ -66,6 +66,24 @@ def _deployment_inputs(tmp_path: Path) -> tuple[Path, Path, Path, CollectorSyste
     return config, perf, collector, layout
 
 
+def test_admin_cli_help_is_chinese_first_and_keeps_stable_commands() -> None:
+    runner = CliRunner()
+    root_help = runner.invoke(app, ["--help"])
+    assert root_help.exit_code == 0, root_help.output
+    assert "用于可选 PerfLens Collector 的显式管理员操作" in root_help.output
+    assert "undeploy" in root_help.output
+    assert "停止并移除托管服务" in root_help.output
+    assert "archive-spool" in root_help.output
+    assert "归档旧的托管 spool 证据" in root_help.output
+    assert "Explicit administrator operations" not in root_help.output
+
+    archive_help = runner.invoke(app, ["archive-spool", "--help"])
+    assert archive_help.exit_code == 0, archive_help.output
+    assert "只选择早于该天数的产物" in archive_help.output
+    assert "单次最多归档的产物数量" in archive_help.output
+    assert "只计算哈希并显示计划" in archive_help.output
+
+
 def test_admin_deploy_dry_run_is_read_only_and_cli_reports_chinese_or_json(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

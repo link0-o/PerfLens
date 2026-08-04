@@ -73,6 +73,10 @@ Debian 13 用户也可以直接安装原生 `.deb`，不需要自己创建 Pytho
 perflens status --project /绝对路径/你的项目
 ```
 
+命令帮助同样是中文优先。忘记参数时直接运行 `perflens --help`、
+`perflens setup --help` 或 `perflens-admin --help`；英文命令名和参数名保持稳定，已有脚本
+不需要修改。采集时长、资源上限、归档筛选和授权参数都在对应子命令帮助中说明。
+
 自动采集已配置且本地访问条件满足时，这条命令还会执行一次有界、只读的健康握手，
 通过内核 peer credentials 复核 Collector 的 PID/UID。遗留 Socket、无响应服务或错误
 身份进程会明确显示为不可用，不再被误报为“可验收”。
