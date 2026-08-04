@@ -86,6 +86,6 @@ allowed_stat_events = [
 # Unix-socket mode: owner and perflens group may read/write; no access for others. Usually unchanged.
 socket_mode = "0660"
 
-# 采集产物权限：所有者可读写、perflens 组只读、其他用户无权限。通常不要修改。
-# Artifact mode: owner read/write, perflens group read-only, no access for others. Usually unchanged.
+# 采集产物权限：只允许 0640（默认）或更严格的 0440；授权组必须只读，其他用户无权限。
+# Artifact mode: only 0640 (default) or stricter 0440; the authorized group is read-only.
 artifact_mode = "0640"

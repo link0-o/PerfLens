@@ -35,6 +35,13 @@ response whose typed envelope, request ID, or collection PID/mode does not match
 the authorized request. A pathname or well-formed JSON response alone is not a
 trusted Collector identity.
 
+Successful collection is not trusted until the ordinary-user client opens the
+plan-derived spool filename with `O_NOFOLLOW` and streams it through bounded
+size and SHA-256 verification. The file must remain a single-link regular file
+owned by the service, use the Collector socket group, and have mode `0640` or
+`0440` under a non-writable service-owned directory. This prevents a successful
+response from silently referring to replaced or group-writable evidence.
+
 Before starting perf, the Collector atomically creates and fsyncs an empty,
 service-private consumed-plan tombstone. It survives collection failure and
 Collector process restarts, so a restart cannot make the same plan executable

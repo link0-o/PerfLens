@@ -16,6 +16,11 @@ requires an exact request-ID response, and confirms that returned collection
 PID/mode match the authorized plan. Malformed, oversized, timed-out, stale, or
 mismatched responses fail closed.
 
+The client also streams the returned spool file through size and SHA-256
+verification before accepting collection success. It rejects symlinks,
+replacements, extra hard links, unexpected names/owners/groups, and any mode
+other than `0640` or `0440`.
+
 Before starting perf, the Broker reserves against independent spool byte and
 artifact-count quotas and a filesystem free-space floor. Exhaustion denies the
 new collection without deleting or overwriting existing evidence.

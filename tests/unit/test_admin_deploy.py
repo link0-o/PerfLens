@@ -1281,6 +1281,8 @@ def test_admin_deploy_rejects_unsafe_policy_and_symlink(tmp_path: Path) -> None:
         "allowed_uids = [0]\n",
         "allowed_uids = [1000, 1001]\n",
         'socket_mode = "0666"\n',
+        'artifact_mode = "0600"\n',
+        'artifact_mode = "0620"\n',
         "max_duration_seconds = nan\n",
         "max_spool_bytes = 1\n",
         "max_spool_artifacts = 0\n",

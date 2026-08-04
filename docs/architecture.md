@@ -66,6 +66,12 @@ from evidence quotas and archives, expire within the policy TTL bound, and any
 unsafe tombstone makes collection and administrator evidence operations fail
 closed.
 
+After a successful response, the ordinary-user client independently verifies
+the plan-derived evidence filename and opens it without following symlinks. It
+requires service ownership, the Collector socket group, a single regular-file
+link, read-only group permissions, an unchanged file identity, the authorized
+size bound, and the advertised SHA-256 before accepting the artifact.
+
 For a confirmed current-project workload, an ordinary-user coordinator launches
 one in-project executable, captures the new PID, and uses the same PID-plan path.
 The Collector never receives or starts the workload command. `perflens-admin` is

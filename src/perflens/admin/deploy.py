@@ -843,10 +843,7 @@ def parse_collector_deployment_policy(
         or socket_mode > 0o660
         or socket_mode & 0o007
         or socket_mode & 0o600 != 0o600
-        or artifact_mode < 0
-        or artifact_mode > 0o640
-        or artifact_mode & 0o007
-        or artifact_mode & 0o400 != 0o400
+        or artifact_mode not in {0o440, 0o640}
     ):
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,

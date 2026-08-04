@@ -476,6 +476,7 @@ def test_broker_collects_verified_pid_to_fixed_spool(tmp_path: Path) -> None:
         assert artifact.target_pid == target.pid
         assert artifact.output_path.startswith(str(spool))
         assert Path(artifact.output_path).read_bytes() == b"PERFILE2-broker"
+        assert Path(artifact.output_path).stat().st_mode & 0o777 == 0o640
         assert _collection_artifacts(spool) == (Path(artifact.output_path),)
         assert (spool / replay_marker_name(plan.plan_id)).is_file()
     finally:

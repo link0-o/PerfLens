@@ -130,13 +130,11 @@ def validate_broker_policy(policy: CollectorBrokerPolicy) -> CollectorBrokerPoli
         raise ValueError("Collector socket mode must not grant access to other users")
     if (
         not _is_integer(policy.artifact_mode)
-        or policy.artifact_mode < 0
-        or policy.artifact_mode > 0o640
-        or policy.artifact_mode & 0o007
-        or policy.artifact_mode & 0o400 != 0o400
+        or policy.artifact_mode not in {0o440, 0o640}
     ):
         raise ValueError(
-            "Collector artifact mode must be owner-readable and inaccessible to others"
+            "Collector artifact mode must be 0440 or 0640 so the authorized group is "
+            "read-only and other users have no access"
         )
     return CollectorBrokerPolicy(
         spool_root=spool_root,

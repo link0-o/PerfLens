@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 # pyright: reportPrivateUsage=false
+import hashlib
 import json
 import os
 import socket
@@ -22,6 +23,7 @@ from perflens.collector_broker.client import (
     _read_response_frame,
     _socket_identity,
     _validate_connected_peer,
+    _verify_collection_artifact,
 )
 from perflens.collector_broker.policy import CollectorBrokerPolicy, validate_broker_policy
 from perflens.collector_broker.protocol import (
@@ -448,6 +450,64 @@ def test_client_rejects_collection_result_that_does_not_match_plan(
     with pytest.raises(PerfLensError, match="does not match") as mismatch:
         CollectorBrokerClient(socket_path).collect(plan)
     assert mismatch.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_client_verifies_collection_file_identity_permissions_and_digest(tmp_path: Path) -> None:
+    listener, socket_path = _listening_socket(tmp_path, "v")
+    socket_identity = _socket_identity(socket_path)
+    listener.close()
+    plan = _plan()
+    spool = tmp_path / "evidence"
+    spool.mkdir()
+    spool.chmod(0o750)
+    output = spool / f"{plan.plan_id}.perf.data"
+    payload = b"PERFILE2-verified"
+    output.write_bytes(payload)
+    output.chmod(0o640)
+    artifact = CollectionArtifact(
+        collection_id="collection-verified-output",
+        mode=plan.mode,
+        target_type="pid",
+        target_argument_count=0,
+        target_pid=plan.target_pid,
+        output_path=str(output),
+        output_sha256=hashlib.sha256(payload).hexdigest(),
+        output_bytes=len(payload),
+        output_format="perf_data",
+        perf_executable="/usr/bin/perf",
+        started_at="2026-08-04T00:00:00+00:00",
+        finished_at="2026-08-04T00:00:01+00:00",
+        duration_seconds=1,
+        frequency_hz=plan.frequency_hz,
+        call_graph=plan.call_graph,
+    )
+
+    _verify_collection_artifact(artifact, plan, socket_identity, os.geteuid())
+
+    with pytest.raises(PerfLensError, match="integrity metadata") as wrong_digest:
+        _verify_collection_artifact(
+            artifact.model_copy(update={"output_sha256": "0" * 64}),
+            plan,
+            socket_identity,
+            os.geteuid(),
+        )
+    assert wrong_digest.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    output.chmod(0o660)
+    with pytest.raises(PerfLensError, match="artifact policy"):
+        _verify_collection_artifact(artifact, plan, socket_identity, os.geteuid())
+    output.chmod(0o640)
+
+    second_name = spool / "second-link"
+    os.link(output, second_name)
+    with pytest.raises(PerfLensError, match="artifact policy"):
+        _verify_collection_artifact(artifact, plan, socket_identity, os.geteuid())
+    second_name.unlink()
+
+    output.write_bytes(b"X" * len(payload))
+    output.chmod(0o640)
+    with pytest.raises(PerfLensError, match="integrity metadata"):
+        _verify_collection_artifact(artifact, plan, socket_identity, os.geteuid())
 
 
 @pytest.mark.parametrize("timeout_seconds", [False, 0, -1, 5.01, float("inf"), float("nan")])

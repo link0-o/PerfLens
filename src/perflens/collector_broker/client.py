@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import secrets
 import socket
 import stat
@@ -48,7 +49,7 @@ class CollectorBrokerClient:
             request_id=f"request-{hashlib.sha256(identity.encode()).hexdigest()[:24]}",
             plan=plan,
         )
-        response, _server_pid, _server_uid = self._exchange(
+        response, _server_pid, server_uid = self._exchange(
             request.model_dump_json().encode("utf-8") + b"\n",
             expected_request_id=request.request_id,
         )
@@ -78,6 +79,7 @@ class CollectorBrokerClient:
                 "collector_broker",
                 "Collector result does not match the authorized collection plan",
             )
+        _verify_collection_artifact(artifact, plan, self._socket, server_uid)
         return artifact
 
     def health(self, *, expected_service_uid: int | None = None) -> CollectorHealthArtifact:
@@ -197,6 +199,7 @@ class _SocketIdentity:
     device: int
     inode: int
     uid: int
+    gid: int
     mode: int
     parent_device: int
     parent_inode: int
@@ -226,6 +229,7 @@ def _socket_identity(path: Path) -> _SocketIdentity:
         device=metadata.st_dev,
         inode=metadata.st_ino,
         uid=metadata.st_uid,
+        gid=metadata.st_gid,
         mode=stat.S_IMODE(metadata.st_mode),
         parent_device=parent_metadata.st_dev,
         parent_inode=parent_metadata.st_ino,
@@ -252,8 +256,14 @@ def _validate_connected_peer(identity: _SocketIdentity, server_pid: int, server_
         ) from exc
     if (
         not stat.S_ISSOCK(metadata.st_mode)
-        or (metadata.st_dev, metadata.st_ino, metadata.st_uid, stat.S_IMODE(metadata.st_mode))
-        != (identity.device, identity.inode, identity.uid, identity.mode)
+        or (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_uid,
+            metadata.st_gid,
+            stat.S_IMODE(metadata.st_mode),
+        )
+        != (identity.device, identity.inode, identity.uid, identity.gid, identity.mode)
         or (
             parent_metadata.st_dev,
             parent_metadata.st_ino,
@@ -272,6 +282,125 @@ def _validate_connected_peer(identity: _SocketIdentity, server_pid: int, server_
             "collector_broker",
             "Collector socket identity changed before the request",
         )
+
+
+def _verify_collection_artifact(
+    artifact: CollectionArtifact,
+    plan: CollectionPlanArtifact,
+    socket_identity: _SocketIdentity,
+    server_uid: int,
+) -> None:
+    expected_name = f"{plan.plan_id}.stat.csv" if plan.mode == "stat" else (
+        f"{plan.plan_id}.perf.data"
+    )
+    expected_format = "perf_stat_delimited" if plan.mode == "stat" else "perf_data"
+    candidate = Path(artifact.output_path).expanduser()
+    if (
+        not candidate.is_absolute()
+        or candidate.name != expected_name
+        or artifact.output_format != expected_format
+    ):
+        raise _unsafe_collection_artifact()
+    try:
+        resolved = candidate.resolve(strict=True)
+        metadata = candidate.stat(follow_symlinks=False)
+        parent_metadata = candidate.parent.stat()
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.EXTERNAL_TOOL_FAILED,
+            "collector_broker",
+            "Collector output cannot be inspected",
+            recoverable=True,
+            details={"path": str(candidate)},
+        ) from exc
+    mode = stat.S_IMODE(metadata.st_mode)
+    if (
+        candidate != resolved
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or metadata.st_uid != server_uid
+        or metadata.st_gid != socket_identity.gid
+        or mode not in {0o440, 0o640}
+        or parent_metadata.st_uid != server_uid
+        or parent_metadata.st_mode & 0o022
+    ):
+        raise _unsafe_collection_artifact()
+
+    descriptor = -1
+    try:
+        descriptor = os.open(resolved, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        before = os.fstat(descriptor)
+        if _file_identity(before) != _file_identity(metadata):
+            raise _unsafe_collection_artifact()
+        digest = hashlib.sha256()
+        actual_bytes = 0
+        while chunk := os.read(descriptor, 1 << 20):
+            actual_bytes += len(chunk)
+            if actual_bytes > plan.max_output_bytes:
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "collector_broker",
+                    "Collector output exceeds the authorized plan limit",
+                )
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+    except PerfLensError:
+        raise
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.EXTERNAL_TOOL_FAILED,
+            "collector_broker",
+            "Collector output cannot be read safely",
+            recoverable=True,
+            details={"path": str(resolved)},
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+    try:
+        current = resolved.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "collector_broker",
+            "Collector output changed during verification",
+        ) from exc
+    if (
+        _file_identity(before) != _file_identity(after)
+        or _file_identity(after) != _file_identity(current)
+        or actual_bytes != artifact.output_bytes
+        or digest.hexdigest() != artifact.output_sha256
+    ):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "collector_broker",
+            "Collector output does not match its integrity metadata",
+        )
+
+
+def _file_identity(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_uid,
+        metadata.st_gid,
+        stat.S_IMODE(metadata.st_mode),
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _unsafe_collection_artifact() -> PerfLensError:
+    return PerfLensError(
+        ErrorCode.PATH_SAFETY_VIOLATION,
+        "collector_broker",
+        "Collector output path or metadata violates the artifact policy",
+    )
 
 
 def _read_response_frame(connection: socket.socket) -> bytes:

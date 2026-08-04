@@ -6,6 +6,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Added
 
+- End-to-end Collector evidence verification before a client accepts success:
+  canonical plan-derived filename, service ownership, socket-group identity,
+  read-only group access, single-link regular-file metadata, bounded streamed
+  size, and SHA-256 are rechecked without following symlinks.
 - Fail-closed Collector client authentication and response correlation. Every
   exchange now pins safe socket path metadata, requires the kernel peer UID to
   match the socket owner, bounds and types the response envelope, checks the
@@ -44,6 +48,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Changed
 
+- Collector `artifact_mode` is restricted to `0640` or `0440`; configurations
+  that make evidence group-writable or unreadable by the authorized group now
+  fail deployment and service startup validation.
 - CI and release workflows now pin every external GitHub Action to an immutable
   full commit SHA, disable checkout credential persistence, fail closed on
   missing upload inputs, and retain intermediate artifacts for at most seven

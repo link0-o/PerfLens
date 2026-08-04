@@ -174,12 +174,16 @@ def test_broker_policy_limit_validation(tmp_path: Path) -> None:
         replace(base, socket_mode=True),
         replace(base, socket_mode=0o400),
         replace(base, artifact_mode=0o644),
+        replace(base, artifact_mode=0o600),
+        replace(base, artifact_mode=0o620),
+        replace(base, artifact_mode=0o540),
         replace(base, artifact_mode=0),
         replace(base, artifact_mode=False),
     )
     for policy in invalid_policies:
         with pytest.raises(ValueError):
             validate_broker_policy(policy)
+    assert validate_broker_policy(replace(base, artifact_mode=0o440)).artifact_mode == 0o440
 
 
 def test_broker_policy_rejects_unsafe_paths(tmp_path: Path) -> None:
