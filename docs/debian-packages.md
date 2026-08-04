@@ -42,6 +42,11 @@ repeat with `sudo` and without `--dry-run`. The command preserves the authorized
 UID, fixed spool, unit, and evidence, and rolls back the policy if activation
 fails.
 
+For retention, use `archive-spool --dry-run` and `archive-spool` to create a
+root-managed stored ZIP with a versioned hash manifest. Verify it with
+`prune-archived-spool --dry-run`; exact source deletion remains disabled until
+the administrator supplies `I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE`.
+
 To upgrade, install both matching new packages, run `sudo perflens-admin upgrade
 --dry-run`, then `sudo perflens-admin upgrade`. This preserves the deployed policy
 and spool, updates only a verified managed unit, restarts the new program, and

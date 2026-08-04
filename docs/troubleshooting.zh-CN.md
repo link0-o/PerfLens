@@ -51,6 +51,16 @@ perflens status \
 异常项不是仍在使用的证据或管理员文件，再人工处理；`spool-status` 本身不会跟随链接
 或删除任何内容。
 
+不要用 `rm` 或 Agent 自动任务按 mtime 清空 spool。正常释放空间应遵循
+`archive-spool --dry-run` → 创建 root 管理归档 → 复制到独立存储 →
+`prune-archived-spool --dry-run` → 显式授权清理的顺序。
+
+若 `archive-spool` 报告 `unmanaged entry`，说明目录里有临时采集文件、手工文件、链接
+或未知命名；它不会猜测哪些可以删除。停止 Collector 后检查该项目。若
+`prune-archived-spool` 报告身份或 SHA-256 不匹配，表示归档或源文件在归档后发生变化；
+不要放宽校验或继续删除，应保留两边并人工比对。归档父目录和归档本身必须由 root
+管理且不可组写，避免清理期间备份被替换。
+
 ## `upgrade` 拒绝升级或升级后恢复
 
 `perflens-admin upgrade` 只读取固定的 `/etc/perflens/collector.toml`，并且只替换带

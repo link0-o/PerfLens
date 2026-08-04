@@ -1,0 +1,108 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "already_absent_artifact_count": {
+      "minimum": 0,
+      "title": "Already Absent Artifact Count",
+      "type": "integer"
+    },
+    "archive_id": {
+      "pattern": "^spool-archive-[a-f0-9]{16}$",
+      "title": "Archive Id",
+      "type": "string"
+    },
+    "archive_path": {
+      "title": "Archive Path",
+      "type": "string"
+    },
+    "archive_preserved": {
+      "default": true,
+      "title": "Archive Preserved",
+      "type": "boolean"
+    },
+    "archive_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Archive Sha256",
+      "type": "string"
+    },
+    "authorization_required": {
+      "const": "I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE",
+      "default": "I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE",
+      "title": "Authorization Required",
+      "type": "string"
+    },
+    "config_path": {
+      "title": "Config Path",
+      "type": "string"
+    },
+    "next_steps": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "planned_artifact_names": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Planned Artifact Names",
+      "type": "array"
+    },
+    "planned_logical_bytes": {
+      "minimum": 0,
+      "title": "Planned Logical Bytes",
+      "type": "integer"
+    },
+    "removed_artifact_count": {
+      "minimum": 0,
+      "title": "Removed Artifact Count",
+      "type": "integer"
+    },
+    "removed_logical_bytes": {
+      "minimum": 0,
+      "title": "Removed Logical Bytes",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "spool_root": {
+      "title": "Spool Root",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "dry_run",
+        "pruned",
+        "nothing_to_prune"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "status",
+    "archive_path",
+    "archive_sha256",
+    "archive_id",
+    "config_path",
+    "spool_root",
+    "planned_artifact_names",
+    "planned_logical_bytes",
+    "already_absent_artifact_count",
+    "removed_artifact_count",
+    "removed_logical_bytes"
+  ],
+  "title": "CollectorSpoolPruneArtifact",
+  "type": "object"
+}

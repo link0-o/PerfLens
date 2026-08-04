@@ -58,6 +58,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - `perflens-admin update-policy` for strict dry-run validation and atomic
   application of a separate policy candidate, with authenticated health checks,
   rollback on activation failure, and immutable UID/spool boundaries.
+- An explicit `archive-spool` and `prune-archived-spool` evidence lifecycle with
+  bounded selection, stored ZIP manifests, per-file SHA-256 and source-identity
+  verification, root-managed archives, dry-run review, and destructive
+  authorization without automatic retention deletion.
 
 ### Changed
 

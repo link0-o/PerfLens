@@ -68,6 +68,11 @@ Collector 还会在启动 perf 前检查 spool 总字节数、文件数和文件
 可读证据时加 `--json`。
 每套 Collector 只允许一个普通用户 UID，避免共享 `perflens` 组导致 Profile 跨用户泄露。
 
+旧证据不会按时间自动删除。管理员可先用 `archive-spool --dry-run` 审查选择结果，再创建
+带版本化 manifest 与逐文件 SHA-256 的 root 管理 ZIP。只有完成独立备份、运行
+`prune-archived-spool --dry-run` 并逐项确认后，才输入
+`I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE` 清理完全匹配的原文件；归档始终保留。
+
 后续升级先安装新版本，再运行 `sudo perflens-admin upgrade --dry-run` 和
 `sudo perflens-admin upgrade`。升级器保留管理员策略与历史证据，只替换可信托管 unit，
 失败时尝试恢复；完成后用普通用户重新运行 `accept-collector` 验收。

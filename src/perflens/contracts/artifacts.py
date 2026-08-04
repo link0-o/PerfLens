@@ -638,6 +638,69 @@ class CollectorSpoolStatusArtifact(ContractModel):
     next_steps: tuple[str, ...] = ()
 
 
+class CollectorSpoolArchiveEntry(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    name: str = Field(pattern=r"^plan-[a-f0-9]{20}\.(?:stat\.csv|perf\.data)$")
+    logical_bytes: int = Field(ge=0)
+    modified_time_ns: int = Field(ge=0)
+    source_device: int = Field(ge=0)
+    source_inode: int = Field(gt=0)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class CollectorSpoolArchiveManifest(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    archive_id: str = Field(pattern=r"^spool-archive-[a-f0-9]{16}$")
+    created_at: str
+    config_path: str
+    spool_root: str
+    allowed_uid: int = Field(gt=0)
+    policy_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    older_than_days: int = Field(ge=0, le=36_500)
+    keep_latest: int = Field(ge=0, le=10_000)
+    max_artifacts: int = Field(gt=0, le=10_000)
+    max_total_bytes: int = Field(gt=0, le=1 << 40)
+    eligible_artifact_count: int = Field(ge=0)
+    selection_truncated: bool
+    artifact_count: int = Field(ge=0, le=10_000)
+    total_logical_bytes: int = Field(ge=0, le=1 << 40)
+    entries: tuple[CollectorSpoolArchiveEntry, ...]
+
+
+class CollectorSpoolArchiveArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    status: Literal["dry_run", "archived", "nothing_to_archive"]
+    archive_path: str
+    archive_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    archive_created: bool
+    manifest: CollectorSpoolArchiveManifest
+    source_artifacts_preserved: bool = True
+    next_steps: tuple[str, ...] = ()
+
+
+class CollectorSpoolPruneArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    status: Literal["dry_run", "pruned", "nothing_to_prune"]
+    archive_path: str
+    archive_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    archive_id: str = Field(pattern=r"^spool-archive-[a-f0-9]{16}$")
+    config_path: str
+    spool_root: str
+    planned_artifact_names: tuple[str, ...]
+    planned_logical_bytes: int = Field(ge=0)
+    already_absent_artifact_count: int = Field(ge=0)
+    removed_artifact_count: int = Field(ge=0)
+    removed_logical_bytes: int = Field(ge=0)
+    authorization_required: Literal[
+        "I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE"
+    ] = "I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE"
+    archive_preserved: bool = True
+    next_steps: tuple[str, ...] = ()
+
+
 class RuntimeStatusArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     perflens_version: str

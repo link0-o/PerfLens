@@ -60,6 +60,12 @@ sudo perflens-admin update-policy --config "$PWD/collector.next.toml"
 该命令会重启并验证服务，失败时恢复原策略；不会改变授权 UID、固定 spool、unit 或
 历史产物。候选与当前配置相同时不写入也不重启。
 
+长期运行后不要手工按日期删除 `/var/lib/perflens` 文件。先用管理员命令
+`archive-spool --dry-run` 和 `archive-spool` 创建 root 管理、带 manifest 与 SHA-256 的
+独立归档，再运行 `prune-archived-spool --dry-run`。只有逐项确认计划后才传入
+`I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE`。详细目录准备、默认保留量和完整命令见
+[《产品部署指南》](deployment.zh-CN.md)。
+
 ## 升级与卸载
 
 使用 `sudo apt install ./新版本.deb` 升级。系统包不会覆盖管理员策略，也不会自行重启

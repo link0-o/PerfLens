@@ -143,6 +143,56 @@ perflens-admin spool-status --json
 这是时点检查，不会替下一次采集预留空间；最终仍以 Collector 启动 perf 前的独立
 配额复核为准，并发产生的新证据可能让后续采集被安全拒绝。
 
+## 归档并安全清理旧证据
+
+PerfLens 不按时间自动删除性能证据。需要释放 spool 空间时，管理员先在独立磁盘或
+备份位置准备一个 root 管理、不可组写的目录；下面路径只是示例：
+
+```bash
+sudo install -d -o root -g perflens -m 0750 /srv/perflens-archives
+```
+
+先生成只读计划，再创建归档。默认只选择 7 天前的托管产物，同时保留最新 20 份，
+单次最多归档 1000 份或 10 GiB：
+
+```bash
+sudo perflens-admin archive-spool \
+  --output /srv/perflens-archives/perflens-2026-08-04.zip \
+  --dry-run
+sudo perflens-admin archive-spool \
+  --output /srv/perflens-archives/perflens-2026-08-04.zip
+```
+
+`archive-spool` 只接受 Collector 生成的
+`plan-<20位十六进制>.perf.data` 和 `.stat.csv` 普通文件。它拒绝链接、目录、临时文件、
+未知文件、属主/权限异常和采集期间发生变化的文件。归档使用不压缩 ZIP，内含版本化
+manifest、源 inode/大小/mtime 和逐文件 SHA-256；发布时拒绝覆盖已有路径。源文件全部
+保留，`selection_truncated: true` 表示还有符合条件的证据未装入本次有界归档。
+
+把 ZIP 复制到独立存储并确认备份策略后，先做完整双向校验，不删除任何内容：
+
+```bash
+sudo perflens-admin prune-archived-spool \
+  --archive /srv/perflens-archives/perflens-2026-08-04.zip \
+  --dry-run
+```
+
+确认 JSON 中每个 `planned_artifact_names` 后，才显式授权清理：
+
+```bash
+sudo perflens-admin prune-archived-spool \
+  --archive /srv/perflens-archives/perflens-2026-08-04.zip \
+  --authorization I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE
+```
+
+清理器要求归档文件及父目录由 root 管理，然后重新验证 ZIP 结构、manifest、归档内
+数据哈希，以及 spool 原文件的设备号、inode、大小、mtime、属主、权限和 SHA-256。
+所有仍存在的源文件都通过预检后才开始删除，删除前逐个再次复核；归档永不被删除。
+重复执行是幂等的，已不存在的原文件只计入 `already_absent_artifact_count`。
+
+这是人工管理员生命周期，不应交给 Agent 定时执行，也不应做成安装后自动轮转。若
+spool 中出现未知项目，先停止 Collector 并人工审查，不能通过放宽名称或链接检查绕过。
+
 ## 一条命令安全更新策略
 
 需要调整采集模式、最大时长、频率、事件或存储配额时，不要直接编辑正在使用的

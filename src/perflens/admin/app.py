@@ -17,6 +17,7 @@ from perflens.admin.deploy import (
     update_collector_policy,
     upgrade_collector,
 )
+from perflens.admin.spool import archive_collector_spool, prune_archived_collector_spool
 from perflens.contracts.artifacts import CollectorSpoolStatusArtifact, ErrorArtifact, ErrorBody
 from perflens.domain.errors import ErrorCode, PerfLensError
 
@@ -157,6 +158,88 @@ def update_policy_command(
     """Safely update policy, restart, health-check, and roll back on failure."""
     try:
         result = update_collector_policy(config, dry_run=dry_run)
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(result.model_dump_json(indent=2))
+
+
+@app.command("archive-spool")
+def archive_spool_command(
+    output: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="New absolute ZIP archive path."),
+    ],
+    config: Annotated[
+        Path,
+        typer.Option("--config", dir_okay=False, help="Deployed Collector TOML policy."),
+    ] = Path("/etc/perflens/collector.toml"),
+    older_than_days: Annotated[
+        int,
+        typer.Option("--older-than-days", min=0, max=36_500),
+    ] = 7,
+    keep_latest: Annotated[
+        int,
+        typer.Option("--keep-latest", min=0, max=10_000),
+    ] = 20,
+    max_artifacts: Annotated[
+        int,
+        typer.Option("--max-artifacts", min=1, max=10_000),
+    ] = 1000,
+    max_total_bytes: Annotated[
+        int,
+        typer.Option("--max-total-bytes", min=1, max=1 << 40),
+    ] = 10 << 30,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Hash and plan without creating an archive."),
+    ] = False,
+) -> None:
+    """Archive old managed spool evidence without deleting source files."""
+    try:
+        result = archive_collector_spool(
+            output,
+            config_path=config,
+            older_than_days=older_than_days,
+            keep_latest=keep_latest,
+            max_artifacts=max_artifacts,
+            max_total_bytes=max_total_bytes,
+            dry_run=dry_run,
+        )
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(result.model_dump_json(indent=2))
+
+
+@app.command("prune-archived-spool")
+def prune_archived_spool_command(
+    archive: Annotated[
+        Path,
+        typer.Option("--archive", dir_okay=False, help="Verified archive ZIP path."),
+    ],
+    config: Annotated[
+        Path,
+        typer.Option("--config", dir_okay=False, help="Deployed Collector TOML policy."),
+    ] = Path("/etc/perflens/collector.toml"),
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Verify archive and sources without deletion."),
+    ] = False,
+    authorization: Annotated[
+        str | None,
+        typer.Option(
+            "--authorization",
+            help="Exact destructive-operation authorization phrase.",
+        ),
+    ] = None,
+) -> None:
+    """Prune only exact source files proven by a verified archive manifest."""
+    try:
+        result = prune_archived_collector_spool(
+            archive,
+            config_path=config,
+            dry_run=dry_run,
+            authorization=authorization,
+        )
     except PerfLensError as exc:
         _fail(exc)
     typer.echo(result.model_dump_json(indent=2))

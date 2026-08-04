@@ -27,9 +27,9 @@
 |---|---|---|
 | 代码规范 | `ruff check .` | 通过 |
 | 严格类型 | `pyright` | 0 错误、0 警告 |
-| Python 3.12 | `pytest -q`，Python 3.12.13 | 239 通过 |
-| Python 3.13 | 隔离环境 `pytest -q` | 239 通过 |
-| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.47%，通过 |
+| Python 3.12 | `pytest -q`，Python 3.12.13 | 252 通过 |
+| Python 3.13 | 隔离环境 `pytest -q` | 252 通过 |
+| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.36%，通过 |
 | Skill | Skill 结构和打包测试 | 通过 |
 | Schema | 已提交 Schema 与 Contract 生成结果相等 | 通过 |
 | 依赖锁 | `uv export --locked` | 通过 |
@@ -41,6 +41,7 @@
 | 部署验收命令 | `accept-collector` → 内置负载 → 授权 stat 计划 → Broker | 可执行 perf Test Double 通过 |
 | Collector 存储边界 | 累计字节/文件数/空闲余量 → 启动 perf 前预留 | 三类拒绝及 Unix Socket 端到端通过 |
 | Collector 存储检查 | `spool-status` → 直接普通文件 → 配额/磁盘余量 | 中文摘要、版本化 JSON 和异常项拒绝通过 |
+| Collector 证据生命周期 | 托管文件选择 → ZIP manifest/哈希 → 双份复核 → 显式授权清理 | 默认不删除、root 归档、篡改/身份变化/未知项目拒绝路径通过 |
 | Collector 用户隔离 | 单实例单 UID；策略/资产/部署拒绝多 UID | 拒绝路径和组可读边界已验证 |
 | 项目工作负载 | 普通用户启动 → 内部 PID → Broker → 清理 | 可执行 perf Test Double 端到端通过 |
 | 管理员部署 | 严格 TOML → 内置资产 → 固定命令 → Socket | 成功、回滚和拒绝路径通过 |
@@ -73,6 +74,8 @@
 - 大批量符号地址分组发送，避免标准输入/输出管道死锁；
 - 主动采集默认关闭，PID 附加具有额外独立权限门。
 - 自动计划绑定 PID 所有者和启动时间，短期且单次；Collector 验证 Unix 对等 UID、独立策略和固定 spool，并在启动 perf 前执行累计字节、文件数和磁盘空闲余量配额。
+- 旧证据只通过管理员 archive-then-prune 流程处理；清理前验证 root 管理归档、ZIP
+  manifest、归档成员哈希及源设备号/inode/大小/mtime/属主/权限/哈希，并要求独立授权。
 - 项目可执行程序始终由普通用户启动，Collector 只收到 PID 计划；管理员部署配置按
   不跟随符号链接的单次快照读取，系统命令使用固定绝对路径白名单。
 

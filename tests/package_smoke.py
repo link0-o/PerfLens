@@ -45,6 +45,18 @@ def main() -> None:
         "--help",
         expected="Safely update policy",
     )
+    _run(
+        perflens_admin,
+        "archive-spool",
+        "--help",
+        expected="Archive old managed spool evidence",
+    )
+    _run(
+        perflens_admin,
+        "prune-archived-spool",
+        "--help",
+        expected="Prune only exact source files",
+    )
     _run(perflens, "verify-collector", "--help", expected="bounded real perf-stat probe")
     _run(perflens, "accept-collector", "--help", expected="without choosing a PID")
 

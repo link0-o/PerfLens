@@ -90,6 +90,27 @@ This is a point-in-time inspection, not a reservation. The Collector still
 rechecks capacity immediately before starting perf, and concurrent artifacts
 may cause a later collection to be safely denied.
 
+PerfLens never deletes evidence by age automatically. For an explicit,
+auditable lifecycle, prepare a root-managed, non-group-writable directory on
+independent storage, then run `sudo perflens-admin archive-spool --output
+/absolute/archive.zip --dry-run` followed by the same command without
+`--dry-run`. Defaults select managed artifacts older than seven days, keep the
+newest 20, and bound one archive to 1000 files or 10 GiB.
+
+The stored ZIP contains a versioned manifest plus source identity and SHA-256
+for every `plan-<20 hex>.perf.data` or `.stat.csv` member. Archive creation
+rejects unknown entries, links, directories, unsafe ownership/modes, concurrent
+changes, and existing outputs; it preserves every source. After copying the ZIP
+to independent storage, run `sudo perflens-admin prune-archived-spool --archive
+/absolute/archive.zip --dry-run`. Only after reviewing every planned name, pass
+`--authorization I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE`.
+
+Pruning requires a root-managed archive and parent, verifies the ZIP, manifest,
+archived bytes, and each source device/inode/size/mtime/owner/mode/SHA-256 before
+any removal, then rechecks each source immediately before unlinking. The archive
+is always preserved and repeated execution is idempotent. This is a human
+administrator operation and must not be scheduled by an Agent.
+
 To tune collection modes, duration, frequency, events, or storage quotas, do
 not edit the live `/etc/perflens/collector.toml` in place. Copy it to a separate
 candidate, set mode `0600`, edit the bilingual comments, and run:

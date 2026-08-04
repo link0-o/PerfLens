@@ -243,6 +243,12 @@ After deployment, `perflens-admin spool-status` gives a read-only Chinese
 summary of spool usage, filesystem reserve, and currently reservable output;
 add `--json` for the versioned machine-readable artifact.
 
+Evidence is never age-deleted automatically. Administrators can use the
+archive-then-prune workflow to create a bounded stored ZIP with a versioned
+manifest and per-file SHA-256, preserve all sources, verify both copies with a
+dry run, and only then explicitly authorize removal of exact matching source
+inodes. The archive remains intact and Agents must not schedule pruning.
+
 Administrators can tune the bilingual policy without memorizing a manual
 restart sequence: copy it to a separate mode-`0600` candidate, run
 `perflens-admin update-policy --config <candidate> --dry-run`, then repeat with

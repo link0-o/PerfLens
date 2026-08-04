@@ -38,6 +38,14 @@ An unsafe result means a directory, symbolic link, or another non-regular entry
 was observed. Stop the Collector and inspect it manually; `spool-status` never
 follows or removes such entries.
 
+Do not use mtime-based `rm` or an Agent job to clear the spool. Use the explicit
+`archive-spool --dry-run` → root-managed archive → independent copy →
+`prune-archived-spool --dry-run` → authorized prune sequence. An unmanaged-entry
+error means a temporary, manual, linked, or unknown file needs stopped-service
+review. A source identity or SHA-256 mismatch means either copy changed; preserve
+both and investigate instead of weakening validation. The archive and its parent
+must remain root-managed and non-group-writable during pruning.
+
 `perflens-admin upgrade` reads only the fixed deployed policy and replaces only
 a trusted PerfLens-managed unit. Use `sudo perflens-admin upgrade --dry-run`
 before execution. Alternate policies, symlinks, unknown units, and unsafe modes

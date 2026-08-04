@@ -34,6 +34,8 @@ MCP 分析产物并生成报告
 - 产物只能写入 Collector 配置的固定 spool；
 - Collector 在启动 perf 前同时检查 spool 总字节数、文件数和文件系统空闲余量；达到
   任一边界都会拒绝新采集，不会自动删除旧证据；
+- 管理员需要释放空间时使用独立的“归档 → 双份哈希复核 → 显式授权清理”流程；MCP、
+  Skill 和 Collector 协议都没有自动删除接口；
 - Broker 模式暂不启动用户提供的命令，也不支持全系统采样。
 
 旧的 `collect-profile` CLI/MCP 工具仍可用于人工确认的命令或 PID 采集。Agent 驱动的实时 PID 诊断应优先使用计划与 Broker。

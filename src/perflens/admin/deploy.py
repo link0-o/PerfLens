@@ -48,7 +48,7 @@ class CollectorSystemLayout:
 
 
 @dataclass(frozen=True, slots=True)
-class _DeploymentPolicy:
+class CollectorDeploymentPolicy:
     raw_text: str
     spool_root: Path
     perf_path: Path
@@ -61,7 +61,7 @@ class _DeploymentPolicy:
 
 
 @dataclass(frozen=True, slots=True)
-class _ConfigSource:
+class CollectorConfigSource:
     path: Path
     raw_text: str
     metadata: os.stat_result
@@ -90,8 +90,8 @@ def deploy_collector(
 ) -> CollectorDeploymentArtifact:
     """Deploy fixed Collector assets from one strictly validated data-only policy."""
     effective_layout = layout or CollectorSystemLayout()
-    source = _candidate_config(config_path)
-    policy = _parse_deployment_policy(
+    source = load_collector_config(config_path)
+    policy = parse_collector_deployment_policy(
         source.raw_text,
         expected_spool=effective_layout.state_directory,
         require_root_owned_tools=require_root,
@@ -209,7 +209,7 @@ def upgrade_collector(
     """Upgrade only a verified managed unit while preserving policy and evidence."""
     stage = "collector_upgrade"
     effective_layout = layout or CollectorSystemLayout()
-    source = _candidate_config(config_path, stage=stage)
+    source = load_collector_config(config_path, stage=stage)
     try:
         deployed_config = effective_layout.config_path.resolve(strict=True)
     except OSError as exc:
@@ -234,7 +234,7 @@ def upgrade_collector(
                 "during upgrade.",
             ),
         )
-    policy = _parse_deployment_policy(
+    policy = parse_collector_deployment_policy(
         source.raw_text,
         expected_spool=effective_layout.state_directory,
         require_root_owned_tools=require_root,
@@ -402,8 +402,8 @@ def update_collector_policy(
     """Validate and atomically apply a bounded Collector policy update."""
     stage = "collector_policy_update"
     effective_layout = layout or CollectorSystemLayout()
-    candidate = _candidate_config(config_path, stage=stage)
-    current = _candidate_config(effective_layout.config_path, stage=stage)
+    candidate = load_collector_config(config_path, stage=stage)
+    current = load_collector_config(effective_layout.config_path, stage=stage)
     if candidate.path == current.path:
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
@@ -422,13 +422,13 @@ def update_collector_policy(
             "Deployed Collector policy must be root owned",
             details={"config_path": str(current.path)},
         )
-    current_policy = _parse_deployment_policy(
+    current_policy = parse_collector_deployment_policy(
         current.raw_text,
         expected_spool=effective_layout.state_directory,
         require_root_owned_tools=require_root,
         stage=stage,
     )
-    candidate_policy = _parse_deployment_policy(
+    candidate_policy = parse_collector_deployment_policy(
         candidate.raw_text,
         expected_spool=effective_layout.state_directory,
         require_root_owned_tools=require_root,
@@ -540,7 +540,7 @@ def update_collector_policy(
         rollback_errors: list[str] = []
         if replacement_attempted:
             try:
-                deployed_candidate = _candidate_config(current.path, stage=stage)
+                deployed_candidate = load_collector_config(current.path, stage=stage)
                 deployed_raw = deployed_candidate.raw_text.encode("utf-8")
                 if deployed_raw != previous_raw:
                     if deployed_raw != candidate_raw:
@@ -651,8 +651,8 @@ def inspect_collector_spool(
 ) -> CollectorSpoolStatusArtifact:
     """Inspect fixed Collector spool capacity without changing host state."""
     effective_layout = layout or CollectorSystemLayout()
-    source = _candidate_config(config_path, stage="collector_spool_status")
-    policy = _parse_deployment_policy(
+    source = load_collector_config(config_path, stage="collector_spool_status")
+    policy = parse_collector_deployment_policy(
         source.raw_text,
         expected_spool=effective_layout.state_directory,
         require_root_owned_tools=require_root_owned_tools,
@@ -661,11 +661,11 @@ def inspect_collector_spool(
     return _inspect_spool(source.path, policy)
 
 
-def _candidate_config(
+def load_collector_config(
     path: Path,
     *,
     stage: str = "collector_deploy",
-) -> _ConfigSource:
+) -> CollectorConfigSource:
     candidate = path.expanduser()
     if candidate.is_symlink():
         raise PerfLensError(
@@ -690,10 +690,10 @@ def _candidate_config(
             "Collector deployment config cannot be resolved",
             details={"path": str(path)},
         ) from exc
-    invoking_uid = _invoking_uid()
+    candidate_owner_uid = invoking_uid()
     if (
         not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid not in {0, invoking_uid}
+        or metadata.st_uid not in {0, candidate_owner_uid}
         or metadata.st_mode & 0o022
         or metadata.st_size > _MAX_CONFIG_BYTES
     ):
@@ -722,16 +722,16 @@ def _candidate_config(
             stage,
             "Collector deployment config exceeds its size limit",
         )
-    return _ConfigSource(path=resolved, raw_text=text, metadata=metadata)
+    return CollectorConfigSource(path=resolved, raw_text=text, metadata=metadata)
 
 
-def _parse_deployment_policy(
+def parse_collector_deployment_policy(
     text: str,
     *,
     expected_spool: Path,
     require_root_owned_tools: bool,
     stage: str = "collector_deploy",
-) -> _DeploymentPolicy:
+) -> CollectorDeploymentPolicy:
     try:
         payload = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
@@ -848,7 +848,7 @@ def _parse_deployment_policy(
             stage,
             "Collector deployment config violates fixed paths or bounded policy",
         )
-    return _DeploymentPolicy(
+    return CollectorDeploymentPolicy(
         raw_text=text,
         spool_root=spool,
         perf_path=perf,
@@ -863,7 +863,7 @@ def _parse_deployment_policy(
 
 def _inspect_spool(
     config_path: Path,
-    policy: _DeploymentPolicy,
+    policy: CollectorDeploymentPolicy,
 ) -> CollectorSpoolStatusArtifact:
     artifact_count = 0
     logical_bytes = 0
@@ -966,7 +966,7 @@ def _inspect_spool(
 
 def _spool_status_result(
     config_path: Path,
-    policy: _DeploymentPolicy,
+    policy: CollectorDeploymentPolicy,
     *,
     status: Literal["ready", "warning", "exhausted", "unsafe", "unavailable"],
     scan_complete: bool,
@@ -1319,7 +1319,7 @@ def _replace_verified_managed_service(
 
 def _replace_verified_config(
     path: Path,
-    inspected: _ConfigSource,
+    inspected: CollectorConfigSource,
     replacement: bytes,
     *,
     stage: str,
@@ -1474,7 +1474,7 @@ def _wait_for_policy_update_socket(
         ) from exc
 
 
-def _invoking_uid() -> int:
+def invoking_uid() -> int:
     raw = os.environ.get("SUDO_UID")
     if raw is None:
         return os.geteuid()
@@ -1560,11 +1560,11 @@ def _undeployment_result(
 
 def _policy_update_result(
     status: Literal["dry_run", "unchanged", "updated"],
-    candidate: _ConfigSource,
+    candidate: CollectorConfigSource,
     config_path: Path,
     previous: bytes,
     candidate_raw: bytes,
-    policy: _DeploymentPolicy,
+    policy: CollectorDeploymentPolicy,
     *,
     change_required: bool,
     policy_updated: bool,

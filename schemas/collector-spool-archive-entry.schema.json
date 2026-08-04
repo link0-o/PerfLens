@@ -1,0 +1,51 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "logical_bytes": {
+      "minimum": 0,
+      "title": "Logical Bytes",
+      "type": "integer"
+    },
+    "modified_time_ns": {
+      "minimum": 0,
+      "title": "Modified Time Ns",
+      "type": "integer"
+    },
+    "name": {
+      "pattern": "^plan-[a-f0-9]{20}\\.(?:stat\\.csv|perf\\.data)$",
+      "title": "Name",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Sha256",
+      "type": "string"
+    },
+    "source_device": {
+      "minimum": 0,
+      "title": "Source Device",
+      "type": "integer"
+    },
+    "source_inode": {
+      "exclusiveMinimum": 0,
+      "title": "Source Inode",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "name",
+    "logical_bytes",
+    "modified_time_ns",
+    "source_device",
+    "source_inode",
+    "sha256"
+  ],
+  "title": "CollectorSpoolArchiveEntry",
+  "type": "object"
+}

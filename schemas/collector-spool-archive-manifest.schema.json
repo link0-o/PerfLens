@@ -1,0 +1,167 @@
+{
+  "$defs": {
+    "CollectorSpoolArchiveEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "logical_bytes": {
+          "minimum": 0,
+          "title": "Logical Bytes",
+          "type": "integer"
+        },
+        "modified_time_ns": {
+          "minimum": 0,
+          "title": "Modified Time Ns",
+          "type": "integer"
+        },
+        "name": {
+          "pattern": "^plan-[a-f0-9]{20}\\.(?:stat\\.csv|perf\\.data)$",
+          "title": "Name",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "source_device": {
+          "minimum": 0,
+          "title": "Source Device",
+          "type": "integer"
+        },
+        "source_inode": {
+          "exclusiveMinimum": 0,
+          "title": "Source Inode",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "logical_bytes",
+        "modified_time_ns",
+        "source_device",
+        "source_inode",
+        "sha256"
+      ],
+      "title": "CollectorSpoolArchiveEntry",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "allowed_uid": {
+      "exclusiveMinimum": 0,
+      "title": "Allowed Uid",
+      "type": "integer"
+    },
+    "archive_id": {
+      "pattern": "^spool-archive-[a-f0-9]{16}$",
+      "title": "Archive Id",
+      "type": "string"
+    },
+    "artifact_count": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Artifact Count",
+      "type": "integer"
+    },
+    "config_path": {
+      "title": "Config Path",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "eligible_artifact_count": {
+      "minimum": 0,
+      "title": "Eligible Artifact Count",
+      "type": "integer"
+    },
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/CollectorSpoolArchiveEntry"
+      },
+      "title": "Entries",
+      "type": "array"
+    },
+    "keep_latest": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Keep Latest",
+      "type": "integer"
+    },
+    "max_artifacts": {
+      "exclusiveMinimum": 0,
+      "maximum": 10000,
+      "title": "Max Artifacts",
+      "type": "integer"
+    },
+    "max_total_bytes": {
+      "exclusiveMinimum": 0,
+      "maximum": 1099511627776,
+      "title": "Max Total Bytes",
+      "type": "integer"
+    },
+    "older_than_days": {
+      "maximum": 36500,
+      "minimum": 0,
+      "title": "Older Than Days",
+      "type": "integer"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "policy_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Policy Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "selection_truncated": {
+      "title": "Selection Truncated",
+      "type": "boolean"
+    },
+    "spool_root": {
+      "title": "Spool Root",
+      "type": "string"
+    },
+    "total_logical_bytes": {
+      "maximum": 1099511627776,
+      "minimum": 0,
+      "title": "Total Logical Bytes",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "archive_id",
+    "created_at",
+    "config_path",
+    "spool_root",
+    "allowed_uid",
+    "policy_sha256",
+    "older_than_days",
+    "keep_latest",
+    "max_artifacts",
+    "max_total_bytes",
+    "eligible_artifact_count",
+    "selection_truncated",
+    "artifact_count",
+    "total_logical_bytes",
+    "entries"
+  ],
+  "title": "CollectorSpoolArchiveManifest",
+  "type": "object"
+}

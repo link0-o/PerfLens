@@ -288,6 +288,12 @@ PerfLens 永远不会自行执行 sudo、修改内核策略或降低主机安全
 磁盘保留余量和当前最多可采集数据量；该命令只读，不删除旧证据。机器可读输出使用
 `perflens-admin spool-status --json`。
 
+旧证据不会自动轮转。管理员可以先用 `perflens-admin archive-spool --dry-run` 生成精确
+计划，再创建带版本化 manifest 和逐文件 SHA-256 的只读 ZIP；源文件此时仍全部保留。
+只有把归档放到独立存储、运行 `prune-archived-spool --dry-run` 并逐项审查后，才能输入
+`I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE` 清理完全匹配的原文件。完整命令见
+[《产品部署指南》](docs/deployment.zh-CN.md)。Agent 不应自动执行该清理流程。
+
 首次部署和后续升级都会完成只读健康协议往返，并通过内核凭据复核服务 PID/UID；仅
 存在 Socket 文件不会被当作成功，因此旧文件、错误身份或未监听服务会在自动采集前
 暴露出来。
