@@ -49,6 +49,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - Read-only `perflens-admin spool-status` capacity inspection with a Chinese
   summary, versioned JSON evidence, quota headroom, and safe handling of
   unexpected non-regular spool entries.
+- `perflens-admin upgrade` for explicit one-command Collector upgrades that
+  preserve administrator policy and evidence, compare unit hashes, replace only
+  verified managed units, and attempt rollback after activation failure.
 
 ### Changed
 

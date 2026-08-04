@@ -65,4 +65,8 @@ acceptance as the ordinary user with
 `perflens accept-collector --authorize-host-acceptance`; its built-in probe
 requires no PID, defaults to one second, and is capped at five seconds.
 
+For upgrades, install the new wheel or matching DEBs first, then run `sudo
+perflens-admin upgrade --dry-run` and `sudo perflens-admin upgrade`. Policy and
+spool evidence are preserved; rerun ordinary-user `accept-collector` afterward.
+
 Uninstall a pipx installation with `pipx uninstall perflens`. Project Skill files, setup output, Collector service state, and collected artifacts are deliberately not removed automatically.

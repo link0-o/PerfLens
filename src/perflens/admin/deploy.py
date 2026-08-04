@@ -25,6 +25,7 @@ from perflens.contracts.artifacts import (
     CollectorDeploymentArtifact,
     CollectorSpoolStatusArtifact,
     CollectorUndeploymentArtifact,
+    CollectorUpgradeArtifact,
 )
 from perflens.distribution.collector import install_collector_assets
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -61,6 +62,12 @@ class _DeploymentPolicy:
 class _ConfigSource:
     path: Path
     raw_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ManagedServiceSnapshot:
+    metadata: os.stat_result
+    raw: bytes
 
 
 CommandExecutor = Callable[[tuple[str, ...]], None]
@@ -178,6 +185,184 @@ def deploy_collector(
         commands,
         warnings,
         next_steps,
+    )
+
+
+def upgrade_collector(
+    config_path: Path = Path("/etc/perflens/collector.toml"),
+    *,
+    dry_run: bool = False,
+    layout: CollectorSystemLayout | None = None,
+    collector_command: Path | None = None,
+    require_root: bool = True,
+    command_executor: CommandExecutor | None = None,
+    socket_waiter: SocketWaiter | None = None,
+) -> CollectorUpgradeArtifact:
+    """Upgrade only a verified managed unit while preserving policy and evidence."""
+    stage = "collector_upgrade"
+    effective_layout = layout or CollectorSystemLayout()
+    source = _candidate_config(config_path, stage=stage)
+    try:
+        deployed_config = effective_layout.config_path.resolve(strict=True)
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            stage,
+            "Deployed Collector policy cannot be resolved",
+            details={"path": str(effective_layout.config_path)},
+            suggested_actions=("Deploy the Collector before running upgrade.",),
+        ) from exc
+    if source.path != deployed_config:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Collector upgrade must preserve the fixed deployed policy",
+            details={
+                "provided_config": str(source.path),
+                "deployed_config": str(deployed_config),
+            },
+            suggested_actions=(
+                "Edit and validate the deployed policy separately; do not replace it "
+                "during upgrade.",
+            ),
+        )
+    policy = _parse_deployment_policy(
+        source.raw_text,
+        expected_spool=effective_layout.state_directory,
+        require_root_owned_tools=require_root,
+        stage=stage,
+    )
+    command = _collector_command(
+        collector_command,
+        require_root_owner=require_root,
+        stage=stage,
+    )
+    previous = _verify_managed_service(
+        effective_layout.service_path,
+        require_root_owner=require_root,
+        stage=stage,
+    )
+    commands = (
+        ("/usr/bin/systemctl", "daemon-reload"),
+        ("/usr/bin/systemctl", "restart", "perflens-collector.service"),
+    )
+    warnings = (
+        "Administrator policy and collected artifacts are preserved.",
+        "Package installation must complete before this command is run.",
+        "Host perf/kernel policy is not changed.",
+    )
+    next_steps = (
+        "Run perflens accept-collector --authorize-host-acceptance as an ordinary user.",
+        "Run perflens-admin spool-status to check retained evidence capacity.",
+    )
+
+    with tempfile.TemporaryDirectory(prefix="perflens-admin-upgrade-") as temporary:
+        staged = install_collector_assets(
+            Path(temporary) / "assets",
+            allowed_uids=policy.allowed_uids,
+            collector_command=command,
+            perf_path=policy.perf_path,
+        )
+        candidate = (staged / "perflens-collector.service").read_bytes()
+        if len(candidate) > _MAX_SERVICE_BYTES:
+            raise PerfLensError(
+                ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                stage,
+                "Bundled Collector service exceeds its upgrade size limit",
+            )
+        update_required = previous.raw != candidate
+        if dry_run:
+            return _upgrade_result(
+                "dry_run",
+                deployed_config,
+                effective_layout,
+                command,
+                previous.raw,
+                candidate,
+                update_required=update_required,
+                service_updated=False,
+                commands=commands,
+                warnings=warnings,
+                next_steps=next_steps,
+            )
+        if require_root and os.geteuid() != 0:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "Collector upgrade must be started explicitly by an administrator",
+                recoverable=True,
+                suggested_actions=("Run sudo perflens-admin upgrade --dry-run first.",),
+            )
+
+        executor = command_executor or _run_admin_upgrade_command
+        wait_for_socket = socket_waiter or _wait_for_upgrade_socket
+        service_updated = False
+        try:
+            if update_required:
+                service_updated = True
+                _replace_verified_managed_service(
+                    effective_layout.service_path,
+                    previous,
+                    candidate,
+                    stage=stage,
+                )
+            for planned in commands:
+                executor(planned)
+            wait_for_socket(effective_layout.socket_path)
+        except BaseException as exc:
+            rollback_errors: list[str] = []
+            if service_updated:
+                try:
+                    current = _verify_managed_service(
+                        effective_layout.service_path,
+                        require_root_owner=require_root,
+                        stage=stage,
+                    )
+                    if current.raw == previous.raw:
+                        service_updated = False
+                    elif current.raw != candidate:
+                        raise PerfLensError(
+                            ErrorCode.PATH_SAFETY_VIOLATION,
+                            stage,
+                            "Collector service changed before upgrade rollback",
+                        )
+                    else:
+                        _replace_verified_managed_service(
+                            effective_layout.service_path,
+                            current,
+                            previous.raw,
+                            stage=stage,
+                            mode=stat.S_IMODE(previous.metadata.st_mode),
+                        )
+                    for rollback_command in commands:
+                        executor(rollback_command)
+                except BaseException as rollback_exc:
+                    rollback_errors.append(type(rollback_exc).__name__)
+            if rollback_errors:
+                raise PerfLensError(
+                    ErrorCode.OUTPUT_WRITE_FAILED,
+                    stage,
+                    "Collector upgrade failed and the managed unit could not be fully restored",
+                    recoverable=True,
+                    details={"rollback_errors": rollback_errors},
+                    suggested_actions=(
+                        "Inspect the service unit, systemctl status, and journal before retrying.",
+                    ),
+                ) from exc
+            raise
+
+    return _upgrade_result(
+        "upgraded" if update_required else "restarted",
+        deployed_config,
+        effective_layout,
+        command,
+        previous.raw,
+        candidate,
+        update_required=update_required,
+        service_updated=service_updated,
+        commands=commands,
+        warnings=warnings,
+        next_steps=next_steps,
     )
 
 
@@ -665,7 +850,12 @@ def _strict_mode(value: object) -> int:
     return _strict_integer(value)
 
 
-def _collector_command(explicit: Path | None, *, require_root_owner: bool) -> Path:
+def _collector_command(
+    explicit: Path | None,
+    *,
+    require_root_owner: bool,
+    stage: str = "collector_deploy",
+) -> Path:
     candidate = explicit or Path(sys.executable).resolve().parent / "perflens-collector"
     try:
         resolved = candidate.expanduser().resolve(strict=True)
@@ -673,7 +863,7 @@ def _collector_command(explicit: Path | None, *, require_root_owner: bool) -> Pa
     except OSError as exc:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
-            "collector_deploy",
+            stage,
             "Trusted perflens-collector executable cannot be resolved",
             details={"path": str(candidate)},
         ) from exc
@@ -686,7 +876,7 @@ def _collector_command(explicit: Path | None, *, require_root_owner: bool) -> Pa
     ):
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
-            "collector_deploy",
+            stage,
             "perflens-collector must be a trusted-owner executable not writable by group or "
             "other",
             details={"path": str(resolved)},
@@ -779,7 +969,10 @@ def _install_new_or_identical_text(text: str, destination: Path, *, mode: int) -
                 "Collector destination differs and will not be overwritten",
                 recoverable=True,
                 details={"path": str(destination)},
-                suggested_actions=("Review the difference and use a future explicit update flow.",),
+                suggested_actions=(
+                    "Review the difference; use perflens-admin upgrade only for a managed "
+                    "service update, and edit policy separately.",
+                ),
             )
         os.chmod(destination, mode)
         return False
@@ -788,12 +981,17 @@ def _install_new_or_identical_text(text: str, destination: Path, *, mode: int) -
     return True
 
 
-def _verify_managed_service(path: Path, *, require_root_owner: bool) -> os.stat_result:
+def _verify_managed_service(
+    path: Path,
+    *,
+    require_root_owner: bool,
+    stage: str = "collector_undeploy",
+) -> _ManagedServiceSnapshot:
     candidate = path.expanduser()
     if candidate.is_symlink():
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
-            "collector_undeploy",
+            stage,
             "Collector service unit must not be a symbolic link",
             details={"path": str(candidate)},
         )
@@ -805,7 +1003,7 @@ def _verify_managed_service(path: Path, *, require_root_owner: bool) -> os.stat_
     except OSError as exc:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
-            "collector_undeploy",
+            stage,
             "Collector service unit cannot be inspected safely",
             details={"path": str(candidate)},
         ) from exc
@@ -822,18 +1020,21 @@ def _verify_managed_service(path: Path, *, require_root_owner: bool) -> os.stat_
     ):
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
-            "collector_undeploy",
+            stage,
             "Service unit is not a bounded, trusted PerfLens-managed file",
             details={"path": str(candidate)},
         )
-    return metadata
+    return _ManagedServiceSnapshot(metadata=metadata, raw=raw)
 
 
 def _unlink_verified_managed_service(path: Path, *, require_root_owner: bool) -> None:
     inspected = _verify_managed_service(path, require_root_owner=require_root_owner)
     try:
         current = path.stat(follow_symlinks=False)
-        if (current.st_dev, current.st_ino) != (inspected.st_dev, inspected.st_ino):
+        if (current.st_dev, current.st_ino) != (
+            inspected.metadata.st_dev,
+            inspected.metadata.st_ino,
+        ):
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,
                 "collector_undeploy",
@@ -852,10 +1053,46 @@ def _unlink_verified_managed_service(path: Path, *, require_root_owner: bool) ->
         ) from exc
 
 
+def _replace_verified_managed_service(
+    path: Path,
+    inspected: _ManagedServiceSnapshot,
+    replacement: bytes,
+    *,
+    stage: str,
+    mode: int = 0o644,
+) -> None:
+    try:
+        current = path.stat(follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != (
+            inspected.metadata.st_dev,
+            inspected.metadata.st_ino,
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "Collector service unit changed during upgrade",
+                details={"path": str(path)},
+            )
+        text = replacement.decode("utf-8")
+        write_text_atomic(text, path, max_output_bytes=_MAX_SERVICE_BYTES)
+        os.chmod(path, mode)
+    except PerfLensError:
+        raise
+    except (OSError, UnicodeDecodeError) as exc:
+        raise PerfLensError(
+            ErrorCode.OUTPUT_WRITE_FAILED,
+            stage,
+            "Unable to replace the verified Collector service unit",
+            details={"path": str(path)},
+        ) from exc
+
+
 def _run_admin_command(
     command: tuple[str, ...],
     *,
-    stage: Literal["collector_deploy", "collector_undeploy"] = "collector_deploy",
+    stage: Literal[
+        "collector_deploy", "collector_undeploy", "collector_upgrade"
+    ] = "collector_deploy",
 ) -> None:
     executable = Path(command[0])
     allowed = {"/usr/bin/systemd-sysusers", "/usr/sbin/usermod", "/usr/bin/systemctl"}
@@ -901,6 +1138,10 @@ def _run_admin_undeploy_command(command: tuple[str, ...]) -> None:
     _run_admin_command(command, stage="collector_undeploy")
 
 
+def _run_admin_upgrade_command(command: tuple[str, ...]) -> None:
+    _run_admin_command(command, stage="collector_upgrade")
+
+
 def _wait_for_socket(path: Path) -> None:
     deadline = time.monotonic() + 5.0
     while time.monotonic() < deadline:
@@ -920,6 +1161,20 @@ def _wait_for_socket(path: Path) -> None:
             "Inspect systemctl status and journalctl for perflens-collector.service.",
         ),
     )
+
+
+def _wait_for_upgrade_socket(path: Path) -> None:
+    try:
+        _wait_for_socket(path)
+    except PerfLensError as exc:
+        raise PerfLensError(
+            exc.code,
+            "collector_upgrade",
+            exc.message,
+            recoverable=exc.recoverable,
+            details=exc.details,
+            suggested_actions=exc.suggested_actions,
+        ) from exc
 
 
 def _invoking_uid() -> int:
@@ -951,6 +1206,36 @@ def _result(
         service_path=str(layout.service_path),
         collector_command=str(command),
         allowed_uids=allowed_uids,
+        planned_commands=commands,
+        warnings=warnings,
+        next_steps=next_steps,
+    )
+
+
+def _upgrade_result(
+    status: Literal["dry_run", "restarted", "upgraded"],
+    config_path: Path,
+    layout: CollectorSystemLayout,
+    command: Path,
+    previous: bytes,
+    candidate: bytes,
+    *,
+    update_required: bool,
+    service_updated: bool,
+    commands: tuple[tuple[str, ...], ...],
+    warnings: tuple[str, ...],
+    next_steps: tuple[str, ...],
+) -> CollectorUpgradeArtifact:
+    return CollectorUpgradeArtifact(
+        perflens_version=__version__,
+        status=status,
+        config_path=str(config_path),
+        service_path=str(layout.service_path),
+        collector_command=str(command),
+        previous_service_sha256=hashlib.sha256(previous).hexdigest(),
+        candidate_service_sha256=hashlib.sha256(candidate).hexdigest(),
+        service_update_required=update_required,
+        service_updated=service_updated,
         planned_commands=commands,
         warnings=warnings,
         next_steps=next_steps,

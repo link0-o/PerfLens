@@ -18,11 +18,13 @@ from perflens.admin.deploy import (
     deploy_collector,
     inspect_collector_spool,
     undeploy_collector,
+    upgrade_collector,
 )
 from perflens.contracts.artifacts import (
     CollectorDeploymentArtifact,
     CollectorSpoolStatusArtifact,
     CollectorUndeploymentArtifact,
+    CollectorUpgradeArtifact,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 
@@ -171,6 +173,175 @@ def test_admin_deploy_rolls_back_new_files_after_service_failure(tmp_path: Path)
 
     assert not layout.config_path.exists()
     assert not layout.service_path.exists()
+
+
+def test_admin_upgrade_dry_run_and_restart_preserve_policy_and_data(tmp_path: Path) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+    artifact = layout.state_directory / "retained.data"
+    artifact.write_bytes(b"evidence")
+    policy_before = layout.config_path.read_bytes()
+    service_before = layout.service_path.read_bytes()
+
+    dry_run = upgrade_collector(
+        layout.config_path,
+        dry_run=True,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+    )
+    assert dry_run.schema_version == "1.0"
+    assert dry_run.status == "dry_run"
+    assert dry_run.service_update_required is False
+    assert dry_run.service_updated is False
+    assert dry_run.previous_service_sha256 == dry_run.candidate_service_sha256
+    assert layout.service_path.read_bytes() == service_before
+
+    commands: list[tuple[str, ...]] = []
+    sockets: list[Path] = []
+    restarted = upgrade_collector(
+        layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=commands.append,
+        socket_waiter=sockets.append,
+    )
+    assert restarted.status == "restarted"
+    assert restarted.service_updated is False
+    assert restarted.config_preserved is True
+    assert restarted.state_preserved is True
+    assert layout.config_path.read_bytes() == policy_before
+    assert artifact.read_bytes() == b"evidence"
+    assert commands == [
+        ("/usr/bin/systemctl", "daemon-reload"),
+        ("/usr/bin/systemctl", "restart", "perflens-collector.service"),
+    ]
+    assert sockets == [layout.socket_path]
+
+
+def test_admin_upgrade_replaces_only_managed_unit_and_cli_is_versioned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+    policy_before = layout.config_path.read_bytes()
+    old_service = layout.service_path.read_text(encoding="utf-8") + "# old template\n"
+    layout.service_path.write_text(old_service, encoding="utf-8")
+
+    upgraded = upgrade_collector(
+        layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+    )
+    assert upgraded.status == "upgraded"
+    assert upgraded.service_update_required is True
+    assert upgraded.service_updated is True
+    assert "# old template" not in layout.service_path.read_text(encoding="utf-8")
+    assert layout.config_path.read_bytes() == policy_before
+
+    def fake_upgrade(
+        *,
+        dry_run: bool = False,
+        collector_command: Path | None = None,
+    ) -> CollectorUpgradeArtifact:
+        del dry_run, collector_command
+        return upgraded
+
+    monkeypatch.setattr("perflens.admin.app.upgrade_collector", fake_upgrade)
+    cli_result = CliRunner().invoke(app, ["upgrade", "--dry-run"])
+    assert cli_result.exit_code == 0, cli_result.output
+    assert '"schema_version": "1.0"' in cli_result.output
+    assert '"status": "upgraded"' in cli_result.output
+
+
+def test_admin_upgrade_rolls_back_unit_when_restart_fails(tmp_path: Path) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+    old_service = layout.service_path.read_text(encoding="utf-8") + "# old template\n"
+    layout.service_path.write_text(old_service, encoding="utf-8")
+    restart_attempts = 0
+
+    def execute(command: tuple[str, ...]) -> None:
+        nonlocal restart_attempts
+        if command[1] == "restart":
+            restart_attempts += 1
+            if restart_attempts == 1:
+                raise PerfLensError(ErrorCode.EXTERNAL_TOOL_FAILED, "test", "restart failed")
+
+    with pytest.raises(PerfLensError) as failed:
+        upgrade_collector(
+            layout.config_path,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+            command_executor=execute,
+            socket_waiter=lambda _path: None,
+        )
+    assert failed.value.message == "restart failed"
+    assert restart_attempts == 2
+    assert layout.service_path.read_text(encoding="utf-8") == old_service
+
+
+def test_admin_upgrade_rejects_alternate_policy_and_unmanaged_unit(tmp_path: Path) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+    with pytest.raises(PerfLensError) as alternate:
+        upgrade_collector(
+            config,
+            dry_run=True,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+        )
+    assert alternate.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    layout.service_path.write_text("[Unit]\nDescription=unmanaged\n", encoding="utf-8")
+    with pytest.raises(PerfLensError) as unmanaged:
+        upgrade_collector(
+            layout.config_path,
+            dry_run=True,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+        )
+    assert unmanaged.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 
 def test_admin_undeploy_removes_only_service_and_preserves_data(tmp_path: Path) -> None:

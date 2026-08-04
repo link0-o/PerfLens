@@ -288,6 +288,10 @@ PerfLens 永远不会自行执行 sudo、修改内核策略或降低主机安全
 磁盘保留余量和当前最多可采集数据量；该命令只读，不删除旧证据。机器可读输出使用
 `perflens-admin spool-status --json`。
 
+安装新版本后使用 `sudo perflens-admin upgrade --dry-run` 预检，再运行
+`sudo perflens-admin upgrade`。它保留管理员策略和历史证据，只更新可信托管 unit，失败
+时尝试恢复；升级后应重新运行普通用户真实验收。
+
 - 所有用户路径都会被规范化，并限制在配置的 allowed root 内。
 - 输入 Profile 不会被覆盖。
 - 产物使用原子写入，并且只能写入指定 artifact root。

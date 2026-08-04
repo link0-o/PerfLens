@@ -29,6 +29,12 @@ def main() -> None:
     )
     _run(
         perflens_admin,
+        "upgrade",
+        "--help",
+        expected="Safely upgrade and restart",
+    )
+    _run(
+        perflens_admin,
         "spool-status",
         "--help",
         expected="Read-only Chinese summary",

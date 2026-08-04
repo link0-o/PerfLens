@@ -38,6 +38,14 @@ An unsafe result means a directory, symbolic link, or another non-regular entry
 was observed. Stop the Collector and inspect it manually; `spool-status` never
 follows or removes such entries.
 
+`perflens-admin upgrade` reads only the fixed deployed policy and replaces only
+a trusted PerfLens-managed unit. Use `sudo perflens-admin upgrade --dry-run`
+before execution. Alternate policies, symlinks, unknown units, and unsafe modes
+are rejected before restart. If activation fails after replacement, the command
+attempts to restore the old unit and reload systemd. A rollback warning requires
+manual inspection of the unit, service status, and journal before retrying;
+policy and spool evidence are not deleted.
+
 `perflens-admin undeploy` removes only a fixed unit with the PerfLens management
 marker, trusted ownership, and no group/other write permission. Review rejected
 legacy or manually edited units with `systemctl cat perflens-collector.service`

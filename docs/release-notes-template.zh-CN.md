@@ -68,4 +68,8 @@ Collector 还会在启动 perf 前检查 spool 总字节数、文件数和文件
 可读证据时加 `--json`。
 每套 Collector 只允许一个普通用户 UID，避免共享 `perflens` 组导致 Profile 跨用户泄露。
 
+后续升级先安装新版本，再运行 `sudo perflens-admin upgrade --dry-run` 和
+`sudo perflens-admin upgrade`。升级器保留管理员策略与历史证据，只替换可信托管 unit，
+失败时尝试恢复；完成后用普通用户重新运行 `accept-collector` 验收。
+
 **Full Changelog**：https://github.com/link0-o/PerfLens/commits/{tag}

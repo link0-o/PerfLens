@@ -49,7 +49,19 @@ perflens-admin spool-status
 
 ## 升级与卸载
 
-使用 `sudo apt install ./新版本.deb` 升级。系统包不会覆盖管理员策略。
+使用 `sudo apt install ./新版本.deb` 升级。系统包不会覆盖管理员策略，也不会自行重启
+Collector。安装新版本后执行：
+
+```bash
+sudo perflens-admin upgrade --dry-run
+sudo perflens-admin upgrade
+perflens accept-collector --authorize-host-acceptance
+```
+
+前两条由管理员运行：先比较现有与新 unit，再安全更新并重启；配置和历史产物保持
+不变，失败时尝试恢复旧 unit。最后一条由普通用户运行，确认新版本在本机仍能完成真实
+短时采集。不要用 `undeploy` 加 `deploy` 代替日常升级，也不要重新提交项目目录中的旧
+策略覆盖 `/etc/perflens/collector.toml`。
 
 卸载 Collector 前，先让管理员入口验证并移除 PerfLens 托管的 unit：
 

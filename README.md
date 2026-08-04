@@ -243,6 +243,11 @@ After deployment, `perflens-admin spool-status` gives a read-only Chinese
 summary of spool usage, filesystem reserve, and currently reservable output;
 add `--json` for the versioned machine-readable artifact.
 
+After installing a new release, run `sudo perflens-admin upgrade --dry-run` and
+then `sudo perflens-admin upgrade`. The explicit flow preserves policy and spool
+data, replaces only a verified managed unit, restarts the service, and attempts
+unit rollback on activation failure.
+
 After one administrator-reviewed deployment, users do not need to discover a
 PID. They may ask the Skill to optimize the current project, approve one exact
 executable and argument list, and let the ordinary-user launcher obtain the new

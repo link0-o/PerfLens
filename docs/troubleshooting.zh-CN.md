@@ -51,6 +51,19 @@ perflens status \
 异常项不是仍在使用的证据或管理员文件，再人工处理；`spool-status` 本身不会跟随链接
 或删除任何内容。
 
+## `upgrade` 拒绝升级或升级后恢复
+
+`perflens-admin upgrade` 只读取固定的 `/etc/perflens/collector.toml`，并且只替换带
+PerfLens 托管标记、属主可信、没有组/其他用户写权限的 unit。若传入替代策略、unit 被
+手工改成未知服务、路径是符号链接或权限过宽，命令会在重启前拒绝。先运行
+`sudo perflens-admin upgrade --dry-run`，再用 `systemctl cat
+perflens-collector.service` 审查差异，不要放宽检查。
+
+如果新 unit 已写入但重启或 Socket 检查失败，命令会尝试恢复旧 unit，并再次执行
+`daemon-reload` 和 `restart`。看到“could not be fully restored”时，不要继续自动重试；
+应立即检查 unit 内容、`systemctl status perflens-collector.service` 和对应 journal，确认
+当前实际加载的版本后再处理。管理员策略和 spool 证据不会在升级中删除。
+
 ## `undeploy` 拒绝移除 service
 
 `perflens-admin undeploy` 只删除带 PerfLens 托管标记、所有者可信、且没有组/其他

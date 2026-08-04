@@ -168,6 +168,20 @@ Collector 以特权启动用户程序。
 1 秒、最多 5 秒。管理员也可以通过 Collector 独立策略进一步降低允许的模式、事件、
 时长和输出大小。
 
+## 升级
+
+先安装新 wheel 或同版本配套的两个新 DEB，再由管理员运行：
+
+```bash
+sudo perflens-admin upgrade --dry-run
+sudo perflens-admin upgrade
+```
+
+该流程保留 `/etc/perflens/collector.toml` 和历史采集证据，只更新可信的托管 unit 并
+重启新程序，失败时尝试恢复旧 unit。完成后以普通用户重新运行
+`perflens accept-collector --authorize-host-acceptance`。完整边界见
+[《产品部署指南》](docs/deployment.zh-CN.md)。
+
 ## 卸载
 
 pipx 安装的普通用户程序可以这样卸载：

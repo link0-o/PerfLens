@@ -14,6 +14,7 @@ from perflens.admin.deploy import (
     deploy_collector,
     inspect_collector_spool,
     undeploy_collector,
+    upgrade_collector,
 )
 from perflens.contracts.artifacts import CollectorSpoolStatusArtifact, ErrorArtifact, ErrorBody
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -80,6 +81,32 @@ def undeploy_command(
     """Stop and remove the managed service while preserving policy and artifacts."""
     try:
         result = undeploy_collector(dry_run=dry_run)
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(result.model_dump_json(indent=2))
+
+
+@app.command("upgrade")
+def upgrade_command(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Validate and compare the managed unit without changes."),
+    ] = False,
+    collector_command: Annotated[
+        Path | None,
+        typer.Option(
+            "--collector-command",
+            dir_okay=False,
+            help="Trusted upgraded Collector path; defaults beside perflens-admin.",
+        ),
+    ] = None,
+) -> None:
+    """Safely upgrade and restart the Collector while preserving policy and artifacts."""
+    try:
+        result = upgrade_collector(
+            dry_run=dry_run,
+            collector_command=collector_command,
+        )
     except PerfLensError as exc:
         _fail(exc)
     typer.echo(result.model_dump_json(indent=2))

@@ -210,9 +210,31 @@ PerfLens 以普通用户启动该文件并取得新 PID；Collector 只收到 PI
 
 ## 升级和卸载
 
-升级时先安装新 wheel/系统包，再检查 unit 与策略差异，然后重启 Collector。不要覆盖管理员维护的 `/etc/perflens/collector.toml`。
+升级时先安装新 wheel/系统包。安装包只替换程序，不启动服务，也不覆盖管理员维护的
+`/etc/perflens/collector.toml`。然后先只读预检：
 
-先执行：
+```bash
+sudo perflens-admin upgrade --dry-run
+```
+
+结果中的 `previous_service_sha256` 与 `candidate_service_sha256` 用于确认 unit 是否变化；
+`service_update_required: false` 仍是正常情况，因为服务仍需重启来加载新程序。确认后只需：
+
+```bash
+sudo perflens-admin upgrade
+```
+
+`upgrade` 只读取固定的已部署策略，只更新带 PerfLens 托管标记且所有者、权限可信的
+systemd unit，再执行固定的 `daemon-reload` 和 `restart`。它不会接受项目目录中的替代
+策略，不修改 sysctl/capability，也不删除配置或 `/var/lib/perflens` 证据。若更新 unit
+后重启或 Socket 检查失败，会尝试原子恢复旧 unit 并重新加载；此时应按错误提示检查
+`systemctl status` 和日志。升级成功后，再以普通用户运行一次：
+
+```bash
+perflens accept-collector --authorize-host-acceptance
+```
+
+软件卸载前先执行：
 
 ```bash
 sudo perflens-admin undeploy --dry-run

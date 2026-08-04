@@ -1,0 +1,104 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "candidate_service_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Candidate Service Sha256",
+      "type": "string"
+    },
+    "collector_command": {
+      "title": "Collector Command",
+      "type": "string"
+    },
+    "config_path": {
+      "title": "Config Path",
+      "type": "string"
+    },
+    "config_preserved": {
+      "default": true,
+      "title": "Config Preserved",
+      "type": "boolean"
+    },
+    "next_steps": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "planned_commands": {
+      "items": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "title": "Planned Commands",
+      "type": "array"
+    },
+    "previous_service_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Previous Service Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "service_path": {
+      "title": "Service Path",
+      "type": "string"
+    },
+    "service_update_required": {
+      "title": "Service Update Required",
+      "type": "boolean"
+    },
+    "service_updated": {
+      "title": "Service Updated",
+      "type": "boolean"
+    },
+    "state_preserved": {
+      "default": true,
+      "title": "State Preserved",
+      "type": "boolean"
+    },
+    "status": {
+      "enum": [
+        "dry_run",
+        "restarted",
+        "upgraded"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "status",
+    "config_path",
+    "service_path",
+    "collector_command",
+    "previous_service_sha256",
+    "candidate_service_sha256",
+    "service_update_required",
+    "service_updated",
+    "planned_commands"
+  ],
+  "title": "CollectorUpgradeArtifact",
+  "type": "object"
+}

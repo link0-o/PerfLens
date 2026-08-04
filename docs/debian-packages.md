@@ -36,6 +36,12 @@ After the user's new login session, `perflens status --project <project>` checks
 runtime readiness and `perflens-admin spool-status` reports Collector storage
 headroom. Both are read-only; add `--json` to the latter for a versioned artifact.
 
+To upgrade, install both matching new packages, run `sudo perflens-admin upgrade
+--dry-run`, then `sudo perflens-admin upgrade`. This preserves the deployed policy
+and spool, updates only a verified managed unit, restarts the new program, and
+attempts to restore the old unit if activation fails. Repeat ordinary-user
+`perflens accept-collector --authorize-host-acceptance` afterward.
+
 Before package removal, use `sudo perflens-admin undeploy`. It verifies and removes
 only a trusted PerfLens-managed unit. Policy, collected artifacts, and the system
 identity are preserved by default. See the Chinese guide above for the full flow.
