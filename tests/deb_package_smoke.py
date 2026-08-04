@@ -93,6 +93,8 @@ def main() -> None:
         ).read_text(encoding="utf-8")
         assert "policy_version = 1" in policy
         assert "策略格式版本" in policy
+        assert "max_spool_bytes = 10737418240" in policy
+        assert "PerfLens never deletes old evidence automatically" in policy
         assert service.startswith("# Managed by PerfLens.")
         _assert_shared_libraries(root)
 

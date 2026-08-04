@@ -62,4 +62,7 @@ Agent 和 MCP 始终保持普通用户权限。检查引导生成的 `collector.
 真实短时验收。先运行 `perflens doctor`，再阅读
 [产品部署指南](https://github.com/link0-o/PerfLens/blob/{tag}/docs/deployment.zh-CN.md)。
 
+Collector 还会在启动 perf 前检查 spool 总字节数、文件数和文件系统空闲余量；达到
+管理员配置的边界时拒绝新采集，但不会自动删除旧证据。
+
 **Full Changelog**：https://github.com/link0-o/PerfLens/commits/{tag}

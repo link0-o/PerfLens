@@ -44,6 +44,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   while preserving administrator policy, collected artifacts, users, and groups.
 - A no-PID `perflens accept-collector` command that profiles a fixed,
   self-owned probe and emits versioned end-to-end host acceptance evidence.
+- Independent Collector spool byte, artifact-count, and filesystem free-space
+  quotas that deny new collections without deleting existing evidence.
 
 ### Changed
 

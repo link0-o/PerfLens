@@ -65,7 +65,7 @@ MCP 在服务端分别控制允许根目录、产物写入、进程执行、主�
 
 `perf stat` 输出由独立 Metric Adapter 处理，不混入栈 ProfileAdapter 层级。
 
-自动采集采用不同的权限边界：MCP 生成短期、单次、绑定 PID 所有者和启动时间的计划；可选 Collector 通过 Unix Socket 对等凭据和独立只读策略再次校验，只接受 PID，且只能写固定 spool。Collector 不接受 shell、任意命令、任意输出路径或全系统目标。MCP 与 Skill 始终保持普通用户权限。
+自动采集采用不同的权限边界：MCP 生成短期、单次、绑定 PID 所有者和启动时间的计划；可选 Collector 通过 Unix Socket 对等凭据和独立只读策略再次校验，只接受 PID，且只能写固定 spool。Collector 还会在启动 perf 前检查累计字节、文件数和文件系统空闲余量，不足时拒绝新采集且不删除旧证据。Collector 不接受 shell、任意命令、任意输出路径或全系统目标。MCP 与 Skill 始终保持普通用户权限。
 
 当前项目自动优化时，普通用户启动器可以在用户确认后启动一个项目内可执行文件，
 内部取得新 PID，再走同一条 PID 计划链路。Collector 不会收到或启动项目命令。

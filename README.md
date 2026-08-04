@@ -231,7 +231,9 @@ For an approved live PID, PerfLens can automatically inspect permissions, create
 short-lived PID-bound plan, execute it once through a separately policy-enforcing
 Collector Broker, and analyze the result. See
 [automatic collection](docs/automatic-collection.md). The MCP server and Agent remain
-unprivileged.
+unprivileged. The Collector also enforces cumulative spool byte/file quotas and
+a filesystem free-space reserve; exhaustion denies new work without deleting
+old evidence.
 
 After one administrator-reviewed deployment, users do not need to discover a
 PID. They may ask the Skill to optimize the current project, approve one exact

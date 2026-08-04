@@ -124,6 +124,57 @@ def test_broker_collects_verified_pid_to_fixed_spool(tmp_path: Path) -> None:
         target.wait(timeout=5)
 
 
+def test_broker_rejects_collection_when_spool_quota_cannot_reserve_output(
+    tmp_path: Path,
+) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    filler = spool / "existing.perf.data"
+    filler.write_bytes(b"x")
+    target = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        start_new_session=True,
+    )
+    try:
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode="record",
+                pid=target.pid,
+                duration_seconds=0.1,
+                max_output_bytes=1024,
+            ),
+            policy=AutomaticCollectionPolicy(enabled=True, max_output_bytes=1024),
+            capabilities=_capabilities(),
+        )
+        policy = CollectorBrokerPolicy(
+            spool_root=spool,
+            perf_path=_fake_perf(tmp_path),
+            allowed_uids=(os.geteuid(),),
+            max_duration_seconds=1,
+            max_output_bytes=1024,
+            max_spool_bytes=1024,
+            min_free_bytes=0,
+        )
+        with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+            worker = threading.Thread(target=server.serve_once, daemon=True)
+            worker.start()
+            with pytest.raises(PerfLensError) as captured:
+                CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(plan)
+            worker.join(timeout=5)
+
+        assert captured.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+        assert not worker.is_alive()
+        assert list(spool.iterdir()) == [filler]
+        assert filler.read_bytes() == b"x"
+    finally:
+        target.terminate()
+        target.wait(timeout=5)
+
+
 def test_broker_policy_rejects_forged_target_owner(tmp_path: Path) -> None:
     spool = tmp_path / "spool"
     runtime = tmp_path / "run"

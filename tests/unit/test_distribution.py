@@ -67,6 +67,8 @@ def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
     assert "Ordinary-user UIDs allowed to call the Collector" in policy
     assert "强烈建议保持 false" in policy
     assert "Security-sensitive; keep false" in policy
+    assert "max_spool_bytes = 10737418240" in policy
+    assert "PerfLens never deletes old evidence automatically" in policy
     assert "ExecStart=/opt/perflens/bin/perflens-collector " in service
     with pytest.raises(PerfLensError) as captured:
         install_collector_assets(target)

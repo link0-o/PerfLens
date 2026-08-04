@@ -319,6 +319,9 @@ def _parse_deployment_policy(
         "max_duration_seconds",
         "max_frequency_hz",
         "max_output_bytes",
+        "max_spool_bytes",
+        "max_spool_artifacts",
+        "min_free_bytes",
         "max_plan_ttl_seconds",
         "allowed_stat_events",
         "socket_mode",
@@ -335,28 +338,27 @@ def _parse_deployment_policy(
         policy_version = values.get("policy_version", COLLECTOR_POLICY_VERSION)
         if isinstance(policy_version, bool) or not isinstance(policy_version, int):
             raise TypeError("policy_version must be an integer")
-        spool = Path(str(values["spool_root"])).expanduser().resolve(strict=False)
-        perf_candidate = Path(str(values["perf_path"])).expanduser()
+        spool = Path(_strict_string(values["spool_root"])).expanduser().resolve(strict=False)
+        perf_candidate = Path(_strict_string(values["perf_path"])).expanduser()
         perf = perf_candidate.resolve(strict=True)
-        uids = tuple(sorted(set(int(value) for value in values["allowed_uids"])))
-        modes = tuple(dict.fromkeys(str(value) for value in values["allowed_modes"]))
-        duration = float(values.get("max_duration_seconds", 30.0))
-        frequency = int(values.get("max_frequency_hz", 99))
-        output_bytes = int(values.get("max_output_bytes", 1 << 30))
-        plan_ttl = int(values.get("max_plan_ttl_seconds", 300))
-        events = tuple(str(value) for value in values.get("allowed_stat_events", ()))
+        uids = tuple(sorted(set(_strict_integer(value) for value in values["allowed_uids"])))
+        modes = tuple(
+            dict.fromkeys(_strict_string(value) for value in values["allowed_modes"])
+        )
+        duration = _strict_number(values.get("max_duration_seconds", 30.0))
+        frequency = _strict_integer(values.get("max_frequency_hz", 99))
+        output_bytes = _strict_integer(values.get("max_output_bytes", 1 << 30))
+        spool_bytes = _strict_integer(values.get("max_spool_bytes", 10 << 30))
+        spool_artifacts = _strict_integer(values.get("max_spool_artifacts", 1000))
+        min_free_bytes = _strict_integer(values.get("min_free_bytes", 1 << 30))
+        plan_ttl = _strict_integer(values.get("max_plan_ttl_seconds", 300))
+        events = tuple(
+            _strict_string(value) for value in values.get("allowed_stat_events", ())
+        )
         socket_mode_raw = values.get("socket_mode", "0660")
         artifact_mode_raw = values.get("artifact_mode", "0640")
-        socket_mode = (
-            int(socket_mode_raw, 8)
-            if isinstance(socket_mode_raw, str)
-            else int(socket_mode_raw)
-        )
-        artifact_mode = (
-            int(artifact_mode_raw, 8)
-            if isinstance(artifact_mode_raw, str)
-            else int(artifact_mode_raw)
-        )
+        socket_mode = _strict_mode(socket_mode_raw)
+        artifact_mode = _strict_mode(artifact_mode_raw)
     except (KeyError, OSError, TypeError, ValueError) as exc:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
@@ -383,6 +385,9 @@ def _parse_deployment_policy(
         or not 0 < duration <= 86_400
         or not 1 <= frequency <= 10_000
         or output_bytes < 1
+        or not output_bytes <= spool_bytes <= 1 << 50
+        or not 1 <= spool_artifacts <= 1_000_000
+        or not 0 <= min_free_bytes <= 1 << 50
         or not 1 <= plan_ttl <= 3600
         or (events and (len(events) > 64 or any(not event or "\0" in event for event in events)))
         or socket_mode < 0
@@ -406,6 +411,30 @@ def _parse_deployment_policy(
         allowed_uids=uids,
         allowed_modes=modes,
     )
+
+
+def _strict_integer(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("expected an integer, not a boolean")
+    return value
+
+
+def _strict_number(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("expected a number, not a boolean")
+    return float(value)
+
+
+def _strict_string(value: object) -> str:
+    if not isinstance(value, str):
+        raise TypeError("expected a string")
+    return value
+
+
+def _strict_mode(value: object) -> int:
+    if isinstance(value, str):
+        return int(value, 8)
+    return _strict_integer(value)
 
 
 def _collector_command(explicit: Path | None, *, require_root_owner: bool) -> Path:

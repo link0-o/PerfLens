@@ -8,6 +8,7 @@ import sys
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -113,6 +114,56 @@ def test_broker_authorization_denies_every_out_of_policy_dimension(tmp_path: Pat
         os.geteuid(),
         base.model_copy(update={"target_uid": os.geteuid() + 1}),
     )
+
+
+def test_broker_denies_exhausted_or_unsafe_spool(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = _policy(tmp_path)
+    spool = policy.spool_root
+    plan = _plan()
+
+    filler = spool / "existing.perf.data"
+    filler.write_bytes(b"x" * 513)
+    byte_limited = replace(
+        policy,
+        max_spool_bytes=1536,
+        max_spool_artifacts=10,
+        min_free_bytes=0,
+    )
+    with pytest.raises(PerfLensError) as byte_error:
+        _broker_with_policy(byte_limited)._authorize_spool_capacity(plan)
+    assert byte_error.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+
+    count_limited = replace(
+        policy,
+        max_spool_artifacts=1,
+        min_free_bytes=0,
+    )
+    with pytest.raises(PerfLensError) as count_error:
+        _broker_with_policy(count_limited)._authorize_spool_capacity(plan)
+    assert count_error.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+
+    filler.unlink()
+
+    def exhausted_disk(_path: object) -> SimpleNamespace:
+        return SimpleNamespace(free=1023)
+
+    monkeypatch.setattr(
+        "perflens.collector_broker.server.shutil.disk_usage",
+        exhausted_disk,
+    )
+    no_free_space = replace(policy, min_free_bytes=0)
+    with pytest.raises(PerfLensError) as free_space_error:
+        _broker_with_policy(no_free_space)._authorize_spool_capacity(plan)
+    assert free_space_error.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+
+    unexpected = spool / "unexpected"
+    unexpected.mkdir()
+    with pytest.raises(PerfLensError) as unsafe_entry:
+        _broker_with_policy(policy)._authorize_spool_capacity(plan)
+    assert unsafe_entry.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 
 def test_socket_path_and_client_require_safe_existing_socket(tmp_path: Path) -> None:

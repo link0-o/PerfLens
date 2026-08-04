@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import socket
 import struct
 import threading
@@ -141,6 +142,7 @@ class CollectorBrokerServer:
         plan = request.plan
         self._authorize(peer_uid, plan)
         assert_plan_current(plan)
+        self._authorize_spool_capacity(plan)
         self._consume_plan(plan)
         suffix = ".stat.csv" if plan.mode == "stat" else ".perf.data"
         output_path = self._policy.spool_root / f"{plan.plan_id}{suffix}"
@@ -234,6 +236,54 @@ class CollectorBrokerServer:
                 ErrorCode.PATH_SAFETY_VIOLATION,
                 "authorization",
                 "perf stat event is not allowed by collector policy",
+                recoverable=True,
+            )
+
+    def _authorize_spool_capacity(self, plan: CollectionPlanArtifact) -> None:
+        artifact_count = 0
+        spool_bytes = 0
+        try:
+            with os.scandir(self._policy.spool_root) as entries:
+                for entry in entries:
+                    if not entry.is_file(follow_symlinks=False):
+                        raise PerfLensError(
+                            ErrorCode.PATH_SAFETY_VIOLATION,
+                            "collector_broker",
+                            "Collector spool contains an unexpected non-regular entry",
+                            recoverable=True,
+                            details={"entry": entry.name},
+                        )
+                    artifact_count += 1
+                    if artifact_count >= self._policy.max_spool_artifacts:
+                        raise PerfLensError(
+                            ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                            "collector_broker",
+                            "Collector spool artifact-count quota is exhausted",
+                            recoverable=True,
+                        )
+                    spool_bytes += entry.stat(follow_symlinks=False).st_size
+                    if spool_bytes + plan.max_output_bytes > self._policy.max_spool_bytes:
+                        raise PerfLensError(
+                            ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                            "collector_broker",
+                            "Collector spool byte quota cannot reserve the requested output",
+                            recoverable=True,
+                        )
+            free_bytes = shutil.disk_usage(self._policy.spool_root).free
+        except PerfLensError:
+            raise
+        except OSError as exc:
+            raise PerfLensError(
+                ErrorCode.OUTPUT_WRITE_FAILED,
+                "collector_broker",
+                "Unable to inspect Collector spool capacity",
+                recoverable=True,
+            ) from exc
+        if free_bytes - plan.max_output_bytes < self._policy.min_free_bytes:
+            raise PerfLensError(
+                ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                "collector_broker",
+                "Collector filesystem free-space reserve would be violated",
                 recoverable=True,
             )
 

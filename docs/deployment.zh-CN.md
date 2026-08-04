@@ -103,6 +103,13 @@ perflens status --project /绝对路径/工作区
 
 正式策略默认位于 `/etc/perflens/collector.toml`。保持 `allow_other_target_uids = false`，先只开放 `stat` 和 `record`，并保持短时长、低频率和固定 spool。
 
+长期自动采集还应检查三个累计存储边界：`max_spool_bytes` 限制全部产物的总逻辑
+字节数，`max_spool_artifacts` 限制文件数量，`min_free_bytes` 为 spool 所在文件系统
+保留空闲空间。默认分别为 10 GiB、1000 个文件和 1 GiB。Collector 会按本次计划的
+最坏输出大小预留空间；任何边界不足时都在启动 perf 前返回
+`RESOURCE_LIMIT_EXCEEDED`。PerfLens 不会自动删除、覆盖或轮转旧证据，管理员应先审查、
+归档，再明确删除不再需要的产物。
+
 ## 内核权限
 
 先运行：

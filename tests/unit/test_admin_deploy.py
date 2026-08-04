@@ -50,6 +50,9 @@ def _deployment_inputs(tmp_path: Path) -> tuple[Path, Path, Path, CollectorSyste
         "max_duration_seconds = 30.0\n"
         "max_frequency_hz = 99\n"
         "max_output_bytes = 1048576\n"
+        "max_spool_bytes = 10737418240\n"
+        "max_spool_artifacts = 1000\n"
+        "min_free_bytes = 1073741824\n"
         "max_plan_ttl_seconds = 300\n",
         encoding="utf-8",
     )
@@ -354,6 +357,10 @@ def test_admin_deploy_rejects_unsafe_policy_and_symlink(tmp_path: Path) -> None:
         "allowed_uids = [0]\n",
         'socket_mode = "0666"\n',
         "max_duration_seconds = nan\n",
+        "max_spool_bytes = 1\n",
+        "max_spool_artifacts = 0\n",
+        "min_free_bytes = -1\n",
+        "min_free_bytes = false\n",
     ],
 )
 def test_admin_deploy_rejects_invalid_bounded_fields(
@@ -366,6 +373,12 @@ def test_admin_deploy_rejects_invalid_bounded_fields(
         text = text.replace(f"allowed_uids = [{os.geteuid()}]\n", replacement)
     elif replacement.startswith("max_duration"):
         text = text.replace("max_duration_seconds = 30.0\n", replacement)
+    elif replacement.startswith("max_spool_bytes"):
+        text = text.replace("max_spool_bytes = 10737418240\n", replacement)
+    elif replacement.startswith("max_spool_artifacts"):
+        text = text.replace("max_spool_artifacts = 1000\n", replacement)
+    elif replacement.startswith("min_free_bytes"):
+        text = text.replace("min_free_bytes = 1073741824\n", replacement)
     else:
         text += replacement
     config.write_text(text, encoding="utf-8")

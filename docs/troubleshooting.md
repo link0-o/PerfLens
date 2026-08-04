@@ -23,6 +23,16 @@ as legacy version 1; unsupported versions are rejected before deployment or
 Collector startup. Regenerate the policy with a matching PerfLens release rather
 than deleting unfamiliar fields.
 
+## Collector returns `RESOURCE_LIMIT_EXCEEDED`
+
+A spool-quota or free-space error means the Collector could not reserve the
+plan's worst-case output before starting perf. Administrators should inspect
+the file count and logical size under `/var/lib/perflens`, the filesystem's free
+space, and the `max_spool_bytes`, `max_spool_artifacts`, and `min_free_bytes`
+policy fields. Review and archive evidence before explicitly removing files;
+do not let the Agent delete artifacts or hide disk pressure with unbounded
+limits.
+
 `perflens-admin undeploy` removes only a fixed unit with the PerfLens management
 marker, trusted ownership, and no group/other write permission. Review rejected
 legacy or manually edited units with `systemctl cat perflens-collector.service`

@@ -46,6 +46,9 @@ def test_policy_must_be_immutable_to_non_root_service_owner(tmp_path: Path) -> N
     assert policy.policy_version == 1
     assert policy.allowed_uids == (os.geteuid(),)
     assert policy.allowed_modes == ("record", "stat")
+    assert policy.max_spool_bytes == 10 << 30
+    assert policy.max_spool_artifacts == 1000
+    assert policy.min_free_bytes == 1 << 30
 
 
 def test_policy_rejects_unknown_fields(tmp_path: Path) -> None:
@@ -103,6 +106,40 @@ def test_policy_loader_rejects_invalid_field_types(tmp_path: Path) -> None:
         load_broker_policy(policy_path)
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "max_duration_seconds = true",
+        "max_frequency_hz = true",
+        "max_output_bytes = true",
+        "max_spool_bytes = true",
+        "max_spool_artifacts = true",
+        "min_free_bytes = false",
+        "max_plan_ttl_seconds = true",
+        "socket_mode = true",
+        "artifact_mode = false",
+    ],
+)
+def test_policy_loader_rejects_boolean_numeric_fields(tmp_path: Path, field: str) -> None:
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    spool.chmod(0o750)
+    perf = _fake_perf(tmp_path)
+    policy_path = tmp_path / "collector.toml"
+    policy_path.write_text(
+        "[collector]\n"
+        f'spool_root = "{spool}"\n'
+        f'perf_path = "{perf}"\n'
+        f"allowed_uids = [{os.geteuid()}]\n"
+        f"{field}\n",
+        encoding="utf-8",
+    )
+    policy_path.chmod(0o444)
+
+    with pytest.raises(PerfLensError, match="field values"):
+        load_broker_policy(policy_path)
+
+
 def test_broker_policy_limit_validation(tmp_path: Path) -> None:
     spool = tmp_path / "spool"
     spool.mkdir()
@@ -114,19 +151,30 @@ def test_broker_policy_limit_validation(tmp_path: Path) -> None:
     )
     invalid_policies = (
         replace(base, policy_version=2),
+        replace(base, policy_version=True),
         replace(base, allowed_uids=()),
         replace(base, allowed_uids=(-1,)),
         replace(base, allowed_modes=()),
         replace(base, max_duration_seconds=0),
+        replace(base, max_duration_seconds=float("nan")),
         replace(base, max_frequency_hz=0),
+        replace(base, max_frequency_hz=True),
         replace(base, max_output_bytes=0),
+        replace(base, max_spool_bytes=(1 << 30) - 1),
+        replace(base, max_spool_bytes=(1 << 50) + 1),
+        replace(base, max_spool_artifacts=0),
+        replace(base, max_spool_artifacts=1_000_001),
+        replace(base, min_free_bytes=-1),
+        replace(base, min_free_bytes=(1 << 50) + 1),
         replace(base, max_plan_ttl_seconds=0),
         replace(base, max_plan_ttl_seconds=3601),
         replace(base, allowed_stat_events=()),
         replace(base, socket_mode=0o666),
+        replace(base, socket_mode=True),
         replace(base, socket_mode=0o400),
         replace(base, artifact_mode=0o644),
         replace(base, artifact_mode=0),
+        replace(base, artifact_mode=False),
     )
     for policy in invalid_policies:
         with pytest.raises(ValueError):

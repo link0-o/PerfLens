@@ -37,6 +37,14 @@ perflens status \
 读取；其他版本会在部署或服务启动前被拒绝。不要为了绕过错误直接删除未知字段，
 应使用匹配版本的 PerfLens 重新生成配置并审查差异。
 
+## Collector 返回 `RESOURCE_LIMIT_EXCEEDED`
+
+如果错误提到 spool 配额或文件系统空闲余量，说明 Collector 在启动 perf 前无法为本次
+计划的最坏输出预留空间。管理员应检查 `/var/lib/perflens` 的文件数量、逻辑大小和
+所在文件系统剩余空间，并对照 `/etc/perflens/collector.toml` 中的
+`max_spool_bytes`、`max_spool_artifacts`、`min_free_bytes`。先审查并归档证据，再明确
+删除不再需要的文件；不要让 Agent 自动删除或通过无限提高配额掩盖磁盘问题。
+
 ## `undeploy` 拒绝移除 service
 
 `perflens-admin undeploy` 只删除带 PerfLens 托管标记、所有者可信、且没有组/其他

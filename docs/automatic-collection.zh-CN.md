@@ -32,6 +32,8 @@ MCP 分析产物并生成报告
 - Collector 策略再次限制调用 UID、目标所有者、模式、时长、频率、事件、输出大小；
 - Collector 会再次限制计划最长有效期，并拒绝非 root 所有且可被服务账号修改的 `perf` 文件；
 - 产物只能写入 Collector 配置的固定 spool；
+- Collector 在启动 perf 前同时检查 spool 总字节数、文件数和文件系统空闲余量；达到
+  任一边界都会拒绝新采集，不会自动删除旧证据；
 - Broker 模式暂不启动用户提供的命令，也不支持全系统采样。
 
 旧的 `collect-profile` CLI/MCP 工具仍可用于人工确认的命令或 PID 采集。Agent 驱动的实时 PID 诊断应优先使用计划与 Broker。

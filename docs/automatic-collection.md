@@ -10,6 +10,10 @@ user grant → Skill → optional ordinary-user launch → PID-bound MCP plan �
 
 The optional `perflens-collector` is a Unix-socket broker. It authenticates peers with `SO_PEERCRED`, accepts only typed PID plans, revalidates PID owner/start time, enforces an independent root-owned policy, and writes only to a fixed spool. Plans have a bounded lifetime, and the running Broker rejects replay of the same plan. It also rejects a `perf` executable that is both non-root-owned and writable by the service account. It never accepts a shell command, arbitrary executable, environment, output path, or system-wide target.
 
+Before starting perf, the Broker reserves against independent spool byte and
+artifact-count quotas and a filesystem free-space floor. Exhaustion denies the
+new collection without deleting or overwriting existing evidence.
+
 Run `perflens doctor` for a read-only capability report. Stage the packaged service templates with:
 
 The example below uses the native DEB path; wheel deployments should replace it

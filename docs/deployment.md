@@ -56,6 +56,14 @@ policies carry `policy_version = 1`; a missing field is treated as legacy
 version 1, while unsupported versions are rejected before deployment and
 Collector startup.
 
+Long-running automatic collection is also bounded by `max_spool_bytes`,
+`max_spool_artifacts`, and `min_free_bytes`. The defaults cap logical artifact
+storage at 10 GiB and 1000 files while reserving 1 GiB on the spool filesystem.
+The Collector reserves the plan's worst-case output before starting perf and
+returns `RESOURCE_LIMIT_EXCEEDED` when a boundary cannot be met. It never
+deletes or rotates old evidence automatically; an administrator must review and
+archive artifacts before explicitly removing them.
+
 `accept-collector` starts a fixed, self-owned CPU probe and performs a real,
 policy-bounded perf-stat collection of at most five seconds. It always cleans up
 the probe and emits versioned acceptance evidence, so users do not need to find

@@ -279,7 +279,7 @@ PerfLens 永远不会自行执行 sudo、修改内核策略或降低主机安全
 
 ## 权限和安全边界
 
-运行 `perflens doctor` 可以在不采样、不附加 PID 的情况下检查当前五种采集模式。Agent 自动采集使用短期、单次、绑定 PID 所有者和启动时间的计划，并由 Unix Socket Collector 再次检查调用 UID、目标、模式和资源上限。Skill 本身不是授权。
+运行 `perflens doctor` 可以在不采样、不附加 PID 的情况下检查当前五种采集模式。Agent 自动采集使用短期、单次、绑定 PID 所有者和启动时间的计划，并由 Unix Socket Collector 再次检查调用 UID、目标、模式、单次资源上限、spool 累计配额和磁盘空闲余量。达到存储边界时只拒绝新采集，不自动删除旧证据。Skill 本身不是授权。
 
 - 所有用户路径都会被规范化，并限制在配置的 allowed root 内。
 - 输入 Profile 不会被覆盖。

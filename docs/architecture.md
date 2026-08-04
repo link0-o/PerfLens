@@ -53,7 +53,10 @@ Automatic collection has a second privilege boundary. The MCP server creates a
 short-lived, single-use plan bound to PID owner and process start time. The optional
 Collector revalidates it using Unix peer credentials and an independent immutable
 policy. It accepts no shell, arbitrary command, environment, output path, or
-system-wide target. The MCP server and Skill remain unprivileged.
+system-wide target. Before starting perf it also reserves against cumulative
+spool bytes, artifact count, and a filesystem free-space floor. Exhaustion
+denies the new collection without deleting old evidence. The MCP server and
+Skill remain unprivileged.
 
 For a confirmed current-project workload, an ordinary-user coordinator launches
 one in-project executable, captures the new PID, and uses the same PID-plan path.

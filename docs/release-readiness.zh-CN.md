@@ -27,9 +27,9 @@
 |---|---|---|
 | 代码规范 | `ruff check .` | 通过 |
 | 严格类型 | `pyright` | 0 错误、0 警告 |
-| Python 3.12 | `pytest -q`，Python 3.12.13 | 201 通过 |
-| Python 3.13 | 隔离环境 `pytest -q` | 201 通过 |
-| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.32%，通过 |
+| Python 3.12 | `pytest -q`，Python 3.12.13 | 216 通过 |
+| Python 3.13 | 隔离环境 `pytest -q` | 216 通过 |
+| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.38%，通过 |
 | Skill | Skill 结构和打包测试 | 通过 |
 | Schema | 已提交 Schema 与 Contract 生成结果相等 | 通过 |
 | 依赖锁 | `uv export --locked` | 通过 |
@@ -38,6 +38,7 @@
 | wheel/sdist | 全新临时目录构建和隔离安装 | 全部通过 |
 | SHA-256 | wheel、sdist、两个 DEB、Skill、SBOM | 六项全部通过 |
 | 部署验收命令 | `accept-collector` → 内置负载 → 授权 stat 计划 → Broker | 可执行 perf Test Double 通过 |
+| Collector 存储边界 | 累计字节/文件数/空闲余量 → 启动 perf 前预留 | 三类拒绝及 Unix Socket 端到端通过 |
 | 项目工作负载 | 普通用户启动 → 内部 PID → Broker → 清理 | 可执行 perf Test Double 端到端通过 |
 | 管理员部署 | 严格 TOML → 内置资产 → 固定命令 → Socket | 成功、回滚和拒绝路径通过 |
 | 管理员撤销部署 | 托管标记/所有者/权限 → 固定停用 → inode 复核 → 删除 unit | 保留数据和拒绝路径通过 |
@@ -66,7 +67,7 @@
 - 非有限 Benchmark 与 perf-stat 数值会被拒绝；
 - 大批量符号地址分组发送，避免标准输入/输出管道死锁；
 - 主动采集默认关闭，PID 附加具有额外独立权限门。
-- 自动计划绑定 PID 所有者和启动时间，短期且单次；Collector 验证 Unix 对等 UID、独立策略和固定 spool。
+- 自动计划绑定 PID 所有者和启动时间，短期且单次；Collector 验证 Unix 对等 UID、独立策略和固定 spool，并在启动 perf 前执行累计字节、文件数和磁盘空闲余量配额。
 - 项目可执行程序始终由普通用户启动，Collector 只收到 PID 计划；管理员部署配置按
   不跟随符号链接的单次快照读取，系统命令使用固定绝对路径白名单。
 

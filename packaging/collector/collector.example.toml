@@ -47,6 +47,20 @@ max_frequency_hz = 99
 # Maximum bytes for one collection artifact. 1073741824 bytes equals 1 GiB.
 max_output_bytes = 1073741824
 
+# 固定 spool 中所有产物允许占用的总逻辑字节数。10737418240 字节等于 10 GiB。
+# Maximum logical bytes for all artifacts in the fixed spool. 10737418240 bytes equals 10 GiB.
+# 达到边界时新采集会被拒绝；PerfLens 不会自动删除旧证据。
+# New collections are denied at the boundary; PerfLens never deletes old evidence automatically.
+max_spool_bytes = 10737418240
+
+# spool 中允许保存的产物文件总数。达到上限时新采集会被拒绝。
+# Maximum artifact-file count in the spool. New collections are denied at this limit.
+max_spool_artifacts = 1000
+
+# 为 spool 所在文件系统保留的最小空闲字节数。1073741824 字节等于 1 GiB。
+# Minimum free bytes reserved on the spool filesystem. 1073741824 bytes equals 1 GiB.
+min_free_bytes = 1073741824
+
 # 一次性采集计划的最长有效期（秒）；过期或已经使用的计划会被拒绝。
 # Maximum lifetime of a single-use plan in seconds; expired or consumed plans are rejected.
 max_plan_ttl_seconds = 300
