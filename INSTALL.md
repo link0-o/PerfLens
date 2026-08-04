@@ -51,7 +51,9 @@ global option before the subcommand (`perflens --json-errors <command> ...` or
 After trusting the project, restart Codex and confirm the project configuration
 with `codex mcp list`; no manual MCP block copy is needed by default. `status`
 checks the active project file rather than treating the standalone snippet as
-proof that MCP was configured.
+proof that MCP was configured. It also revalidates that the configured
+`perflens-mcp` still exists, is executable, and satisfies the onboarding entry
+point trust rules.
 
 Existing-profile analysis needs no Collector. To stage administrator-reviewed assets for authorized live-PID collection, use a new output directory:
 

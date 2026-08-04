@@ -312,7 +312,7 @@ def render_codex_config(
     """Return a project-scoped TOML snippet for the installed MCP executable."""
     safe_workspace = _existing_directory(workspace, label="Workspace")
     safe_artifact_root = _artifact_directory(safe_workspace, artifact_root)
-    safe_command = _mcp_executable(mcp_command)
+    safe_command = validate_mcp_executable(mcp_command)
     if allow_project_execution and not automatic_collection:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
@@ -420,7 +420,8 @@ def _artifact_directory(workspace: Path, artifact_root: Path | None) -> Path:
     return resolved
 
 
-def _mcp_executable(explicit: Path | None) -> Path:
+def validate_mcp_executable(explicit: Path | None = None) -> Path:
+    """Resolve and revalidate an MCP entry point using onboarding trust rules."""
     candidate: Path | None = explicit
     if candidate is None:
         found = shutil.which("perflens-mcp")

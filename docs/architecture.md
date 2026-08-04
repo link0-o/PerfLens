@@ -76,6 +76,8 @@ service UID. A socket pathname alone is never treated as a healthy service.
 onboarding files, Skill, active project MCP configuration against the selected
 setup, staged assets, socket access, current
 login-group membership, and host perf conditions without sampling a target.
+Project MCP readiness additionally requires the configured executable to pass
+fresh existence, execute-permission, and trusted-entry-point validation.
 After its configuration and access prerequisites pass, it also performs one
 500 ms-bounded `health` round trip and requires the dedicated service UID plus
 kernel `SO_PEERCRED` identity before reporting `ready_for_verification`.

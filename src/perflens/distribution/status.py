@@ -24,6 +24,7 @@ from perflens.contracts.artifacts import (
     RuntimeStatusArtifact,
     SetupArtifact,
 )
+from perflens.distribution.codex import validate_mcp_executable
 from perflens.distribution.skill import SKILL_NAME
 from perflens.domain.errors import ErrorCode, PerfLensError
 
@@ -288,7 +289,16 @@ def _inspect_codex_project_config(project: Path, setup: Path) -> McpStatus:
     if expected_status != "ready":
         return "incomplete"
     matches = expected_table is not None and project_table == expected_table
-    return "ready" if matches else "incomplete"
+    if not matches:
+        return "incomplete"
+    command = project_table.get("command")
+    if not isinstance(command, str) or not Path(command).is_absolute():
+        return "incomplete"
+    try:
+        validated_command = validate_mcp_executable(Path(command))
+    except PerfLensError:
+        return "incomplete"
+    return "ready" if str(validated_command) == command else "incomplete"
 
 
 def _read_perflens_mcp_table(

@@ -52,6 +52,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
+- `perflens status` now revalidates the configured MCP executable instead of
+  reporting readiness for a removed, non-executable, moved, or no-longer-trusted
+  entry point that merely remains in matching TOML.
 - Refresh and detach now reject a marked PerfLens block if unrelated TOML
   tables were inserted inside it, preventing managed-block replacement from
   deleting user configuration that PerfLens does not own.

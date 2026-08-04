@@ -79,11 +79,12 @@ Collector 协议只有两类有界请求：唯一会产生系统状态的 `colle
 `health` 往返，不能把遗留 Socket 文件或错误身份进程当成服务就绪。
 
 `perflens status` 是独立的只读诊断边界。它检查项目引导、Skill、项目 MCP 配置是否与
-所选引导一致、
-Collector 资产、Socket、当前登录会话用户组和主机 perf 条件，但不会采样、连接目标
+所选引导一致、Collector 资产、Socket、当前登录会话用户组和主机 perf 条件，但不会
+采样、连接目标
 进程或宣称真实 Collector 已经通过验收。配置和访问前置条件满足后，它会额外执行一次
 最长 500 毫秒的 `health` 往返；只有专用服务 UID 与内核 `SO_PEERCRED` 身份都通过，
 才会显示 `ready_for_verification`。
+项目 MCP 配置还必须让入口程序重新通过存在性、执行权限和可信路径检查后才算就绪。
 
 原生 Debian 发行同样按权限拆包：`perflens` 主包只暴露普通用户 CLI/MCP，
 `perflens-collector` 包才增加管理员和 Collector 入口。两个包的安装过程都不会部署

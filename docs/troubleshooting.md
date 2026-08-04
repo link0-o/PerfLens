@@ -24,6 +24,10 @@ malformed, or wrong-identity socket remains unavailable. `ready_for_verification
 real `perflens accept-collector --authorize-host-acceptance` probe is the next step, not that sampling has already
 succeeded.
 
+The project MCP check also revalidates the configured executable. A missing,
+non-executable, moved, or no-longer-trusted entry point makes configuration
+incomplete and requires a fresh setup bundle.
+
 PerfLens domain failures are Chinese-first for people. Automation must not parse
 that prose: place the global `--json-errors` option before the subcommand, for
 example `perflens --json-errors <command> ...` or `perflens-admin --json-errors

@@ -23,6 +23,10 @@ Collector 资产、Socket、当前登录
 “可进行真实短时验收”也不等于 perf 已经采集成功，仍需执行
 `perflens accept-collector --authorize-host-acceptance`。
 
+项目 MCP 状态还会重新验证 `.codex/config.toml` 中的命令路径。若 pipx/uv 环境被移动、
+入口不再可执行或可信符号链接被替换，状态会显示配置不完整；使用新的输出目录重新运行
+`perflens setup`，检查差异后重启 Codex。
+
 需要保存机器可读结果时使用：
 
 ```bash

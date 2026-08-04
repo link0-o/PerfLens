@@ -1314,7 +1314,7 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
         "skill_incomplete": "项目 Skill 不完整或路径不安全。",
         "mcp_project_config_missing": "项目 .codex/config.toml 尚未接入 PerfLens MCP。",
         "mcp_project_config_incomplete": (
-            "项目 Codex 配置无效、过大、路径不安全; 或与本次引导不匹配。"
+            "项目 Codex 配置无效、入口程序失效、路径不安全; 或与本次引导不匹配。"
         ),
         "collector_assets_missing": "缺少 Collector 部署资产。",
         "collector_assets_incomplete": "Collector 部署资产不完整或路径不安全。",
