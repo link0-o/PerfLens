@@ -45,9 +45,9 @@ PerfLens requires Python 3.12 or newer.
 For a GitHub release, download the wheel and install it as an isolated tool:
 
 ```bash
-pipx install ./perflens-0.1.0-py3-none-any.whl
+pipx install ./perflens-0.1.1-py3-none-any.whl
 # or
-uv tool install ./perflens-0.1.0-py3-none-any.whl
+uv tool install ./perflens-0.1.1-py3-none-any.whl
 ```
 
 Then run project-scoped onboarding:
@@ -68,6 +68,13 @@ Run a read-only readiness summary at any time:
 
 ```bash
 perflens status --project /absolute/path/to/project
+```
+
+After administrator deployment and a fresh login, verify the Collector without
+finding a PID:
+
+```bash
+perflens accept-collector --authorize-host-acceptance
 ```
 
 The wheel installation commands provide `perflens`, `perflens-mcp`, the optional

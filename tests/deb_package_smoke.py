@@ -83,6 +83,7 @@ def main() -> None:
         launcher = root / "usr/lib/perflens/perflens-launcher"
         assert launcher.is_file()
         assert launcher.stat().st_mode & 0o777 == 0o755
+        assert not tuple((root / "usr/lib/perflens").glob("*.dist-info/uv_cache.json"))
         _assert_safe_modes(root)
         policy = (
             root / "usr/share/perflens/collector/collector.example.toml"

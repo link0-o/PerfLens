@@ -71,6 +71,10 @@ def test_cli_exposes_version_and_release_setup_commands(tmp_path: Path) -> None:
     assert denied_probe.exit_code == 5
     assert "explicit target authorization" in denied_probe.stderr
 
+    denied_acceptance = runner.invoke(app, ["accept-collector"])
+    assert denied_acceptance.exit_code == 5
+    assert "explicit authorization" in denied_acceptance.stderr
+
     guided_project = tmp_path / "guided-project"
     guided_project.mkdir()
     guided = runner.invoke(

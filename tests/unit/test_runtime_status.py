@@ -205,5 +205,5 @@ def test_runtime_status_distinguishes_collector_access_and_verification(
     assert artifact.automatic_collection_status == expected
     if expected == "ready_for_verification":
         assert artifact.next_steps == (
-            "Run an explicitly authorized short verify-collector probe.",
+            "Run perflens accept-collector --authorize-host-acceptance.",
         )

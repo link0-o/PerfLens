@@ -53,4 +53,6 @@ Collector never receives or launches the workload command. Interactive,
 setuid/setgid, shell, arbitrary-environment, and system-wide workloads are not
 supported; daemonizing programs should expose a foreground mode.
 
-See [Product deployment](deployment.md) for configurable asset rendering, the explicitly authorized real `verify-collector` probe, upgrades, and uninstall behavior.
+See [Product deployment](deployment.md) for configurable asset rendering, the
+no-PID `accept-collector` host probe, advanced existing-PID verification,
+upgrades, and uninstall behavior.

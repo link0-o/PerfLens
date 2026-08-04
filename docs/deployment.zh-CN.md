@@ -29,7 +29,7 @@ PerfLens 应拆成普通用户分析端和系统 Collector 两部分部署：
 ```bash
 sudo python3 -m venv /opt/perflens
 sudo /opt/perflens/bin/python -m pip install \
-  ./dist/perflens-0.1.0-py3-none-any.whl
+  ./dist/perflens-0.1.1-py3-none-any.whl
 ```
 
 这里的版本号只是示例，应替换为实际构建版本。正式离线部署应同时提供 wheelhouse 或完整系统包，不应在安装脚本中隐式访问网络。
@@ -116,31 +116,27 @@ Debian 的 `perf_event_paranoid=3` 可能在 CAP_PERFMON 正常检查前拒绝�
 
 PerfLens 安装和运行时不会自动修改 sysctl、文件 capability 或 systemd 状态。不要为了省事让 MCP/Agent 以 root 运行，也不要默认给 Collector `CAP_SYS_ADMIN`。
 
-## 真实 Collector 验收
+## 真实 Collector 一键验收
 
-选择当前用户拥有、允许短时观察的测试 PID。例如先启动一个临时进程：
-
-```bash
-sleep 30 &
-test_pid=$!
-```
-
-使用普通用户执行一次最多 5 秒的真实 `perf stat`：
+重新登录后，以普通用户执行一条命令即可，不需要查找或输入 PID：
 
 ```bash
-perflens verify-collector \
-  --socket /run/perflens/collector.sock \
-  --pid "$test_pid" \
-  --duration-seconds 1 \
-  --authorize-target \
-  --authorization I_EXPLICITLY_AUTHORIZE_TARGET_PROFILING \
-  --authorize-pid-attach \
-  --pid-authorization I_EXPLICITLY_AUTHORIZE_PID_ATTACH
+perflens accept-collector --authorize-host-acceptance
 ```
 
-成功时输出带 `schema_version` 的 Collection JSON，指标产物写入策略限定的 `/var/lib/perflens`。失败时会返回稳定错误，例如 Socket 权限、策略拒绝、PID 所有者不符或内核禁止 perf。
+PerfLens 会以当前普通用户启动一个固定、隔离、最长约 30 秒的内置 CPU 测试负载，
+通过 Collector 对它执行默认 1 秒、最多 5 秒的真实 `perf stat`，完成后无论成功失败
+都会终止测试进程。Collector 仍然只接收绑定 PID、UID 和启动时间的短期单次计划，
+不会收到任意命令、环境变量或输出路径。
 
-这条命令是真实采集，不是只读健康检查；不要对未授权 PID 执行。
+成功时输出带 `schema_version` 和 `status: passed` 的验收 JSON，指标产物写入策略限定
+的 `/var/lib/perflens`。需要留档时使用
+`--output ./perflens-collector-acceptance.json`；输出文件必须是新文件。失败时会返回
+稳定错误，例如 Socket 权限、策略拒绝或内核禁止 perf。
+
+这是主动采集，不是只读健康检查，所以必须显式传入授权开关。高级用户若要验证自己
+已有且明确授权的进程，仍可使用 `perflens verify-collector --help`，该命令要求 PID
+和两层附加授权。
 
 ## MCP 产品配置
 
@@ -206,6 +202,6 @@ DEB 满足以下边界，未来 RPM 也应保持一致：
 - 安装软件包时不生成管理员配置、不启动服务；
 - 部署后采用经管理员审查的最小模式和短时限；
 - 提示管理员把明确的普通用户加入组并配置 `allowed_uids`；
-- 提供 `verify-collector` 作为安装后的显式真实验收，而不是声称服务启动就等于 perf 可用。
+- 提供无需手工 PID 的 `accept-collector` 作为安装后显式真实验收，而不是声称服务启动就等于 perf 可用。
 
 容器部署时，Collector 应留在宿主机，只把受控 Unix Socket 提供给普通用户 MCP；不要把整个分析容器改成 `--privileged`。

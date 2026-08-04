@@ -12,7 +12,8 @@ perflens status --project /绝对路径/你的项目
 
 这条命令只读检查引导目录、Skill、MCP 配置片段、Collector 资产、Socket、当前登录
 会话的 `perflens` 组身份和本机 perf 条件。它不会采样或附加进程；显示“可进行真实
-短时验收”也不等于 perf 已经采集成功，仍需执行明确授权的 `verify-collector`。
+短时验收”也不等于 perf 已经采集成功，仍需执行
+`perflens accept-collector --authorize-host-acceptance`。
 
 需要保存机器可读结果时使用：
 

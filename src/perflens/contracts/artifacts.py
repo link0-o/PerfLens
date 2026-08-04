@@ -515,6 +515,27 @@ class ProjectRunArtifact(ContractModel):
     warnings: tuple[str, ...] = ()
 
 
+class CollectorAcceptanceArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    acceptance_id: str = Field(pattern=r"^acceptance-[a-f0-9]{20}$")
+    status: Literal["passed"] = "passed"
+    socket_path: str
+    probe_kind: Literal["built_in_cpu"] = "built_in_cpu"
+    target_pid: int = Field(gt=0)
+    target_uid: int = Field(ge=0)
+    target_start_time_ticks: int = Field(gt=0)
+    requested_duration_seconds: float = Field(gt=0, le=5)
+    collection_id: str
+    output_path: str
+    output_sha256: str
+    output_bytes: int = Field(gt=0)
+    metric_count: int = Field(ge=0)
+    started_at: str
+    finished_at: str
+    warnings: tuple[str, ...] = ()
+
+
 class CollectorDeploymentArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     perflens_version: str

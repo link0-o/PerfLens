@@ -39,6 +39,7 @@ from perflens.collection.planning import (
 )
 from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.contracts.artifacts import ErrorArtifact, ErrorBody, RuntimeStatusArtifact
+from perflens.distribution.acceptance import accept_collector
 from perflens.distribution.codex import render_codex_config
 from perflens.distribution.collector import install_collector_assets
 from perflens.distribution.onboarding import run_project_setup
@@ -445,6 +446,61 @@ def verify_collector_command(
             safe_output = validate_new_output_file(output_path)
             write_json_new_atomic(artifact, safe_output, max_output_bytes=1 << 20)
             typer.echo(str(safe_output))
+            return
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(
+        json.dumps(artifact.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True)
+    )
+
+
+@app.command("accept-collector")
+def accept_collector_command(
+    socket_path: Annotated[
+        Path,
+        typer.Option("--socket", dir_okay=False, help="Installed Collector Unix socket."),
+    ] = Path("/run/perflens/collector.sock"),
+    duration_seconds: Annotated[
+        float,
+        typer.Option(
+            "--duration-seconds",
+            min=0.1,
+            max=5.0,
+            help="Built-in CPU probe duration; capped at five seconds.",
+        ),
+    ] = 1.0,
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Optional new acceptance JSON path."),
+    ] = None,
+    perf_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--perf-path",
+            dir_okay=False,
+            help="Optional local perf path used only for the capability snapshot.",
+        ),
+    ] = None,
+    authorize_host_acceptance: Annotated[
+        bool,
+        typer.Option(
+            "--authorize-host-acceptance",
+            help="Authorize profiling PerfLens's fixed, self-owned test workload.",
+        ),
+    ] = False,
+) -> None:
+    """Test an installed Collector end to end without choosing a PID."""
+    try:
+        artifact = accept_collector(
+            socket_path,
+            duration_seconds=duration_seconds,
+            authorized=authorize_host_acceptance,
+            capabilities=inspect_collection_capabilities(perf_path),
+        )
+        if output_path is not None:
+            safe_output = validate_new_output_file(output_path)
+            write_json_new_atomic(artifact, safe_output, max_output_bytes=1 << 20)
+            typer.echo(f"Collector 验收通过: 证据已写入 {safe_output}")
             return
     except PerfLensError as exc:
         _fail(exc)

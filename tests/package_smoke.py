@@ -28,6 +28,7 @@ def main() -> None:
         expected="preserving policy and artifacts",
     )
     _run(perflens, "verify-collector", "--help", expected="bounded real perf-stat probe")
+    _run(perflens, "accept-collector", "--help", expected="without choosing a PID")
 
     with tempfile.TemporaryDirectory(prefix="perflens-package-smoke-") as directory:
         root = Path(directory)

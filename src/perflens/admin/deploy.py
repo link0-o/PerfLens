@@ -90,7 +90,7 @@ def deploy_collector(
     )
     next_steps = (
         "Start a new login session for every newly authorized user.",
-        "Run perflens verify-collector as an authorized ordinary user.",
+        "Run perflens accept-collector --authorize-host-acceptance as an ordinary user.",
         "Enable automatic collection in the generated Codex MCP configuration.",
     )
     if dry_run:

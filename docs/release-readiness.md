@@ -16,9 +16,9 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 |---|---|---|
 | Lint | `ruff check .` | passed |
 | Strict types | `pyright` | 0 errors, 0 warnings |
-| Python 3.13 | isolated `pytest -q` environment | 196 passed |
-| Python 3.12 | `pytest -q` on 3.12.13 | 196 passed |
-| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.36%, passed |
+| Python 3.13 | isolated `pytest -q` environment | 201 passed |
+| Python 3.12 | `pytest -q` on 3.12.13 | 201 passed |
+| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.32%, passed |
 | Skill | structure and package tests | passed |
 | Schemas | checked-in schema equality test | passed |
 | Dependency lock | `uv export --locked` | passed |
@@ -27,7 +27,7 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 | Real profile | pinned upstream FlameGraph perf example | full analyze/classify/report flow passed |
 | Active perf denial | real perf 6.12.90, `perf_event_paranoid=3` | structured failure; no residual output |
 | Automatic Broker | MCP plan → authenticated Unix socket → fixed spool | passed with executable perf test double |
-| Deployment verification | `verify-collector` → authorized stat plan → Broker | passed with executable perf test double |
+| Deployment verification | `accept-collector` → built-in probe → authorized stat plan → Broker | passed with executable perf test double |
 | Project workload | ordinary-user launch → internal PID → Broker → cleanup | passed end to end with executable perf test double |
 | Admin deploy | strict TOML → packaged assets → fixed command allowlist → socket check | success, rollback, and denial paths passed |
 | Admin undeploy | trusted marker/owner/mode → fixed stop → inode recheck → unit removal | preserve-data and denial paths passed |

@@ -300,5 +300,5 @@ def _next_steps(
     elif automatic_status == "access_denied":
         steps.append("Start a new login session after joining the perflens group.")
     elif automatic_status == "ready_for_verification":
-        steps.append("Run an explicitly authorized short verify-collector probe.")
+        steps.append("Run perflens accept-collector --authorize-host-acceptance.")
     return tuple(steps)

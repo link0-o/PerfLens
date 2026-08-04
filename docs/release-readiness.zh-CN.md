@@ -27,9 +27,9 @@
 |---|---|---|
 | 代码规范 | `ruff check .` | 通过 |
 | 严格类型 | `pyright` | 0 错误、0 警告 |
-| Python 3.12 | `pytest -q`，Python 3.12.13 | 196 通过 |
-| Python 3.13 | 隔离环境 `pytest -q` | 196 通过 |
-| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.36%，通过 |
+| Python 3.12 | `pytest -q`，Python 3.12.13 | 201 通过 |
+| Python 3.13 | 隔离环境 `pytest -q` | 201 通过 |
+| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.32%，通过 |
 | Skill | Skill 结构和打包测试 | 通过 |
 | Schema | 已提交 Schema 与 Contract 生成结果相等 | 通过 |
 | 依赖锁 | `uv export --locked` | 通过 |
@@ -37,7 +37,7 @@
 | SBOM | uv CycloneDX 1.5 导出 | 通过 |
 | wheel/sdist | 全新临时目录构建和隔离安装 | 全部通过 |
 | SHA-256 | wheel、sdist、两个 DEB、Skill、SBOM | 六项全部通过 |
-| 部署验收命令 | `verify-collector` → 授权 stat 计划 → Broker | 可执行 perf Test Double 通过 |
+| 部署验收命令 | `accept-collector` → 内置负载 → 授权 stat 计划 → Broker | 可执行 perf Test Double 通过 |
 | 项目工作负载 | 普通用户启动 → 内部 PID → Broker → 清理 | 可执行 perf Test Double 端到端通过 |
 | 管理员部署 | 严格 TOML → 内置资产 → 固定命令 → Socket | 成功、回滚和拒绝路径通过 |
 | 管理员撤销部署 | 托管标记/所有者/权限 → 固定停用 → inode 复核 → 删除 unit | 保留数据和拒绝路径通过 |
@@ -81,4 +81,5 @@
 
 正式发布前仍需执行[《发布流程》](releasing.zh-CN.md)中的版本同步、CHANGELOG、完整测试、构建、SBOM、校验和和标签步骤。
 
-已经发布的 `v0.1.0` 不应移动或覆盖。本次 `Unreleased` 修复若要发布，建议使用新的补丁版本，例如 `v0.1.1`。
+已经发布的 `v0.1.0` 不应移动或覆盖。当前候选版本已经提升为 `v0.1.1`；提交并推送
+发布提交后，应创建新的 `v0.1.1` 标签。

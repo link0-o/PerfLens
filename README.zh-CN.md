@@ -42,9 +42,9 @@ PerfLens 不包含 LLM API、Web UI、自动修改源码功能、Benchmark 执�
 从 GitHub Releases 下载 wheel 后，推荐作为独立工具安装：
 
 ```bash
-pipx install ./perflens-0.1.0-py3-none-any.whl
+pipx install ./perflens-0.1.1-py3-none-any.whl
 # 或者
-uv tool install ./perflens-0.1.0-py3-none-any.whl
+uv tool install ./perflens-0.1.1-py3-none-any.whl
 ```
 
 不要手工提取 wheel。安装成功后运行项目引导：
@@ -65,6 +65,12 @@ Debian 13 用户也可以直接安装原生 `.deb`，不需要自己创建 Pytho
 
 ```bash
 perflens status --project /绝对路径/你的项目
+```
+
+管理员完成 Collector 部署、用户重新登录后，只需一条命令做真实验收，不必查 PID：
+
+```bash
+perflens accept-collector --authorize-host-acceptance
 ```
 
 上面的 wheel 安装方式会安装 `perflens`、`perflens-mcp`、可选的 `perflens-collector`

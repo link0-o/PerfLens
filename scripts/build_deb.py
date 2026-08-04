@@ -154,6 +154,7 @@ def _build_main_tree(
     if offline:
         install_project.append("--offline")
     _run(tuple(install_project), cwd=project_root)
+    _remove_nondeterministic_uv_metadata(runtime)
 
     launcher_source = project_root / "packaging/debian/perflens-launcher.py"
     launcher = runtime / "perflens-launcher"
@@ -325,6 +326,26 @@ def _normalize_tree(root: Path) -> None:
     for path in sorted(root.rglob("*")):
         os.utime(path, (_SOURCE_DATE_EPOCH, _SOURCE_DATE_EPOCH), follow_symlinks=False)
     os.utime(root, (_SOURCE_DATE_EPOCH, _SOURCE_DATE_EPOCH))
+
+
+def _remove_nondeterministic_uv_metadata(runtime: Path) -> None:
+    """Drop uv's install timestamp cache and its wheel RECORD entry."""
+    for cache in sorted(runtime.glob("*.dist-info/uv_cache.json")):
+        metadata = cache.parent
+        record = metadata / "RECORD"
+        relative_cache = cache.relative_to(runtime).as_posix()
+        try:
+            lines = record.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            raise RuntimeError(f"unable to read wheel RECORD for {metadata.name}") from exc
+        retained = [line for line in lines if line.partition(",")[0] != relative_cache]
+        if len(retained) != len(lines) - 1:
+            raise RuntimeError(f"wheel RECORD does not uniquely list {relative_cache}")
+        try:
+            record.write_text("\n".join(retained) + "\n", encoding="utf-8")
+            cache.unlink()
+        except OSError as exc:
+            raise RuntimeError(f"unable to normalize uv metadata for {metadata.name}") from exc
 
 
 def _tree_kib(root: Path) -> int:

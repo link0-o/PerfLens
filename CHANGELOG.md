@@ -4,6 +4,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-04
+
 ### Added
 
 - Chinese maintainer documentation for development, architecture, security,
@@ -40,11 +42,13 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   Collector entry points, with no service activation during package installation.
 - `perflens-admin undeploy`, which removes only a verified managed service unit
   while preserving administrator policy, collected artifacts, users, and groups.
+- A no-PID `perflens accept-collector` command that profiles a fixed,
+  self-owned probe and emits versioned end-to-end host acceptance evidence.
 
 ### Changed
 
 - Release preparation now requires a CycloneDX JSON SBOM, rejects stale or
-  unexpected files in `dist/`, and checksums only the four intended assets.
+  unexpected files in `dist/`, and checksums only the six intended assets.
 - CI and release jobs now have explicit timeouts and concurrency controls.
 - The Performance Analysis Skill now drives policy-approved live PID collection
   through the plan/Broker workflow before deterministic analysis.
@@ -94,5 +98,6 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - Tag-driven GitHub Release automation with wheel/sdist smoke tests, a
   standalone Skill archive, CycloneDX SBOM, and SHA-256 checksums.
 
-[Unreleased]: https://github.com/link0-o/PerfLens/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/link0-o/PerfLens/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/link0-o/PerfLens/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/link0-o/PerfLens/releases/tag/v0.1.0

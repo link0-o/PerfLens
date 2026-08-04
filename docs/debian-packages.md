@@ -12,7 +12,7 @@ PerfLens publishes two role-separated native packages for Debian 13 `amd64`:
 For offline profile analysis, install only the main package:
 
 ```bash
-sudo apt install ./perflens_0.1.0-1_amd64.deb
+sudo apt install ./perflens_0.1.1-1_amd64.deb
 perflens setup --project /absolute/path/to/project
 ```
 
@@ -20,8 +20,8 @@ For automatic collection, install both packages and generate a reviewed policy:
 
 ```bash
 sudo apt install \
-  ./perflens_0.1.0-1_amd64.deb \
-  ./perflens-collector_0.1.0-1_all.deb
+  ./perflens_0.1.1-1_amd64.deb \
+  ./perflens-collector_0.1.1-1_all.deb
 
 perflens setup \
   --project /absolute/path/to/project \

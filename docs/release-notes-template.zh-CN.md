@@ -57,7 +57,9 @@ uv tool install ./perflens-{version}-py3-none-any.whl
 Agent 和 MCP 始终保持普通用户权限。检查引导生成的 `collector.toml` 后，可以先执行
 `perflens-admin deploy --config <配置> --dry-run`，再由管理员执行一次
 同样的命令（加 `sudo`、去掉 `--dry-run`）。之后用户可以直接说“优化当前项目的性能”，
-确认具体程序和参数后由 PerfLens 自动取得新 PID。先运行 `perflens doctor`，再阅读
+确认具体程序和参数后由 PerfLens 自动取得新 PID。用户重新登录后可先运行
+`perflens accept-collector --authorize-host-acceptance`，用内置负载完成无需 PID 的
+真实短时验收。先运行 `perflens doctor`，再阅读
 [产品部署指南](https://github.com/link0-o/PerfLens/blob/{tag}/docs/deployment.zh-CN.md)。
 
 **Full Changelog**：https://github.com/link0-o/PerfLens/commits/{tag}

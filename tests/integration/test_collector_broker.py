@@ -211,6 +211,51 @@ def test_cli_verifies_real_broker_path_with_bounded_stat_probe(tmp_path: Path) -
         target.wait(timeout=5)
 
 
+def test_cli_accepts_collector_without_user_supplied_pid(tmp_path: Path) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    fake_perf = _fake_perf(tmp_path)
+    policy = CollectorBrokerPolicy(
+        spool_root=spool,
+        perf_path=fake_perf,
+        allowed_uids=(os.geteuid(),),
+        allowed_modes=("stat",),
+        max_duration_seconds=5,
+        max_output_bytes=8 << 20,
+    )
+    with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+        worker = threading.Thread(target=server.serve_once, daemon=True)
+        worker.start()
+        result = CliRunner().invoke(
+            app,
+            [
+                "accept-collector",
+                "--socket",
+                str(server.socket_path),
+                "--duration-seconds",
+                "0.1",
+                "--perf-path",
+                str(fake_perf),
+                "--authorize-host-acceptance",
+            ],
+        )
+        worker.join(timeout=5)
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["schema_version"] == "1.0"
+    assert payload["status"] == "passed"
+    assert payload["probe_kind"] == "built_in_cpu"
+    assert payload["metric_count"] >= 2
+    assert Path(payload["output_path"]).parent == spool
+    assert not Path(f"/proc/{payload['target_pid']}").exists()
+    assert not worker.is_alive()
+
+
 def test_mcp_plans_and_executes_single_use_automatic_collection(tmp_path: Path) -> None:
     spool = tmp_path / "spool"
     runtime = tmp_path / "run"

@@ -294,7 +294,8 @@ sudo /opt/perflens/bin/perflens-admin deploy \
 ```
 
 正式 DEB/RPM 可把命令安装为 `/usr/bin/perflens-admin`。部署器只接受配置数据，
-不会修改 sysctl；安装后仍要以普通用户运行 `perflens verify-collector`。
+不会修改 sysctl；安装后仍要以普通用户运行
+`perflens accept-collector --authorize-host-acceptance`。
 """
         if prepare_collector
         else """
@@ -363,7 +364,7 @@ PerfLens Skill 位于项目的 `.agents/skills/{SKILL_NAME}`。可以对 Codex �
 
 实时采集不是固定 10 秒。自动计划默认 10 秒，用户可以在请求中调整，
 但 MCP 和 Collector 都会执行各自的时长上限；当前默认上限是 30 秒。
-`verify-collector` 只是部署验收，默认 1 秒且最多 5 秒。
+`accept-collector` 使用内置测试负载完成部署验收，不需要输入 PID；默认 1 秒且最多 5 秒。
 
 ## 6. 获取帮助
 
@@ -394,8 +395,8 @@ def _english_guide(
     collector = (
         "Administrator-reviewed Collector assets were generated. Validate the TOML with "
         "`/opt/perflens/bin/perflens-admin deploy --config <toml> --dry-run`, then have an "
-        "administrator run the same command with sudo and without `--dry-run`. Verify a real "
-        "short collection before enabling live analysis."
+        "administrator run the same command with sudo and without `--dry-run`. Then run "
+        "`perflens accept-collector --authorize-host-acceptance` as the ordinary user."
         if prepare_collector
         else "No Collector assets were generated; existing-profile analysis needs no privilege."
     )

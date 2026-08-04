@@ -17,7 +17,7 @@ For the current wheel-based deployment:
 3. inspect the TOML and use the trusted `perflens-admin deploy` entry point;
 4. add the authorized user to the `perflens` group and restart their login session;
 5. review the host `perf_event_paranoid` policy;
-6. run an explicitly authorized `verify-collector` probe against an owned test PID;
+6. run `perflens accept-collector --authorize-host-acceptance` as the ordinary user;
 7. only then enable the MCP automatic-collection gates.
 
 Example asset rendering:
@@ -56,7 +56,12 @@ policies carry `policy_version = 1`; a missing field is treated as legacy
 version 1, while unsupported versions are rejected before deployment and
 Collector startup.
 
-`verify-collector` performs a real, policy-bounded perf-stat collection of at most five seconds. It requires both documented authorization tokens and an explicitly selected PID; it is not a read-only health check.
+`accept-collector` starts a fixed, self-owned CPU probe and performs a real,
+policy-bounded perf-stat collection of at most five seconds. It always cleans up
+the probe and emits versioned acceptance evidence, so users do not need to find
+a PID. It still requires `--authorize-host-acceptance` because it is not a
+read-only health check. The advanced `verify-collector` command remains
+available for an explicitly authorized existing PID.
 
 Production releases now ship separate `perflens` and `perflens-collector` DEBs.
 They install offline and do not activate the service. Future RPM installers must
