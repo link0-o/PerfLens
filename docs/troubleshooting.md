@@ -139,7 +139,12 @@ Restart the MCP client after changing server configuration. Tool annotations are
 
 ## An output already exists
 
-Analysis artifacts may be atomically replaced only when they are not the source profile. Active collection data and its metadata are stricter: they always require new paths and never overwrite existing files. Choose a new output name rather than deleting evidence automatically.
+MCP artifacts never replace an existing pathname. Reusing an artifact ID is
+accepted only when its stored bytes are identical; different content indicates
+an ID collision or tampering and fails closed. CLI output commands may still
+atomically replace a non-input destination where documented. Active collection
+data always requires a new path. Choose a new output name rather than deleting
+evidence automatically.
 
 ## Analysis is partial
 

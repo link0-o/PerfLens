@@ -42,6 +42,14 @@ Neither is imported by the deterministic core and neither calls an LLM API.
 MCP paths, writes, process execution, active collection, and PID attachment are
 independently enforced server-side.
 
+The MCP ArtifactStore is an append-only-by-identifier evidence boundary.
+Publishing never replaces a pathname; identical bytes are idempotent and a
+conflicting ID is rejected. Reads pin the artifact-root identity and use
+nonblocking, no-symlink descriptors for unchanged, single-link, mode-`0600`
+regular files. This prevents FIFO hangs and path replacement from being treated
+as valid evidence, but does not sandbox an intentionally hostile same-UID
+project workload.
+
 Active collection is isolated from read-only adapters. It accepts one exact
 command or PID only after explicit authorization, runs absolute executables
 without a shell or sudo, monitors output size while the process runs, kills the

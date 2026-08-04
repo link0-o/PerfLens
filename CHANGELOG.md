@@ -6,6 +6,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Added
 
+- Hardened MCP ArtifactStore persistence: JSON artifacts publish without
+  overwrite, identical content is idempotent, conflicting IDs fail closed, and
+  bounded reads pin the user-owned root plus require unchanged single-link
+  `0600` regular files opened with `O_NOFOLLOW|O_NONBLOCK`.
 - End-to-end Collector evidence verification before a client accepts success:
   canonical plan-derived filename, service ownership, socket-group identity,
   read-only group access, single-link regular-file metadata, bounded streamed

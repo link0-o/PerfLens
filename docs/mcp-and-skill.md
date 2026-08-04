@@ -51,7 +51,13 @@ mkdir -p perflens-results
   --allow-writes
 ```
 
-The server uses stdio, so an MCP client normally starts it. `--allow-writes` authorizes only atomic JSON artifacts beneath `--artifact-root`. Add `--allow-process-execution` only when the client should be allowed to invoke the read-only `perf script` or symbolizer adapters. It does not authorize live sampling or process attachment.
+The server uses stdio, so an MCP client normally starts it. `--allow-writes`
+authorizes only atomic, no-overwrite JSON artifacts beneath `--artifact-root`.
+Reusing an artifact ID is idempotent only for byte-identical content. Reads
+reject FIFOs, symlinks, extra hard links, unsafe modes, and root/file identity
+changes. Add `--allow-process-execution` only when the client should be allowed
+to invoke the read-only `perf script` or symbolizer adapters. It does not
+authorize live sampling or process attachment.
 
 Active collection is a separate, default-off capability. For an explicitly approved target command, all three startup gates are required:
 

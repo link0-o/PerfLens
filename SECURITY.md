@@ -20,6 +20,16 @@ authorization, never overwrites an existing output, and adds independent
 server gates for process execution, collection, and PID attachment. PerfLens
 never invokes sudo or changes host perf/sysctl policy.
 
+The MCP ArtifactStore publishes JSON without replacing an existing pathname;
+reusing an ID succeeds only when the existing bytes are identical. Reads pin
+the user-owned artifact-root identity and accept only unchanged, single-link,
+mode-`0600` regular files opened with `O_NOFOLLOW|O_NONBLOCK`. FIFOs, symlinks,
+hard-link aliases, permission changes, root replacement, and conflicting IDs
+fail closed instead of blocking or silently replacing evidence. Because an
+authorized project workload normally shares the MCP user's UID, this protects
+the workflow from accidental/racing paths but is not a sandbox against hostile
+same-UID code; use OS isolation for untrusted workloads.
+
 The optional automatic Collector is a separate privilege boundary. MCP creates
 short-lived, single-use plans bound to PID identity; the Collector authenticates the
 Unix peer, applies an independent policy, accepts PID targets only, and writes to a
