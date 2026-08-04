@@ -5,6 +5,8 @@
 # First run perflens-admin deploy --config <this-file> --dry-run, then deploy as administrator.
 # 正式配置会安装到 /etc/perflens/collector.toml，并保持 root 所有、0644 或更严格权限。
 # The deployed policy is installed at /etc/perflens/collector.toml, root-owned, mode 0644 or stricter.
+# 部署后运行 perflens-admin spool-status 可只读检查配额；加 --json 输出版本化证据。
+# After deployment, perflens-admin spool-status checks quotas read-only; add --json for versioned evidence.
 
 [collector]
 

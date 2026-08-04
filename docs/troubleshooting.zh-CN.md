@@ -40,10 +40,16 @@ perflens status \
 ## Collector 返回 `RESOURCE_LIMIT_EXCEEDED`
 
 如果错误提到 spool 配额或文件系统空闲余量，说明 Collector 在启动 perf 前无法为本次
-计划的最坏输出预留空间。管理员应检查 `/var/lib/perflens` 的文件数量、逻辑大小和
-所在文件系统剩余空间，并对照 `/etc/perflens/collector.toml` 中的
+计划的最坏输出预留空间。先运行只读命令 `perflens-admin spool-status`，它会按
+`/etc/perflens/collector.toml` 汇总 `/var/lib/perflens` 的文件数量、逻辑大小、
+所在文件系统剩余空间和当前最多可采集字节数，并标出具体边界。需要完整机器可读证据
+时加 `--json`。然后对照策略中的
 `max_spool_bytes`、`max_spool_artifacts`、`min_free_bytes`。先审查并归档证据，再明确
 删除不再需要的文件；不要让 Agent 自动删除或通过无限提高配额掩盖磁盘问题。
+
+如果结果为 `目录中存在不安全项目`，不要让 Agent 尝试清理。先停止 Collector，确认
+异常项不是仍在使用的证据或管理员文件，再人工处理；`spool-status` 本身不会跟随链接
+或删除任何内容。
 
 ## `undeploy` 拒绝移除 service
 

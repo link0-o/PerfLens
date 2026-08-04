@@ -26,12 +26,17 @@ than deleting unfamiliar fields.
 ## Collector returns `RESOURCE_LIMIT_EXCEEDED`
 
 A spool-quota or free-space error means the Collector could not reserve the
-plan's worst-case output before starting perf. Administrators should inspect
-the file count and logical size under `/var/lib/perflens`, the filesystem's free
-space, and the `max_spool_bytes`, `max_spool_artifacts`, and `min_free_bytes`
-policy fields. Review and archive evidence before explicitly removing files;
-do not let the Agent delete artifacts or hide disk pressure with unbounded
-limits.
+plan's worst-case output before starting perf. Run the read-only
+`perflens-admin spool-status` command first. It compares direct regular-file
+count, logical bytes, filesystem reserve, and currently reservable output with
+the `max_spool_bytes`, `max_spool_artifacts`, and `min_free_bytes` policy fields.
+Use `--json` for versioned machine-readable evidence. Review and archive
+evidence before explicitly removing files; do not let the Agent delete
+artifacts or hide disk pressure with unbounded limits.
+
+An unsafe result means a directory, symbolic link, or another non-regular entry
+was observed. Stop the Collector and inspect it manually; `spool-status` never
+follows or removes such entries.
 
 `perflens-admin undeploy` removes only a fixed unit with the PerfLens management
 marker, trusted ownership, and no group/other write permission. Review rejected

@@ -1,0 +1,175 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "checked_at": {
+      "title": "Checked At",
+      "type": "string"
+    },
+    "config_path": {
+      "title": "Config Path",
+      "type": "string"
+    },
+    "filesystem_free_bytes": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Filesystem Free Bytes"
+    },
+    "free_bytes_above_reserve": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Free Bytes Above Reserve"
+    },
+    "issues": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Issues",
+      "type": "array"
+    },
+    "max_collectable_output_bytes": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Max Collectable Output Bytes"
+    },
+    "max_output_bytes": {
+      "exclusiveMinimum": 0,
+      "title": "Max Output Bytes",
+      "type": "integer"
+    },
+    "max_spool_artifacts": {
+      "exclusiveMinimum": 0,
+      "title": "Max Spool Artifacts",
+      "type": "integer"
+    },
+    "max_spool_bytes": {
+      "exclusiveMinimum": 0,
+      "title": "Max Spool Bytes",
+      "type": "integer"
+    },
+    "min_free_bytes": {
+      "minimum": 0,
+      "title": "Min Free Bytes",
+      "type": "integer"
+    },
+    "next_steps": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "observed_artifact_count": {
+      "minimum": 0,
+      "title": "Observed Artifact Count",
+      "type": "integer"
+    },
+    "observed_logical_bytes": {
+      "minimum": 0,
+      "title": "Observed Logical Bytes",
+      "type": "integer"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "remaining_artifact_slots": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Remaining Artifact Slots"
+    },
+    "remaining_spool_bytes": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Remaining Spool Bytes"
+    },
+    "scan_complete": {
+      "title": "Scan Complete",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "spool_root": {
+      "title": "Spool Root",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "ready",
+        "warning",
+        "exhausted",
+        "unsafe",
+        "unavailable"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "status_id": {
+      "pattern": "^spool-status-[a-f0-9]{16}$",
+      "title": "Status Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "status_id",
+    "checked_at",
+    "status",
+    "config_path",
+    "spool_root",
+    "scan_complete",
+    "observed_artifact_count",
+    "observed_logical_bytes",
+    "max_output_bytes",
+    "max_spool_bytes",
+    "max_spool_artifacts",
+    "min_free_bytes"
+  ],
+  "title": "CollectorSpoolStatusArtifact",
+  "type": "object"
+}

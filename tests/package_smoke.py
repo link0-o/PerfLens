@@ -27,6 +27,12 @@ def main() -> None:
         "--help",
         expected="preserving policy and artifacts",
     )
+    _run(
+        perflens_admin,
+        "spool-status",
+        "--help",
+        expected="Read-only Chinese summary",
+    )
     _run(perflens, "verify-collector", "--help", expected="bounded real perf-stat probe")
     _run(perflens, "accept-collector", "--help", expected="without choosing a PID")
 

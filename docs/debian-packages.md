@@ -32,6 +32,9 @@ perflens setup \
 Package installation never enables a service, writes `/etc/perflens`, changes
 sysctl/capabilities, or grants user access. After reviewing the generated policy,
 an administrator explicitly runs `sudo perflens-admin deploy --config <policy>`.
+After the user's new login session, `perflens status --project <project>` checks
+runtime readiness and `perflens-admin spool-status` reports Collector storage
+headroom. Both are read-only; add `--json` to the latter for a versioned artifact.
 
 Before package removal, use `sudo perflens-admin undeploy`. It verifies and removes
 only a trusted PerfLens-managed unit. Policy, collected artifacts, and the system

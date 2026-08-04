@@ -41,7 +41,11 @@ sudo perflens-admin deploy \
 
 ```bash
 perflens status --project /绝对路径/你的项目
+perflens-admin spool-status
 ```
+
+第一条检查项目、MCP、Socket 和权限是否就绪；第二条用中文汇总 Collector 存储配额和
+剩余空间。两条命令都只读。需要留存第二条命令的版本化 JSON 时加 `--json`。
 
 ## 升级与卸载
 

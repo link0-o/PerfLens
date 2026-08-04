@@ -27,9 +27,9 @@
 |---|---|---|
 | 代码规范 | `ruff check .` | 通过 |
 | 严格类型 | `pyright` | 0 错误、0 警告 |
-| Python 3.12 | `pytest -q`，Python 3.12.13 | 217 通过 |
-| Python 3.13 | 隔离环境 `pytest -q` | 217 通过 |
-| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.38%，通过 |
+| Python 3.12 | `pytest -q`，Python 3.12.13 | 226 通过 |
+| Python 3.13 | 隔离环境 `pytest -q` | 226 通过 |
+| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.64%，通过 |
 | Skill | Skill 结构和打包测试 | 通过 |
 | Schema | 已提交 Schema 与 Contract 生成结果相等 | 通过 |
 | 依赖锁 | `uv export --locked` | 通过 |
@@ -39,6 +39,7 @@
 | SHA-256 | wheel、sdist、两个 DEB、Skill、SBOM | 六项全部通过 |
 | 部署验收命令 | `accept-collector` → 内置负载 → 授权 stat 计划 → Broker | 可执行 perf Test Double 通过 |
 | Collector 存储边界 | 累计字节/文件数/空闲余量 → 启动 perf 前预留 | 三类拒绝及 Unix Socket 端到端通过 |
+| Collector 存储检查 | `spool-status` → 直接普通文件 → 配额/磁盘余量 | 中文摘要、版本化 JSON 和异常项拒绝通过 |
 | Collector 用户隔离 | 单实例单 UID；策略/资产/部署拒绝多 UID | 拒绝路径和组可读边界已验证 |
 | 项目工作负载 | 普通用户启动 → 内部 PID → Broker → 清理 | 可执行 perf Test Double 端到端通过 |
 | 管理员部署 | 严格 TOML → 内置资产 → 固定命令 → Socket | 成功、回滚和拒绝路径通过 |

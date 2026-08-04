@@ -284,6 +284,10 @@ PerfLens 永远不会自行执行 sudo、修改内核策略或降低主机安全
 当前每套 Collector 只允许一个普通用户 UID；不要让多个用户共享同一个 `perflens`
 组和 spool，否则组可读 Profile 会跨用户泄露。
 
+部署后只需运行 `perflens-admin spool-status`，即可用中文查看 spool 文件数、逻辑大小、
+磁盘保留余量和当前最多可采集数据量；该命令只读，不删除旧证据。机器可读输出使用
+`perflens-admin spool-status --json`。
+
 - 所有用户路径都会被规范化，并限制在配置的 allowed root 内。
 - 输入 Profile 不会被覆盖。
 - 产物使用原子写入，并且只能写入指定 artifact root。

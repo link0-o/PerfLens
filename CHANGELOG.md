@@ -46,6 +46,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   self-owned probe and emits versioned end-to-end host acceptance evidence.
 - Independent Collector spool byte, artifact-count, and filesystem free-space
   quotas that deny new collections without deleting existing evidence.
+- Read-only `perflens-admin spool-status` capacity inspection with a Chinese
+  summary, versioned JSON evidence, quota headroom, and safe handling of
+  unexpected non-regular spool entries.
 
 ### Changed
 
@@ -71,6 +74,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   address sets.
 - Validated command-runner executables, resource limits, artifact limits, and
   wrapped process-start/output-write failures in stable PerfLens errors.
+- Updated the locked `cryptography` transitive dependency from 49.0.0 to
+  50.0.0 after release auditing identified CVE-2026-69247.
 
 ## [0.1.0] - 2026-07-30
 

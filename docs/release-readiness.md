@@ -16,9 +16,9 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 |---|---|---|
 | Lint | `ruff check .` | passed |
 | Strict types | `pyright` | 0 errors, 0 warnings |
-| Python 3.13 | isolated `pytest -q` environment | 217 passed |
-| Python 3.12 | `pytest -q` on 3.12.13 | 217 passed |
-| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.38%, passed |
+| Python 3.13 | isolated `pytest -q` environment | 226 passed |
+| Python 3.12 | `pytest -q` on 3.12.13 | 226 passed |
+| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.64%, passed |
 | Skill | structure and package tests | passed |
 | Schemas | checked-in schema equality test | passed |
 | Dependency lock | `uv export --locked` | passed |
@@ -29,6 +29,7 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 | Automatic Broker | MCP plan → authenticated Unix socket → fixed spool | passed with executable perf test double |
 | Deployment verification | `accept-collector` → built-in probe → authorized stat plan → Broker | passed with executable perf test double |
 | Collector storage bounds | cumulative bytes/files/free-space reserve before perf | three denial classes and Unix-socket end-to-end passed |
+| Collector storage status | `spool-status` → direct regular files → quota/filesystem headroom | Chinese summary, versioned JSON, and unsafe-entry paths passed |
 | Collector user isolation | one UID per instance; policy/staging/deploy deny multiple UIDs | denial and group-read boundary verified |
 | Project workload | ordinary-user launch → internal PID → Broker → cleanup | passed end to end with executable perf test double |
 | Admin deploy | strict TOML → packaged assets → fixed command allowlist → socket check | success, rollback, and denial paths passed |

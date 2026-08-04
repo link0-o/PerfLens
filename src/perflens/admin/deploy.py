@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import pwd
@@ -13,6 +14,7 @@ import time
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -21,6 +23,7 @@ from perflens.artifacts.filesystem import write_text_atomic
 from perflens.collector_broker.policy import COLLECTOR_POLICY_VERSION
 from perflens.contracts.artifacts import (
     CollectorDeploymentArtifact,
+    CollectorSpoolStatusArtifact,
     CollectorUndeploymentArtifact,
 )
 from perflens.distribution.collector import install_collector_assets
@@ -48,6 +51,10 @@ class _DeploymentPolicy:
     perf_path: Path
     allowed_uids: tuple[int, ...]
     allowed_modes: tuple[str, ...]
+    max_output_bytes: int
+    max_spool_bytes: int
+    max_spool_artifacts: int
+    min_free_bytes: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,12 +228,34 @@ def undeploy_collector(
     return _undeployment_result("removed", effective_layout, commands, warnings, next_steps)
 
 
-def _candidate_config(path: Path) -> _ConfigSource:
+def inspect_collector_spool(
+    config_path: Path = Path("/etc/perflens/collector.toml"),
+    *,
+    layout: CollectorSystemLayout | None = None,
+    require_root_owned_tools: bool = True,
+) -> CollectorSpoolStatusArtifact:
+    """Inspect fixed Collector spool capacity without changing host state."""
+    effective_layout = layout or CollectorSystemLayout()
+    source = _candidate_config(config_path, stage="collector_spool_status")
+    policy = _parse_deployment_policy(
+        source.raw_text,
+        expected_spool=effective_layout.state_directory,
+        require_root_owned_tools=require_root_owned_tools,
+        stage="collector_spool_status",
+    )
+    return _inspect_spool(source.path, policy)
+
+
+def _candidate_config(
+    path: Path,
+    *,
+    stage: str = "collector_deploy",
+) -> _ConfigSource:
     candidate = path.expanduser()
     if candidate.is_symlink():
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
-            "collector_deploy",
+            stage,
             "Collector deployment config must not be a symbolic link",
         )
     descriptor = -1
@@ -242,7 +271,7 @@ def _candidate_config(path: Path) -> _ConfigSource:
             os.close(descriptor)
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
-            "collector_deploy",
+            stage,
             "Collector deployment config cannot be resolved",
             details={"path": str(path)},
         ) from exc
@@ -256,7 +285,7 @@ def _candidate_config(path: Path) -> _ConfigSource:
         os.close(descriptor)
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
-            "collector_deploy",
+            stage,
             "Collector config must be invoking-user/root owned, non-writable by group/other, "
             "and bounded",
             details={"path": str(resolved)},
@@ -268,14 +297,14 @@ def _candidate_config(path: Path) -> _ConfigSource:
     except (OSError, UnicodeDecodeError) as exc:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
-            "collector_deploy",
+            stage,
             "Collector deployment config cannot be read as bounded UTF-8",
             details={"path": str(resolved)},
         ) from exc
     if len(raw) > _MAX_CONFIG_BYTES:
         raise PerfLensError(
             ErrorCode.RESOURCE_LIMIT_EXCEEDED,
-            "collector_deploy",
+            stage,
             "Collector deployment config exceeds its size limit",
         )
     return _ConfigSource(path=resolved, raw_text=text)
@@ -286,26 +315,27 @@ def _parse_deployment_policy(
     *,
     expected_spool: Path,
     require_root_owned_tools: bool,
+    stage: str = "collector_deploy",
 ) -> _DeploymentPolicy:
     try:
         payload = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
-            "collector_deploy",
+            stage,
             "Collector deployment config is not valid bounded UTF-8 TOML",
         ) from exc
     if set(payload) != {"collector"}:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
-            "collector_deploy",
+            stage,
             "Collector deployment config must contain only one [collector] table",
         )
     section = payload["collector"]
     if not isinstance(section, dict):
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
-            "collector_deploy",
+            stage,
             "Collector deployment config requires a [collector] table",
         )
     values = cast(dict[str, Any], section)
@@ -330,7 +360,7 @@ def _parse_deployment_policy(
     if set(values) - allowed_keys:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
-            "collector_deploy",
+            stage,
             "Collector deployment config contains unsupported fields",
             details={"fields": sorted(set(values) - allowed_keys)},
         )
@@ -362,7 +392,7 @@ def _parse_deployment_policy(
     except (KeyError, OSError, TypeError, ValueError) as exc:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
-            "collector_deploy",
+            stage,
             "Collector deployment config has missing or invalid values",
         ) from exc
     perf_metadata = perf.stat()
@@ -400,7 +430,7 @@ def _parse_deployment_policy(
     ):
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
-            "collector_deploy",
+            stage,
             "Collector deployment config violates fixed paths or bounded policy",
         )
     return _DeploymentPolicy(
@@ -409,6 +439,205 @@ def _parse_deployment_policy(
         perf_path=perf,
         allowed_uids=uids,
         allowed_modes=modes,
+        max_output_bytes=output_bytes,
+        max_spool_bytes=spool_bytes,
+        max_spool_artifacts=spool_artifacts,
+        min_free_bytes=min_free_bytes,
+    )
+
+
+def _inspect_spool(
+    config_path: Path,
+    policy: _DeploymentPolicy,
+) -> CollectorSpoolStatusArtifact:
+    artifact_count = 0
+    logical_bytes = 0
+    free_bytes: int | None = None
+    scan_complete = False
+    issues: list[str] = []
+    descriptor = -1
+    status: Literal["ready", "warning", "exhausted", "unsafe", "unavailable"] = (
+        "unavailable"
+    )
+    try:
+        descriptor = os.open(
+            policy.spool_root,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_DIRECTORY,
+        )
+    except OSError:
+        return _spool_status_result(
+            config_path,
+            policy,
+            status="unavailable",
+            scan_complete=False,
+            artifact_count=0,
+            logical_bytes=0,
+            free_bytes=None,
+            issues=("spool_unavailable",),
+        )
+
+    try:
+        with os.scandir(descriptor) as entries:
+            for entry in entries:
+                try:
+                    if not entry.is_file(follow_symlinks=False):
+                        issues.append("unexpected_non_regular_entry")
+                        status = "unsafe"
+                        break
+                    size = entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    issues.append("spool_entry_changed_during_scan")
+                    status = "unsafe"
+                    break
+                artifact_count += 1
+                logical_bytes += size
+                if artifact_count >= policy.max_spool_artifacts:
+                    issues.append("artifact_count_quota_exhausted")
+                    status = "exhausted"
+                    break
+                if logical_bytes >= policy.max_spool_bytes:
+                    issues.append("spool_byte_quota_exhausted")
+                    status = "exhausted"
+                    break
+            else:
+                scan_complete = True
+                status = "ready"
+        filesystem = os.fstatvfs(descriptor)
+        block_size = filesystem.f_frsize or filesystem.f_bsize
+        free_bytes = filesystem.f_bavail * block_size
+    except OSError:
+        issues.append("spool_capacity_inspection_failed")
+        if status not in {"unsafe", "exhausted"}:
+            status = "unavailable"
+    finally:
+        os.close(descriptor)
+
+    if status == "ready" and free_bytes is not None:
+        remaining_bytes = max(0, policy.max_spool_bytes - logical_bytes)
+        free_above_reserve = max(0, free_bytes - policy.min_free_bytes)
+        collectable_bytes = min(
+            policy.max_output_bytes,
+            remaining_bytes,
+            free_above_reserve,
+        )
+        if collectable_bytes == 0:
+            status = "exhausted"
+            if free_bytes <= policy.min_free_bytes:
+                issues.append("filesystem_free_space_reserve_exhausted")
+        elif (
+            collectable_bytes < policy.max_output_bytes
+            or logical_bytes * 5 >= policy.max_spool_bytes * 4
+            or artifact_count * 5 >= policy.max_spool_artifacts * 4
+        ):
+            status = "warning"
+            if collectable_bytes < policy.max_output_bytes:
+                issues.append("full_size_collection_cannot_be_reserved")
+            if logical_bytes * 5 >= policy.max_spool_bytes * 4:
+                issues.append("spool_byte_quota_above_80_percent")
+            if artifact_count * 5 >= policy.max_spool_artifacts * 4:
+                issues.append("artifact_count_quota_above_80_percent")
+
+    return _spool_status_result(
+        config_path,
+        policy,
+        status=status,
+        scan_complete=scan_complete,
+        artifact_count=artifact_count,
+        logical_bytes=logical_bytes,
+        free_bytes=free_bytes,
+        issues=tuple(dict.fromkeys(issues)),
+    )
+
+
+def _spool_status_result(
+    config_path: Path,
+    policy: _DeploymentPolicy,
+    *,
+    status: Literal["ready", "warning", "exhausted", "unsafe", "unavailable"],
+    scan_complete: bool,
+    artifact_count: int,
+    logical_bytes: int,
+    free_bytes: int | None,
+    issues: tuple[str, ...],
+) -> CollectorSpoolStatusArtifact:
+    byte_quota_exhausted = "spool_byte_quota_exhausted" in issues
+    count_quota_exhausted = "artifact_count_quota_exhausted" in issues
+    remaining_bytes = (
+        max(0, policy.max_spool_bytes - logical_bytes)
+        if scan_complete or byte_quota_exhausted
+        else None
+    )
+    remaining_slots = (
+        max(0, policy.max_spool_artifacts - artifact_count)
+        if scan_complete or count_quota_exhausted
+        else None
+    )
+    free_above_reserve = (
+        None if free_bytes is None else max(0, free_bytes - policy.min_free_bytes)
+    )
+    collectable_bytes: int | None = None
+    if (
+        scan_complete
+        and free_above_reserve is not None
+        and remaining_bytes is not None
+        and status not in {"unsafe", "unavailable"}
+    ):
+        collectable_bytes = min(
+            policy.max_output_bytes,
+            remaining_bytes,
+            free_above_reserve,
+        )
+    if remaining_slots == 0 or remaining_bytes == 0:
+        collectable_bytes = 0
+    checked_at = datetime.now(tz=UTC).isoformat()
+    identity = "\0".join(
+        (
+            checked_at,
+            str(config_path),
+            str(policy.spool_root),
+            status,
+            str(scan_complete),
+            str(artifact_count),
+            str(logical_bytes),
+            str(free_bytes),
+        )
+    )
+    next_steps = {
+        "ready": ("Continue monitoring spool capacity before long collection sessions.",),
+        "warning": (
+            "Review and archive old evidence before the remaining capacity is exhausted.",
+        ),
+        "exhausted": (
+            "Review and archive old evidence, then explicitly remove only files no longer needed.",
+        ),
+        "unsafe": (
+            "Stop the Collector and inspect unexpected spool entries without following links.",
+        ),
+        "unavailable": (
+            "Verify the deployed policy, spool path, permissions, and filesystem availability.",
+        ),
+    }[status]
+    return CollectorSpoolStatusArtifact(
+        perflens_version=__version__,
+        status_id=f"spool-status-{hashlib.sha256(identity.encode()).hexdigest()[:16]}",
+        checked_at=checked_at,
+        status=status,
+        config_path=str(config_path),
+        spool_root=str(policy.spool_root),
+        scan_complete=scan_complete,
+        observed_artifact_count=artifact_count,
+        observed_logical_bytes=logical_bytes,
+        filesystem_free_bytes=free_bytes,
+        max_output_bytes=policy.max_output_bytes,
+        max_spool_bytes=policy.max_spool_bytes,
+        max_spool_artifacts=policy.max_spool_artifacts,
+        min_free_bytes=policy.min_free_bytes,
+        remaining_spool_bytes=remaining_bytes,
+        remaining_artifact_slots=remaining_slots,
+        free_bytes_above_reserve=free_above_reserve,
+        max_collectable_output_bytes=collectable_bytes,
+        issues=issues,
+        next_steps=next_steps,
     )
 
 

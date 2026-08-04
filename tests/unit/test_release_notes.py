@@ -29,6 +29,7 @@ def test_release_notes_explain_wheel_installation(tmp_path: Path) -> None:
     assert f"perflens-{__version__}-py3-none-any.whl" in rendered
     assert ".whl` 不要解压" in rendered
     assert f"blob/v{__version__}/INSTALL.zh-CN.md" in rendered
+    assert "perflens-admin spool-status" in rendered
     assert "{version}" not in rendered
     assert "{tag}" not in rendered
 

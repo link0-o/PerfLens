@@ -71,6 +71,21 @@ returns `RESOURCE_LIMIT_EXCEEDED` when a boundary cannot be met. It never
 deletes or rotates old evidence automatically; an administrator must review and
 archive artifacts before explicitly removing them.
 
+Routine operators do not need to combine `find`, `du`, and `df`. Run the single
+read-only command `perflens-admin spool-status` to get a Chinese summary of file
+count, logical bytes, filesystem reserve, and the largest output currently
+reservable. It reads `/etc/perflens/collector.toml` by default and never changes
+configuration, artifacts, or collection state. Use `--json` for the complete
+versioned artifact, or `--config /absolute/path/collector.toml` before the
+default system policy is installed. An unsafe status means the direct spool
+contains a directory, symbolic link, or another non-regular entry; the command
+does not follow or remove it. A quota-short-circuited scan reports
+`scan_complete = false`, so observed values are lower bounds.
+
+This is a point-in-time inspection, not a reservation. The Collector still
+rechecks capacity immediately before starting perf, and concurrent artifacts
+may cause a later collection to be safely denied.
+
 `accept-collector` starts a fixed, self-owned CPU probe and performs a real,
 policy-bounded perf-stat collection of at most five seconds. It always cleans up
 the probe and emits versioned acceptance evidence, so users do not need to find

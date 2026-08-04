@@ -16,10 +16,12 @@ from perflens.admin.app import app
 from perflens.admin.deploy import (
     CollectorSystemLayout,
     deploy_collector,
+    inspect_collector_spool,
     undeploy_collector,
 )
 from perflens.contracts.artifacts import (
     CollectorDeploymentArtifact,
+    CollectorSpoolStatusArtifact,
     CollectorUndeploymentArtifact,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -259,6 +261,226 @@ def test_admin_undeploy_cli_emits_versioned_result(
     assert result.exit_code == 0, result.output
     assert '"schema_version": "1.0"' in result.output
     assert '"status": "already_absent"' in result.output
+
+
+def test_admin_spool_status_reports_versioned_read_only_capacity(tmp_path: Path) -> None:
+    config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    layout.state_directory.mkdir(parents=True)
+    first = layout.state_directory / "first.data"
+    second = layout.state_directory / "second.json"
+    first.write_bytes(b"profile")
+    second.write_bytes(b"{}")
+    before = {path.name: path.read_bytes() for path in layout.state_directory.iterdir()}
+
+    result = inspect_collector_spool(
+        config,
+        layout=layout,
+        require_root_owned_tools=False,
+    )
+
+    assert result.schema_version == "1.0"
+    assert result.status_id.startswith("spool-status-")
+    assert result.status == "ready"
+    assert result.scan_complete is True
+    assert result.observed_artifact_count == 2
+    assert result.observed_logical_bytes == 9
+    assert result.remaining_artifact_slots == 998
+    assert result.max_collectable_output_bytes == 1048576
+    assert {path.name: path.read_bytes() for path in layout.state_directory.iterdir()} == before
+
+
+def test_admin_spool_status_warns_and_reports_exhausted_count(tmp_path: Path) -> None:
+    config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    layout.state_directory.mkdir(parents=True)
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        .replace("max_spool_bytes = 10737418240", "max_spool_bytes = 10485760")
+        .replace("max_spool_artifacts = 1000", "max_spool_artifacts = 2"),
+        encoding="utf-8",
+    )
+    (layout.state_directory / "large.data").write_bytes(b"")
+    with (layout.state_directory / "large.data").open("r+b") as handle:
+        handle.truncate(8 * 1024 * 1024)
+
+    warning = inspect_collector_spool(
+        config,
+        layout=layout,
+        require_root_owned_tools=False,
+    )
+    assert warning.status == "warning"
+    assert warning.scan_complete is True
+    assert "spool_byte_quota_above_80_percent" in warning.issues
+
+    (layout.state_directory / "second.data").write_bytes(b"x")
+    exhausted = inspect_collector_spool(
+        config,
+        layout=layout,
+        require_root_owned_tools=False,
+    )
+    assert exhausted.status == "exhausted"
+    assert exhausted.scan_complete is False
+    assert exhausted.remaining_artifact_slots == 0
+    assert exhausted.remaining_spool_bytes is None
+    assert exhausted.max_collectable_output_bytes == 0
+    assert "artifact_count_quota_exhausted" in exhausted.issues
+
+
+def test_admin_spool_status_reports_byte_exhaustion_and_count_warning(
+    tmp_path: Path,
+) -> None:
+    config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    layout.state_directory.mkdir(parents=True)
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        .replace("max_spool_bytes = 10737418240", "max_spool_bytes = 1048576")
+        .replace("max_spool_artifacts = 1000", "max_spool_artifacts = 5"),
+        encoding="utf-8",
+    )
+    full = layout.state_directory / "full.data"
+    full.write_bytes(b"")
+    with full.open("r+b") as handle:
+        handle.truncate(1024 * 1024)
+
+    exhausted = inspect_collector_spool(
+        config,
+        layout=layout,
+        require_root_owned_tools=False,
+    )
+    assert exhausted.status == "exhausted"
+    assert exhausted.remaining_spool_bytes == 0
+    assert exhausted.remaining_artifact_slots is None
+    assert "spool_byte_quota_exhausted" in exhausted.issues
+
+    full.unlink()
+    for index in range(4):
+        (layout.state_directory / f"artifact-{index}").write_bytes(b"x")
+    warning = inspect_collector_spool(
+        config,
+        layout=layout,
+        require_root_owned_tools=False,
+    )
+    assert warning.status == "warning"
+    assert "artifact_count_quota_above_80_percent" in warning.issues
+
+
+@pytest.mark.parametrize(
+    ("available_bytes", "expected_status", "expected_issue"),
+    [
+        (0, "exhausted", "filesystem_free_space_reserve_exhausted"),
+        (
+            (1 << 30) + (512 << 10),
+            "warning",
+            "full_size_collection_cannot_be_reserved",
+        ),
+    ],
+)
+def test_admin_spool_status_applies_filesystem_reserve(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    available_bytes: int,
+    expected_status: str,
+    expected_issue: str,
+) -> None:
+    config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    layout.state_directory.mkdir(parents=True)
+
+    def filesystem_status(_descriptor: int) -> os.statvfs_result:
+        return os.statvfs_result(
+            (1, 1, available_bytes, available_bytes, available_bytes, 0, 0, 0, 255, 255)
+        )
+
+    monkeypatch.setattr(admin_deploy.os, "fstatvfs", filesystem_status)
+    result = inspect_collector_spool(
+        config,
+        layout=layout,
+        require_root_owned_tools=False,
+    )
+
+    assert result.status == expected_status
+    assert expected_issue in result.issues
+
+
+def test_admin_spool_status_reports_filesystem_inspection_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    layout.state_directory.mkdir(parents=True)
+
+    def fail_filesystem_status(_descriptor: int) -> os.statvfs_result:
+        raise OSError("simulated statvfs failure")
+
+    monkeypatch.setattr(admin_deploy.os, "fstatvfs", fail_filesystem_status)
+    result = inspect_collector_spool(
+        config,
+        layout=layout,
+        require_root_owned_tools=False,
+    )
+
+    assert result.status == "unavailable"
+    assert result.scan_complete is True
+    assert result.issues == ("spool_capacity_inspection_failed",)
+
+
+@pytest.mark.parametrize("entry_kind", ["directory", "symlink"])
+def test_admin_spool_status_reports_unsafe_entries_without_following_or_removing(
+    tmp_path: Path,
+    entry_kind: str,
+) -> None:
+    config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    layout.state_directory.mkdir(parents=True)
+    unexpected = layout.state_directory / "unexpected"
+    target = tmp_path / "outside.data"
+    target.write_bytes(b"outside")
+    if entry_kind == "directory":
+        unexpected.mkdir()
+    else:
+        unexpected.symlink_to(target)
+
+    result = inspect_collector_spool(
+        config,
+        layout=layout,
+        require_root_owned_tools=False,
+    )
+
+    assert result.status == "unsafe"
+    assert result.scan_complete is False
+    assert result.max_collectable_output_bytes is None
+    assert result.issues == ("unexpected_non_regular_entry",)
+    assert unexpected.exists() or unexpected.is_symlink()
+    assert target.read_bytes() == b"outside"
+
+
+def test_admin_spool_status_reports_unavailable_spool_and_cli_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    artifact = inspect_collector_spool(
+        config,
+        layout=layout,
+        require_root_owned_tools=False,
+    )
+    assert artifact.status == "unavailable"
+    assert artifact.filesystem_free_bytes is None
+    assert artifact.max_collectable_output_bytes is None
+
+    def fake_status(_config: Path) -> CollectorSpoolStatusArtifact:
+        return artifact
+
+    monkeypatch.setattr("perflens.admin.app.inspect_collector_spool", fake_status)
+    summary = CliRunner().invoke(app, ["spool-status", "--config", str(config)])
+    assert summary.exit_code == 0, summary.output
+    assert "PerfLens Collector 存储检查 (只读)" in summary.output
+    assert "状态: 当前无法检查" in summary.output
+
+    result = CliRunner().invoke(
+        app,
+        ["spool-status", "--config", str(config), "--json"],
+    )
+    assert result.exit_code == 0, result.output
+    assert '"schema_version": "1.0"' in result.output
+    assert '"status": "unavailable"' in result.output
 
 
 def test_admin_helpers_reject_commands_and_report_system_failures(

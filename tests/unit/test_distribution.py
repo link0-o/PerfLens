@@ -69,6 +69,7 @@ def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
     assert "Security-sensitive; keep false" in policy
     assert "max_spool_bytes = 10737418240" in policy
     assert "PerfLens never deletes old evidence automatically" in policy
+    assert "perflens-admin spool-status checks quotas read-only" in policy
     assert "exactly one UID is supported" in policy
     assert "ExecStart=/opt/perflens/bin/perflens-collector " in service
     with pytest.raises(PerfLensError) as captured:

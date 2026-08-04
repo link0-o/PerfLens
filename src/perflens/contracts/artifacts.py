@@ -564,6 +564,30 @@ class CollectorUndeploymentArtifact(ContractModel):
     next_steps: tuple[str, ...] = ()
 
 
+class CollectorSpoolStatusArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    status_id: str = Field(pattern=r"^spool-status-[a-f0-9]{16}$")
+    checked_at: str
+    status: Literal["ready", "warning", "exhausted", "unsafe", "unavailable"]
+    config_path: str
+    spool_root: str
+    scan_complete: bool
+    observed_artifact_count: int = Field(ge=0)
+    observed_logical_bytes: int = Field(ge=0)
+    filesystem_free_bytes: int | None = Field(default=None, ge=0)
+    max_output_bytes: int = Field(gt=0)
+    max_spool_bytes: int = Field(gt=0)
+    max_spool_artifacts: int = Field(gt=0)
+    min_free_bytes: int = Field(ge=0)
+    remaining_spool_bytes: int | None = Field(default=None, ge=0)
+    remaining_artifact_slots: int | None = Field(default=None, ge=0)
+    free_bytes_above_reserve: int | None = Field(default=None, ge=0)
+    max_collectable_output_bytes: int | None = Field(default=None, ge=0)
+    issues: tuple[str, ...] = ()
+    next_steps: tuple[str, ...] = ()
+
+
 class RuntimeStatusArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     perflens_version: str

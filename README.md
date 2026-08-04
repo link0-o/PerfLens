@@ -239,6 +239,10 @@ Each Collector instance permits exactly one ordinary UID. Sharing its
 `perflens` group and spool across callers would expose group-readable profiles
 between users and is rejected.
 
+After deployment, `perflens-admin spool-status` gives a read-only Chinese
+summary of spool usage, filesystem reserve, and currently reservable output;
+add `--json` for the versioned machine-readable artifact.
+
 After one administrator-reviewed deployment, users do not need to discover a
 PID. They may ask the Skill to optimize the current project, approve one exact
 executable and argument list, and let the ordinary-user launcher obtain the new
