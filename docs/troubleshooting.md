@@ -146,6 +146,12 @@ atomically replace a non-input destination where documented. Active collection
 data always requires a new path. Choose a new output name rather than deleting
 evidence automatically.
 
+For a structured write error, inspect `details.published`. `false` means the
+destination was not changed and retry is safe after fixing the cause. `true`
+means complete bytes were published but directory durability or pathname
+identity could not be confirmed; verify the destination before retrying so an
+uncertain storage acknowledgement does not become an accidental overwrite.
+
 ## Analysis is partial
 
 Inspect parse statistics, bounded warnings, the sampled event, weight semantics, call-graph availability, unresolved symbols, and source metadata. Individual malformed records may yield a valid `partial` artifact. Structural limit violations, mixed event semantics, or untrusted relocation data fail instead of silently approximating.

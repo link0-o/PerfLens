@@ -6,6 +6,11 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Added
 
+- Crash-durable artifact publication through pinned directory descriptors:
+  private temporary files and their containing directory are both fsynced,
+  recursively created parent entries are synced, directory replacement is
+  detected, and structured failures distinguish pre-publication from ambiguous
+  post-publication storage errors.
 - Hardened MCP ArtifactStore persistence: JSON artifacts publish without
   overwrite, identical content is idempotent, conflicting IDs fail closed, and
   bounded reads pin the user-owned root plus require unchanged single-link

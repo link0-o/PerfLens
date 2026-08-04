@@ -147,7 +147,7 @@ MCP 的开关只代表服务器允许某类操作；主动采集仍需要每次�
 - `tests/unit`：确定性逻辑和边界条件；
 - `tests/integration`：CLI、perf.data Adapter 等跨组件流程；
 - `tests/mcp`：MCP Schema、权限和客户端/服务端流程；
-- `tests/security`：路径穿越、覆盖保护和原子写入；
+- `tests/security`：路径穿越、覆盖保护、文件/目录 fsync、目录替换和原子写入故障注入；
 - `tests/golden`：稳定、可审核的产物输出；
 - `tests/performance`：不会因普通 CI 噪声频繁误报的性能烟雾线；
 - `tests/package_smoke.py`：从 wheel/sdist 安装后的入口点与资源完整性。

@@ -22,7 +22,7 @@ The current release formally supports Milestones 0 through 9:
 - symbol plus DSO grouping (DSO is explicitly `unknown` for standard folded input);
 - bounded parse diagnostics and versioned JSON artifacts;
 - a production CLI with path checks, stable error output, resource limits, and
-  atomic writes;
+  crash-durable file-and-directory-synced atomic writes;
 - streaming parsing of explicitly-fielded `perf script` text;
 - `perf.data` conversion through an allowlisted system `perf` process;
 - bounded subprocess output, stderr diagnostics, timeouts, and process-group cleanup.

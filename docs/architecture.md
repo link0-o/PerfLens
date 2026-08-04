@@ -24,7 +24,11 @@ output limits. The application service owns lifecycle,
 fingerprinting, metadata, and conversion to versioned boundary models.
 
 Inputs are immutable. Output is written to a temporary sibling and atomically
-replaced only after serialization and `fsync` complete.
+replaced only after serialization and file `fsync` complete. Publication uses
+a pinned directory descriptor, then fsyncs the directory entry and verifies
+that the directory pathname still identifies the same inode. Parent directories
+created by the writer are also synced, so a successful return represents both
+complete bytes and durable namespace metadata.
 
 Symbolization is another adapter boundary. `pyelftools` inspects ELF identity
 and debug capabilities; it is not used as a custom high-throughput DWARF

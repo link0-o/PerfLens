@@ -20,6 +20,15 @@ authorization, never overwrites an existing output, and adds independent
 server gates for process execution, collection, and PID attachment. PerfLens
 never invokes sudo or changes host perf/sysctl policy.
 
+Ordinary artifact writers publish through a pinned directory descriptor. They
+create a private mode-`0600` sibling, fsync the file, rename/link inside the
+pinned directory, fsync that directory, and then recheck that its pathname
+still identifies the same directory. Newly created parent directory entries
+are synced top-down. Structured write failures include `published=false` when
+retry is safe and `published=true` when publication happened but storage
+durability or path identity could not be confirmed; callers must verify before
+retrying the latter.
+
 The MCP ArtifactStore publishes JSON without replacing an existing pathname;
 reusing an ID succeeds only when the existing bytes are identical. Reads pin
 the user-owned artifact-root identity and accept only unchanged, single-link,
