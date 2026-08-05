@@ -96,6 +96,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
+- The isolated GitHub Release publisher now passes the repository explicitly
+  to `gh release create`, so tag verification does not require a checkout or a
+  local `.git` directory in the write-token job.
 - Collector clients now include the socket inode change timestamp in their
   pinned identity, so an unlinked-and-replaced socket is rejected even when
   the filesystem immediately reuses the same inode number. Debian package

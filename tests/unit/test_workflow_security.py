@@ -106,6 +106,7 @@ def test_release_write_token_is_isolated_from_checkout_and_project_code() -> Non
     publisher_command = run_steps[0]["run"]
     assert isinstance(publisher_command, str)
     assert publisher_command.lstrip().startswith("gh release create ")
+    assert '--repo "$GITHUB_REPOSITORY"' in publisher_command
     assert "uv " not in publisher_command
     assert "python" not in publisher_command
     assert "scripts/" not in publisher_command

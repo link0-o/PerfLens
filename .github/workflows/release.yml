@@ -172,6 +172,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "$GITHUB_REF_NAME" release-bundle/dist/*
+          --repo "$GITHUB_REPOSITORY"
           --verify-tag
           --notes-file release-bundle/release-notes.md
           --title "PerfLens $GITHUB_REF_NAME"
