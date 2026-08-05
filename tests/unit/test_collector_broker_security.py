@@ -320,8 +320,22 @@ def test_client_rejects_unsafe_socket_permissions_and_replacement(tmp_path: Path
         replacement.bind(str(replacement_path))
         os.chmod(replacement_path, 0o660)
         replacement.listen(1)
+        current = _socket_identity(replacement_path)
+        reused_inode_identity = replace(
+            identity,
+            device=current.device,
+            inode=current.inode,
+            ctime_ns=current.ctime_ns - 1,
+            uid=current.uid,
+            gid=current.gid,
+            mode=current.mode,
+        )
         with pytest.raises(PerfLensError, match="identity changed") as changed:
-            _validate_connected_peer(identity, os.getpid(), os.geteuid())
+            _validate_connected_peer(
+                reused_inode_identity,
+                os.getpid(),
+                os.geteuid(),
+            )
     assert changed.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 

@@ -198,6 +198,7 @@ class _SocketIdentity:
     path: Path
     device: int
     inode: int
+    ctime_ns: int
     uid: int
     gid: int
     mode: int
@@ -228,6 +229,7 @@ def _socket_identity(path: Path) -> _SocketIdentity:
         path=safe_path,
         device=metadata.st_dev,
         inode=metadata.st_ino,
+        ctime_ns=metadata.st_ctime_ns,
         uid=metadata.st_uid,
         gid=metadata.st_gid,
         mode=stat.S_IMODE(metadata.st_mode),
@@ -259,11 +261,19 @@ def _validate_connected_peer(identity: _SocketIdentity, server_pid: int, server_
         or (
             metadata.st_dev,
             metadata.st_ino,
+            metadata.st_ctime_ns,
             metadata.st_uid,
             metadata.st_gid,
             stat.S_IMODE(metadata.st_mode),
         )
-        != (identity.device, identity.inode, identity.uid, identity.gid, identity.mode)
+        != (
+            identity.device,
+            identity.inode,
+            identity.ctime_ns,
+            identity.uid,
+            identity.gid,
+            identity.mode,
+        )
         or (
             parent_metadata.st_dev,
             parent_metadata.st_ino,

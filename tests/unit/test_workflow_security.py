@@ -211,3 +211,27 @@ def test_published_python_packages_are_rebuilt_and_compared() -> None:
         )
         assert len(verifier_indexes) == 1
         assert commands.index(builds[1]) < verifier_indexes[0]
+
+
+def test_debian_install_smoke_uses_the_production_perf_entry() -> None:
+    workflows = _workflows()
+    for workflow_name in ("ci.yml", "release.yml"):
+        jobs = _jobs(workflows[workflow_name], label=workflow_name)
+        steps = _steps(
+            jobs["debian-package"],
+            label=f"{workflow_name}.debian-package",
+        )
+        commands = tuple(
+            cast(str, step["run"])
+            for step in steps
+            if isinstance(step.get("run"), str)
+        )
+        prerequisites = next(
+            command for command in commands if "apt-get update" in command
+        )
+        installed_smoke = next(
+            command for command in commands if "perflens-admin deploy" in command
+        )
+        assert "linux-perf" in prerequisites
+        assert "--perf-path /usr/bin/perf" in installed_smoke
+        assert "--perf-path /usr/bin/true" not in installed_smoke

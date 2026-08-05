@@ -96,6 +96,11 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
+- Collector clients now include the socket inode change timestamp in their
+  pinned identity, so an unlinked-and-replaced socket is rejected even when
+  the filesystem immediately reuses the same inode number. Debian package
+  smoke jobs now validate deployment with the real root-managed `perf` entry
+  instead of a test executable rejected by the production policy.
 - Single-use Collector plans now persist as atomic, private replay tombstones
   before perf starts. Failed collections remain consumed across Collector
   restarts; bounded expiry, spool locking, quota exclusion, archive/prune

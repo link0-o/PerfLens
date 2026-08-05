@@ -38,7 +38,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Install Debian build prerequisites
-        run: apt-get update && apt-get install --yes ca-certificates dpkg-dev git python3
+        run: >-
+          apt-get update && apt-get install --yes
+          ca-certificates dpkg-dev git linux-perf python3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
@@ -76,7 +78,7 @@ jobs:
             --prepare-collector \
             --automatic-collection \
             --collector-uid 65534 \
-            --perf-path /usr/bin/true
+            --perf-path /usr/bin/perf
           grep -F "ExecStart=/usr/bin/perflens-collector" \
             /tmp/perflens-installed-preflight/perflens-setup/collector-assets/perflens-collector.service
           grep -F "/usr/bin/perflens-admin deploy" \
