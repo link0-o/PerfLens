@@ -2,7 +2,7 @@
 
 简体中文 | [English](release-readiness.md)
 
-本文把最终实现与项目 Definition of Done 对应起来。表中的本地验证更新到 2026-08-04；工作流配置本身不等于远程 GitHub Actions 已经成功运行。
+本文把最终实现与项目 Definition of Done 对应起来。表中的本地验证更新到 2026-08-05；工作流配置本身不等于远程 GitHub Actions 已经成功运行。
 
 ## 功能范围
 
@@ -28,8 +28,8 @@
 | 代码规范 | `ruff check .` | 通过 |
 | 严格类型 | `pyright` | 0 错误、0 警告 |
 | Python 3.12 | 隔离环境 `pytest -q`，Python 3.12.13 | 310 通过 |
-| Python 3.13 | 隔离环境 `pytest -q` | 310 通过 |
-| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.24%，通过 |
+| Python 3.13 | 隔离环境 `pytest -q` | 378 通过 |
+| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.09%，通过 |
 | Skill | Skill 结构和打包测试 | 通过 |
 | Schema | 已提交 Schema 与 Contract 生成结果相等 | 通过 |
 | 依赖锁 | `uv export --locked` | 通过 |
@@ -93,5 +93,5 @@
 
 正式发布前仍需执行[《发布流程》](releasing.zh-CN.md)中的版本同步、CHANGELOG、完整测试、构建、SBOM、校验和和标签步骤。
 
-已经发布的 `v0.1.0` 不应移动或覆盖。当前候选版本已经提升为 `v0.1.1`；提交并推送
-发布提交后，应创建新的 `v0.1.1` 标签。
+已经发布的版本标签不应移动或覆盖。当前候选版本是 `v0.1.2`；提交并推送
+发布提交后，应创建新的 `v0.1.2` 标签。

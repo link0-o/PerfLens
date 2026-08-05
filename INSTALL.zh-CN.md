@@ -7,17 +7,17 @@
 普通 Linux 用户应下载：
 
 ```text
-perflens-0.1.1-py3-none-any.whl
+perflens-0.1.2-py3-none-any.whl
 ```
 
-`.whl` 是 Python 安装包，不是需要解压后点击运行的 ZIP。不要提取它。解压后看到的 `perflens/` 和 `perflens-0.1.1.dist-info/` 只是程序模块与安装元数据。
+`.whl` 是 Python 安装包，不是需要解压后点击运行的 ZIP。不要提取它。解压后看到的 `perflens/` 和 `perflens-0.1.2.dist-info/` 只是程序模块与安装元数据。
 
 其他 Release 文件的用途：
 
-- `perflens_0.1.1-1_amd64.deb`：Debian 13 普通用户主安装包；
-- `perflens-collector_0.1.1-1_all.deb`：可选 Collector 管理入口，需配合同版本主包；
-- `perflens-0.1.1.tar.gz`：源码发行包；
-- `perflens-performance-analysis-0.1.1.zip`：只包含 Agent Skill；
+- `perflens_0.1.2-1_amd64.deb`：Debian 13 普通用户主安装包；
+- `perflens-collector_0.1.2-1_all.deb`：可选 Collector 管理入口，需配合同版本主包；
+- `perflens-0.1.2.tar.gz`：源码发行包；
+- `perflens-performance-analysis-0.1.2.zip`：只包含 Agent Skill；
 - `sbom.cdx.json`：依赖安全清单；
 - `SHA256SUMS`：下载校验和；
 - `Source code`：GitHub 自动生成的源码快照。
@@ -33,7 +33,7 @@ sha256sum --ignore-missing --check SHA256SUMS
 DEB、源码包、Skill、SBOM 和 `SHA256SUMS` 也可以用相同命令验证：
 
 ```bash
-gh attestation verify ./perflens-0.1.1-py3-none-any.whl \
+gh attestation verify ./perflens-0.1.2-py3-none-any.whl \
   --repo link0-o/PerfLens \
   --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -45,7 +45,7 @@ gh attestation verify ./perflens-0.1.1-py3-none-any.whl \
 Debian 13 `amd64` 用户推荐直接安装主 DEB，不需要 pipx：
 
 ```bash
-sudo apt install ./perflens_0.1.1-1_amd64.deb
+sudo apt install ./perflens_0.1.2-1_amd64.deb
 ```
 
 需要自动采集时再安装完全相同版本的 Collector DEB。安装软件包不会自动启动
@@ -57,7 +57,7 @@ sudo apt install ./perflens_0.1.1-1_amd64.deb
 
 ```bash
 cd ~/Downloads
-pipx install ./perflens-0.1.1-py3-none-any.whl
+pipx install ./perflens-0.1.2-py3-none-any.whl
 ```
 
 如果浏览器下载到了其他目录，请先在文件管理器中进入该目录，右键空白处选择
@@ -74,7 +74,7 @@ pipx ensurepath
 然后重新打开终端，再执行 wheel 安装命令。也可以使用：
 
 ```bash
-uv tool install ./perflens-0.1.1-py3-none-any.whl
+uv tool install ./perflens-0.1.2-py3-none-any.whl
 ```
 
 验证安装：

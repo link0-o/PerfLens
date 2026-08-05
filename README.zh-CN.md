@@ -42,9 +42,9 @@ PerfLens 不包含 LLM API、Web UI、自动修改源码功能、Benchmark 执�
 从 GitHub Releases 下载 wheel 后，推荐作为独立工具安装：
 
 ```bash
-pipx install ./perflens-0.1.1-py3-none-any.whl
+pipx install ./perflens-0.1.2-py3-none-any.whl
 # 或者
-uv tool install ./perflens-0.1.1-py3-none-any.whl
+uv tool install ./perflens-0.1.2-py3-none-any.whl
 ```
 
 不要手工提取 wheel。安装成功后进入要分析的项目，首次运行：

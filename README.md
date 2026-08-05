@@ -45,9 +45,9 @@ PerfLens requires Python 3.12 or newer.
 For a GitHub release, download the wheel and install it as an isolated tool:
 
 ```bash
-pipx install ./perflens-0.1.1-py3-none-any.whl
+pipx install ./perflens-0.1.2-py3-none-any.whl
 # or
-uv tool install ./perflens-0.1.1-py3-none-any.whl
+uv tool install ./perflens-0.1.2-py3-none-any.whl
 ```
 
 Then opt one project in. Other projects do not see the Skill or MCP server:

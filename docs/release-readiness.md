@@ -2,7 +2,7 @@
 
 [简体中文](release-readiness.zh-CN.md) | English
 
-This record maps the final implementation to the planning document's Definition of Done. It records commands that were actually run locally through 2026-08-04; CI configuration is not presented as a completed remote CI run.
+This record maps the final implementation to the planning document's Definition of Done. It records commands that were actually run locally through 2026-08-05; CI configuration is not presented as a completed remote CI run.
 
 ## Functional scope
 
@@ -16,9 +16,9 @@ The intentionally excluded product areas remain excluded: LLM APIs, custom agent
 |---|---|---|
 | Lint | `ruff check .` | passed |
 | Strict types | `pyright` | 0 errors, 0 warnings |
-| Python 3.13 | isolated `pytest -q` environment | 310 passed |
+| Python 3.13 | isolated `pytest -q` environment | 378 passed |
 | Python 3.12 | isolated `pytest -q` on 3.12.13 | 310 passed |
-| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.24%, passed |
+| Coverage | `pytest --cov=perflens --cov-fail-under=85` | 85.09%, passed |
 | Skill | structure and package tests | passed |
 | Schemas | checked-in schema equality test | passed |
 | Dependency lock | `uv export --locked` | passed |
@@ -65,3 +65,11 @@ directories. The checked-in release workflow repeats these gates. See
 ## Interpretation boundaries
 
 No rule match is a confirmed root cause. Profile percentage deltas are not absolute-time deltas. Benchmark results remain candidates until matched, correctness-preserving A/B validation. The off-CPU collector records sched-switch stack evidence but does not by itself reconstruct blocked duration.
+
+## Release operation
+
+Before publishing, follow [the release procedure](releasing.md) to synchronize
+versions, verify the changelog, run all quality gates, build the release assets,
+generate the SBOM and checksums, and create the tag. Published version tags must
+not be moved or overwritten. The current candidate is `v0.1.2`; after the release
+commit is pushed, create the new `v0.1.2` tag.

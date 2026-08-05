@@ -41,19 +41,19 @@ uv run python scripts/build_deb.py \
 uv run python tests/deb_package_smoke.py --directory dist
 
 uv run --isolated --no-project \
-  --with dist/perflens-0.1.1-py3-none-any.whl \
+  --with dist/perflens-0.1.2-py3-none-any.whl \
   tests/package_smoke.py
 uv run --isolated --no-project \
-  --with dist/perflens-0.1.1.tar.gz \
+  --with dist/perflens-0.1.2.tar.gz \
   tests/package_smoke.py
 
 uv export --locked --no-dev --no-emit-project \
   --preview-features sbom-export \
   --format cyclonedx1.5 \
   --output-file dist/sbom.cdx.json
-uv run python scripts/prepare_release.py --tag v0.1.1
+uv run python scripts/prepare_release.py --tag v0.1.2
 uv run python scripts/render_release_notes.py \
-  --tag v0.1.1 \
+  --tag v0.1.2 \
   --output /tmp/perflens-release-notes.md
 sha256sum --check dist/SHA256SUMS
 ```
@@ -70,8 +70,8 @@ Python 3.13；构建器会固定权限和时间戳，CI 会提取包并执行命
 只有发布提交已经进入 `main` 后，才创建并推送带注释的版本标签：
 
 ```bash
-git tag -a v0.1.1 -m "PerfLens v0.1.1"
-git push origin v0.1.1
+git tag -a v0.1.2 -m "PerfLens v0.1.2"
+git push origin v0.1.2
 ```
 
 `.github/workflows/release.yml` 会检查标签和包版本是否一致，重新运行代码规范、类型、测试、覆盖率、wheel、sdist 和 DEB 冒烟测试，然后创建 GitHub Release。
@@ -97,7 +97,7 @@ git push origin v0.1.1
 GitHub Release。发布完成后至少抽查一个资产：
 
 ```bash
-gh attestation verify ./dist/perflens-0.1.1-py3-none-any.whl \
+gh attestation verify ./dist/perflens-0.1.2-py3-none-any.whl \
   --repo link0-o/PerfLens \
   --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -111,8 +111,8 @@ gh attestation verify ./dist/perflens-0.1.1-py3-none-any.whl \
 
 ```bash
 uv publish \
-  dist/perflens-0.1.1-py3-none-any.whl \
-  dist/perflens-0.1.1.tar.gz
+  dist/perflens-0.1.2-py3-none-any.whl \
+  dist/perflens-0.1.2.tar.gz
 ```
 
 PyPI 版本不可覆盖。发布错误时应增加新版本，不应尝试替换已经上传的文件。

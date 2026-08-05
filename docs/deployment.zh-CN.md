@@ -29,7 +29,7 @@ PerfLens 应拆成普通用户分析端和系统 Collector 两部分部署：
 ```bash
 sudo python3 -m venv /opt/perflens
 sudo /opt/perflens/bin/python -m pip install \
-  ./dist/perflens-0.1.1-py3-none-any.whl
+  ./dist/perflens-0.1.2-py3-none-any.whl
 ```
 
 这里的版本号只是示例，应替换为实际构建版本。正式离线部署应同时提供 wheelhouse 或完整系统包，不应在安装脚本中隐式访问网络。

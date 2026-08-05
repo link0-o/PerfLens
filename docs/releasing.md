@@ -44,19 +44,19 @@ uv run python scripts/build_deb.py \
 uv run python tests/deb_package_smoke.py --directory dist
 
 uv run --isolated --no-project \
-  --with dist/perflens-0.1.1-py3-none-any.whl \
+  --with dist/perflens-0.1.2-py3-none-any.whl \
   tests/package_smoke.py
 uv run --isolated --no-project \
-  --with dist/perflens-0.1.1.tar.gz \
+  --with dist/perflens-0.1.2.tar.gz \
   tests/package_smoke.py
 
 uv export --locked --no-dev --no-emit-project \
   --preview-features sbom-export \
   --format cyclonedx1.5 \
   --output-file dist/sbom.cdx.json
-uv run python scripts/prepare_release.py --tag v0.1.1
+uv run python scripts/prepare_release.py --tag v0.1.2
 uv run python scripts/render_release_notes.py \
-  --tag v0.1.1 \
+  --tag v0.1.2 \
   --output /tmp/perflens-release-notes.md
 sha256sum --check dist/SHA256SUMS
 ```
@@ -76,8 +76,8 @@ Create and push an annotated version tag only after the release commit is on
 `main`:
 
 ```bash
-git tag -a v0.1.1 -m "PerfLens v0.1.1"
-git push origin v0.1.1
+git tag -a v0.1.2 -m "PerfLens v0.1.2"
+git push origin v0.1.2
 ```
 
 `.github/workflows/release.yml` checks that the tag matches the package
@@ -110,7 +110,7 @@ publisher runs only after attestation succeeds. After publication, spot-check
 at least one asset:
 
 ```bash
-gh attestation verify ./dist/perflens-0.1.1-py3-none-any.whl \
+gh attestation verify ./dist/perflens-0.1.2-py3-none-any.whl \
   --repo link0-o/PerfLens \
   --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -124,8 +124,8 @@ not the Skill archive or SBOM:
 
 ```bash
 uv publish \
-  dist/perflens-0.1.1-py3-none-any.whl \
-  dist/perflens-0.1.1.tar.gz
+  dist/perflens-0.1.2-py3-none-any.whl \
+  dist/perflens-0.1.2.tar.gz
 ```
 
 PyPI versions are immutable. If a release is wrong, fix it in a new version
