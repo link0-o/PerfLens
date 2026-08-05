@@ -764,13 +764,27 @@ class SetupArtifact(ContractModel):
     perflens_version: str
     project_root: str
     output_directory: str
-    skill_status: Literal["installed", "existing", "skipped"]
+    skill_status: Literal["installed", "updated", "existing", "skipped"]
     skill_path: str | None = None
+    skill_fingerprint: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     mcp_config_path: str
     codex_project_config_path: str | None = None
     codex_project_config_status: Literal[
         "installed", "updated", "existing", "skipped"
     ] = "skipped"
+    claude_skill_status: Literal[
+        "installed", "updated", "existing", "skipped"
+    ] = "skipped"
+    claude_skill_path: str | None = None
+    claude_skill_fingerprint: str | None = Field(
+        default=None, pattern=r"^[a-f0-9]{64}$"
+    )
+    claude_mcp_config_path: str | None = None
+    claude_project_config_path: str | None = None
+    claude_project_config_status: Literal[
+        "installed", "updated", "existing", "skipped"
+    ] = "skipped"
+    claude_project_config_managed: bool = False
     capability_report_path: str
     collector_assets_path: str | None = None
     automatic_collection_enabled: bool = False
@@ -786,7 +800,23 @@ class ProjectDetachmentArtifact(ContractModel):
     detachment_id: str = Field(pattern=r"^detachment-[a-f0-9]{16}$")
     project_root: str
     dry_run: bool
+    selected_clients: tuple[Literal["codex", "claude-code"], ...] = ("codex",)
+    remove_skills: bool = False
+    setup_directory: str | None = None
     codex_config_path: str
-    codex_config_status: Literal["not_found", "planned", "removed"]
+    codex_config_status: Literal["not_found", "planned", "removed", "skipped"]
+    claude_config_path: str | None = None
+    claude_config_status: Literal[
+        "not_found", "planned", "removed", "skipped"
+    ] = "skipped"
+    codex_skill_path: str | None = None
+    codex_skill_status: Literal[
+        "not_found", "planned", "removed", "preserved", "skipped"
+    ] = "skipped"
+    claude_skill_path: str | None = None
+    claude_skill_status: Literal[
+        "not_found", "planned", "removed", "preserved", "skipped"
+    ] = "skipped"
+    removed_paths: tuple[str, ...] = ()
     preserved_paths: tuple[str, ...] = ()
     next_steps: tuple[str, ...] = ()

@@ -13,7 +13,8 @@
 | 规则 | 安全 YAML；安装包内置通用、Linux 和 C++ 候选规则 |
 | 报告 | JSON 证据包和 Markdown |
 | MCP | 官方 Python SDK 2.x，本地 stdio 传输 |
-| Skill | 仓库 `.agents/skills` 下的 Skill，并使用 `skill-creator` 验证 |
+| Skill | Codex `.agents/skills` 与 Claude Code `.claude/skills` 项目 Skill，并使用 `skill-creator` 验证 |
+| AI 客户端配置 | Codex 项目 `.codex/config.toml`；Claude Code 项目 `.mcp.json` |
 | 主动采集 | perf record/stat/sched/lock 和基于 sched-switch 的 off-CPU 证据；默认关闭且取决于系统权限 |
 | 自动采集 | 普通用户项目启动器，加上只接受 PID 的 Linux Collector Broker；使用 `SO_PEERCRED`，并提供 systemd 模板 |
 | Collector 策略 | 版本 1；缺失版本号按旧版版本 1 读取，不支持的版本会被拒绝 |

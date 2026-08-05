@@ -34,7 +34,7 @@ sudo /opt/perflens/bin/python -m pip install \
 
 这里的版本号只是示例，应替换为实际构建版本。正式离线部署应同时提供 wheelhouse 或完整系统包，不应在安装脚本中隐式访问网络。
 
-普通用户首次安装和项目配置应先按照[《安装与首次使用》](../INSTALL.zh-CN.md)运行 `perflens setup`。本页主要面向需要部署系统 Collector 的管理员。
+普通用户首次安装和项目配置应先按照[《安装与首次使用》](../INSTALL.zh-CN.md)在目标项目运行 `perflens init`。本页主要面向需要部署系统 Collector 的管理员。
 
 优先使用 `perflens setup --prepare-collector` 生成当前布局匹配的完整资产和可复制命令。
 正式 DEB 会自动使用 `/usr/bin`；wheel/source 会使用下面的 `/opt/perflens`。只有自定义
@@ -365,8 +365,8 @@ perflens accept-collector --authorize-host-acceptance
 ```
 
 软件卸载前，普通用户先对每个已接入项目运行 `perflens detach --project <项目>
---dry-run`，确认后去掉 `--dry-run`。它只移除项目 Codex 配置中的 PerfLens 托管块，
-不会代替系统服务卸载。然后由管理员执行：
+--dry-run`，确认后去掉 `--dry-run`。它移除经过验证的 Codex/Claude 项目 MCP 接入和
+未修改托管 Skill，但保留引导与性能证据，也不会代替系统服务卸载。然后由管理员执行：
 
 ```bash
 sudo perflens-admin undeploy --dry-run

@@ -5,25 +5,35 @@
 PerfLens consists of three separable layers:
 
 1. The deterministic Python Core and CLI.
-2. A local stdio MCP server that exposes bounded, typed tools.
-3. A repository Skill that tells an Agent how to interpret evidence and use the tools.
+2. A local stdio MCP server that exposes bounded, typed tools to Codex or Claude Code.
+3. A project Skill that tells an Agent how to interpret evidence and use the tools.
 
 Neither the Core nor MCP server calls an LLM API. The Skill contains workflow instructions only.
 
 ## Start the MCP server
 
-For an installed wheel, start with the guided setup:
+For an installed package, opt only the selected project in:
 
 ```bash
-perflens setup --project /absolute/path/to/workspace
+cd /absolute/path/to/workspace
+perflens init
 ```
 
-It installs the project Skill and creates Chinese and English next steps,
+It activates Codex and Claude Code by default. Use `--client codex`,
+`--client claude-code`, or `--read-only` to narrow the scope. It installs only
+project Skills and MCP configuration, then creates Chinese and English next steps,
 capability diagnostics, a safely managed project `.codex/config.toml` block,
 and a standalone `codex-mcp.toml` under
 `perflens-setup/`. It neither overwrites existing files nor requests
 administrator privileges. See the [installation guide](../INSTALL.md) for the
 complete download-to-first-analysis path.
+
+Use `perflens init --update` to refresh an existing project after an upgrade or
+to change collection gates. Update mode requires a matching ownership artifact
+and refuses modified Skills or unverified client configuration. Detach a client
+before updating with a narrower client selection. The managed setup directory
+refuses unexpected user files and preserves staged Collector assets unless
+regeneration is explicitly requested.
 
 The individual commands remain available for users who want to control each
 step separately:
@@ -103,6 +113,18 @@ tool_timeout_sec = 300
 
 Restart Codex after changing MCP configuration, then use `/mcp` or `codex mcp list` to confirm the server and tools. See the [official Codex MCP configuration reference](https://developers.openai.com/codex/mcp/).
 
+## Connect Claude Code
+
+`perflens init` installs the same Agent Skill under
+`.claude/skills/perflens-performance-analysis` and safely merges the bounded
+stdio server into the project `.mcp.json`. Existing unrelated servers are
+preserved, while a conflicting user-managed `perflens` entry is not overwritten.
+Claude Code asks the user to approve a project-scoped MCP server before use.
+If the top-level `.claude/skills` directory was created after Claude Code
+started, restart once, then invoke `/perflens-performance-analysis`.
+See the official Claude Code [Skills](https://code.claude.com/docs/en/slash-commands)
+and [MCP](https://code.claude.com/docs/en/mcp) documentation for client behavior.
+
 ## Use the Skill
 
 The repository Skill is at `.agents/skills/perflens-performance-analysis`. In Codex, invoke it explicitly when desired:
@@ -158,7 +180,7 @@ authorization to execute arbitrary project files.
 
 All list responses are bounded and paginated. The server emits typed structured output and checked-in JSON Schemas; it never returns an unbounded full analysis through a list tool.
 
-## Detach project MCP configuration
+## Detach project integration
 
 Before package uninstall, preview and then detach every configured project:
 
@@ -167,6 +189,10 @@ perflens detach --project /absolute/path/to/project --dry-run
 perflens detach --project /absolute/path/to/project
 ```
 
-Only a complete marked block containing exclusively `mcp_servers.perflens` is
-removed. Other Codex settings, the Skill, onboarding files, and analysis
-artifacts are preserved; unmarked or mixed-content configuration is refused.
+By default both clients are handled: a complete marked Codex block, an exact
+recorded Claude `perflens` entry, and unchanged managed project Skills are
+removed. Other client settings, onboarding files, analysis artifacts, and
+Collector data are preserved; modified or unverified content is refused. Use
+`--client codex|claude-code` for one client, `--keep-skills` to retain Skills,
+and `--setup-directory` for a custom onboarding directory. A retained Skill
+remains discoverable, so `--keep-skills` is not complete deactivation.

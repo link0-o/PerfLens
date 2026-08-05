@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import grp
 import hashlib
+import json
 import os
 import pwd
 import stat
@@ -64,9 +65,11 @@ def inspect_runtime_status(
     """Inspect generated onboarding and local Collector access without sampling."""
     project = _project_directory(project_root)
     setup = _setup_path(project, setup_directory)
-    setup_status, automatic_requested, setup_issues = _inspect_setup(project, setup)
-    skill_status = _inspect_skill(project)
-    mcp_status = _inspect_codex_project_config(project, setup)
+    setup_status, automatic_requested, setup_issues, setup_artifact = _inspect_setup(
+        project, setup
+    )
+    skill_status = _inspect_selected_skills(project, setup_artifact)
+    mcp_status = _inspect_selected_project_configs(project, setup, setup_artifact)
     assets_status = _inspect_assets(setup, automatic_requested=automatic_requested)
     socket_status = _inspect_socket(collector_socket)
     group_status = _collector_group_status()
@@ -74,7 +77,7 @@ def inspect_runtime_status(
     if (
         automatic_requested
         and setup_status == "ready"
-        and assets_status == "ready"
+        and assets_status in {"ready", "not_requested"}
         and socket_status == "ready"
         and group_status == "member"
     ):
@@ -90,7 +93,7 @@ def inspect_runtime_status(
         issues.append(f"skill_{skill_status}")
     if mcp_status != "ready":
         issues.append(f"mcp_project_config_{mcp_status}")
-    if automatic_requested and assets_status != "ready":
+    if automatic_requested and assets_status not in {"ready", "not_requested"}:
         issues.append(f"collector_assets_{assets_status}")
     if automatic_requested and socket_status != "ready":
         issues.append(f"collector_socket_{socket_status}")
@@ -234,14 +237,17 @@ def _setup_path(project: Path, requested: Path) -> Path:
     return setup
 
 
-def _inspect_setup(project: Path, setup: Path) -> tuple[SetupStatus, bool, tuple[str, ...]]:
+def _inspect_setup(
+    project: Path,
+    setup: Path,
+) -> tuple[SetupStatus, bool, tuple[str, ...], SetupArtifact | None]:
     if not setup.exists() and not setup.is_symlink():
-        return "missing", False, ("setup_missing",)
+        return "missing", False, ("setup_missing",), None
     if setup.is_symlink() or not setup.is_dir():
-        return "incomplete", False, ("setup_unsafe",)
+        return "incomplete", False, ("setup_unsafe",), None
     artifact_path = setup / "setup.json"
     if artifact_path.is_symlink() or not artifact_path.is_file():
-        return "incomplete", False, ("setup_artifact_missing",)
+        return "incomplete", False, ("setup_artifact_missing",), None
     try:
         with artifact_path.open("rb") as handle:
             raw = handle.read(_MAX_SETUP_BYTES + 1)
@@ -251,20 +257,64 @@ def _inspect_setup(project: Path, setup: Path) -> tuple[SetupStatus, bool, tuple
         recorded_project = Path(artifact.project_root).resolve(strict=True)
         recorded_output = Path(artifact.output_directory).resolve(strict=True)
     except (OSError, ValueError, ValidationError):
-        return "incomplete", False, ("setup_artifact_invalid",)
+        return "incomplete", False, ("setup_artifact_invalid",), None
     if recorded_project != project or recorded_output != setup:
-        return "incomplete", artifact.automatic_collection_enabled, ("setup_identity_mismatch",)
-    return "ready", artifact.automatic_collection_enabled, ()
+        return (
+            "incomplete",
+            artifact.automatic_collection_enabled,
+            ("setup_identity_mismatch",),
+            artifact,
+        )
+    return "ready", artifact.automatic_collection_enabled, (), artifact
 
 
-def _inspect_skill(project: Path) -> SkillStatus:
-    root = project / ".agents" / "skills" / SKILL_NAME
+def _inspect_selected_skills(
+    project: Path,
+    artifact: SetupArtifact | None,
+) -> SkillStatus:
+    clients: list[Literal["codex", "claude-code"]] = []
+    if artifact is None or artifact.skill_status != "skipped":
+        clients.append("codex")
+    if artifact is not None and artifact.claude_skill_status != "skipped":
+        clients.append("claude-code")
+    if not clients:
+        return "missing"
+    statuses = tuple(_inspect_skill(project, client=client) for client in clients)
+    if all(status == "ready" for status in statuses):
+        return "ready"
+    return "incomplete" if "incomplete" in statuses else "missing"
+
+
+def _inspect_skill(
+    project: Path,
+    *,
+    client: Literal["codex", "claude-code"] = "codex",
+) -> SkillStatus:
+    parent = ".agents" if client == "codex" else ".claude"
+    root = project / parent / "skills" / SKILL_NAME
     skill = root / "SKILL.md"
     if not root.exists() and not root.is_symlink():
         return "missing"
     if root.is_symlink() or not root.is_dir() or skill.is_symlink() or not skill.is_file():
         return "incomplete"
     return "ready"
+
+
+def _inspect_selected_project_configs(
+    project: Path,
+    setup: Path,
+    artifact: SetupArtifact | None,
+) -> McpStatus:
+    statuses: list[McpStatus] = []
+    if artifact is None or artifact.codex_project_config_status != "skipped":
+        statuses.append(_inspect_codex_project_config(project, setup))
+    if artifact is not None and artifact.claude_project_config_status != "skipped":
+        statuses.append(_inspect_claude_project_config(project, setup))
+    if not statuses:
+        return "missing"
+    if all(status == "ready" for status in statuses):
+        return "ready"
+    return "incomplete" if "incomplete" in statuses else "missing"
 
 
 def _inspect_codex_project_config(project: Path, setup: Path) -> McpStatus:
@@ -301,6 +351,52 @@ def _inspect_codex_project_config(project: Path, setup: Path) -> McpStatus:
     return "ready" if str(validated_command) == command else "incomplete"
 
 
+def _inspect_claude_project_config(project: Path, setup: Path) -> McpStatus:
+    path = project / ".mcp.json"
+    if not path.exists() and not path.is_symlink():
+        return "missing"
+    if path.is_symlink() or not path.is_file():
+        return "incomplete"
+    project_status, project_table = _read_claude_perflens_table(path)
+    if project_status != "ready" or project_table is None:
+        return project_status
+    snippet = setup / "claude-mcp.json"
+    if snippet.is_symlink() or not snippet.is_file():
+        return "incomplete"
+    expected_status, expected_table = _read_claude_perflens_table(snippet)
+    if expected_status != "ready" or expected_table != project_table:
+        return "incomplete"
+    command = project_table.get("command")
+    if not isinstance(command, str) or not Path(command).is_absolute():
+        return "incomplete"
+    try:
+        validated_command = validate_mcp_executable(Path(command))
+    except PerfLensError:
+        return "incomplete"
+    return "ready" if str(validated_command) == command else "incomplete"
+
+
+def _read_claude_perflens_table(
+    path: Path,
+) -> tuple[McpStatus, dict[str, object] | None]:
+    try:
+        raw = path.read_bytes()
+        if len(raw) > _MAX_SETUP_BYTES:
+            return "incomplete", None
+        parsed: object = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return "incomplete", None
+    if not isinstance(parsed, dict):
+        return "incomplete", None
+    servers = cast(dict[str, object], parsed).get("mcpServers")
+    if not isinstance(servers, dict):
+        return "missing", None
+    table = cast(dict[str, object], servers).get("perflens")
+    if not isinstance(table, dict):
+        return "missing", None
+    return "ready", cast(dict[str, object], table)
+
+
 def _read_perflens_mcp_table(
     path: Path,
 ) -> tuple[McpStatus, dict[str, object] | None]:
@@ -323,7 +419,7 @@ def _read_perflens_mcp_table(
 def _inspect_assets(setup: Path, *, automatic_requested: bool) -> AssetsStatus:
     root = setup / "collector-assets"
     if not root.exists() and not root.is_symlink():
-        return "missing" if automatic_requested else "not_requested"
+        return "not_requested"
     required = (
         root / "collector.toml",
         root / "perflens-collector.service",
@@ -423,7 +519,11 @@ def _automatic_status(
 ) -> AutomaticStatus:
     if not requested:
         return "not_configured"
-    if setup_status != "ready" or mcp_status != "ready" or assets_status != "ready":
+    if (
+        setup_status != "ready"
+        or mcp_status != "ready"
+        or assets_status not in {"ready", "not_requested"}
+    ):
         return "configuration_incomplete"
     if socket_status in {"missing", "invalid"}:
         return "collector_unavailable"
@@ -443,11 +543,11 @@ def _next_steps(
 ) -> tuple[str, ...]:
     steps: list[str] = []
     if setup_status != "ready":
-        steps.append("Run perflens setup in a new project output directory.")
+        steps.append("Run perflens init in the selected project.")
     if skill_status != "ready":
         steps.append("Install or repair the project PerfLens Skill.")
     if mcp_status != "ready":
-        steps.append("Generate and merge the Codex MCP configuration snippet.")
+        steps.append("Generate and merge the selected client MCP configuration.")
     if automatic_status == "configuration_incomplete":
         steps.append("Regenerate setup with --prepare-collector --automatic-collection.")
     elif automatic_status == "collector_unavailable":

@@ -23,9 +23,16 @@ def main() -> None:
     _run(perflens_admin, "--version", expected=__version__)
     root_help = _run(perflens, "--help", expected="基于证据的 Linux 性能分析工具")
     assert "--json-errors" in root_help
+    init_help = _run(perflens, "init", "--help", expected="未 init 的项目不可见")
+    assert "--client" in init_help
+    assert "claude-code" in init_help
+    assert "--setup-directory" in init_help
+    assert "--update" in init_help
     detach_help = _run(perflens, "detach", "--help")
     assert "--dry-run" in detach_help
     assert "--json" in detach_help
+    assert "--client" in detach_help
+    assert "--keep-skills" in detach_help
     assert "--json-errors" in _run(perflens_admin, "--help")
     doctor_help = _run(perflens, "doctor", "--help")
     assert "--json" in doctor_help
@@ -110,8 +117,10 @@ def main() -> None:
         profile = root / "profile.folded"
         analysis = root / "analysis.json"
         project = root / "project"
+        initialized_project = root / "initialized-project"
         profile.write_text("main;worker 7\nmain;compute 13\n", encoding="utf-8")
         project.mkdir()
+        initialized_project.mkdir()
 
         doctor_output = root / "doctor.json"
         _run(
@@ -192,6 +201,42 @@ def main() -> None:
 
         _run(
             perflens,
+            "init",
+            str(initialized_project),
+            "--read-only",
+            "--mcp-command",
+            perflens_mcp,
+            "--perf-path",
+            "/bin/true",
+        )
+        assert (
+            initialized_project
+            / ".agents/skills/perflens-performance-analysis/SKILL.md"
+        ).is_file()
+        assert (
+            initialized_project
+            / ".claude/skills/perflens-performance-analysis/SKILL.md"
+        ).is_file()
+        assert (initialized_project / ".codex/config.toml").is_file()
+        claude_project = json.loads(
+            (initialized_project / ".mcp.json").read_text(encoding="utf-8")
+        )
+        assert claude_project["mcpServers"]["perflens"]["type"] == "stdio"
+        _run(
+            perflens,
+            "init",
+            str(initialized_project),
+            "--read-only",
+            "--update",
+            "--mcp-command",
+            perflens_mcp,
+            "--perf-path",
+            "/bin/true",
+            expected="更新模式",
+        )
+
+        _run(
+            perflens,
             "setup",
             "--project",
             str(project),
@@ -233,7 +278,7 @@ def main() -> None:
         )
         assert "PerfLens 状态检查 (只读)" in status
         assert "Skill: 就绪" in status
-        assert "Codex 项目 MCP 配置: 已接入" in status
+        assert "项目 MCP 配置: 已接入" in status
 
         collector_assets = root / "collector-assets"
         _run(
@@ -279,19 +324,31 @@ def main() -> None:
             "detach",
             "--project",
             str(project),
+            "--setup-directory",
+            str(project / "guided-setup"),
             "--dry-run",
             expected="预演通过; 尚未修改文件",
         )
-        assert "不删除 Skill、引导目录、分析结果或 Collector 数据" in preview
+        assert "不删除引导目录、分析结果或系统 Collector 数据" in preview
         assert active_config.read_text(encoding="utf-8") == before_detach
         detach_payload = json.loads(
-            _run(perflens, "detach", "--project", str(project), "--json")
+            _run(
+                perflens,
+                "detach",
+                "--project",
+                str(project),
+                "--setup-directory",
+                str(project / "guided-setup"),
+                "--json",
+            )
         )
         assert detach_payload["schema_version"] == "1.0"
         assert detach_payload["codex_config_status"] == "removed"
         assert "BEGIN PerfLens managed MCP configuration" not in active_config.read_text(
             encoding="utf-8"
         )
+        assert detach_payload["codex_skill_status"] == "removed"
+        assert not (project / ".agents/skills/perflens-performance-analysis").exists()
         assert (project / "guided-setup/setup.json").is_file()
 
 

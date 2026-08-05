@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 from dataclasses import dataclass
 from importlib import resources
 from importlib.resources.abc import Traversable
 from pathlib import Path
+from typing import Literal, Protocol
 
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 SKILL_NAME = "perflens-performance-analysis"
+SkillClient = Literal["codex", "claude-code"]
 _MAX_SKILL_FILES = 64
 _MAX_SKILL_BYTES = 2 << 20
 
@@ -21,10 +24,40 @@ class _CopyBudget:
     bytes: int = 0
 
 
-def install_project_skill(project_root: Path) -> Path:
-    """Install the bundled Skill beneath PROJECT/.agents/skills and refuse overwrite."""
+class _Digest(Protocol):
+    def update(self, data: bytes, /) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SkillRemovalPlan:
+    """A bounded removal plan for one unchanged project Skill tree."""
+
+    path: Path
+    expected_fingerprint: str
+
+    def apply(self) -> None:
+        current = project_skill_fingerprint(self.path)
+        if current != self.expected_fingerprint:
+            raise _modified_skill_error(self.path)
+        shutil.rmtree(self.path)
+
+
+def project_skill_path(project_root: Path, *, client: SkillClient = "codex") -> Path:
+    """Return the client-specific project Skill path without creating it."""
     root = _existing_directory(project_root, label="Project root")
-    agents_root = _safe_child_directory(root, ".agents")
+    parents = (".agents", "skills") if client == "codex" else (".claude", "skills")
+    return root.joinpath(*parents, SKILL_NAME)
+
+
+def install_project_skill(
+    project_root: Path,
+    *,
+    client: SkillClient = "codex",
+) -> Path:
+    """Install the bundled Skill in one selected client's project directory."""
+    root = _existing_directory(project_root, label="Project root")
+    client_directory = ".agents" if client == "codex" else ".claude"
+    agents_root = _safe_child_directory(root, client_directory)
     skills_root = _safe_child_directory(agents_root, "skills")
     target = skills_root / SKILL_NAME
     if target.exists() or target.is_symlink():
@@ -60,6 +93,72 @@ def install_project_skill(project_root: Path) -> Path:
             suggested_actions=("Check project directory permissions and free space.",),
         ) from exc
     return target
+
+
+def bundled_skill_fingerprint() -> str:
+    """Return a deterministic fingerprint for the packaged Skill files."""
+    return _resource_fingerprint(_bundled_skill_root(), budget=_CopyBudget())
+
+
+def project_skill_fingerprint(path: Path) -> str:
+    """Fingerprint one bounded, symlink-free installed Skill directory."""
+    if path.is_symlink() or not path.is_dir():
+        raise _modified_skill_error(path)
+    return _path_fingerprint(path, path, budget=_CopyBudget())
+
+
+def refresh_project_skill(
+    project_root: Path,
+    *,
+    client: SkillClient,
+    expected_fingerprint: str,
+) -> tuple[Path, Literal["existing", "updated"]]:
+    """Replace an unchanged managed Skill with the currently bundled version."""
+    target = project_skill_path(project_root, client=client)
+    current = project_skill_fingerprint(target)
+    if current != expected_fingerprint:
+        raise _modified_skill_error(target)
+    bundled = bundled_skill_fingerprint()
+    if current == bundled:
+        return target, "existing"
+
+    backup = target.with_name(f".{target.name}.perflens-backup")
+    if backup.exists() or backup.is_symlink():
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "skill_install",
+            "PerfLens Skill update backup path already exists",
+            details={"path": str(backup)},
+        )
+    target.rename(backup)
+    try:
+        if project_skill_fingerprint(backup) != expected_fingerprint:
+            raise _modified_skill_error(backup)
+        installed = install_project_skill(project_root, client=client)
+    except BaseException:
+        if target.exists() and not target.is_symlink():
+            shutil.rmtree(target, ignore_errors=True)
+        backup.rename(target)
+        raise
+    shutil.rmtree(backup)
+    return installed, "updated"
+
+
+def plan_project_skill_removal(
+    project_root: Path,
+    *,
+    client: SkillClient,
+    expected_fingerprint: str | None,
+) -> SkillRemovalPlan | None:
+    """Plan removal only when the project Skill still matches its recorded owner."""
+    target = project_skill_path(project_root, client=client)
+    if not target.exists() and not target.is_symlink():
+        return None
+    current = project_skill_fingerprint(target)
+    expected = expected_fingerprint or bundled_skill_fingerprint()
+    if current != expected:
+        raise _modified_skill_error(target)
+    return SkillRemovalPlan(target, current)
 
 
 def _bundled_skill_root() -> Traversable:
@@ -167,3 +266,88 @@ def _copy_resource_tree(source: Traversable, target: Path, *, budget: _CopyBudge
             )
         with destination.open("xb") as handle:
             handle.write(data)
+
+
+def _resource_fingerprint(source: Traversable, *, budget: _CopyBudget) -> str:
+    digest = hashlib.sha256()
+    _update_resource_fingerprint(source, "", digest, budget=budget)
+    return digest.hexdigest()
+
+
+def _update_resource_fingerprint(
+    source: Traversable,
+    prefix: str,
+    digest: _Digest,
+    *,
+    budget: _CopyBudget,
+) -> None:
+    for child in sorted(source.iterdir(), key=lambda item: item.name):
+        relative = f"{prefix}/{child.name}" if prefix else child.name
+        if child.is_dir():
+            _update_resource_fingerprint(child, relative, digest, budget=budget)
+            continue
+        if not child.is_file():
+            raise PerfLensError(
+                ErrorCode.INTERNAL_ERROR,
+                "skill_install",
+                "Bundled Skill contains an unsupported resource",
+                details={"name": relative},
+            )
+        data = child.read_bytes()
+        _update_fingerprint_budget(budget, len(data))
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(data)
+        digest.update(b"\0")
+
+
+def _path_fingerprint(
+    root: Path,
+    directory: Path,
+    *,
+    budget: _CopyBudget,
+) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink():
+            raise _modified_skill_error(path)
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise _modified_skill_error(path)
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            raise _modified_skill_error(path) from exc
+        _update_fingerprint_budget(budget, len(data))
+        relative = path.relative_to(root).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(data)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _update_fingerprint_budget(budget: _CopyBudget, size: int) -> None:
+    budget.files += 1
+    budget.bytes += size
+    if budget.files > _MAX_SKILL_FILES or budget.bytes > _MAX_SKILL_BYTES:
+        raise PerfLensError(
+            ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+            "skill_install",
+            "PerfLens Skill exceeds the verification resource limits",
+            details={"files": budget.files, "bytes": budget.bytes},
+        )
+
+
+def _modified_skill_error(path: Path) -> PerfLensError:
+    return PerfLensError(
+        ErrorCode.PATH_SAFETY_VIOLATION,
+        "skill_install",
+        "Project PerfLens Skill is modified, unverified, or unsafe and was preserved",
+        recoverable=True,
+        details={"path": str(path)},
+        suggested_actions=(
+            "Review the Skill directory and remove it manually only if the changes are disposable.",
+        ),
+    )

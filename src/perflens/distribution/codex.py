@@ -21,6 +21,14 @@ CodexConfigInstallStatus = Literal["installed", "updated", "existing"]
 
 
 @dataclass(frozen=True, slots=True)
+class McpLaunchConfiguration:
+    """Validated executable and arguments shared by project MCP clients."""
+
+    command: Path
+    arguments: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class CodexConfigInstallPlan:
     """A checked, project-local Codex configuration change applied once at setup commit."""
 
@@ -310,6 +318,47 @@ def render_codex_config(
     mcp_command: Path | None = None,
 ) -> str:
     """Return a project-scoped TOML snippet for the installed MCP executable."""
+    launch = build_mcp_launch_configuration(
+        workspace,
+        artifact_root=artifact_root,
+        allow_process_execution=allow_process_execution,
+        automatic_collection=automatic_collection,
+        allow_project_execution=allow_project_execution,
+        collector_socket=collector_socket,
+        collector_spool_root=collector_spool_root,
+        automatic_modes=automatic_modes,
+        automatic_max_duration_seconds=automatic_max_duration_seconds,
+        mcp_command=mcp_command,
+    )
+    formatted_arguments = ",\n".join(
+        f"  {_toml_string(value)}" for value in launch.arguments
+    )
+    return (
+        "[mcp_servers.perflens]\n"
+        f"command = {_toml_string(str(launch.command))}\n"
+        "args = [\n"
+        f"{formatted_arguments},\n"
+        "]\n"
+        "required = true\n"
+        'default_tools_approval_mode = "writes"\n'
+        "tool_timeout_sec = 300\n"
+    )
+
+
+def build_mcp_launch_configuration(
+    workspace: Path,
+    *,
+    artifact_root: Path | None = None,
+    allow_process_execution: bool = False,
+    automatic_collection: bool = False,
+    allow_project_execution: bool = False,
+    collector_socket: Path = Path("/run/perflens/collector.sock"),
+    collector_spool_root: Path = Path("/var/lib/perflens"),
+    automatic_modes: tuple[str, ...] = ("stat", "record"),
+    automatic_max_duration_seconds: float = 30.0,
+    mcp_command: Path | None = None,
+) -> McpLaunchConfiguration:
+    """Build one client-neutral, project-bounded MCP launch configuration."""
     safe_workspace = _existing_directory(workspace, label="Workspace")
     safe_artifact_root = _artifact_directory(safe_workspace, artifact_root)
     safe_command = validate_mcp_executable(mcp_command)
@@ -357,17 +406,7 @@ def render_codex_config(
             arguments.extend(("--automatic-mode", mode))
         if allow_project_execution:
             arguments.append("--allow-project-execution")
-    formatted_arguments = ",\n".join(f"  {_toml_string(value)}" for value in arguments)
-    return (
-        "[mcp_servers.perflens]\n"
-        f"command = {_toml_string(str(safe_command))}\n"
-        "args = [\n"
-        f"{formatted_arguments},\n"
-        "]\n"
-        "required = true\n"
-        'default_tools_approval_mode = "writes"\n'
-        "tool_timeout_sec = 300\n"
-    )
+    return McpLaunchConfiguration(safe_command, tuple(arguments))
 
 
 def _existing_directory(path: Path, *, label: str) -> Path:

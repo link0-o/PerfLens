@@ -30,6 +30,8 @@ def test_cli_help_is_chinese_first_without_changing_public_command_names() -> No
     assert root_help.exit_code == 0, root_help.output
     assert "基于证据的 Linux 性能分析工具" in root_help.output
     assert "setup" in root_help.output
+    assert "init" in root_help.output
+    assert "未 init 的项目不可见" in root_help.output
     assert "为一个项目生成安全、中文优先的安装引导" in root_help.output
     assert "accept-collector" in root_help.output
     assert "无需选择 PID" in root_help.output
@@ -75,6 +77,22 @@ def test_cli_exposes_version_and_release_setup_commands(tmp_path: Path) -> None:
     assert config.exit_code == 0, config.output
     assert "[mcp_servers.perflens]" in config.output
     assert '"--allow-process-execution"' in config.output
+
+    claude_config = runner.invoke(
+        app,
+        [
+            "claude-config",
+            "--workspace",
+            str(project),
+            "--mcp-command",
+            sys.executable,
+            "--allow-process-execution",
+        ],
+    )
+    assert claude_config.exit_code == 0, claude_config.output
+    claude_server = json.loads(claude_config.output)["mcpServers"]["perflens"]
+    assert claude_server["type"] == "stdio"
+    assert "--allow-process-execution" in claude_server["args"]
 
     doctor = runner.invoke(app, ["doctor"])
     assert doctor.exit_code == 0, doctor.output
@@ -145,6 +163,175 @@ def test_cli_exposes_version_and_release_setup_commands(tmp_path: Path) -> None:
         encoding="utf-8"
     )
     assert '"--allow-project-execution"' in generated_config
+
+
+def test_init_activates_selected_clients_only_inside_the_project(tmp_path: Path) -> None:
+    project = tmp_path / "claude-project"
+    project.mkdir()
+
+    initialized = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--client",
+            "claude-code",
+            "--read-only",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+
+    assert initialized.exit_code == 0, initialized.output
+    assert "其他未运行 init 的项目不会发现这些集成" in initialized.output
+    assert "Claude Code Skill:" in initialized.output
+    assert "Codex Skill:" not in initialized.output
+    assert not (project / ".agents").exists()
+    assert not (project / ".codex").exists()
+    assert (project / ".claude/skills/perflens-performance-analysis/SKILL.md").is_file()
+    server = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))[
+        "mcpServers"
+    ]["perflens"]
+    assert "--allow-writes" in server["args"]
+    assert "--allow-automatic-collection" not in server["args"]
+
+
+def test_init_defaults_to_codex_and_claude_code_project_activation(tmp_path: Path) -> None:
+    project = tmp_path / "both-project"
+    project.mkdir()
+
+    initialized = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--read-only",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+
+    assert initialized.exit_code == 0, initialized.output
+    assert (project / ".agents/skills/perflens-performance-analysis/SKILL.md").is_file()
+    assert (project / ".codex/config.toml").is_file()
+    assert (project / ".claude/skills/perflens-performance-analysis/SKILL.md").is_file()
+    assert (project / ".mcp.json").is_file()
+
+    repeated = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--read-only",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+    assert repeated.exit_code != 0
+    assert "--update" in repeated.output
+
+    updated = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--read-only",
+            "--update",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+    assert updated.exit_code == 0, updated.output
+    assert "更新模式" in updated.output
+
+
+def test_cli_detach_one_client_then_updates_to_narrower_scope(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    initialized = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--read-only",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+    assert initialized.exit_code == 0, initialized.output
+
+    blocked = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--client",
+            "codex",
+            "--read-only",
+            "--update",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+    assert blocked.exit_code != 0
+    assert "detach --client" in blocked.output
+
+    preview = runner.invoke(
+        app,
+        [
+            "detach",
+            "--project",
+            str(project),
+            "--client",
+            "claude-code",
+            "--dry-run",
+        ],
+    )
+    assert preview.exit_code == 0, preview.output
+    assert "Claude Code MCP: 预演通过" in preview.output
+    assert "Codex MCP: 未选择此客户端" in preview.output
+    assert "--client claude-code" in preview.output
+
+    detached = runner.invoke(
+        app,
+        ["detach", "--project", str(project), "--client", "claude-code"],
+    )
+    assert detached.exit_code == 0, detached.output
+    assert "Claude Code Skill: 已移除" in detached.output
+    assert not (project / ".claude/skills/perflens-performance-analysis").exists()
+
+    updated = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--client",
+            "codex",
+            "--read-only",
+            "--update",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+    assert updated.exit_code == 0, updated.output
+    assert not (project / ".claude/skills/perflens-performance-analysis").exists()
+    assert "perflens" not in json.loads(
+        (project / ".mcp.json").read_text(encoding="utf-8")
+    )["mcpServers"]
 
 
 def test_doctor_translates_mode_reasons_warnings_and_recommendations(
@@ -243,7 +430,7 @@ def test_cli_status_is_chinese_first_and_can_write_json(tmp_path: Path) -> None:
     assert "Collector 健康握手: 未执行 (前置条件未满足)" in displayed.output
     assert "自动采集: 未配置" in displayed.output
     assert "下一步:" in displayed.output
-    assert "perflens setup --project" in displayed.output
+    assert "perflens init" in displayed.output
 
     output = tmp_path / "status.json"
     written = runner.invoke(

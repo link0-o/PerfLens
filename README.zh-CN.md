@@ -1,7 +1,7 @@
 # PerfLens
 
-> 基于证据的 Linux 性能分析工具，集成 CLI、MCP Server 与 Codex Skill。
-> Evidence-driven Linux performance analysis with a CLI, MCP Server, and Codex Skill.
+> 基于证据的 Linux 性能分析工具，集成 CLI、MCP Server、Codex 与 Claude Code Skill。
+> Evidence-driven Linux performance analysis for Codex and Claude Code.
 
 [![CI](https://github.com/link0-o/PerfLens/actions/workflows/ci.yml/badge.svg)](https://github.com/link0-o/PerfLens/actions/workflows/ci.yml)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue)](pyproject.toml)
@@ -19,7 +19,7 @@ PerfLens 是一个面向 Linux 应用和编码 Agent 的、基于证据的性能
 
 ```text
 PerfLens Core + CLI（真正执行确定性分析）
-├── MCP Server（让 Codex 等客户端调用分析工具）
+├── MCP Server（让 Codex、Claude Code 等客户端调用分析工具）
 └── Skill（告诉 Agent 按什么流程分析、如何避免过度下结论）
 ```
 
@@ -30,7 +30,7 @@ PerfLens Core + CLI（真正执行确定性分析）
 最简单的选择：
 
 - 只想在终端生成 JSON/Markdown：使用 CLI。
-- 想让 Codex 自动调用工具并解释结果：配置 MCP，再使用 Skill。
+- 想让 Codex 或 Claude Code 自动调用并解释结果：在目标项目运行一次 `perflens init`。
 - 已经有分析产物，只想按严谨流程解读：也可以只引用 Skill，但同时配置 MCP 效果最好。
 
 PerfLens 不包含 LLM API、Web UI、自动修改源码功能、Benchmark 执行器或自研 Agent 框架。
@@ -47,22 +47,29 @@ pipx install ./perflens-0.1.1-py3-none-any.whl
 uv tool install ./perflens-0.1.1-py3-none-any.whl
 ```
 
-不要手工提取 wheel。安装成功后运行项目引导：
+不要手工提取 wheel。安装成功后进入要分析的项目，首次运行：
 
 ```bash
-perflens setup \
-  --project /绝对路径/你的项目 \
-  --prepare-collector \
-  --automatic-collection
+cd /绝对路径/你的项目
+perflens init
 ```
 
+`init` 默认只在当前项目激活 Codex 和 Claude Code 集成，并开启受策略约束的自动采集。
+只使用一个客户端时传 `--client codex` 或 `--client claude-code`；只分析已有证据时传
+`--read-only`。没有运行 `init` 的其他项目不会出现 PerfLens Skill 或项目 MCP 配置。
 然后打开命令显示的 `下一步.zh-CN.md`。完整新手流程见[《安装与首次使用》](INSTALL.zh-CN.md)。
 引导会自动选择可信 DEB `/usr/bin` 或 wheel `/opt/perflens` 部署入口；直接复制指南中的
 命令即可，不需要记忆或猜测路径。
-它还会安全接入项目 `.codex/config.toml`，保留其他 Codex 设置；重启 Codex 即可，不再
-需要手工复制 MCP 长配置。需要仅生成文件时使用 `--skip-codex-config`。
+Codex 配置写入项目 `.codex/config.toml`；Claude Code 配置安全合并到项目
+`.mcp.json`，并保留其他 MCP 服务。两者都不修改用户级全局配置。
+以后需要切换自动采集参数或升级托管配置时使用 `perflens init --update`。更新只接受
+与 `setup.json` 所有权记录匹配的引导目录、MCP 条目和未修改 Skill；客户端配置或 Skill
+的用户修改会保留并报错。`perflens-setup` 是可重建的托管目录，不应存放用户文件；检测
+到额外文件时更新会拒绝，已有 Collector 暂存资产在未要求重新生成时会保留。要停用某个
+已有客户端，先对该客户端执行 `detach`，再用新的客户端选择更新。
 卸载软件包前使用 `perflens detach --project <项目> --dry-run` 预演，再去掉
-`--dry-run`，即可只移除 PerfLens 托管块而保留 Skill、引导文件和分析证据。
+`--dry-run`。默认同时安全移除 Codex/Claude Code 托管 MCP 和未修改的项目 Skill，保留
+`perflens-setup`、分析证据和系统 Collector 数据；使用 `--keep-skills` 可只解除 MCP。
 
 Debian 13 用户也可以直接安装原生 `.deb`，不需要自己创建 Python 环境。主包与
 可选 Collector 包的选择、安装和安全卸载见[《Debian 安装包》](docs/debian-packages.zh-CN.md)。
@@ -74,7 +81,7 @@ perflens status --project /绝对路径/你的项目
 ```
 
 命令帮助同样是中文优先。忘记参数时直接运行 `perflens --help`、
-`perflens setup --help` 或 `perflens-admin --help`；英文命令名和参数名保持稳定，已有脚本
+`perflens init --help`、`perflens setup --help` 或 `perflens-admin --help`；英文命令名和参数名保持稳定，已有脚本
 不需要修改。采集时长、资源上限、归档筛选和授权参数都在对应子命令帮助中说明。
 
 自动采集已配置且本地访问条件满足时，这条命令还会执行一次有界、只读的健康握手，
@@ -211,16 +218,31 @@ Profile 百分比变化只表示所选事件的分布变化，不等于耗时变
 
 ## 配置 MCP + Skill
 
-正式安装包已经携带 Skill。先把它安装到需要分析的项目中：
+日常接入优先使用一条命令：
+
+```bash
+cd /absolute/path/to/workspace
+perflens init                    # Codex + Claude Code
+perflens init --client codex     # 只启用 Codex
+perflens init --client claude-code --read-only
+perflens init --update           # 安全更新已有项目接入
+```
+
+这是项目级选择，不是全局开关。只有执行过 `init` 的项目会生成相应 Skill 和 MCP 配置。
+普通重复执行会拒绝覆盖已有 `perflens-setup`；明确传入 `--update` 后，PerfLens 才会依据
+旧 `setup.json` 和内容指纹更新自己的内容。修改过或无法证明所有权的文件不会被覆盖。
+下面的命令只适合需要分别控制步骤的高级用户：
 
 ```bash
 perflens install-skill --project /absolute/path/to/workspace
+perflens install-skill --client claude-code --project /absolute/path/to/workspace
 ```
 
 该命令会创建 `.agents/skills/perflens-performance-analysis`，如果目标已经存在则拒绝覆盖。然后生成项目级 MCP 配置：
 
 ```bash
 perflens codex-config --workspace /absolute/path/to/workspace
+perflens claude-config --workspace /absolute/path/to/workspace
 ```
 
 检查输出的 TOML，再将它加入项目的 `.codex/config.toml`。需要直接分析 `perf.data` 或调用源码符号化程序时，才增加：
@@ -262,6 +284,14 @@ codex mcp list
 ```
 
 Skill 位于 `.agents/skills/perflens-performance-analysis`。`$perflens-performance-analysis` 是 Skill 名称；`perflens` 是 MCP Server 名称。
+
+Claude Code Skill 位于 `.claude/skills/perflens-performance-analysis`，可以显式输入：
+
+```text
+使用 /perflens-performance-analysis 分析并优化当前项目。
+```
+
+Claude Code 会在首次使用项目 `.mcp.json` 中的服务时要求用户信任；PerfLens 不会自动批准。
 
 完整权限说明和项目级配置见[《MCP 与 Skill 使用指南》](docs/mcp-and-skill.zh-CN.md)。
 

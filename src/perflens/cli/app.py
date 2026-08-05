@@ -46,6 +46,7 @@ from perflens.contracts.artifacts import (
     RuntimeStatusArtifact,
 )
 from perflens.distribution.acceptance import accept_collector
+from perflens.distribution.claude import render_claude_config
 from perflens.distribution.codex import render_codex_config
 from perflens.distribution.collector import install_collector_assets
 from perflens.distribution.detach import detach_project_integration
@@ -105,10 +106,14 @@ def install_skill_command(
             help="用于安装 .agents/skills 的现有项目根目录。",
         ),
     ] = Path("."),
+    client: Annotated[
+        Literal["codex", "claude-code"],
+        typer.Option("--client", help="安装 Skill 的项目客户端。"),
+    ] = "codex",
 ) -> None:
     """把内置的性能分析 Skill 安装到项目中。"""
     try:
-        target = install_project_skill(project_root)
+        target = install_project_skill(project_root, client=client)
     except PerfLensError as exc:
         _fail(exc)
     typer.echo(str(target))
@@ -139,6 +144,41 @@ def codex_config_command(
     """输出项目级 Codex MCP TOML 配置片段。"""
     try:
         configuration = render_codex_config(
+            workspace,
+            artifact_root=artifact_root,
+            allow_process_execution=allow_process_execution,
+            mcp_command=mcp_command,
+        )
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(configuration, nl=False)
+
+
+@app.command("claude-config")
+def claude_config_command(
+    workspace: Annotated[
+        Path,
+        typer.Option("--workspace", file_okay=False, help="允许访问的工作区根目录。"),
+    ] = Path("."),
+    artifact_root: Annotated[
+        Path | None,
+        typer.Option("--artifact-root", file_okay=False, help="MCP 产物保存目录。"),
+    ] = None,
+    allow_process_execution: Annotated[
+        bool,
+        typer.Option(
+            "--allow-process-execution",
+            help="允许有界的 perf.data 转换和源码符号化。",
+        ),
+    ] = False,
+    mcp_command: Annotated[
+        Path | None,
+        typer.Option("--mcp-command", dir_okay=False, help="可信 perflens-mcp 入口路径。"),
+    ] = None,
+) -> None:
+    """输出项目级 Claude Code MCP JSON 配置。"""
+    try:
+        configuration = render_claude_config(
             workspace,
             artifact_root=artifact_root,
             allow_process_execution=allow_process_execution,
@@ -232,6 +272,100 @@ def status_command(
     _render_status_chinese(artifact)
 
 
+@app.command("init")
+def init_command(
+    project_root: Annotated[
+        Path,
+        typer.Argument(
+            file_okay=False,
+            help="要按需启用 PerfLens 的项目, 默认是当前目录。",
+        ),
+    ] = Path("."),
+    setup_directory: Annotated[
+        Path,
+        typer.Option(
+            "--setup-directory",
+            file_okay=False,
+            help="项目内的托管引导目录, 默认是 perflens-setup。",
+        ),
+    ] = Path("perflens-setup"),
+    client: Annotated[
+        Literal["all", "codex", "claude-code"],
+        typer.Option(
+            "--client",
+            help="要在当前项目激活的 AI 客户端, 默认同时支持两者。",
+        ),
+    ] = "all",
+    automatic_collection: Annotated[
+        bool,
+        typer.Option(
+            "--automatic-collection/--read-only",
+            help="启用有界项目运行和自动采集, --read-only 只分析已有证据。",
+        ),
+    ] = True,
+    prepare_collector: Annotated[
+        bool,
+        typer.Option(
+            "--prepare-collector",
+            help="同时生成供管理员审查的 Collector 部署资产, 不会执行 sudo。",
+        ),
+    ] = False,
+    mcp_command: Annotated[
+        Path | None,
+        typer.Option("--mcp-command", dir_okay=False, help="可信 perflens-mcp 入口路径。"),
+    ] = None,
+    perf_path: Annotated[
+        Path,
+        typer.Option("--perf-path", dir_okay=False, help="系统 perf 程序的绝对路径。"),
+    ] = Path("/usr/bin/perf"),
+    update_existing: Annotated[
+        bool,
+        typer.Option(
+            "--update",
+            help="安全更新当前项目已有的 PerfLens 托管配置和未修改 Skill。",
+        ),
+    ] = False,
+) -> None:
+    """只在当前项目激活 PerfLens Skill 和 MCP, 未 init 的项目不可见。"""
+    codex_selected = client in {"all", "codex"}
+    claude_selected = client in {"all", "claude-code"}
+    try:
+        artifact = run_project_setup(
+            project_root,
+            output_directory=setup_directory,
+            install_skill=codex_selected,
+            install_codex_config=codex_selected,
+            install_claude_skill=claude_selected,
+            install_claude_config=claude_selected,
+            codex_enabled=codex_selected,
+            claude_enabled=claude_selected,
+            allow_process_execution=automatic_collection,
+            mcp_command=mcp_command,
+            prepare_collector=prepare_collector,
+            automatic_collection=automatic_collection,
+            perf_path=perf_path,
+            update_existing=update_existing,
+        )
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo("PerfLens 已按项目激活, 其他未运行 init 的项目不会发现这些集成。")
+    if update_existing:
+        typer.echo(
+            "更新模式: 已重建托管引导; 客户端配置与 Skill 的用户修改不会被覆盖。"
+        )
+    typer.echo(f"项目: {artifact.project_root}")
+    if codex_selected:
+        typer.echo(f"Codex Skill: {artifact.skill_path}")
+        typer.echo(f"Codex MCP: {artifact.codex_project_config_path}")
+    if claude_selected:
+        typer.echo(f"Claude Code Skill: {artifact.claude_skill_path}")
+        typer.echo(f"Claude Code MCP: {artifact.claude_project_config_path}")
+    typer.echo(
+        f"自动采集: {'已启用 (仍需每次工作负载授权)' if automatic_collection else '未启用'}"
+    )
+    typer.echo(f"中文下一步: {Path(artifact.output_directory) / '下一步.zh-CN.md'}")
+
+
 @app.command("setup")
 def setup_command(
     project_root: Annotated[
@@ -250,6 +384,13 @@ def setup_command(
             help="项目内的新引导目录; 默认是 perflens-setup。",
         ),
     ] = None,
+    update_existing: Annotated[
+        bool,
+        typer.Option(
+            "--update",
+            help="验证所有权后更新现有引导目录和未修改的托管接入。",
+        ),
+    ] = False,
     install_skill: Annotated[
         bool,
         typer.Option(
@@ -266,6 +407,13 @@ def setup_command(
             ),
         ),
     ] = True,
+    install_claude_code: Annotated[
+        bool,
+        typer.Option(
+            "--claude-code/--skip-claude-code",
+            help="把 Skill 和 MCP 配置按项目接入 Claude Code。",
+        ),
+    ] = False,
     allow_process_execution: Annotated[
         bool,
         typer.Option(
@@ -322,6 +470,10 @@ def setup_command(
             output_directory=output_directory,
             install_skill=install_skill,
             install_codex_config=install_codex_config,
+            install_claude_skill=install_claude_code,
+            install_claude_config=install_claude_code,
+            codex_enabled=True,
+            claude_enabled=install_claude_code,
             allow_process_execution=allow_process_execution,
             mcp_command=mcp_command,
             prepare_collector=prepare_collector,
@@ -329,11 +481,13 @@ def setup_command(
             collector_uid=collector_uid,
             collector_command=collector_command,
             perf_path=perf_path,
+            update_existing=update_existing,
         )
     except PerfLensError as exc:
         _fail(exc)
     skill_label = {
         "installed": "已安装",
+        "updated": "已安全更新",
         "existing": "已存在/未覆盖",
         "skipped": "已跳过",
     }[artifact.skill_status]
@@ -354,6 +508,22 @@ def setup_command(
     typer.echo(f"Codex 项目配置: {codex_label}")
     if artifact.codex_project_config_path is not None:
         typer.echo(f"Codex 配置路径: {artifact.codex_project_config_path}")
+    claude_skill_label = {
+        "installed": "已安装",
+        "updated": "已安全更新",
+        "existing": "已存在/未覆盖",
+        "skipped": "未启用",
+    }[artifact.claude_skill_status]
+    claude_config_label = {
+        "installed": "已安装",
+        "updated": "已更新 (保留其他 MCP 服务)",
+        "existing": "已存在且内容一致",
+        "skipped": "未启用",
+    }[artifact.claude_project_config_status]
+    typer.echo(f"Claude Code Skill: {claude_skill_label}")
+    typer.echo(f"Claude Code 项目配置: {claude_config_label}")
+    if artifact.claude_project_config_path is not None:
+        typer.echo(f"Claude Code 配置路径: {artifact.claude_project_config_path}")
     typer.echo(f"采集状态: {collection_label}")
     typer.echo(
         f"项目自动运行: {'已启用' if artifact.automatic_collection_enabled else '未启用'}"
@@ -384,6 +554,28 @@ def detach_command(
             help="需要移除 PerfLens 托管 Codex MCP 配置块的项目。",
         ),
     ] = Path("."),
+    client: Annotated[
+        Literal["all", "codex", "claude-code"],
+        typer.Option(
+            "--client",
+            help="解除接入的客户端, 默认同时处理 Codex 和 Claude Code。",
+        ),
+    ] = "all",
+    keep_skills: Annotated[
+        bool,
+        typer.Option(
+            "--keep-skills",
+            help="只移除 MCP 配置, 保留项目 Skill; 默认移除未修改的托管 Skill。",
+        ),
+    ] = False,
+    setup_directory: Annotated[
+        Path,
+        typer.Option(
+            "--setup-directory",
+            file_okay=False,
+            help="用于验证配置和 Skill 所有权的项目引导目录。",
+        ),
+    ] = Path("perflens-setup"),
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", help="只检查将移除的托管块, 不修改文件。"),
@@ -402,7 +594,13 @@ def detach_command(
         safe_output = (
             validate_new_output_file(output_path) if output_path is not None else None
         )
-        artifact = detach_project_integration(project_root, dry_run=dry_run)
+        artifact = detach_project_integration(
+            project_root,
+            client=client,
+            remove_skills=not keep_skills,
+            setup_directory=setup_directory,
+            dry_run=dry_run,
+        )
         if safe_output is not None:
             write_json_new_atomic(artifact, safe_output, max_output_bytes=1 << 20)
     except PerfLensError as exc:
@@ -1498,9 +1696,9 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
         "setup_identity_mismatch": "setup.json 与当前项目或目录不匹配。",
         "skill_missing": "项目 Skill 尚未安装。",
         "skill_incomplete": "项目 Skill 不完整或路径不安全。",
-        "mcp_project_config_missing": "项目 .codex/config.toml 尚未接入 PerfLens MCP。",
+        "mcp_project_config_missing": "所选客户端的项目配置尚未接入 PerfLens MCP。",
         "mcp_project_config_incomplete": (
-            "项目 Codex 配置无效、入口程序失效、路径不安全; 或与本次引导不匹配。"
+            "项目 MCP 配置无效、入口程序失效、路径不安全; 或与本次引导不匹配。"
         ),
         "collector_assets_missing": "缺少 Collector 部署资产。",
         "collector_assets_incomplete": "Collector 部署资产不完整或路径不安全。",
@@ -1519,7 +1717,7 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
     typer.echo(f"项目: {artifact.project_root}")
     typer.echo(f"引导目录: {setup_labels[artifact.setup_status]}")
     typer.echo(f"Skill: {skill_labels[artifact.skill_status]}")
-    typer.echo(f"Codex 项目 MCP 配置: {mcp_labels[artifact.mcp_config_status]}")
+    typer.echo(f"项目 MCP 配置: {mcp_labels[artifact.mcp_config_status]}")
     typer.echo(f"Collector 资产: {asset_labels[artifact.collector_assets_status]}")
     typer.echo(f"Collector Socket: {socket_labels[artifact.collector_socket_status]}")
     typer.echo(f"perflens 用户组: {group_labels[artifact.collector_group_status]}")
@@ -1574,7 +1772,9 @@ def _runtime_next_steps_chinese(artifact: RuntimeStatusArtifact) -> tuple[str, .
     ]
 
     steps: list[str] = []
-    if (
+    if artifact.setup_status == "missing":
+        steps.append(f"只在当前项目激活 PerfLens: `perflens init {shlex.quote(str(project))}`")
+    elif (
         artifact.setup_status != "ready"
         or artifact.skill_status != "ready"
         or artifact.mcp_config_status != "ready"
@@ -1614,16 +1814,30 @@ def _render_detachment_chinese(
     *,
     output_path: Path | None,
 ) -> None:
-    typer.echo("PerfLens 项目 MCP 接入移除")
+    typer.echo("PerfLens 项目接入解除")
     typer.echo(f"项目: {artifact.project_root}")
-    typer.echo(f"Codex 配置: {artifact.codex_config_path}")
-    status = {
+    config_labels = {
         "not_found": "未找到 PerfLens 托管配置; 未修改文件",
         "planned": "预演通过; 尚未修改文件",
         "removed": "已只移除 PerfLens 托管配置块",
-    }[artifact.codex_config_status]
-    typer.echo(f"结果: {status}")
-    typer.echo("保留边界: 不删除 Skill、引导目录、分析结果或 Collector 数据。")
+        "skipped": "未选择此客户端",
+    }
+    skill_labels = {
+        "not_found": "未找到项目 Skill",
+        "planned": "预演通过; 将移除未修改的托管 Skill",
+        "removed": "已移除未修改的托管 Skill",
+        "preserved": "按 --keep-skills 保留",
+        "skipped": "未选择此客户端",
+    }
+    typer.echo(f"Codex MCP: {config_labels[artifact.codex_config_status]}")
+    typer.echo(f"Codex Skill: {skill_labels[artifact.codex_skill_status]}")
+    typer.echo(f"Claude Code MCP: {config_labels[artifact.claude_config_status]}")
+    typer.echo(f"Claude Code Skill: {skill_labels[artifact.claude_skill_status]}")
+    typer.echo("保留边界: 不删除引导目录、分析结果或系统 Collector 数据。")
+    if artifact.removed_paths:
+        typer.echo("已移除路径:")
+        for path in artifact.removed_paths:
+            typer.echo(f"- {path}")
     if artifact.preserved_paths:
         typer.echo("已保留的已知路径:")
         for path in artifact.preserved_paths:
@@ -1631,14 +1845,40 @@ def _render_detachment_chinese(
     if output_path is not None:
         typer.echo(f"版本化结果: {output_path}")
     typer.echo("下一步:")
-    if artifact.codex_config_status == "planned":
-        command = shlex.join(("perflens", "detach", "--project", artifact.project_root))
+    if "planned" in {
+        artifact.codex_config_status,
+        artifact.claude_config_status,
+        artifact.codex_skill_status,
+        artifact.claude_skill_status,
+    }:
+        selected_client = (
+            "all" if set(artifact.selected_clients) == {"codex", "claude-code"}
+            else artifact.selected_clients[0]
+        )
+        command_parts = [
+            "perflens",
+            "detach",
+            "--project",
+            artifact.project_root,
+            "--client",
+            selected_client,
+        ]
+        if not artifact.remove_skills:
+            command_parts.append("--keep-skills")
+        if artifact.setup_directory is not None:
+            command_parts.extend(("--setup-directory", artifact.setup_directory))
+        command = shlex.join(command_parts)
         typer.echo(f"- 确认后执行真实移除: `{command}`")
-    elif artifact.codex_config_status == "removed":
-        typer.echo("- 重启 Codex, 让项目停止启动 PerfLens MCP Server。")
+    elif "removed" in {
+        artifact.codex_config_status,
+        artifact.claude_config_status,
+        artifact.codex_skill_status,
+        artifact.claude_skill_status,
+    }:
+        typer.echo("- 重启已解除接入的 AI 客户端, 让项目停止发现 PerfLens。")
         typer.echo("- 确认其他项目也已 detach 后, 再卸载 wheel 或 DEB。")
     else:
-        typer.echo("- 如果项目使用用户手写的 PerfLens MCP 表, 请人工检查后移除。")
+        typer.echo("- 当前选择范围内没有可安全移除的 PerfLens 托管内容。")
 
 
 def _unused_setup_directory_name(project: Path, status_id: str) -> str:

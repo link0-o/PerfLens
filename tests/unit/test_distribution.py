@@ -1,17 +1,30 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 import pytest
 
+from perflens.distribution.claude import (
+    plan_claude_project_config,
+    plan_claude_project_config_removal,
+    render_claude_config,
+)
 from perflens.distribution.codex import (
     plan_codex_project_config,
     plan_codex_project_config_removal,
     render_codex_config,
 )
 from perflens.distribution.collector import install_collector_assets
-from perflens.distribution.skill import SKILL_NAME, install_project_skill
+from perflens.distribution.skill import (
+    SKILL_NAME,
+    bundled_skill_fingerprint,
+    install_project_skill,
+    plan_project_skill_removal,
+    project_skill_fingerprint,
+    refresh_project_skill,
+)
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 
@@ -48,6 +61,82 @@ def test_project_skill_install_rejects_parent_symlink_escape(tmp_path: Path) -> 
 
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
     assert not (outside / "skills").exists()
+
+
+def test_project_skill_can_be_activated_only_for_claude_code(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    installed = install_project_skill(project, client="claude-code")
+
+    assert installed == project / ".claude" / "skills" / SKILL_NAME
+    assert (installed / "SKILL.md").is_file()
+    assert not (project / ".agents").exists()
+
+
+def test_skill_fingerprint_refresh_and_removal_are_content_bound(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    installed = install_project_skill(project)
+    bundled = bundled_skill_fingerprint()
+    assert project_skill_fingerprint(installed) == bundled
+    unchanged, status = refresh_project_skill(
+        project,
+        client="codex",
+        expected_fingerprint=bundled,
+    )
+    assert unchanged == installed
+    assert status == "existing"
+
+    skill = installed / "SKILL.md"
+    skill.write_text(
+        skill.read_text(encoding="utf-8") + "\nold managed version\n",
+        encoding="utf-8",
+    )
+    old_fingerprint = project_skill_fingerprint(installed)
+    refreshed, status = refresh_project_skill(
+        project,
+        client="codex",
+        expected_fingerprint=old_fingerprint,
+    )
+    assert status == "updated"
+    assert project_skill_fingerprint(refreshed) == bundled
+
+    removal = plan_project_skill_removal(
+        project,
+        client="codex",
+        expected_fingerprint=bundled,
+    )
+    assert removal is not None
+    (refreshed / "SKILL.md").write_text("changed after planning", encoding="utf-8")
+    with pytest.raises(PerfLensError) as changed:
+        removal.apply()
+    assert changed.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert refreshed.exists()
+
+
+def test_skill_removal_refuses_wrong_fingerprint_and_symlink(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    installed = install_project_skill(project)
+
+    with pytest.raises(PerfLensError) as wrong:
+        plan_project_skill_removal(
+            project,
+            client="codex",
+            expected_fingerprint="0" * 64,
+        )
+    assert wrong.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "file").write_text("keep", encoding="utf-8")
+    link = installed / "unsafe-link"
+    link.symlink_to(outside / "file")
+    with pytest.raises(PerfLensError) as linked:
+        project_skill_fingerprint(installed)
+    assert linked.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert (outside / "file").read_text(encoding="utf-8") == "keep"
 
 
 def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
@@ -204,6 +293,142 @@ def test_codex_config_generates_complete_project_collection_policy(tmp_path: Pat
             allow_project_execution=True,
             mcp_command=Path(sys.executable),
         )
+
+
+def test_claude_config_reuses_the_same_bounded_mcp_policy(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    config = json.loads(
+        render_claude_config(
+            workspace,
+            automatic_collection=True,
+            allow_project_execution=True,
+            automatic_max_duration_seconds=12,
+            mcp_command=Path(sys.executable),
+        )
+    )
+    server = config["mcpServers"]["perflens"]
+
+    assert server["type"] == "stdio"
+    assert server["command"] == str(Path(sys.executable).resolve())
+    assert str(workspace.resolve()) in server["args"]
+    assert "--allow-project-execution" in server["args"]
+    assert "--allow-automatic-collection" in server["args"]
+    assert server["env"] == {}
+
+
+def test_claude_project_config_preserves_other_servers_and_refuses_conflicts(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    path = workspace / ".mcp.json"
+    path.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "keep": {"type": "stdio", "command": "/bin/true", "args": []}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated = render_claude_config(workspace, mcp_command=Path(sys.executable))
+
+    plan = plan_claude_project_config(workspace, generated)
+    assert plan.status == "updated"
+    plan.apply()
+    merged = json.loads(path.read_text(encoding="utf-8"))
+    assert set(merged["mcpServers"]) == {"keep", "perflens"}
+    assert plan_claude_project_config(workspace, generated).status == "existing"
+
+    merged["mcpServers"]["perflens"]["args"] = ["--unsafe-change"]
+    path.write_text(json.dumps(merged), encoding="utf-8")
+    with pytest.raises(PerfLensError) as conflict:
+        plan_claude_project_config(workspace, generated)
+    assert conflict.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["keep"]
+
+
+def test_claude_project_config_rejects_symlink_and_invalid_json(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside.json"
+    workspace.mkdir()
+    outside.write_text("{}", encoding="utf-8")
+    path = workspace / ".mcp.json"
+    path.symlink_to(outside)
+    generated = render_claude_config(workspace, mcp_command=Path(sys.executable))
+
+    with pytest.raises(PerfLensError) as linked:
+        plan_claude_project_config(workspace, generated)
+    assert linked.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    path.unlink()
+    path.write_text("not-json", encoding="utf-8")
+    with pytest.raises(PerfLensError) as invalid:
+        plan_claude_project_config(workspace, generated)
+    assert invalid.value.code is ErrorCode.INVALID_INPUT
+
+
+def test_claude_managed_config_can_update_and_detach_without_touching_others(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    old = render_claude_config(workspace, mcp_command=Path(sys.executable))
+    plan_claude_project_config(workspace, old).apply()
+    config_path = workspace / ".mcp.json"
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload["mcpServers"]["keep"] = {
+        "type": "stdio",
+        "command": "/bin/true",
+        "args": [],
+    }
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    new = render_claude_config(
+        workspace,
+        automatic_collection=True,
+        allow_project_execution=True,
+        mcp_command=Path(sys.executable),
+    )
+
+    update = plan_claude_project_config(
+        workspace,
+        new,
+        managed_configuration=old,
+    )
+    assert update.status == "updated"
+    update.apply()
+    removal = plan_claude_project_config_removal(
+        workspace,
+        managed_configuration=new,
+    )
+    assert removal is not None
+    removal.apply()
+
+    remaining = json.loads(config_path.read_text(encoding="utf-8"))["mcpServers"]
+    assert set(remaining) == {"keep"}
+
+
+def test_claude_detach_preserves_user_modified_entry(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    generated = render_claude_config(workspace, mcp_command=Path(sys.executable))
+    plan_claude_project_config(workspace, generated).apply()
+    path = workspace / ".mcp.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["mcpServers"]["perflens"]["args"] = ["user-change"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(PerfLensError) as modified:
+        plan_claude_project_config_removal(
+            workspace,
+            managed_configuration=generated,
+        )
+
+    assert modified.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["perflens"]
 
 
 def test_codex_project_config_install_preserves_and_updates_managed_block(

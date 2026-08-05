@@ -108,7 +108,8 @@ Collector 还会在启动 perf 前检查 spool 总字节数、文件数和文件
 ## 卸载前
 
 先对每个接入项目运行 `perflens detach --project <项目> --dry-run`，确认后去掉
-`--dry-run`。它只移除 PerfLens 托管的 MCP 配置块，保留其他 Codex 设置、Skill、引导
-文件和分析证据。系统 Collector 还需要管理员另行执行 `perflens-admin undeploy`。
+`--dry-run`。它只移除经过所有权验证的 Codex/Claude MCP 配置和未修改 Skill，保留其他
+客户端设置、引导文件和分析证据。需要保留 Skill 时加 `--keep-skills`。系统 Collector
+还需要管理员另行执行 `perflens-admin undeploy`。
 
 **Full Changelog**：https://github.com/link0-o/PerfLens/commits/{tag}

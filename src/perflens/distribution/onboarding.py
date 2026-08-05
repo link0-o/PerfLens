@@ -13,13 +13,28 @@ from perflens import __version__
 from perflens.artifacts.filesystem import write_json_new_atomic, write_text_atomic
 from perflens.collection.capabilities import inspect_collection_capabilities
 from perflens.contracts.artifacts import CollectionCapabilityArtifact, SetupArtifact
+from perflens.distribution.claude import (
+    ClaudeConfigInstallPlan,
+    plan_claude_project_config,
+    plan_claude_project_config_removal,
+    render_claude_config,
+)
 from perflens.distribution.codex import (
     CodexConfigInstallPlan,
     plan_codex_project_config,
+    plan_codex_project_config_removal,
     render_codex_config,
 )
 from perflens.distribution.collector import install_collector_assets
-from perflens.distribution.skill import SKILL_NAME, install_project_skill
+from perflens.distribution.skill import (
+    SKILL_NAME,
+    SkillClient,
+    bundled_skill_fingerprint,
+    install_project_skill,
+    project_skill_fingerprint,
+    project_skill_path,
+    refresh_project_skill,
+)
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _MAX_GUIDE_BYTES = 256 << 10
@@ -35,6 +50,10 @@ def run_project_setup(
     output_directory: Path | None = None,
     install_skill: bool = True,
     install_codex_config: bool = True,
+    install_claude_skill: bool = False,
+    install_claude_config: bool = False,
+    codex_enabled: bool = True,
+    claude_enabled: bool = False,
     allow_process_execution: bool = False,
     mcp_command: Path | None = None,
     prepare_collector: bool = False,
@@ -42,6 +61,7 @@ def run_project_setup(
     collector_uid: int | None = None,
     collector_command: Path | None = None,
     perf_path: Path = Path("/usr/bin/perf"),
+    update_existing: bool = False,
 ) -> SetupArtifact:
     """Create a bounded onboarding bundle inside one selected project."""
     project = _existing_project(project_root)
@@ -51,8 +71,44 @@ def run_project_setup(
         else collector_command or _WHEEL_COLLECTOR_COMMAND
     )
     admin_command = selected_collector_command.with_name("perflens-admin")
-    output = _new_output_directory(project, output_directory)
-    skill_path, skill_status = _skill_preflight(project, install_skill=install_skill)
+    output, previous_artifact = _setup_output_state(
+        project,
+        output_directory,
+        update_existing=update_existing,
+    )
+    previous_claude_configuration = _previous_claude_configuration(
+        project,
+        previous_artifact,
+    )
+    _validate_disabled_clients_detached(
+        project,
+        previous_artifact,
+        codex_enabled=codex_enabled,
+        claude_enabled=claude_enabled,
+        previous_claude_configuration=previous_claude_configuration,
+    )
+    skill_path, skill_status = _skill_preflight(
+        project,
+        install_skill=install_skill,
+        client="codex",
+        update_existing=update_existing,
+        expected_fingerprint=(
+            previous_artifact.skill_fingerprint
+            if previous_artifact is not None
+            else None
+        ),
+    )
+    claude_skill_path, claude_skill_status = _skill_preflight(
+        project,
+        install_skill=install_claude_skill,
+        client="claude-code",
+        update_existing=update_existing,
+        expected_fingerprint=(
+            previous_artifact.claude_skill_fingerprint
+            if previous_artifact is not None
+            else None
+        ),
+    )
     configuration = render_codex_config(
         project,
         allow_process_execution=allow_process_execution,
@@ -62,6 +118,22 @@ def run_project_setup(
     )
     codex_plan: CodexConfigInstallPlan | None = (
         plan_codex_project_config(project, configuration) if install_codex_config else None
+    )
+    claude_configuration = render_claude_config(
+        project,
+        allow_process_execution=allow_process_execution,
+        automatic_collection=automatic_collection,
+        allow_project_execution=automatic_collection,
+        mcp_command=mcp_command,
+    )
+    claude_plan: ClaudeConfigInstallPlan | None = (
+        plan_claude_project_config(
+            project,
+            claude_configuration,
+            managed_configuration=previous_claude_configuration,
+        )
+        if install_claude_config
+        else None
     )
     capabilities = inspect_collection_capabilities(perf_path)
     collection_status, blocked_modes = _collection_status(capabilities)
@@ -74,13 +146,30 @@ def run_project_setup(
         collection_status=collection_status,
         admin_command=admin_command,
         codex_plan=codex_plan,
+        claude_plan=claude_plan,
+        codex_selected=codex_enabled,
+        claude_selected=claude_enabled,
     )
 
+    backup = _setup_backup_path(output) if previous_artifact is not None else None
     created = False
     installed_skill = False
+    installed_claude_skill = False
+    applied_codex_config = False
+    applied_claude_config = False
+    moved_collector_assets = False
     try:
+        if backup is not None:
+            output.rename(backup)
         output.mkdir()
         created = True
+        preserved_collector_assets = (
+            backup / "collector-assets"
+            if backup is not None
+            and not prepare_collector
+            and (backup / "collector-assets").is_dir()
+            else None
+        )
         mcp_config_path = output / "codex-mcp.toml"
         capability_path = output / "collection-capabilities.json"
         chinese_guide_path = output / "下一步.zh-CN.md"
@@ -101,6 +190,9 @@ def run_project_setup(
                 admin_command,
                 selected_collector_command,
                 codex_plan,
+                claude_plan,
+                codex_enabled,
+                claude_enabled,
             ),
             chinese_guide_path,
             max_output_bytes=_MAX_GUIDE_BYTES,
@@ -115,8 +207,17 @@ def run_project_setup(
                 admin_command,
                 selected_collector_command,
                 codex_plan,
+                claude_plan,
+                codex_enabled,
+                claude_enabled,
             ),
             english_guide_path,
+            max_output_bytes=_MAX_GUIDE_BYTES,
+        )
+        claude_mcp_config_path = output / "claude-mcp.json"
+        write_text_atomic(
+            claude_configuration,
+            claude_mcp_config_path,
             max_output_bytes=_MAX_GUIDE_BYTES,
         )
 
@@ -128,19 +229,40 @@ def run_project_setup(
                 collector_command=selected_collector_command,
                 perf_path=perf_path,
             )
+        elif preserved_collector_assets is not None:
+            collector_assets_path = output / "collector-assets"
+            preserved_collector_assets.rename(collector_assets_path)
+            moved_collector_assets = True
 
         if skill_status == "installed":
-            skill_path = install_project_skill(project)
+            skill_path = install_project_skill(project, client="codex")
             installed_skill = True
+        elif skill_status == "updated":
+            assert skill_path is not None
+
+        if claude_skill_status == "installed":
+            claude_skill_path = install_project_skill(project, client="claude-code")
+            installed_claude_skill = True
+        elif claude_skill_status == "updated":
+            assert claude_skill_path is not None
+
+        skill_fingerprint = _owned_skill_fingerprint(skill_path, status=skill_status)
+        claude_skill_fingerprint = _owned_skill_fingerprint(
+            claude_skill_path,
+            status=claude_skill_status,
+        )
 
         generated = [
             mcp_config_path,
             capability_path,
             chinese_guide_path,
             english_guide_path,
+            claude_mcp_config_path,
         ]
         if codex_plan is not None and codex_plan.status != "existing":
             generated.append(codex_plan.path)
+        if claude_plan is not None and claude_plan.status != "existing":
+            generated.append(claude_plan.path)
         if collector_assets_path is not None:
             generated.extend(sorted(collector_assets_path.iterdir()))
         setup_path = output / "setup.json"
@@ -151,12 +273,35 @@ def run_project_setup(
             output_directory=str(output),
             skill_status=skill_status,
             skill_path=str(skill_path) if skill_path is not None else None,
+            skill_fingerprint=skill_fingerprint,
             mcp_config_path=str(mcp_config_path),
             codex_project_config_path=(
                 str(codex_plan.path) if codex_plan is not None else None
             ),
             codex_project_config_status=(
                 codex_plan.status if codex_plan is not None else "skipped"
+            ),
+            claude_skill_status=claude_skill_status,
+            claude_skill_path=(
+                str(claude_skill_path) if claude_skill_path is not None else None
+            ),
+            claude_skill_fingerprint=claude_skill_fingerprint,
+            claude_mcp_config_path=str(claude_mcp_config_path),
+            claude_project_config_path=(
+                str(claude_plan.path) if claude_plan is not None else None
+            ),
+            claude_project_config_status=(
+                claude_plan.status if claude_plan is not None else "skipped"
+            ),
+            claude_project_config_managed=(
+                claude_plan is not None
+                and (
+                    claude_plan.status in {"installed", "updated"}
+                    or (
+                        previous_artifact is not None
+                        and previous_artifact.claude_project_config_managed
+                    )
+                )
             ),
             capability_report_path=str(capability_path),
             collector_assets_path=(
@@ -171,12 +316,50 @@ def run_project_setup(
         write_json_new_atomic(artifact, setup_path, max_output_bytes=_MAX_SETUP_JSON_BYTES)
         if codex_plan is not None:
             codex_plan.apply()
+            applied_codex_config = codex_plan.status != "existing"
+        if claude_plan is not None:
+            claude_plan.apply()
+            applied_claude_config = claude_plan.status != "existing"
+        if skill_status == "updated":
+            skill_path, _ = refresh_project_skill(
+                project,
+                client="codex",
+                expected_fingerprint=_expected_skill_fingerprint(
+                    previous_artifact,
+                    client="codex",
+                ),
+            )
+        if claude_skill_status == "updated":
+            claude_skill_path, _ = refresh_project_skill(
+                project,
+                client="claude-code",
+                expected_fingerprint=_expected_skill_fingerprint(
+                    previous_artifact,
+                    client="claude-code",
+                ),
+            )
+        if backup is not None:
+            shutil.rmtree(backup)
         return artifact
     except BaseException:
+        if applied_claude_config and claude_plan is not None:
+            _rollback_config_plan(claude_plan)
+        if applied_codex_config and codex_plan is not None:
+            _rollback_config_plan(codex_plan)
+        if (
+            moved_collector_assets
+            and backup is not None
+            and (output / "collector-assets").is_dir()
+        ):
+            (output / "collector-assets").rename(backup / "collector-assets")
         if created:
             shutil.rmtree(output, ignore_errors=True)
+        if backup is not None and backup.exists() and not output.exists():
+            backup.rename(output)
         if installed_skill and skill_path is not None:
             shutil.rmtree(skill_path, ignore_errors=True)
+        if installed_claude_skill and claude_skill_path is not None:
+            shutil.rmtree(claude_skill_path, ignore_errors=True)
         raise
 
 
@@ -249,7 +432,106 @@ def _trusted_packaged_entrypoint(
     return stat.S_ISLNK(entry_status.st_mode) or entry_status.st_mode & 0o022 == 0
 
 
-def _new_output_directory(project: Path, requested: Path | None) -> Path:
+def _setup_output_state(
+    project: Path,
+    requested: Path | None,
+    *,
+    update_existing: bool,
+) -> tuple[Path, SetupArtifact | None]:
+    output = _output_path(project, requested)
+    if not output.exists() and not output.is_symlink():
+        return output, None
+    if not update_existing:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Setup output directory already exists and will not be overwritten",
+            recoverable=True,
+            details={"path": str(output)},
+            suggested_actions=("Rerun perflens init with --update after reviewing it.",),
+        )
+    if output.is_symlink() or not output.is_dir():
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Existing setup path is unsafe and was preserved",
+            details={"path": str(output)},
+        )
+    artifact_path = output / "setup.json"
+    if artifact_path.is_symlink() or not artifact_path.is_file():
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Existing setup directory has no trustworthy ownership record",
+            details={"path": str(output)},
+        )
+    try:
+        raw = artifact_path.read_bytes()
+        if len(raw) > _MAX_SETUP_JSON_BYTES:
+            raise ValueError("setup artifact exceeds its size limit")
+        artifact = SetupArtifact.model_validate_json(raw)
+        recorded_project = Path(artifact.project_root).resolve(strict=True)
+        recorded_output = Path(artifact.output_directory).resolve(strict=True)
+    except (OSError, ValueError) as exc:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Existing setup ownership record is invalid and was preserved",
+            details={"path": str(artifact_path)},
+        ) from exc
+    if recorded_project != project or recorded_output != output:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Existing setup ownership does not match the selected project",
+            details={"path": str(output), "project": str(project)},
+        )
+    _validate_setup_update_contents(output)
+    return output, artifact
+
+
+def _validate_setup_update_contents(output: Path) -> None:
+    managed_names = {
+        "NEXT_STEPS.md",
+        "claude-mcp.json",
+        "codex-mcp.toml",
+        "collection-capabilities.json",
+        "collector-assets",
+        "setup.json",
+        "下一步.zh-CN.md",
+    }
+    try:
+        entries = tuple(output.iterdir())
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Existing setup directory cannot be inspected safely",
+            details={"path": str(output)},
+        ) from exc
+    unknown = tuple(sorted(path.name for path in entries if path.name not in managed_names))
+    if unknown:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Existing setup directory contains user files and was preserved",
+            recoverable=True,
+            details={"path": str(output), "unknown_entries": unknown},
+            suggested_actions=(
+                "Move user files outside perflens-setup before rerunning init --update.",
+            ),
+        )
+    assets = output / "collector-assets"
+    if assets.is_symlink() or (assets.exists() and not assets.is_dir()):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Existing Collector staging assets are unsafe and were preserved",
+            details={"path": str(assets)},
+        )
+
+
+def _output_path(project: Path, requested: Path | None) -> Path:
     candidate = requested or Path("perflens-setup")
     if not candidate.is_absolute():
         candidate = project / candidate
@@ -270,21 +552,171 @@ def _new_output_directory(project: Path, requested: Path | None) -> Path:
             "Setup output directory must remain inside the selected project",
             details={"path": str(output), "project": str(project)},
         )
-    if output.exists() or output.is_symlink():
-        raise PerfLensError(
-            ErrorCode.PATH_SAFETY_VIOLATION,
-            "setup",
-            "Setup output directory already exists and will not be overwritten",
-            recoverable=True,
-            details={"path": str(output)},
-        )
     return output
 
 
+def _previous_claude_configuration(
+    project: Path,
+    artifact: SetupArtifact | None,
+) -> str | None:
+    if artifact is None or not artifact.claude_project_config_managed:
+        return None
+    setup = Path(artifact.output_directory)
+    path = setup / "claude-mcp.json"
+    if (
+        not setup.is_relative_to(project)
+        or path.is_symlink()
+        or not path.is_file()
+    ):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Recorded Claude MCP ownership file is missing or unsafe",
+            details={"path": str(path)},
+        )
+    try:
+        raw = path.read_bytes()
+        if len(raw) > _MAX_SETUP_JSON_BYTES:
+            raise ValueError("Claude MCP ownership file exceeds its size limit")
+        return raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Recorded Claude MCP ownership file is invalid",
+            details={"path": str(path)},
+        ) from exc
+
+
+def _validate_disabled_clients_detached(
+    project: Path,
+    artifact: SetupArtifact | None,
+    *,
+    codex_enabled: bool,
+    claude_enabled: bool,
+    previous_claude_configuration: str | None,
+) -> None:
+    if artifact is None:
+        return
+    still_active: list[str] = []
+    if not codex_enabled and artifact.codex_project_config_status != "skipped":
+        try:
+            codex_plan = plan_codex_project_config_removal(project)
+        except PerfLensError:
+            codex_plan = True
+        if codex_plan is not None:
+            still_active.append("codex")
+    if (
+        not codex_enabled
+        and artifact.skill_status != "skipped"
+        and (project / ".agents/skills/perflens-performance-analysis").exists()
+        and "codex" not in still_active
+    ):
+        still_active.append("codex")
+    if not claude_enabled and artifact.claude_project_config_status != "skipped":
+        try:
+            claude_plan = plan_claude_project_config_removal(
+                project,
+                managed_configuration=previous_claude_configuration,
+            )
+        except PerfLensError:
+            claude_plan = True
+        if claude_plan is not None:
+            still_active.append("claude-code")
+    if (
+        not claude_enabled
+        and artifact.claude_skill_status != "skipped"
+        and (project / ".claude/skills/perflens-performance-analysis").exists()
+        and "claude-code" not in still_active
+    ):
+        still_active.append("claude-code")
+    if still_active:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "setup",
+            "Disabled clients are still attached and were preserved",
+            recoverable=True,
+            details={"clients": still_active},
+            suggested_actions=(
+                "Run perflens detach --client CLIENT first, then rerun init --update.",
+            ),
+        )
+
+
+def _setup_backup_path(output: Path) -> Path:
+    backup = output.with_name(f".{output.name}.perflens-backup")
+    if backup.exists() or backup.is_symlink():
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Setup update backup path already exists",
+            details={"path": str(backup)},
+        )
+    return backup
+
+
+def _expected_skill_fingerprint(
+    artifact: SetupArtifact | None,
+    *,
+    client: SkillClient,
+) -> str:
+    recorded = None
+    if artifact is not None:
+        recorded = (
+            artifact.skill_fingerprint
+            if client == "codex"
+            else artifact.claude_skill_fingerprint
+        )
+    return recorded or bundled_skill_fingerprint()
+
+
+def _owned_skill_fingerprint(
+    path: Path | None,
+    *,
+    status: Literal["installed", "updated", "existing", "skipped"],
+) -> str | None:
+    if path is None or status == "skipped":
+        return None
+    current = project_skill_fingerprint(path)
+    bundled = bundled_skill_fingerprint()
+    if status in {"installed", "updated"} or current == bundled:
+        return bundled
+    return None
+
+
+def _rollback_config_plan(
+    plan: CodexConfigInstallPlan | ClaudeConfigInstallPlan,
+) -> None:
+    if plan.status == "existing":
+        return
+    try:
+        current = plan.path.read_text(encoding="utf-8") if plan.path.exists() else None
+        if current != plan.content:
+            return
+        if plan.expected_content is None:
+            plan.path.unlink()
+        else:
+            write_text_atomic(
+                plan.expected_content,
+                plan.path,
+                max_output_bytes=_MAX_SETUP_JSON_BYTES,
+            )
+    except (OSError, PerfLensError):
+        return
+
+
 def _skill_preflight(
-    project: Path, *, install_skill: bool
-) -> tuple[Path | None, Literal["installed", "existing", "skipped"]]:
-    target = project / ".agents" / "skills" / SKILL_NAME
+    project: Path,
+    *,
+    install_skill: bool,
+    client: SkillClient,
+    update_existing: bool,
+    expected_fingerprint: str | None,
+) -> tuple[
+    Path | None,
+    Literal["installed", "updated", "existing", "skipped"],
+]:
+    target = project_skill_path(project, client=client)
     if not install_skill:
         return None, "skipped"
     if not target.exists() and not target.is_symlink():
@@ -310,6 +742,19 @@ def _skill_preflight(
             "Existing PerfLens Skill path is incomplete or unsafe",
             details={"path": str(target)},
         )
+    if update_existing:
+        current = project_skill_fingerprint(resolved)
+        expected = expected_fingerprint or bundled_skill_fingerprint()
+        if current != expected:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "setup",
+                "Existing PerfLens Skill was modified and was preserved",
+                recoverable=True,
+                details={"path": str(resolved)},
+            )
+        if current != bundled_skill_fingerprint():
+            return resolved, "updated"
     return resolved, "existing"
 
 
@@ -333,18 +778,28 @@ def _next_steps(
     collection_status: str,
     admin_command: Path,
     codex_plan: CodexConfigInstallPlan | None,
+    claude_plan: ClaudeConfigInstallPlan | None,
+    codex_selected: bool,
+    claude_selected: bool,
 ) -> tuple[str, ...]:
     steps = [
         f"Review {output / '下一步.zh-CN.md'}.",
         f"Ask the Skill to analyze a profile inside {project}.",
     ]
-    if codex_plan is None:
+    if codex_selected and codex_plan is None:
         steps.insert(
             1,
             f"Merge {output / 'codex-mcp.toml'} into the user's Codex config, then restart Codex.",
         )
-    else:
+    elif codex_plan is not None:
         steps.insert(1, f"Restart Codex; project MCP config is at {codex_plan.path}.")
+    if claude_selected and claude_plan is None:
+        steps.append(f"Merge {output / 'claude-mcp.json'} into the project .mcp.json.")
+    elif claude_plan is not None:
+        steps.append(
+            "Approve the project MCP server in Claude Code; configuration is at "
+            f"{claude_plan.path}."
+        )
     if prepare_collector:
         steps.append(
             "Have an administrator review collector-assets/collector.toml, then run "
@@ -373,6 +828,9 @@ def _chinese_guide(
     admin_command: Path = Path("/opt/perflens/bin/perflens-admin"),
     collector_command: Path = _WHEEL_COLLECTOR_COMMAND,
     codex_plan: CodexConfigInstallPlan | None = None,
+    claude_plan: ClaudeConfigInstallPlan | None = None,
+    codex_selected: bool = True,
+    claude_selected: bool = False,
 ) -> str:
     layout_note = _chinese_layout_note(admin_command, collector_command)
     policy_path = output / "collector-assets" / "collector.toml"
@@ -420,7 +878,7 @@ perflens setup --project <项目> --prepare-collector --automatic-collection
     )
     project_section = (
         f"""
-## 5. 直接优化当前项目
+## 6. 直接优化当前项目
 
 MCP 配置已包含自动采集和普通用户项目执行能力。Collector 部署并验收后，可以说：
 
@@ -435,7 +893,7 @@ PID 并交给 Collector。用户不需要查找或输入 PID。
 """
         if automatic_collection
         else """
-## 5. 直接优化当前项目
+## 6. 直接优化当前项目
 
 本次 MCP 配置没有开启项目自动运行。需要该能力时，请使用一个新的输出目录重新运行
 `perflens setup --automatic-collection`，并先完成 Collector 部署。
@@ -449,10 +907,61 @@ PID 并交给 Collector。用户不需要查找或输入 PID。
 同时保留了 `{output / 'codex-mcp.toml'}` 作为可检查、可迁移的独立配置片段。
 """
         if codex_plan is not None
-        else f"""本次使用了 `--skip-codex-config`，没有修改项目的 Codex 配置。打开
+        else (
+            f"""本次使用了 `--skip-codex-config`，没有修改项目的 Codex 配置。打开
 `{output / 'codex-mcp.toml'}`，复制其中完整的 `[mcp_servers.perflens]` 配置块到
 项目 `.codex/config.toml` 或用户配置；不要覆盖已有设置。保存后重启 Codex，再执行
 `codex mcp list` 检查 `perflens`。
+"""
+            if codex_selected
+            else "当前项目没有启用 Codex 集成，因此 Codex 不会发现 PerfLens。\n"
+        )
+    )
+    claude_section = (
+        f"""## 3. Claude Code (已启用)
+
+项目级 MCP 配置已安全{_codex_status_chinese(claude_plan.status)}到
+`{claude_plan.path}`，项目 Skill 位于 `.claude/skills/{SKILL_NAME}`。
+首次创建顶层 `.claude/skills` 后重新启动 Claude Code，检查并批准项目
+`.mcp.json` 中的 `perflens` 服务，然后可以说：
+
+```text
+使用 /{SKILL_NAME} 分析并优化当前项目的运行性能。
+```
+
+Claude Code 会在首次使用项目级 MCP 时单独请求信任；PerfLens 不会代替用户批准。
+独立配置副本保存在 `{output / 'claude-mcp.json'}`。
+"""
+        if claude_plan is not None
+        else (
+            f"""## 3. Claude Code (需手动接入)
+
+本次没有修改 `.mcp.json`。请检查 `{output / 'claude-mcp.json'}` 后手动合并，
+项目 Skill 位于 `.claude/skills/{SKILL_NAME}`。
+"""
+            if claude_selected
+            else f"""## 3. Claude Code (未启用)
+
+当前项目没有安装 Claude Code Skill，也没有写入 `.mcp.json`，所以 Claude Code
+不会发现 PerfLens。需要时在一个尚未初始化的项目运行
+`perflens init --client claude-code`。可检查的配置模板保存在
+`{output / 'claude-mcp.json'}`。
+"""
+        )
+    )
+    codex_skill_section = (
+        f"""## 2. Codex Skill
+
+PerfLens Skill 位于项目的 `.agents/skills/{SKILL_NAME}`。可以对 Codex 说：
+
+```text
+使用 $perflens-performance-analysis 分析这个项目的性能 Profile，区分直接证据、候选原因和缺失证据。
+```
+"""
+        if codex_selected
+        else """## 2. Codex Skill (未启用)
+
+当前项目没有安装 Codex Skill，也没有写入 `.codex/config.toml`。
 """
     )
     return f"""# PerfLens 安装后的下一步
@@ -463,21 +972,16 @@ PID 并交给 Collector。用户不需要查找或输入 PID。
 
 {codex_section}
 
-## 2. Skill
+{codex_skill_section}
 
-PerfLens Skill 位于项目的 `.agents/skills/{SKILL_NAME}`。可以对 Codex 说：
-
-```text
-使用 $perflens-performance-analysis 分析这个项目的性能 Profile，区分直接证据、候选原因和缺失证据。
-```
-
-## 3. 当前采集检查
+{claude_section}
+## 4. 当前采集检查
 
 权限报告：`{output / 'collection-capabilities.json'}`
 
 综合状态：`{_collection_status_chinese(capabilities)}`。这只是权限诊断，不是成功采样证明。
 {collector_section}
-## 4. 一条命令检查当前状态
+## 5. 一条命令检查当前状态
 
 以后不需要重新记住部署排错命令，直接运行本次引导对应的只读检查：
 
@@ -489,17 +993,18 @@ PerfLens Skill 位于项目的 `.agents/skills/{SKILL_NAME}`。可以对 Codex �
 检查到另一次旧引导。该命令不会运行 perf、修改系统或写入 Collector spool。
 
 {project_section}
-## 6. 采集时长
+## 7. 采集时长
 
 实时采集不是固定 10 秒。自动计划默认 10 秒，用户可以在请求中调整，
 但 MCP 和 Collector 都会执行各自的时长上限；当前默认上限是 30 秒。
 `accept-collector` 使用内置测试负载完成部署验收，不需要输入 PID；默认 1 秒且最多 5 秒。
 
-## 7. 获取帮助
+## 8. 获取帮助
 
 ```bash
 perflens --help
 perflens doctor
+perflens init --help
 perflens setup --help
 ```
 """
@@ -553,6 +1058,9 @@ def _english_guide(
     admin_command: Path = Path("/opt/perflens/bin/perflens-admin"),
     collector_command: Path = _WHEEL_COLLECTOR_COMMAND,
     codex_plan: CodexConfigInstallPlan | None = None,
+    claude_plan: ClaudeConfigInstallPlan | None = None,
+    codex_selected: bool = True,
+    claude_selected: bool = False,
 ) -> str:
     status_command = _status_command(project, output)
     layout = (
@@ -575,23 +1083,43 @@ def _english_guide(
         "restart Codex and run `codex mcp list`. The standalone codex-mcp.toml remains "
         "available for review and migration."
         if codex_plan is not None
-        else "No project configuration was changed. Merge codex-mcp.toml manually, restart "
-        "Codex, and run `codex mcp list`."
+        else (
+            "No project configuration was changed. Merge codex-mcp.toml manually, restart "
+            "Codex, and run `codex mcp list`."
+            if codex_selected
+            else "Codex integration is not activated for this project."
+        )
+    )
+    claude = (
+        f"Claude Code project MCP configuration is {claude_plan.status} at "
+        f"`{claude_plan.path}` and its Skill is under `.claude/skills/{SKILL_NAME}`. "
+        "Restart Claude Code when the top-level skills directory is new, then approve the "
+        "project MCP server when prompted."
+        if claude_plan is not None
+        else (
+            "Claude Code Skill was installed but .mcp.json was not changed; merge "
+            "claude-mcp.json manually."
+            if claude_selected
+            else "Claude Code was not activated for this project. Run "
+            "`perflens init --client claude-code` in a new project to opt in."
+        )
     )
     return f"""# PerfLens next steps
 
 Project: `{project}`
 
 1. {codex}
-2. Use the project Skill at `.agents/skills/{SKILL_NAME}` for evidence-first analysis.
-3. Review `{output / 'collection-capabilities.json'}`; the aggregate status is
+2. {claude}
+3. Use the selected project Skill for evidence-first analysis.
+4. Review `{output / 'collection-capabilities.json'}`; the aggregate status is
    `{_collection_status(capabilities)[0]}` and is not proof of successful sampling.
-4. {collector}
-5. Project workload execution is {'enabled' if automatic_collection else 'disabled'} in the
+5. {collector}
+6. Project workload execution is {'enabled' if automatic_collection else 'disabled'} in the
    generated MCP configuration. It always runs as the ordinary MCP user and still requires
    per-call authorization.
-6. Recheck this exact onboarding bundle with `{status_command}`. Keep
+7. Recheck this exact onboarding bundle with `{status_command}`. Keep
    `--setup-directory` when a custom output directory was used; the command is read-only.
 
-Run `perflens --help`, `perflens doctor`, or `perflens setup --help` for command help.
+Run `perflens --help`, `perflens doctor`, `perflens init --help`, or
+`perflens setup --help` for command help.
 """

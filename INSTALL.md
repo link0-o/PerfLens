@@ -41,16 +41,29 @@ Verify it and run the project-scoped onboarding command:
 
 ```bash
 perflens --version
-perflens setup --project /absolute/path/to/project
+cd /absolute/path/to/project
+perflens init
 ```
 
-`setup` installs or recognizes the bundled Skill, safely creates or updates a
-marked PerfLens block in the project's `.codex/config.toml`, and creates
-`perflens-setup/` with a standalone MCP snippet, capability report, bilingual
-next steps, and versioned setup artifact. Other project settings are preserved;
-a conflicting user-managed PerfLens table is never overwritten. Use
-`--skip-codex-config` for generation only. Setup never changes user-level Codex
+`init` activates only this project for Codex and Claude Code. It installs the
+selected project Skills, creates or updates the marked PerfLens block in
+`.codex/config.toml`, safely merges the Claude Code `.mcp.json`, and creates
+`perflens-setup/` with standalone MCP configurations, a capability report,
+bilingual next steps, and a versioned setup artifact. Other project settings
+are preserved; conflicting user-managed PerfLens entries are never overwritten.
+Use `--client codex`, `--client claude-code`, or `--read-only` to narrow the
+activation. Projects that have not run `init` do not discover PerfLens. The
+same setup directory is never overwritten implicitly. After a package upgrade
+or when changing collection gates, use `perflens init --update`; it requires a
+matching ownership artifact and refuses modified Skills or unverified MCP
+entries. The managed setup directory is rebuilt, refuses unexpected user files,
+and preserves existing staged Collector assets unless regeneration is explicit.
+Detach a client before updating to a narrower client selection. The
+advanced `setup` command remains available for generation-only and Collector
+staging workflows. Setup never changes user-level Codex
 configuration, invokes sudo, changes sysctl/capabilities, or starts the Collector.
+When using a custom onboarding directory, pass the same `--setup-directory` to
+init, update, and detach.
 Its completion summary and generated guides include an exact `perflens status`
 command bound to that output directory. Preserve `--setup-directory` whenever
 `--output-directory` was used.
@@ -136,10 +149,14 @@ perflens-admin upgrade --dry-run` and `sudo perflens-admin upgrade`. Policy and
 spool evidence are preserved; rerun ordinary-user `accept-collector` afterward.
 
 Before uninstalling, run `perflens detach --project <project> --dry-run` and then
-repeat without `--dry-run` for every configured project. Detach removes only a
-structurally verified PerfLens-managed block from project `.codex/config.toml`;
-it preserves unrelated settings and refuses unmarked or mixed-content blocks.
-It never deletes the Skill, onboarding directories, results, or Collector data.
+repeat without `--dry-run` for every configured project. Detach removes verified
+Codex and Claude Code MCP entries plus unchanged managed project Skills by
+default. It preserves unrelated settings, onboarding directories, results, and
+Collector data, and refuses user-modified or unverified content. Use
+`--client codex|claude-code` to select one client, `--keep-skills` to retain
+Skills, and `--setup-directory` for a non-default onboarding directory. A kept
+Skill remains discoverable, so `--keep-skills` is not complete deactivation and
+must not be used before narrowing a later `init --update` client selection.
 After all projects are detached, uninstall a pipx installation with `pipx
 uninstall perflens`. Review preserved project files separately, and use the
 administrator `undeploy` workflow for a system Collector.

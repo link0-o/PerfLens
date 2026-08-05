@@ -16,13 +16,14 @@ Runtime status schema `1.0` may include optional Collector health, service
 identity, policy, allowed-mode, and spool fields. Readers preserve defaults for
 older status artifacts that predate the authenticated health handshake.
 
-Setup schema `1.0` may include the optional project Codex configuration path
-and install status. Readers treat older setup artifacts as generation-only
-onboarding that skipped project configuration installation.
+Setup schema `1.0` may include optional Codex/Claude project configuration
+paths, install states, and project Skill fingerprints. Readers treat older
+setup artifacts as generation-only onboarding with no recorded Skill ownership.
 
 Project detach results use the independent `ProjectDetachmentArtifact` schema
-`1.0`. It records preview/removal state, the exact configuration path, and known
-preserved project paths; it never claims those paths were deleted or archived.
+`1.0`. It may record selected clients, Skill removal policy, Codex/Claude and
+Skill states, exact removed paths, and known preserved paths. Older payloads
+default to the original Codex-only, Skill-preserving behavior.
 
 Collector TOML policies use an independent integer `policy_version`. Generated
 policies currently write version `1`; a missing field is read as legacy version

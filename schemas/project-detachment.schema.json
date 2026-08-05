@@ -1,6 +1,53 @@
 {
   "additionalProperties": false,
   "properties": {
+    "claude_config_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Claude Config Path"
+    },
+    "claude_config_status": {
+      "default": "skipped",
+      "enum": [
+        "not_found",
+        "planned",
+        "removed",
+        "skipped"
+      ],
+      "title": "Claude Config Status",
+      "type": "string"
+    },
+    "claude_skill_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Claude Skill Path"
+    },
+    "claude_skill_status": {
+      "default": "skipped",
+      "enum": [
+        "not_found",
+        "planned",
+        "removed",
+        "preserved",
+        "skipped"
+      ],
+      "title": "Claude Skill Status",
+      "type": "string"
+    },
     "codex_config_path": {
       "title": "Codex Config Path",
       "type": "string"
@@ -9,9 +56,34 @@
       "enum": [
         "not_found",
         "planned",
-        "removed"
+        "removed",
+        "skipped"
       ],
       "title": "Codex Config Status",
+      "type": "string"
+    },
+    "codex_skill_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Codex Skill Path"
+    },
+    "codex_skill_status": {
+      "default": "skipped",
+      "enum": [
+        "not_found",
+        "planned",
+        "removed",
+        "preserved",
+        "skipped"
+      ],
+      "title": "Codex Skill Status",
       "type": "string"
     },
     "detachment_id": {
@@ -47,11 +119,50 @@
       "title": "Project Root",
       "type": "string"
     },
+    "remove_skills": {
+      "default": false,
+      "title": "Remove Skills",
+      "type": "boolean"
+    },
+    "removed_paths": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Removed Paths",
+      "type": "array"
+    },
     "schema_version": {
       "const": "1.0",
       "default": "1.0",
       "title": "Schema Version",
       "type": "string"
+    },
+    "selected_clients": {
+      "default": [
+        "codex"
+      ],
+      "items": {
+        "enum": [
+          "codex",
+          "claude-code"
+        ],
+        "type": "string"
+      },
+      "title": "Selected Clients",
+      "type": "array"
+    },
+    "setup_directory": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Setup Directory"
     }
   },
   "required": [

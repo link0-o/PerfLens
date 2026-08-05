@@ -17,7 +17,8 @@ PerfLens 为 Debian 13 `amd64` 提供两个职责分离的原生安装包：
 
 ```bash
 sudo apt install ./perflens_0.1.1-1_amd64.deb
-perflens setup --project /绝对路径/你的项目
+cd /绝对路径/你的项目
+perflens init
 ```
 
 需要自动采集时，同时安装两个包：
@@ -96,9 +97,13 @@ perflens accept-collector --authorize-host-acceptance
 不变，失败时尝试恢复旧 unit。最后一条由普通用户运行，确认新版本在本机仍能完成真实
 短时采集。不要用 `undeploy` 加 `deploy` 代替日常升级，也不要重新提交项目目录中的旧
 策略覆盖 `/etc/perflens/collector.toml`。
+每个仍需接入的项目可在检查新版本后运行一次 `perflens init --update`，安全刷新项目级
+MCP 参数、引导和未修改 Skill；用户修改过或无法证明所有权的内容不会被覆盖。
 
 卸载软件包前，普通用户先对每个接入项目执行 `perflens detach --project <项目>
---dry-run`，确认后去掉 `--dry-run`。然后让管理员入口验证并移除 PerfLens 托管的 unit：
+--dry-run`，确认它只计划移除经过验证的 Codex/Claude MCP 和未修改 Skill 后去掉
+`--dry-run`。引导目录、结果和系统 Collector 数据仍保留。然后让管理员入口验证并移除
+PerfLens 托管的 unit：
 
 ```bash
 sudo perflens-admin undeploy --dry-run

@@ -6,6 +6,23 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Added
 
+- `perflens init` as the one-command, project-only opt-in. It activates Codex
+  and/or Claude Code without installing a globally discoverable Skill;
+  uninitialized projects do not expose PerfLens integration metadata.
+- Claude Code support through `.claude/skills/perflens-performance-analysis`
+  and safe project `.mcp.json` merging. Existing MCP servers are preserved,
+  conflicting user-managed `perflens` entries are refused, and project trust
+  remains a Claude Code decision.
+- `perflens claude-config` and client selection for `install-skill` and `init`,
+  with bilingual onboarding documentation and package smoke coverage.
+- Safe `perflens init --update` lifecycle refresh. Existing onboarding must
+  prove project ownership; Claude entries must match their recorded sidecar;
+  project Skills use bounded SHA-256 fingerprints and user modifications are
+  preserved rather than overwritten.
+- Complete Codex/Claude project detachment with client selection, dry-run,
+  optional `--keep-skills`, exact Claude ownership checks, unchanged-Skill
+  verification, and preservation of onboarding, results, and Collector data.
+
 - Crash-durable artifact publication through pinned directory descriptors:
   private temporary files and their containing directory are both fsynced,
   recursively created parent entries are synced, directory replacement is
@@ -27,9 +44,6 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   successful collection, request rejection, shutdown, and startup failure.
   Stable error/request IDs support journal correlation without logging target
   PIDs, commands, profiles, tool stderr, local paths, or tracebacks.
-- Chinese-first `perflens detach` project lifecycle cleanup with dry-run,
-  versioned JSON evidence, exact managed-block ownership checks, and explicit
-  preservation of Skill, onboarding, results, and Collector data.
 - Safe project-level Codex MCP configuration installation during `perflens
   setup`. PerfLens creates or updates only its marked block, preserves unrelated
   settings, refuses conflicting user-managed tables and unsafe paths, and

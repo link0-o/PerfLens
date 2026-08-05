@@ -14,11 +14,12 @@ Schema `1.0` 没有前置版本。读取器会拒绝不支持的 Major 版本。
 运行状态 Schema `1.0` 可以包含可选的 Collector 健康状态、服务身份、策略版本、允许
 模式和 spool 字段。读取握手功能加入前生成的旧状态产物时，这些字段使用兼容默认值。
 
-引导产物 Schema `1.0` 可以包含可选的项目 Codex 配置路径和安装状态。读取自动接入
-`.codex/config.toml` 之前生成的旧引导产物时，默认按“已跳过项目配置”处理。
+引导产物 Schema `1.0` 可以包含可选的 Codex/Claude 项目配置路径、安装状态和项目
+Skill 内容指纹。旧产物缺少指纹时按“没有记录 Skill 所有权”兼容读取。
 
-项目接入移除结果使用独立的 `ProjectDetachmentArtifact` Schema `1.0`，记录预演/移除
-状态、实际配置路径和明确保留的已知项目路径；它不代表这些保留路径已被删除或归档。
+项目接入移除结果使用独立的 `ProjectDetachmentArtifact` Schema `1.0`，可以记录所选
+客户端、Skill 移除策略、Codex/Claude 配置与 Skill 状态、实际移除路径和明确保留路径。
+旧产物默认按原有“只处理 Codex、保留 Skill”语义兼容读取。
 
 Collector TOML 策略使用独立的整数 `policy_version`。当前生成的策略写入版本 `1`；为了
 兼容旧策略，缺失该字段时按版本 1 读取，而不支持的版本会在部署或 Collector 启动前

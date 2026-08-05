@@ -19,7 +19,8 @@ For offline profile analysis, install only the main package:
 
 ```bash
 sudo apt install ./perflens_0.1.1-1_amd64.deb
-perflens setup --project /absolute/path/to/project
+cd /absolute/path/to/project
+perflens init
 ```
 
 For automatic collection, install both packages and generate a reviewed policy:
@@ -70,12 +71,16 @@ To upgrade, install both matching new packages, run `sudo perflens-admin upgrade
 and spool, updates only a verified managed unit, restarts the new program, and
 attempts to restore the old unit if activation fails. Repeat ordinary-user
 `perflens accept-collector --authorize-host-acceptance` afterward.
+For each still-enabled project, run `perflens init --update` after review to
+refresh owned project MCP settings, onboarding, and unchanged Skills. Modified
+or unverified project content is preserved and reported instead of overwritten.
 
 Before package removal, preview and run `perflens detach --project <project>` for
 every configured project, then use `sudo perflens-admin undeploy`. These remove
-only a structurally owned project MCP block and a trusted managed unit. Policy,
-collected artifacts, project Skill files, onboarding files, and the system
-identity are preserved by default. See the Chinese guide above for the full flow.
+only verified Codex/Claude MCP entries, unchanged managed project Skills, and a
+trusted managed unit. Policy, collected artifacts, onboarding files, and the
+system identity are preserved. Use `--keep-skills` when Skill retention is
+intentional. See the Chinese guide above for the full flow.
 
 The main package vendors dependencies selected and hashed by `uv.lock`, so install
 does not access the network. Native Python extensions make it architecture and ABI

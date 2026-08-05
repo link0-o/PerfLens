@@ -13,7 +13,8 @@
 | Rules | Safe YAML; packaged generic, Linux, and C++ candidate rules |
 | Reports | JSON evidence bundle and Markdown |
 | MCP | Official Python SDK 2.x, local stdio transport |
-| Skill | Repository skill under `.agents/skills`, validated by `skill-creator` |
+| Skill | Project Skill for Codex `.agents/skills` and Claude Code `.claude/skills`, validated by `skill-creator` |
+| AI client config | Codex project `.codex/config.toml`; Claude Code project `.mcp.json` |
 | Active collection | perf record/stat/sched/lock and sched-switch off-CPU evidence; default off and permission dependent |
 | Automatic collection | Ordinary-user project launcher plus PID-only Linux Collector Broker using `SO_PEERCRED`; systemd template provided |
 | Collector policy | Version 1; missing version is accepted as legacy version 1, unsupported versions are rejected |

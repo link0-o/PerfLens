@@ -1,7 +1,7 @@
 # PerfLens
 
-> Evidence-driven Linux performance analysis with a CLI, MCP Server, and Codex Skill.
-> 基于证据的 Linux 性能分析工具，集成 CLI、MCP Server 与 Codex Skill。
+> Evidence-driven Linux performance analysis with a CLI, MCP Server, and project Skills for Codex and Claude Code.
+> 基于证据的 Linux 性能分析工具，支持 Codex 与 Claude Code。
 
 [![CI](https://github.com/link0-o/PerfLens/actions/workflows/ci.yml/badge.svg)](https://github.com/link0-o/PerfLens/actions/workflows/ci.yml)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue)](pyproject.toml)
@@ -50,24 +50,37 @@ pipx install ./perflens-0.1.1-py3-none-any.whl
 uv tool install ./perflens-0.1.1-py3-none-any.whl
 ```
 
-Then run project-scoped onboarding:
+Then opt one project in. Other projects do not see the Skill or MCP server:
 
 ```bash
-perflens setup \
-  --project /absolute/path/to/project \
-  --prepare-collector \
-  --automatic-collection
+cd /absolute/path/to/project
+perflens init
 ```
+
+This activates Codex and Claude Code by default. Select only one with
+`--client codex` or `--client claude-code`, or use `--read-only` when the
+project should analyze existing evidence without automatic collection.
+Rerun with `perflens init --update` when upgrading managed integration or
+changing collection gates. Update mode requires a matching `setup.json`, updates
+only the previously generated Claude entry and marked Codex block, and refuses
+to overwrite a modified Skill or unverified client configuration. The managed
+`perflens-setup` directory is rebuilt and must not contain user files; unexpected
+entries cause refusal, while staged Collector assets are preserved unless
+regeneration is explicitly requested. Detach a no-longer-needed client before
+updating with a narrower `--client` selection.
 
 Follow the generated `NEXT_STEPS.md`. See [Installation and first use](INSTALL.md) for the complete beginner flow.
 Onboarding safely selects the native `/usr/bin` or wheel `/opt/perflens` layout,
 so copy the exact generated deployment command instead of guessing paths.
-It also installs a marked, project-scoped MCP block in `.codex/config.toml`
-while preserving other settings; restart Codex instead of manually copying the
-long snippet. Use `--skip-codex-config` for generation-only workflows.
+It installs only project-scoped integration: Codex uses `.codex/config.toml`
+and `.agents/skills`, while Claude Code uses `.mcp.json` and `.claude/skills`.
+Existing unrelated configuration is preserved; user-level global configuration
+is not modified.
 Before package uninstall, preview `perflens detach --project <project>
---dry-run`, then repeat without `--dry-run` to remove only PerfLens's managed
-MCP block while preserving Skill, onboarding, and analysis evidence.
+--dry-run`, then repeat without `--dry-run`. By default it removes verified
+Codex/Claude MCP entries and unchanged project Skills while preserving
+onboarding, analysis evidence, and system Collector data. Use `--keep-skills`
+to detach MCP only or `--client` to select one client.
 
 Debian 13 users can instead install the native, offline `.deb` packages. See
 [Debian packages](docs/debian-packages.md) for the split main/Collector flow.
@@ -306,11 +319,12 @@ real Collector verification, upgrades, and uninstall behavior.
 
 ## Use MCP with the Skill
 
-An installed release contains a copy of the Skill. Install it into the project
-that will use PerfLens:
+The normal path is `perflens init`, which activates only the selected project.
+For separate, advanced steps, install the bundled Skill for a specific client:
 
 ```bash
 perflens install-skill --project /absolute/path/to/workspace
+perflens install-skill --client claude-code --project /absolute/path/to/workspace
 ```
 
 The command creates
@@ -319,6 +333,7 @@ existing Skill. To print a project-scoped MCP configuration:
 
 ```bash
 perflens codex-config --workspace /absolute/path/to/workspace
+perflens claude-config --workspace /absolute/path/to/workspace
 ```
 
 Add `--allow-process-execution` only when `perf.data` conversion or source
@@ -341,6 +356,11 @@ Restart Codex, then ask:
 ```text
 $perflens-performance-analysis analyze ./profile.folded and report direct evidence, candidates, and missing evidence.
 ```
+
+For Claude Code, `perflens init` installs the project Skill under
+`.claude/skills/perflens-performance-analysis` and safely merges `perflens`
+into the project `.mcp.json`. Claude Code asks the user to trust a project MCP
+server before first use. Invoke it with `/perflens-performance-analysis`.
 
 See [MCP server and Skill setup](docs/mcp-and-skill.md) for permissions,
 project-scoped configuration, process-execution opt-in, and the full tool flow.

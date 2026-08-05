@@ -9,7 +9,9 @@ import pytest
 
 from perflens.contracts.artifacts import SetupArtifact
 from perflens.distribution import onboarding
+from perflens.distribution.claude import render_claude_config
 from perflens.distribution.onboarding import run_project_setup
+from perflens.distribution.skill import install_project_skill
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 
@@ -118,6 +120,254 @@ def test_setup_can_generate_without_installing_codex_project_config(tmp_path: Pa
     assert "--skip-codex-config" in guide
 
 
+def test_setup_can_activate_claude_code_without_exposing_codex_skill(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    artifact = run_project_setup(
+        project,
+        install_skill=False,
+        install_codex_config=False,
+        install_claude_skill=True,
+        install_claude_config=True,
+        codex_enabled=False,
+        claude_enabled=True,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+
+    assert artifact.skill_status == "skipped"
+    assert artifact.codex_project_config_status == "skipped"
+    assert artifact.claude_skill_status == "installed"
+    assert artifact.claude_project_config_status == "installed"
+    assert artifact.claude_project_config_managed is True
+    assert not (project / ".agents").exists()
+    assert not (project / ".codex").exists()
+    assert (project / ".claude/skills/perflens-performance-analysis/SKILL.md").is_file()
+    assert json.loads((project / ".mcp.json").read_text(encoding="utf-8"))[
+        "mcpServers"
+    ]["perflens"]
+    guide = (project / "perflens-setup/下一步.zh-CN.md").read_text(encoding="utf-8")
+    assert "Codex Skill (未启用)" in guide
+    assert "Claude Code (已启用)" in guide
+
+
+def test_setup_update_replaces_owned_bundle_and_both_client_configs(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    first = run_project_setup(
+        project,
+        install_claude_skill=True,
+        install_claude_config=True,
+        codex_enabled=True,
+        claude_enabled=True,
+        automatic_collection=True,
+        allow_process_execution=True,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+    old_setup = (project / "perflens-setup/setup.json").read_text(encoding="utf-8")
+    assert first.skill_fingerprint is not None
+    assert first.claude_skill_fingerprint is not None
+    assert "--allow-automatic-collection" in (project / ".mcp.json").read_text(
+        encoding="utf-8"
+    )
+
+    updated = run_project_setup(
+        project,
+        install_claude_skill=True,
+        install_claude_config=True,
+        codex_enabled=True,
+        claude_enabled=True,
+        automatic_collection=False,
+        allow_process_execution=False,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+        update_existing=True,
+    )
+
+    assert updated.automatic_collection_enabled is False
+    assert updated.codex_project_config_status == "updated"
+    assert updated.claude_project_config_status == "updated"
+    assert "--allow-automatic-collection" not in (project / ".mcp.json").read_text(
+        encoding="utf-8"
+    )
+    assert "--allow-automatic-collection" not in (
+        project / ".codex/config.toml"
+    ).read_text(encoding="utf-8")
+    assert (project / "perflens-setup/setup.json").read_text(encoding="utf-8") != old_setup
+    assert not (project / ".perflens-setup.perflens-backup").exists()
+
+
+def test_setup_update_refuses_modified_skill_and_preserves_previous_setup(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    run_project_setup(
+        project,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+    setup_path = project / "perflens-setup/setup.json"
+    before = setup_path.read_text(encoding="utf-8")
+    skill = project / ".agents/skills/perflens-performance-analysis/SKILL.md"
+    skill.write_text(skill.read_text(encoding="utf-8") + "\nuser change\n", encoding="utf-8")
+
+    with pytest.raises(PerfLensError) as modified:
+        run_project_setup(
+            project,
+            mcp_command=Path(sys.executable),
+            perf_path=Path("/bin/true"),
+            update_existing=True,
+        )
+
+    assert modified.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert setup_path.read_text(encoding="utf-8") == before
+    assert "user change" in skill.read_text(encoding="utf-8")
+
+
+def test_setup_update_requires_valid_ownership_and_unused_backup(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    run_project_setup(
+        project,
+        install_skill=False,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+    backup = project / ".perflens-setup.perflens-backup"
+    backup.mkdir()
+    with pytest.raises(PerfLensError) as occupied_backup:
+        run_project_setup(
+            project,
+            install_skill=False,
+            mcp_command=Path(sys.executable),
+            perf_path=Path("/bin/true"),
+            update_existing=True,
+        )
+    assert occupied_backup.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    backup.rmdir()
+
+    setup_path = project / "perflens-setup/setup.json"
+    payload = json.loads(setup_path.read_text(encoding="utf-8"))
+    payload["project_root"] = str(tmp_path)
+    setup_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(PerfLensError) as wrong_owner:
+        run_project_setup(
+            project,
+            install_skill=False,
+            mcp_command=Path(sys.executable),
+            perf_path=Path("/bin/true"),
+            update_existing=True,
+        )
+    assert wrong_owner.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_setup_update_refuses_unowned_existing_output(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    output = project / "perflens-setup"
+    output.mkdir()
+    (output / "user-file").write_text("keep", encoding="utf-8")
+
+    with pytest.raises(PerfLensError) as unowned:
+        run_project_setup(
+            project,
+            install_skill=False,
+            mcp_command=Path(sys.executable),
+            perf_path=Path("/bin/true"),
+            update_existing=True,
+        )
+
+    assert unowned.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert (output / "user-file").read_text(encoding="utf-8") == "keep"
+
+
+def test_setup_does_not_claim_modified_preexisting_skill(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    skill = install_project_skill(project)
+    skill_file = skill / "SKILL.md"
+    skill_file.write_text(
+        skill_file.read_text(encoding="utf-8") + "\nuser-owned change\n",
+        encoding="utf-8",
+    )
+
+    artifact = run_project_setup(
+        project,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+
+    assert artifact.skill_status == "existing"
+    assert artifact.skill_fingerprint is None
+    assert "user-owned change" in skill_file.read_text(encoding="utf-8")
+
+
+def test_setup_does_not_claim_identical_preexisting_claude_entry(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".mcp.json").write_text(
+        render_claude_config(project, mcp_command=Path(sys.executable)),
+        encoding="utf-8",
+    )
+
+    artifact = run_project_setup(
+        project,
+        install_skill=False,
+        install_codex_config=False,
+        install_claude_skill=False,
+        install_claude_config=True,
+        codex_enabled=False,
+        claude_enabled=True,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+
+    assert artifact.claude_project_config_status == "existing"
+    assert artifact.claude_project_config_managed is False
+
+
+def test_setup_update_refuses_extra_files_and_preserves_staged_collector_assets(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    run_project_setup(
+        project,
+        prepare_collector=True,
+        collector_command=Path("/opt/perflens/bin/perflens-collector"),
+        collector_uid=os.geteuid(),
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+    policy = project / "perflens-setup/collector-assets/collector.toml"
+    policy.write_text(policy.read_text(encoding="utf-8") + "\n# reviewed\n", encoding="utf-8")
+    extra = project / "perflens-setup/user-notes.txt"
+    extra.write_text("keep", encoding="utf-8")
+
+    with pytest.raises(PerfLensError) as unknown:
+        run_project_setup(
+            project,
+            mcp_command=Path(sys.executable),
+            perf_path=Path("/bin/true"),
+            update_existing=True,
+        )
+    assert unknown.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert extra.read_text(encoding="utf-8") == "keep"
+
+    extra.unlink()
+    updated = run_project_setup(
+        project,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+        update_existing=True,
+    )
+    assert updated.collector_assets_path == str(project / "perflens-setup/collector-assets")
+    assert "# reviewed" in policy.read_text(encoding="utf-8")
+
+
 def test_setup_artifact_accepts_payload_before_project_config_fields(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -131,11 +381,24 @@ def test_setup_artifact_accepts_payload_before_project_config_fields(tmp_path: P
     payload = artifact.model_dump()
     payload.pop("codex_project_config_path")
     payload.pop("codex_project_config_status")
+    payload.pop("skill_fingerprint")
+    payload.pop("claude_skill_status")
+    payload.pop("claude_skill_path")
+    payload.pop("claude_skill_fingerprint")
+    payload.pop("claude_mcp_config_path")
+    payload.pop("claude_project_config_path")
+    payload.pop("claude_project_config_status")
+    payload.pop("claude_project_config_managed")
 
     restored = SetupArtifact.model_validate(payload)
 
     assert restored.codex_project_config_path is None
     assert restored.codex_project_config_status == "skipped"
+    assert restored.skill_fingerprint is None
+    assert restored.claude_skill_status == "skipped"
+    assert restored.claude_project_config_status == "skipped"
+    assert restored.claude_project_config_managed is False
+    assert restored.claude_skill_fingerprint is None
 
 
 def test_setup_explains_missing_native_collector_package(

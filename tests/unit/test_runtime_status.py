@@ -98,6 +98,63 @@ def test_runtime_status_tracks_generated_automatic_setup(
     assert artifact.automatic_collection_status == "collector_unavailable"
 
 
+def test_runtime_status_accepts_host_level_collector_without_project_assets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mcp = tmp_path / "perflens-mcp"
+    mcp.write_text(f"#!{sys.executable}\nraise SystemExit(0)\n", encoding="utf-8")
+    mcp.chmod(0o500)
+    run_project_setup(
+        tmp_path,
+        mcp_command=mcp,
+        perf_path=Path("/bin/true"),
+        automatic_collection=True,
+    )
+    monkeypatch.setattr(
+        "perflens.distribution.status._collector_group_status",
+        lambda: "member",
+    )
+
+    artifact = inspect_runtime_status(
+        tmp_path,
+        collector_socket=tmp_path / "missing.sock",
+        perf_path=Path("/bin/true"),
+    )
+
+    assert artifact.collector_assets_status == "not_requested"
+    assert artifact.automatic_collection_status == "collector_unavailable"
+    assert "collector_assets_missing" not in artifact.issues
+
+
+def test_runtime_status_accepts_claude_only_project_activation(tmp_path: Path) -> None:
+    mcp = tmp_path / "perflens-mcp"
+    mcp.write_text(f"#!{sys.executable}\nraise SystemExit(0)\n", encoding="utf-8")
+    mcp.chmod(0o500)
+    run_project_setup(
+        tmp_path,
+        install_skill=False,
+        install_codex_config=False,
+        install_claude_skill=True,
+        install_claude_config=True,
+        codex_enabled=False,
+        claude_enabled=True,
+        mcp_command=mcp,
+        perf_path=Path("/bin/true"),
+    )
+
+    artifact = inspect_runtime_status(
+        tmp_path,
+        collector_socket=tmp_path / "missing.sock",
+        perf_path=Path("/bin/true"),
+    )
+
+    assert artifact.setup_status == "ready"
+    assert artifact.skill_status == "ready"
+    assert artifact.mcp_config_status == "ready"
+    assert artifact.automatic_collection_status == "not_configured"
+
+
 def test_runtime_status_requires_active_project_mcp_configuration(tmp_path: Path) -> None:
     _prepare_automatic_setup(tmp_path)
     config = tmp_path / ".codex/config.toml"

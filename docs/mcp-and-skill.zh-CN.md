@@ -7,23 +7,29 @@
 PerfLens 由三个可以分开使用的层组成：
 
 1. **Core + CLI**：确定性地解析 Profile、计算热点和调用路径、定位源码、生成分析产物。
-2. **MCP Server**：把上述能力作为本地 stdio 工具提供给 Codex 等 MCP 客户端。
+2. **MCP Server**：把上述能力作为本地 stdio 工具提供给 Codex、Claude Code 等客户端。
 3. **Performance Analysis Skill**：告诉 Agent 应该按什么顺序使用工具，以及哪些结论有证据、哪些只能算候选。
 
 Core 和 MCP Server 都不会调用 LLM API。Skill 只是工作流和安全规则。因此 PerfLens 可以说是“带 Skill 的 MCP 工具项目”，但 MCP 与 Skill 是两个独立组成部分。
 
 ## 启动和注册 MCP
 
-如果使用正式 wheel 安装，推荐先运行一次中文引导：
+如果使用正式安装包，推荐只在确实需要 PerfLens 的项目中运行一次：
 
 ```bash
-perflens setup --project /absolute/path/to/workspace
+cd /absolute/path/to/workspace
+perflens init
 ```
 
-它会安装项目 Skill、安全创建或更新项目 `.codex/config.toml` 中带标记的 PerfLens
-配置块，并在 `perflens-setup/` 中生成中文下一步说明、采集能力诊断和独立备份片段
-`codex-mcp.toml`；其他 Codex 设置会保留，也不会申请管理员权限。冲突的用户手写
-PerfLens 表会被拒绝覆盖；仅生成文件时使用 `--skip-codex-config`。
+它默认同时激活 Codex 和 Claude Code。Codex 使用项目 `.agents/skills` 和
+`.codex/config.toml`；Claude Code 使用项目 `.claude/skills` 和 `.mcp.json`。
+未运行 `init` 的其他项目没有这些入口，因此客户端不会认为 PerfLens 在那里可用。
+使用 `--client codex`、`--client claude-code` 或 `--read-only` 可以缩小范围。
+冲突的用户手写配置会被拒绝覆盖，也不会申请管理员权限。
+升级接入或调整权限开关时使用 `perflens init --update`。普通重复初始化不会覆盖已有
+引导目录；更新模式也只更新所有权记录匹配的 MCP 配置和未修改 Skill。要停用已有客户端，
+先执行对应客户端的 `detach`，再用新的客户端范围更新。`perflens-setup` 是托管生成目录；
+额外用户文件会阻止更新，已有 Collector 暂存资产在未要求重新生成时保留。
 完整的下载、安装和接入步骤见[《中文安装指南》](../INSTALL.zh-CN.md)。
 
 下面两条命令适合需要分别控制步骤的用户：
@@ -31,10 +37,12 @@ PerfLens 表会被拒绝覆盖；仅生成文件时使用 `--skip-codex-config`�
 ```bash
 perflens install-skill --project /absolute/path/to/workspace
 perflens codex-config --workspace /absolute/path/to/workspace
+perflens install-skill --client claude-code --project /absolute/path/to/workspace
+perflens claude-config --workspace /absolute/path/to/workspace
 ```
 
 第一条命令不会覆盖已有 Skill；第二条命令只把 TOML 输出到终端供你检查，不会自动修改
-全局或项目配置。日常首次接入优先使用 `setup`，不需要手工复制。需要直接分析
+全局或项目配置。日常首次接入优先使用 `init`，不需要手工复制。需要直接分析
 `perf.data` 时，可以在 `codex-config` 后加 `--allow-process-execution`。
 
 如果从源码仓库运行，则在 PerfLens 仓库根目录执行：
@@ -83,6 +91,37 @@ tool_timeout_sec = 300
 
 所有路径都建议写绝对路径。可以重复指定多个 `--allowed-root`，但每个目录必须已经存在。
 
+## 连接 Claude Code
+
+`perflens init` 会把同一份 Agent Skill 安装到
+`.claude/skills/perflens-performance-analysis`，并把下面这种标准 stdio 服务安全合并到
+项目 `.mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "perflens": {
+      "type": "stdio",
+      "command": "/usr/bin/perflens-mcp",
+      "args": ["--allowed-root", "/绝对路径/项目", "--allow-writes"],
+      "env": {}
+    }
+  }
+}
+```
+
+PerfLens 保留其他 `mcpServers`，但拒绝覆盖名称相同且内容不同的用户配置。Claude Code
+首次使用项目级 MCP 时会要求用户信任。首次创建顶层 `.claude/skills` 时如果 Claude Code
+已经运行，需要重启一次。显式调用方式为：
+
+```text
+使用 /perflens-performance-analysis 分析并优化当前项目。
+```
+
+对应机制见 Claude Code 官方的
+[Skill 文档](https://code.claude.com/docs/en/slash-commands)和
+[MCP 项目级配置文档](https://code.claude.com/docs/en/mcp)。
+
 ## 分析 perf.data 时的配置
 
 `perf.data` 是二进制格式，PerfLens 不直接解析它，而是安全地调用系统 `perf script` 转换。MCP 需要额外的进程执行权限：
@@ -104,6 +143,7 @@ Skill 位于：
 
 ```text
 .agents/skills/perflens-performance-analysis
+.claude/skills/perflens-performance-analysis
 ```
 
 在 Codex 中可以显式调用：
@@ -214,7 +254,7 @@ PerfLens 不会请求 sudo，不会修改 `perf_event_paranoid`、capability 或
 
 遇到权限、符号或兼容性问题时，请看[中文故障排查](troubleshooting.zh-CN.md)。
 
-## 移除项目 MCP 接入
+## 解除项目接入
 
 卸载 PerfLens 前，对每个接入过的项目先预演再移除：
 
@@ -223,5 +263,9 @@ perflens detach --project /绝对路径/项目 --dry-run
 perflens detach --project /绝对路径/项目
 ```
 
-它只删除带完整托管标记、且内部只包含 `mcp_servers.perflens` 的配置块。其他项目 Codex
-配置、Skill、引导文件和分析产物均保留；用户手写或混入其他表的配置拒绝自动删除。
+默认同时处理 Codex 和 Claude Code，并删除经过验证的 MCP 条目和未修改托管 Skill。
+Codex 只删除带完整托管标记且只包含 `mcp_servers.perflens` 的块；Claude 只删除与引导目录
+`claude-mcp.json` 完全一致的 `perflens` 条目。引导文件、分析产物和 Collector 数据保留；
+用户修改或无法验证所有权的内容拒绝自动删除。使用 `--client codex|claude-code` 只处理
+一个客户端，使用 `--keep-skills` 保留 Skill，自定义引导目录使用 `--setup-directory`。
+保留的 Skill 仍可被客户端发现，所以 `--keep-skills` 不是彻底停用。

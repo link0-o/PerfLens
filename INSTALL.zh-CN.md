@@ -84,28 +84,58 @@ perflens --version
 perflens --help
 ```
 
-## 第二步：运行安装后引导
+## 第二步：只在需要的项目中激活
 
-选择需要使用 PerfLens 的项目目录：
+进入需要使用 PerfLens 的项目目录，首次运行：
 
 ```bash
-perflens setup --project /绝对路径/你的项目
+cd /绝对路径/你的项目
+perflens init
 ```
+
+默认同时激活 Codex 和 Claude Code，并启用有界项目运行与自动采集。也可以明确选择：
+
+```bash
+perflens init --client codex
+perflens init --client claude-code
+perflens init --read-only
+```
+
+已有项目升级 PerfLens 或需要调整自动采集开关时运行：
+
+```bash
+perflens init --update
+```
+
+不带 `--update` 的重复初始化会拒绝覆盖 `perflens-setup`。更新模式会验证原
+`setup.json`、Claude MCP 记录和 Skill 内容指纹，只更新 PerfLens 确认拥有且未被用户
+修改的客户端内容。`perflens-setup` 本身是可重建托管目录，不应存放用户文件；存在额外
+文件时更新会拒绝。没有显式要求重新生成时，已有 `collector-assets` 会随更新保留。
+要从双客户端缩小到单客户端，先运行
+`perflens detach --client <不再使用的客户端>`，再按新的选择执行 `init --update`。
+使用自定义引导目录时，初始化、更新和 detach 都应传入同一个 `--setup-directory`。
+
+PerfLens 的程序和 Skill 资源随软件包安装，但不会写入 Codex/Claude Code 的全局发现目录。
+只有运行过 `init` 的项目才会生成项目 Skill 和 MCP 配置；其他项目不会看到 PerfLens。
 
 该命令只在所选项目内执行安全操作：
 
 - 安装或识别 PerfLens Performance Analysis Skill；
 - 安全创建或更新项目 `.codex/config.toml` 中由 PerfLens 标记管理的 MCP 配置块；
+- 安全合并项目 `.mcp.json` 中的 Claude Code MCP 服务并保留其他服务；
+- 按选择安装 `.agents/skills` 和/或 `.claude/skills` 项目 Skill；
 - 生成 `perflens-setup/codex-mcp.toml`；
+- 生成 `perflens-setup/claude-mcp.json`；
 - 生成只读权限报告 `collection-capabilities.json`；
 - 生成中文 `下一步.zh-CN.md`；
 - 生成带 `schema_version` 的 `setup.json`。
 
-它不会执行 sudo、修改 sysctl/capability、修改用户级 Codex 配置或启动 Collector。
+它不会执行 sudo、修改 sysctl/capability、修改任何客户端的用户级全局配置或启动 Collector。
 已有项目配置中的其他设置会原样保留；用户手写且与生成结果冲突的
 `[mcp_servers.perflens]` 不会被覆盖，而是要求人工检查。只想生成文件、不接入项目配置时
 加 `--skip-codex-config`。完成后按照终端显示的“请继续阅读”路径操作。
 
+`setup` 命令继续保留，供需要分别控制引导输出、Collector 资产和兼容旧脚本的用户。
 如果需要分析 `perf.data` 或进行源码符号化，可以显式开启有界外部工具：
 
 ```bash
@@ -152,13 +182,24 @@ perflens analyze-folded \
   --output analysis.json
 ```
 
-使用 Codex 时，`setup` 默认已经接入项目 `.codex/config.toml`，不用再复制长配置。
+使用 Codex 时，`init` 默认已经接入项目 `.codex/config.toml`，不用再复制长配置。
 重启 Codex，执行 `codex mcp list` 确认 `perflens` 已加载，然后在项目中说：
 
 ```text
 使用 $perflens-performance-analysis 分析这个项目的性能 Profile，
 区分直接证据、候选原因和缺失证据。
 ```
+
+使用 Claude Code 时，`init` 会把同一份 Agent Skill 安装到项目 `.claude/skills`，并把
+PerfLens 安全合并到项目 `.mcp.json`。首次使用时检查 Claude Code 的项目 MCP 信任提示，
+然后说：
+
+```text
+使用 /perflens-performance-analysis 分析并优化当前项目。
+```
+
+如果创建 `.claude/skills` 时 Claude Code 已经在运行，需要重新启动一次；之后 Skill
+目录内的变更可以被实时发现。
 
 ## 可选：准备自动采集
 
@@ -267,17 +308,20 @@ sudo perflens-admin upgrade
 perflens detach --project /绝对路径/你的项目 --dry-run
 ```
 
-确认它只计划移除带 PerfLens 标记的 MCP 配置块后，再执行：
+确认它只计划移除经过所有权验证的 MCP 配置和未修改 Skill 后，再执行：
 
 ```bash
 perflens detach --project /绝对路径/你的项目
 ```
 
-该命令默认输出中文摘要，只修改项目 `.codex/config.toml` 中结构验证通过的 PerfLens
-托管块；其他 Codex 设置会保留。Skill、`perflens-setup`、自定义引导目录、
-`perflens-results` 和 Collector 数据都不会删除。用户手写的无标记 PerfLens 表，或混入
-其他 TOML 表的托管区会被拒绝自动删除，必须人工检查。自动化程序使用 `--json`；留档
-使用 `--output <新文件.json>`。
+该命令默认同时处理 Codex 和 Claude Code：只删除带完整托管标记的 Codex 块、与
+`claude-mcp.json` 记录完全一致的 Claude `perflens` 条目，以及与 `setup.json` 指纹一致的
+未修改项目 Skill。其他客户端设置、`perflens-setup`、自定义引导目录、
+`perflens-results` 和 Collector 数据都保留。用户修改或无法验证所有权的内容会被拒绝
+自动删除。只处理一个客户端使用 `--client codex|claude-code`；保留 Skill 使用
+`--keep-skills`；自定义引导目录需同时传 `--setup-directory`。自动化程序使用 `--json`，
+留档使用 `--output <新文件.json>`。保留的 Skill 仍会被客户端发现，因此不能把
+`--keep-skills` 当作彻底停用；缩小后续 `init --update` 客户端范围前应移除对应 Skill。
 
 每个已配置项目都完成 detach 后，pipx 安装的普通用户程序可以这样卸载：
 
@@ -285,8 +329,8 @@ perflens detach --project /绝对路径/你的项目
 pipx uninstall perflens
 ```
 
-项目内保留的 Skill、引导目录、Collector 服务和历史采集数据不会被静默删除，应由
-用户或管理员检查后分别处理。系统 Collector 还必须先按产品部署指南执行管理员
+项目内的引导目录、Collector 服务和历史采集数据不会被静默删除，应由用户或管理员
+检查后分别处理。使用 `--keep-skills` 时项目 Skill 也会保留。系统 Collector 还必须先按产品部署指南执行管理员
 `undeploy`，不能由普通用户 detach 代替。
 
 ## 常见问题

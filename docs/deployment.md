@@ -8,7 +8,7 @@ for development acceptance and other Linux distributions.
 
 Deploy PerfLens as two privilege domains: ordinary-user CLI/MCP/Skill processes and a dedicated `perflens-collector` system service with only the host-approved perf capability. The Agent and MCP server must not run as root.
 
-Ordinary users should complete [Installation and first use](../INSTALL.md) and run `perflens setup` first. This page focuses on administrator-managed Collector deployment.
+Ordinary users should complete [Installation and first use](../INSTALL.md) and run `perflens init` in the selected project first. This page focuses on administrator-managed Collector deployment.
 
 Prefer `perflens setup --prepare-collector` to generate assets and exact commands
 for the detected installation layout. Native DEBs select trusted `/usr/bin`
@@ -206,8 +206,9 @@ sends only a short-lived PID plan to the Collector. This enables natural
 privileged service or requiring the user to discover a PID.
 
 Before package removal, ordinary users first preview and run `perflens detach
---project <project>` for every configured project. This removes only the
-managed project MCP block. Then run `sudo perflens-admin undeploy --dry-run`
+--project <project>` for every configured project. This removes verified
+Codex/Claude MCP entries and unchanged managed project Skills while preserving
+onboarding and evidence. Then run `sudo perflens-admin undeploy --dry-run`
 and `sudo perflens-admin undeploy`. It removes only a verified managed unit while
 preserving policy, collected artifacts, and the system identity. See the
 [Chinese guide](deployment.zh-CN.md) for the complete lifecycle.
