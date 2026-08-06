@@ -1,0 +1,15 @@
+[workspace]
+members = ["rust/perflens-privileged-helper"]
+resolver = "2"
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.97.1"
+license = "Apache-2.0"
+repository = "https://github.com/link0-o/PerfLens"
+
+[workspace.dependencies]
+nix = { version = "0.31.3", features = ["fs", "socket", "user"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"

@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+  configure)
+    # Versions before 0.2.0 could leave timestamp-valid bytecode behind after an upgrade.
+    # The runtime launcher no longer reads inline caches; remove the legacy files as well.
+    find /usr/lib/perflens -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+    find /usr/lib/perflens -depth -type d -name '__pycache__' -empty -delete
+    ;;
+esac
+
+exit 0

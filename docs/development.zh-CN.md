@@ -29,6 +29,23 @@ uv run perflens-mcp --version
 
 不要默认使用 sudo。PerfLens 的只读分析、测试和构建都不需要 root。
 
+开发计划中的 `paranoid=3` 高权限 Helper 还需要仓库
+`rust-toolchain.toml` 固定的 Rust 1.97.1。Rust 只用于 Helper；普通 Python wheel、
+只读分析和最终用户不需要安装工具链。安装后检查：
+
+```bash
+rustc --version
+cargo --version
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --locked
+cargo audit --deny warnings
+cargo deny check
+```
+
+私有协议模型或拒绝规则变化后，还要重新生成 Schema，并同时运行 Python/Rust 共享
+golden fixtures。完整边界见[《高权限 Helper 设计》](privileged-helper.zh-CN.md)。
+
 ## 目录结构
 
 | 路径 | 用途 |
@@ -41,6 +58,8 @@ uv run perflens-mcp --version
 | `src/perflens/integrations` | 有界、无 shell 的外部命令适配 |
 | `src/perflens/symbols` | ELF 检查和源码符号化 Provider |
 | `src/perflens/collection` | 默认关闭、必须授权的主动采集 |
+| `src/perflens/privileged_helper` | Python Broker 到 Rust Helper 的私有协议和认证客户端 |
+| `rust/perflens-privileged-helper` | 可选的最小高权限 Rust Helper；不得包含分析/MCP/Skill 逻辑 |
 | `src/perflens/mcp` | MCP Server、权限策略和产物存储 |
 | `src/perflens/cli` | Typer CLI 边界 |
 | `.agents/skills` | PerfLens Performance Analysis Skill |

@@ -53,6 +53,7 @@ from perflens.contracts.artifacts import (
     SourceResolutionArtifact,
     StackSample,
 )
+from perflens.privileged_helper.protocol import helper_request_schema, helper_response_schema
 
 MODELS = {
     "analysis.schema.json": AnalysisArtifact,
@@ -115,6 +116,14 @@ def main() -> None:
             json.dumps(schema, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+    (root / "privileged-helper-request.schema.json").write_text(
+        json.dumps(helper_request_schema(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (root / "privileged-helper-response.schema.json").write_text(
+        json.dumps(helper_response_schema(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":

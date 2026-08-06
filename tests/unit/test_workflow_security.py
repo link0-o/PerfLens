@@ -156,7 +156,7 @@ def test_release_attestation_credentials_are_isolated_from_project_code() -> Non
     assert attestation == {"subject-path": "release-bundle/dist/*"}
 
 
-def test_dependabot_monitors_action_pins_and_uv_lockfile() -> None:
+def test_dependabot_monitors_action_pins_python_and_rust_lockfiles() -> None:
     project_root = Path(__file__).resolve().parents[2]
     with (project_root / ".github" / "dependabot.yml").open(encoding="utf-8") as handle:
         raw_configuration: object = yaml.safe_load(handle)
@@ -172,7 +172,7 @@ def test_dependabot_monitors_action_pins_and_uv_lockfile() -> None:
         for update in updates
         if isinstance(update.get("package-ecosystem"), str)
     }
-    assert set(by_ecosystem) == {"github-actions", "uv"}
+    assert set(by_ecosystem) == {"cargo", "github-actions", "uv"}
     for ecosystem, update in by_ecosystem.items():
         assert update.get("directory") == "/", ecosystem
         schedule = _mapping(update.get("schedule"), label=f"dependabot.{ecosystem}.schedule")

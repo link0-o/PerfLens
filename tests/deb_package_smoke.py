@@ -59,13 +59,13 @@ def main() -> None:
         root = Path(directory) / "root"
         main_control = Path(directory) / "main-control"
         collector_control = Path(directory) / "collector-control"
-        for package, control in (
-            (main_package, main_control),
-            (collector_package, collector_control),
+        for package, control, expected_control_files in (
+            (main_package, main_control, {"control", "md5sums", "postinst"}),
+            (collector_package, collector_control, {"control", "md5sums"}),
         ):
             _run(dpkg_deb, "--extract", str(package), str(root))
             _run(dpkg_deb, "--control", str(package), str(control))
-            assert {path.name for path in control.iterdir()} == {"control", "md5sums"}
+            assert {path.name for path in control.iterdir()} == expected_control_files
 
         binary_directory = root / "usr/bin"
         expected_commands = {
@@ -83,6 +83,10 @@ def main() -> None:
         launcher = root / "usr/lib/perflens/perflens-launcher"
         assert launcher.is_file()
         assert launcher.stat().st_mode & 0o777 == 0o755
+        launcher_text = launcher.read_text(encoding="utf-8")
+        assert "sys.dont_write_bytecode = True" in launcher_text
+        assert "sys.pycache_prefix" in launcher_text
+        assert (main_control / "postinst").stat().st_mode & 0o777 == 0o755
         assert not tuple((root / "usr/lib/perflens").glob("*.dist-info/uv_cache.json"))
         _assert_safe_modes(root)
         policy = (

@@ -16,6 +16,13 @@ Automatic PID plan ─→ Unix socket ─→ restricted Collector ─→ fixed s
 Explicit admin deploy ─→ versioned TOML ─→ perflens-admin ─→ systemd
 ```
 
+For `v0.2.0`, Debian `perf_event_paranoid=3` has a second, optional execution boundary. The public
+Python Broker remains capability-free and forwards only independently validated typed PID plans to
+a separate Rust Helper. A private socket, dedicated identity, and separate root-owned policy prevent
+ordinary users, Agents, MCP, and the Skill from calling it directly. See the
+[privileged Helper design](privileged-helper.md). Until implementation and acceptance are complete,
+this design is not a claim that the current release supports level 3.
+
 The domain layer uses frozen/slotted records, integer Frame IDs, and standard
 library protocols. It imports neither Pydantic nor Typer. Format adapters own
 streaming parsing and frame tables. The `perf.data` adapter delegates only to
@@ -69,6 +76,12 @@ system-wide target. Before starting perf it also reserves against cumulative
 spool bytes, artifact count, and a filesystem free-space floor. Exhaustion
 denies the new collection without deleting old evidence. The MCP server and
 Skill remain unprivileged.
+
+The default `cap_perfmon` mode continues to execute perf inside the restricted Collector and does
+not bypass Debian level 3. The optional `paranoid3_helper` mode does not make the Python Broker root;
+it delegates final perf execution to the small Rust Helper. The Helper repeats plan, PID, policy,
+quota, and path validation instead of trusting Python-only checks. PerfLens detects and explains
+sysctl but never changes it in either mode.
 
 Single-use semantics do not depend on process memory. Before perf starts, the
 Collector locks the fixed spool and atomically creates a mode-`0600`, empty

@@ -12,6 +12,10 @@ from typing import cast
 
 def main() -> None:
     runtime = Path(__file__).resolve().parent
+    # Native packages use reproducible source mtimes. Ignore inline caches from an older
+    # package so an equal-size module cannot survive an in-place upgrade as stale bytecode.
+    sys.dont_write_bytecode = True
+    sys.pycache_prefix = str(runtime / ".perflens-cache-disabled")
     sys.path.insert(0, str(runtime))
     command = Path(sys.argv[0]).name
     entry_points = {

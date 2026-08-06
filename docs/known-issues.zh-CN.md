@@ -5,6 +5,32 @@
 本文记录已经复现、具有明确边界和临时处理方法的问题，包括已经修复的问题。
 不要通过降低部署器安全检查来规避问题；升级前仍可按对应版本的临时方法处理。
 
+## KI-2026-08-06：DEB 原地升级后入口可能继续加载旧版本字节码
+
+- 影响版本：从 `v0.1.2` 原地升级到 `v0.1.3` 的原生 DEB；
+- 修复状态：当前开发分支已修复，将随下一版本发布；
+- 现象：`dpkg-query` 显示 `0.1.3-1`，但 `perflens --version` 或其他入口仍显示
+  `0.1.2`；
+- 根因：可复现 DEB 固定了 Python 源文件时间，旧版遗留的同路径 `.pyc` 可能继续满足
+  时间戳/大小校验；旧包又没有在升级配置阶段清理它。
+
+当前开发修复包含两层防护：原生启动器在导入 PerfLens 前禁用写入并把 cache 查找移到
+包内不存在的固定隔离前缀，因此不再读取旧的 inline `__pycache__`；主包 `postinst` 还会
+在 `configure` 阶段只清理固定 `/usr/lib/perflens` 下遗留的 `.pyc/.pyo` 和空 cache
+目录。普通 wheel 不受 DEB maintainer script 影响。
+
+已经遇到问题的 `v0.1.3` 用户可以先确认包版本，然后删除固定运行时中的旧 cache：
+
+```bash
+dpkg-query -W -f='${Package} ${Version}\n' perflens perflens-collector
+sudo find /usr/lib/perflens -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+sudo find /usr/lib/perflens -depth -type d -name '__pycache__' -empty -delete
+hash -r
+perflens --version
+```
+
+不要删除整个 `/usr/lib/perflens`；它属于已安装的主包。
+
 ## KI-2026-08-05：`umask 0002` 导致 Collector 配置被部署器拒绝
 
 - 影响版本：`v0.1.2`；

@@ -12,6 +12,10 @@ _remove_nondeterministic_uv_metadata = cast(
     Callable[[Path], None],
     runpy.run_path(str(_SCRIPT))["_remove_nondeterministic_uv_metadata"],
 )
+_install_maintainer_script = cast(
+    Callable[[Path, str, Path], None],
+    runpy.run_path(str(_SCRIPT))["_install_maintainer_script"],
+)
 
 
 def test_deb_builder_removes_variable_install_metadata_and_record_entries(
@@ -51,3 +55,19 @@ def test_deb_builder_rejects_ambiguous_uv_record_entries(tmp_path: Path) -> None
 
     with pytest.raises(RuntimeError, match="does not uniquely list"):
         _remove_nondeterministic_uv_metadata(tmp_path)
+
+
+def test_deb_builder_installs_only_known_executable_maintainer_scripts(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "DEBIAN").mkdir()
+    source = tmp_path / "source"
+    source.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+
+    _install_maintainer_script(tmp_path, "postinst", source)
+
+    installed = tmp_path / "DEBIAN/postinst"
+    assert installed.read_bytes() == source.read_bytes()
+    assert installed.stat().st_mode & 0o777 == 0o755
+    with pytest.raises(ValueError, match="unsupported"):
+        _install_maintainer_script(tmp_path, "arbitrary", source)

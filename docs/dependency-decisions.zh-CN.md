@@ -23,6 +23,8 @@
 | 统计比较 | 自研保守的标准库实现 | 重复均值使用明确标注为近似值的正态区间，并结合实际影响和可比性检查；结果仍然只是候选。 |
 | 主动采集 | 复用系统 perf | 薄且默认关闭的封装覆盖 record/stat/sched/lock/tracepoint。PerfLens 负责授权、资源边界、诊断和不可变输出，不重新实现内核探针。 |
 | Release 来源证明 | 复用官方 `actions/attest` | 由 GitHub Actions 的短时 OIDC 身份签发 SLSA Provenance；只用于标签发布工作流，固定到完整提交 SHA，不成为运行依赖。签发任务与项目代码执行及 Release 写权限隔离。 |
+| Debian `paranoid=3` Helper | 新增小型 Rust 二进制 | 只把必须持有高权限的固定 perf PID 执行边界移出 Python；使用安全 Rust、固定稳定工具链和 `Cargo.lock`。CLI/MCP/Skill/Broker/分析器仍是 Python，普通 wheel 和最终用户不需要 Rust。 |
+| Helper 边界模型 | 复用 Serde/Serde JSON 和最小系统调用依赖 | 严格类型、未知字段拒绝和共享 JSON Schema 比自研解析器更可靠；依赖必须锁定、进入 SBOM/许可证审计，`unsafe` 只能集中在无法由安全封装表达的 syscall 边界。 |
 
 没有复制任何第三方实现。运行依赖设置了版本范围，并锁定在 `uv.lock`。修改支持的依赖
 范围前，依赖升级必须先通过 Schema 测试和 Golden 测试。

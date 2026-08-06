@@ -16,6 +16,12 @@ Symbol Provider                ─→ 已验证的源码定位
 管理员显式部署 ─→ 版本化 TOML ─→ perflens-admin ─→ systemd
 ```
 
+`v0.2.0` 为 Debian `perf_event_paranoid=3` 规划第二条可选执行边界：公共 Python Broker
+保持无 capability，只把已经两次验证的类型化 PID 计划交给独立 Rust Helper。Helper 使用
+私有 Socket、专用身份和单独的 root 管理策略；普通用户、Agent、MCP 和 Skill 无法直接
+连接。详细约束见[《高权限 Helper 设计》](privileged-helper.zh-CN.md)。该设计在完成实现和
+验收前不代表当前发行版已经支持等级 3。
+
 ## Core 与边界层
 
 领域层使用冻结且带 `slots` 的轻量记录、整数 Frame ID 和标准库 Protocol。它不导入 Pydantic 或 Typer，因此 Profile 解析和聚合热路径不会依赖 CLI 或边界验证框架。
@@ -74,6 +80,11 @@ MCP ArtifactStore 按产物 ID 采用只追加语义：发布时不替换路径�
 `perf stat` 输出由独立 Metric Adapter 处理，不混入栈 ProfileAdapter 层级。
 
 自动采集采用不同的权限边界：MCP 生成短期、单次、绑定 PID 所有者和启动时间的计划；可选 Collector 通过 Unix Socket 对等凭据和独立只读策略再次校验，只接受 PID，且只能写固定 spool。Collector 还会在启动 perf 前检查累计字节、文件数和文件系统空闲余量，不足时拒绝新采集且不删除旧证据。Collector 不接受 shell、任意命令、任意输出路径或全系统目标。MCP 与 Skill 始终保持普通用户权限。
+
+默认 `cap_perfmon` 模式继续由受限 Collector 执行 perf；它不绕过 Debian 等级 3。
+可选 `paranoid3_helper` 模式不会把 Python Broker 改为 root，而是把最终 perf 执行委托给
+小型 Rust Helper。Helper 必须独立重复计划、PID、策略、配额和路径验证，不能信任只有
+Python 做过的检查。PerfLens 可以检测并解释 sysctl，但任何模式都不会修改它。
 
 单次语义不依赖进程内存。Collector 在启动 perf 前锁定固定 spool，并以原子排他创建、
 `0600` 权限和文件/目录同步写入零字节消费墓碑。墓碑在采集失败或服务重启后仍能拒绝

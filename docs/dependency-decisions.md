@@ -23,6 +23,8 @@
 | Statistical comparison | Build conservative stdlib implementation | Repeated means use an explicitly approximate normal interval plus practical-impact and comparability checks; results remain candidates. |
 | Active collection | Reuse system perf | Thin, default-off wrappers cover record/stat/sched/lock/tracepoint collection. PerfLens owns authorization, bounds, diagnostics, and immutable output, not kernel instrumentation. |
 | Release provenance | Reuse official `actions/attest` | Issues SLSA provenance from short-lived GitHub Actions OIDC identity. It is tag-workflow-only, pinned to a full commit SHA, and never a runtime dependency. Signing is isolated from project-code execution and Release-write permission. |
+| Debian `paranoid=3` Helper | Add a small Rust binary | Only the fixed, higher-privilege perf PID execution boundary leaves Python. It uses safe Rust, a pinned stable toolchain, and `Cargo.lock`; CLI/MCP/Skill/Broker/analysis stay in Python, and ordinary wheels and users need no Rust toolchain. |
+| Helper boundary models | Reuse Serde/Serde JSON and minimal reviewed syscall dependencies | Strict models, unknown-field rejection, and shared JSON Schema are safer than a custom parser. Dependencies are locked, licensed, audited, and unsafe code is isolated to syscall boundaries that lack safe wrappers. |
 
 No third-party implementation is copied. Runtime dependencies are version
 bounded and locked in `uv.lock`. Dependency upgrades require schema and golden

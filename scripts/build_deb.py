@@ -184,6 +184,11 @@ def _build_main_tree(
         ),
     )
     _install_control(root, control)
+    _install_maintainer_script(
+        root,
+        "postinst",
+        project_root / "packaging/debian/perflens.postinst",
+    )
     _normalize_tree(root)
 
 
@@ -241,6 +246,14 @@ def _install_control(root: Path, text: str) -> None:
         if path.is_file() and not path.is_symlink() and not path.is_relative_to(metadata):
             lines.append(f"{_md5(path)}  {path.relative_to(root).as_posix()}")
     (metadata / "md5sums").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _install_maintainer_script(root: Path, name: str, source: Path) -> None:
+    if name not in {"postinst", "preinst", "prerm", "postrm"}:
+        raise ValueError("unsupported Debian maintainer script")
+    destination = root / "DEBIAN" / name
+    shutil.copyfile(source, destination)
+    destination.chmod(0o755)
 
 
 def _control_text(
@@ -323,6 +336,10 @@ def _normalize_tree(root: Path) -> None:
     launcher = root / "usr/lib/perflens/perflens-launcher"
     if launcher.is_file():
         launcher.chmod(0o755)
+    for script_name in ("postinst", "preinst", "prerm", "postrm"):
+        maintainer_script = root / "DEBIAN" / script_name
+        if maintainer_script.is_file():
+            maintainer_script.chmod(0o755)
     for path in sorted(root.rglob("*")):
         os.utime(path, (_SOURCE_DATE_EPOCH, _SOURCE_DATE_EPOCH), follow_symlinks=False)
     os.utime(root, (_SOURCE_DATE_EPOCH, _SOURCE_DATE_EPOCH))

@@ -1,0 +1,182 @@
+{
+  "$defs": {
+    "HelperCollectPidRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "call_graph": {
+          "anyOf": [
+            {
+              "enum": [
+                "fp",
+                "dwarf",
+                "lbr"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Call Graph"
+        },
+        "duration_milliseconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 86400000,
+          "title": "Duration Milliseconds",
+          "type": "integer"
+        },
+        "events": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Events",
+          "type": "array"
+        },
+        "expires_at_unix_milliseconds": {
+          "exclusiveMinimum": 0,
+          "title": "Expires At Unix Milliseconds",
+          "type": "integer"
+        },
+        "frequency_hz": {
+          "anyOf": [
+            {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frequency Hz"
+        },
+        "max_output_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 1099511627776,
+          "title": "Max Output Bytes",
+          "type": "integer"
+        },
+        "mode": {
+          "enum": [
+            "record",
+            "stat"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "operation": {
+          "const": "collect_pid",
+          "default": "collect_pid",
+          "title": "Operation",
+          "type": "string"
+        },
+        "plan_id": {
+          "pattern": "^plan-[a-f0-9]{20}$",
+          "title": "Plan Id",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^request-[a-f0-9]{16,64}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/HelperTarget"
+        }
+      },
+      "required": [
+        "request_id",
+        "plan_id",
+        "target",
+        "mode",
+        "duration_milliseconds",
+        "max_output_bytes",
+        "expires_at_unix_milliseconds"
+      ],
+      "title": "HelperCollectPidRequest",
+      "type": "object"
+    },
+    "HelperHealthRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "const": "health",
+          "default": "health",
+          "title": "Operation",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^request-[a-f0-9]{16,64}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id"
+      ],
+      "title": "HelperHealthRequest",
+      "type": "object"
+    },
+    "HelperTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "pid": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "start_time_ticks": {
+          "exclusiveMinimum": 0,
+          "maximum": 18446744073709551615,
+          "title": "Start Time Ticks",
+          "type": "integer"
+        },
+        "uid": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "title": "Uid",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pid",
+        "uid",
+        "start_time_ticks"
+      ],
+      "title": "HelperTarget",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "collect_pid": "#/$defs/HelperCollectPidRequest",
+      "health": "#/$defs/HelperHealthRequest"
+    },
+    "propertyName": "operation"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/HelperHealthRequest"
+    },
+    {
+      "$ref": "#/$defs/HelperCollectPidRequest"
+    }
+  ]
+}

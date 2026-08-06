@@ -1,0 +1,1 @@
+{"schema_version":"1.0","operation":"collect_pid","request_id":"request-fedcba9876543210","plan_id":"plan-fedcba9876543210abcd","target":{"pid":4321,"uid":1000,"start_time_ticks":123456789},"mode":"record","duration_milliseconds":10000,"frequency_hz":99,"call_graph":"dwarf","events":[],"max_output_bytes":268435456,"expires_at_unix_milliseconds":4102444800000}

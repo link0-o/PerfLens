@@ -1,0 +1,126 @@
+{
+  "$defs": {
+    "HelperErrorBody": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "recoverable": {
+          "title": "Recoverable",
+          "type": "boolean"
+        },
+        "stage": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Stage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "stage",
+        "message",
+        "recoverable"
+      ],
+      "title": "HelperErrorBody",
+      "type": "object"
+    },
+    "HelperHealthResult": {
+      "additionalProperties": false,
+      "properties": {
+        "helper_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Helper Pid",
+          "type": "integer"
+        },
+        "helper_uid": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "title": "Helper Uid",
+          "type": "integer"
+        },
+        "helper_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Helper Version",
+          "type": "string"
+        },
+        "privilege_mode": {
+          "const": "paranoid3_helper",
+          "title": "Privilege Mode",
+          "type": "string"
+        },
+        "ready": {
+          "const": true,
+          "title": "Ready",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "helper_version",
+        "helper_pid",
+        "helper_uid",
+        "privilege_mode",
+        "ready"
+      ],
+      "title": "HelperHealthResult",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HelperErrorBody"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "ok": {
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "request_id": {
+      "pattern": "^(unknown|request-[a-f0-9]{16,64})$",
+      "title": "Request Id",
+      "type": "string"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HelperHealthResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "request_id",
+    "ok"
+  ],
+  "title": "HelperResponse",
+  "type": "object"
+}
