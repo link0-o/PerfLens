@@ -67,10 +67,14 @@ def render_claude_config(
     allow_process_execution: bool = False,
     automatic_collection: bool = False,
     allow_project_execution: bool = False,
+    allow_pid_attach: bool = False,
     collector_socket: Path = Path("/run/perflens/collector.sock"),
     collector_spool_root: Path = Path("/var/lib/perflens"),
     automatic_modes: tuple[str, ...] = ("stat", "record"),
     automatic_max_duration_seconds: float = 30.0,
+    automatic_max_frequency_hz: int = 99,
+    automatic_max_output_bytes: int = 256 << 20,
+    automatic_plan_ttl_seconds: int = 120,
     mcp_command: Path | None = None,
 ) -> str:
     """Return a standalone Claude Code project MCP JSON document."""
@@ -80,10 +84,14 @@ def render_claude_config(
         allow_process_execution=allow_process_execution,
         automatic_collection=automatic_collection,
         allow_project_execution=allow_project_execution,
+        allow_pid_attach=allow_pid_attach,
         collector_socket=collector_socket,
         collector_spool_root=collector_spool_root,
         automatic_modes=automatic_modes,
         automatic_max_duration_seconds=automatic_max_duration_seconds,
+        automatic_max_frequency_hz=automatic_max_frequency_hz,
+        automatic_max_output_bytes=automatic_max_output_bytes,
+        automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
         mcp_command=mcp_command,
     )
     return _render_document(

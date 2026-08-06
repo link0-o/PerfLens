@@ -2,11 +2,11 @@
 
 English | [简体中文](INSTALL.zh-CN.md)
 
-Download `perflens-0.1.2-py3-none-any.whl` for the normal CLI/MCP installation. A wheel is an installable Python package: do not extract it. The extracted `perflens/` and `.dist-info/` directories are modules and metadata, not a graphical launcher.
+Download `perflens-0.1.3-py3-none-any.whl` for the normal CLI/MCP installation. A wheel is an installable Python package: do not extract it. The extracted `perflens/` and `.dist-info/` directories are modules and metadata, not a graphical launcher.
 
 On Debian 13 `amd64`, the recommended alternative is
-`sudo apt install ./perflens_0.1.2-1_amd64.deb`. Add the exact-version
-`perflens-collector_0.1.2-1_all.deb` only for automatic collection. Package
+`sudo apt install ./perflens_0.1.3-1_amd64.deb`. Add the exact-version
+`perflens-collector_0.1.3-1_all.deb` only for automatic collection. Package
 installation does not activate a privileged service. See
 [Debian packages](docs/debian-packages.md).
 
@@ -16,7 +16,7 @@ checking only the assets you downloaded, but each selected file must report
 
 ```bash
 sha256sum --ignore-missing --check SHA256SUMS
-gh attestation verify ./perflens-0.1.2-py3-none-any.whl \
+gh attestation verify ./perflens-0.1.3-py3-none-any.whl \
   --repo link0-o/PerfLens \
   --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -32,9 +32,9 @@ PerfLens requires Linux and Python 3.12 or 3.13. Install the wheel as an isolate
 
 ```bash
 cd ~/Downloads
-pipx install ./perflens-0.1.2-py3-none-any.whl
+pipx install ./perflens-0.1.3-py3-none-any.whl
 # or
-uv tool install ./perflens-0.1.2-py3-none-any.whl
+uv tool install ./perflens-0.1.3-py3-none-any.whl
 ```
 
 Verify it and run the project-scoped onboarding command:
@@ -67,6 +67,12 @@ init, update, and detach.
 Its completion summary and generated guides include an exact `perflens status`
 command bound to that output directory. Preserve `--setup-directory` whenever
 `--output-directory` was used.
+
+Default project collection allows `stat` and `record`, with MCP ceilings of 30
+seconds, 99 Hz, 256 MiB, and a 120-second single-use plan lifetime. The Skill
+typically starts near 10 seconds and adjusts to the workload. Existing-PID
+attachment is off unless `--allow-existing-pid-attach` is supplied. Run
+`perflens init --help` for repeatable mode and limit options.
 
 Run `perflens status --project /absolute/path/to/project` for a read-only
 Chinese-first summary of onboarding, MCP, Collector, group, socket, and perf
@@ -125,8 +131,8 @@ The Skill confirms an exact executable and arguments; PerfLens launches it as
 the ordinary MCP user, obtains that new PID internally, and submits only a
 PID-bound plan to the Collector. The user does not need to discover a PID.
 
-Automatic collection defaults to 10 seconds but is user-adjustable within the
-MCP and Collector policy limits (30 seconds by default). Run the deployment
+The Skill normally requests about 10 seconds, adjusted to the workload; this is
+not a fixed duration. The default MCP and Collector ceiling is 30 seconds. Run the deployment
 acceptance as the ordinary user with
 `perflens accept-collector --authorize-host-acceptance`; its built-in probe
 requires no PID, defaults to one second, and is capped at five seconds. It prints

@@ -42,9 +42,9 @@ PerfLens 不包含 LLM API、Web UI、自动修改源码功能、Benchmark 执�
 从 GitHub Releases 下载 wheel 后，推荐作为独立工具安装：
 
 ```bash
-pipx install ./perflens-0.1.2-py3-none-any.whl
+pipx install ./perflens-0.1.3-py3-none-any.whl
 # 或者
-uv tool install ./perflens-0.1.2-py3-none-any.whl
+uv tool install ./perflens-0.1.3-py3-none-any.whl
 ```
 
 不要手工提取 wheel。安装成功后进入要分析的项目，首次运行：
@@ -238,7 +238,7 @@ perflens install-skill --project /absolute/path/to/workspace
 perflens install-skill --client claude-code --project /absolute/path/to/workspace
 ```
 
-该命令会创建 `.agents/skills/perflens-performance-analysis`，如果目标已经存在则拒绝覆盖。然后生成项目级 MCP 配置：
+该命令会创建 `.agents/skills/perflens`，如果目标已经存在则拒绝覆盖。然后生成项目级 MCP 配置：
 
 ```bash
 perflens codex-config --workspace /absolute/path/to/workspace
@@ -279,16 +279,16 @@ codex mcp list
 之后可以直接对 Codex 说：
 
 ```text
-使用 $perflens-performance-analysis 分析 ./profile.folded，
+使用 $perflens 分析 ./profile.folded，
 告诉我最主要的热点、直接证据、候选原因、缺失证据和下一步验证办法。
 ```
 
-Skill 位于 `.agents/skills/perflens-performance-analysis`。`$perflens-performance-analysis` 是 Skill 名称；`perflens` 是 MCP Server 名称。
+Skill 位于 `.agents/skills/perflens`。`$perflens` 是 Codex Skill 名称；`perflens` 也是 MCP Server 名称，但二者仍是独立组件。
 
-Claude Code Skill 位于 `.claude/skills/perflens-performance-analysis`，可以显式输入：
+Claude Code Skill 位于 `.claude/skills/perflens`，可以显式输入：
 
 ```text
-使用 /perflens-performance-analysis 分析并优化当前项目。
+使用 /perflens 优化当前项目的运行性能。
 ```
 
 Claude Code 会在首次使用项目 `.mcp.json` 中的服务时要求用户信任；PerfLens 不会自动批准。
@@ -300,12 +300,17 @@ Claude Code 会在首次使用项目 `.mcp.json` 中的服务时要求用户信�
 完成一次管理员部署后，用户不必自己找 PID。可以直接说：
 
 ```text
-使用 $perflens-performance-analysis 优化当前项目的运行性能。
+使用 $perflens 优化当前项目的运行性能。
 允许运行我确认的项目可执行文件并采集最多 10 秒，不要附加其他已有进程。
 ```
 
 Skill 会先确认具体可执行文件、参数和工作负载；普通用户启动器取得新 PID，
 Collector 只接收绑定该 PID 的短期采集计划。项目程序不会以 root 运行。
+
+“分析性能”与“优化性能”共用同一个 Skill，但执行边界不同：分析默认只给证据、诊断和
+验证建议，不修改代码；优化会先建立基线，再修改有证据支持的代码，运行正确性测试，
+最后使用相同工作负载重新采集并做 A/B 对比。“深度分析/深度优化”只表示更充分地调查，
+不会自动扩大目录、PID、时长或修改权限。
 
 面向其他用户安装系统 Collector、执行真实验收和后续升级时，请看[《产品部署指南》](docs/deployment.zh-CN.md)。
 
@@ -419,4 +424,5 @@ uv run pip-audit
 - [安全策略](SECURITY.zh-CN.md)
 - [发布就绪检查](docs/release-readiness.zh-CN.md)
 - [发布流程](docs/releasing.zh-CN.md)
+- [已知问题与临时处理](docs/known-issues.zh-CN.md)
 - [故障排查](docs/troubleshooting.zh-CN.md)

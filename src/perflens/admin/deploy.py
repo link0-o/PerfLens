@@ -20,8 +20,15 @@ from typing import Any, Literal, cast
 
 from perflens import __version__
 from perflens.artifacts.filesystem import write_text_atomic
+from perflens.collection.collector import DEFAULT_MAX_OUTPUT_BYTES
 from perflens.collector_broker.client import CollectorBrokerClient
-from perflens.collector_broker.policy import COLLECTOR_POLICY_VERSION
+from perflens.collector_broker.policy import (
+    COLLECTOR_POLICY_VERSION,
+    DEFAULT_MAX_PLAN_TTL_SECONDS,
+    DEFAULT_MAX_SPOOL_ARTIFACTS,
+    DEFAULT_MAX_SPOOL_BYTES,
+    DEFAULT_MIN_FREE_BYTES,
+)
 from perflens.collector_broker.state import (
     collection_artifact_name,
     replay_marker,
@@ -797,11 +804,21 @@ def parse_collector_deployment_policy(
         )
         duration = _strict_number(values.get("max_duration_seconds", 30.0))
         frequency = _strict_integer(values.get("max_frequency_hz", 99))
-        output_bytes = _strict_integer(values.get("max_output_bytes", 1 << 30))
-        spool_bytes = _strict_integer(values.get("max_spool_bytes", 10 << 30))
-        spool_artifacts = _strict_integer(values.get("max_spool_artifacts", 1000))
-        min_free_bytes = _strict_integer(values.get("min_free_bytes", 1 << 30))
-        plan_ttl = _strict_integer(values.get("max_plan_ttl_seconds", 300))
+        output_bytes = _strict_integer(
+            values.get("max_output_bytes", DEFAULT_MAX_OUTPUT_BYTES)
+        )
+        spool_bytes = _strict_integer(
+            values.get("max_spool_bytes", DEFAULT_MAX_SPOOL_BYTES)
+        )
+        spool_artifacts = _strict_integer(
+            values.get("max_spool_artifacts", DEFAULT_MAX_SPOOL_ARTIFACTS)
+        )
+        min_free_bytes = _strict_integer(
+            values.get("min_free_bytes", DEFAULT_MIN_FREE_BYTES)
+        )
+        plan_ttl = _strict_integer(
+            values.get("max_plan_ttl_seconds", DEFAULT_MAX_PLAN_TTL_SECONDS)
+        )
         events = tuple(
             _strict_string(value) for value in values.get("allowed_stat_events", ())
         )

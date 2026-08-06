@@ -1,4 +1,4 @@
-# Syscall and I/O candidates
+# PerfLens syscall and I/O candidates
 
 On-CPU syscall samples measure CPU work on sampled paths, not blocked latency. `read`, `write`, `send`, `recv`, `poll`, or `fsync` cannot identify disk versus network behavior by name alone.
 

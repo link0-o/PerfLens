@@ -19,6 +19,7 @@ from pathlib import Path
 
 from perflens import __version__
 from perflens.collection.collector import (
+    DEFAULT_MAX_OUTPUT_BYTES,
     DEFAULT_STAT_EVENTS,
     CallGraphMode,
     CollectionMode,
@@ -55,7 +56,7 @@ class ProjectWorkloadRequest:
     frequency_hz: int = 99
     call_graph: CallGraphMode = "dwarf"
     events: tuple[str, ...] = DEFAULT_STAT_EVENTS
-    max_output_bytes: int = 1 << 30
+    max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
 
 
 def collect_project_workload(

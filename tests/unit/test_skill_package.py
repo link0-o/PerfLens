@@ -7,13 +7,13 @@ import yaml
 
 def test_performance_skill_has_valid_minimal_frontmatter_and_resources() -> None:
     root = Path(__file__).resolve().parents[2]
-    skill_root = root / ".agents" / "skills" / "perflens-performance-analysis"
+    skill_root = root / ".agents" / "skills" / "perflens"
     skill_text = (skill_root / "SKILL.md").read_text(encoding="utf-8")
     _opening, frontmatter, body = skill_text.split("---", maxsplit=2)
     metadata = yaml.safe_load(frontmatter)
 
     assert metadata.keys() == {"name", "description"}
-    assert metadata["name"] == "perflens-performance-analysis"
+    assert metadata["name"] == "perflens"
     assert "perf.data" in metadata["description"]
     assert "TODO" not in skill_text
     assert "Verified Improvement" in body
@@ -35,11 +35,11 @@ def test_performance_skill_has_valid_minimal_frontmatter_and_resources() -> None
 def test_skill_declares_mcp_dependency_and_explicit_invocation_prompt() -> None:
     root = Path(__file__).resolve().parents[2]
     config_path = (
-        root / ".agents" / "skills" / "perflens-performance-analysis" / "agents" / "openai.yaml"
+        root / ".agents" / "skills" / "perflens" / "agents" / "openai.yaml"
     )
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
-    assert "$perflens-performance-analysis" in config["interface"]["default_prompt"]
+    assert "$perflens" in config["interface"]["default_prompt"]
     assert config["dependencies"]["tools"][0]["value"] == "perflens"
     assert config["dependencies"]["tools"][0]["transport"] == "stdio"
     assert config["policy"]["allow_implicit_invocation"] is True

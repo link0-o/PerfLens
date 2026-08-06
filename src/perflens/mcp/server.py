@@ -20,6 +20,7 @@ from perflens.benchmarks.adapters import load_benchmark
 from perflens.classification.engine import build_diagnosis_bundle as create_diagnosis
 from perflens.collection.capabilities import inspect_collection_capabilities
 from perflens.collection.collector import (
+    DEFAULT_MAX_OUTPUT_BYTES,
     DEFAULT_STAT_EVENTS,
     CollectionRequest,
     CollectionTarget,
@@ -98,13 +99,12 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         raise ValueError("PID attachment cannot be enabled while active collection is disabled")
     if config.allow_automatic_collection and (
         not config.allow_active_collection
-        or not config.allow_pid_attach
         or config.collector_socket is None
         or not config.automatic_collection_policy.enabled
     ):
         raise ValueError(
-            "Automatic collection requires active collection, PID attachment, a broker socket, "
-            "and an enabled automatic policy"
+            "Automatic collection requires active collection, a broker socket, and an enabled "
+            "automatic policy"
         )
     if config.allow_project_execution and not config.allow_automatic_collection:
         raise ValueError("Project execution requires automatic collection to be enabled")
@@ -161,7 +161,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         frequency_hz: int = 99,
         call_graph: Literal["fp", "dwarf", "lbr"] = "dwarf",
         events: tuple[str, ...] = DEFAULT_STAT_EVENTS,
-        max_output_bytes: int = 1 << 30,
+        max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
     ) -> CollectionPlanArtifact:
         plan = create_collection_plan(
             CollectionPlanRequest(
@@ -205,7 +205,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         structured_output=True,
     )
     async def execute_collection_plan(plan_id: str) -> ArtifactReference:
-        _require_automatic_collection(config)
+        _require_automatic_collection(config, require_existing_pid_attach=True)
         try:
             plan = collection_plans.pop(plan_id)
         except KeyError as exc:
@@ -256,7 +256,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         frequency_hz: int = 99,
         call_graph: Literal["fp", "dwarf", "lbr"] = "dwarf",
         events: tuple[str, ...] = DEFAULT_STAT_EVENTS,
-        max_output_bytes: int = 1 << 30,
+        max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
     ) -> ArtifactReference:
         _require_project_execution(config)
         safe_project = policy.workspace_root(project_root)
@@ -701,7 +701,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         call_graph: Literal["fp", "dwarf", "lbr"] = "dwarf",
         events: tuple[str, ...] = DEFAULT_STAT_EVENTS,
         timeout_seconds: float = 300.0,
-        max_output_bytes: int = 1 << 30,
+        max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
     ) -> ArtifactReference:
         _require_active_collection(config, pid=pid)
         safe_output = policy.new_output_file(output_path)
@@ -792,8 +792,15 @@ def _require_active_collection(config: ServerConfig, *, pid: int | None) -> None
         )
 
 
-def _require_automatic_collection(config: ServerConfig) -> None:
-    _require_active_collection(config, pid=1)
+def _require_automatic_collection(
+    config: ServerConfig,
+    *,
+    require_existing_pid_attach: bool,
+) -> None:
+    _require_active_collection(
+        config,
+        pid=1 if require_existing_pid_attach else None,
+    )
     if (
         not config.allow_automatic_collection
         or config.collector_socket is None
@@ -808,7 +815,7 @@ def _require_automatic_collection(config: ServerConfig) -> None:
 
 
 def _require_project_execution(config: ServerConfig) -> None:
-    _require_automatic_collection(config)
+    _require_automatic_collection(config, require_existing_pid_attach=False)
     if not config.allow_project_execution:
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
@@ -840,8 +847,10 @@ def main() -> None:
     )
     parser.add_argument("--automatic-max-duration-seconds", type=float, default=30.0)
     parser.add_argument("--automatic-max-frequency-hz", type=int, default=99)
-    parser.add_argument("--automatic-max-output-bytes", type=int, default=1 << 30)
-    parser.add_argument("--automatic-plan-ttl-seconds", type=int, default=300)
+    parser.add_argument(
+        "--automatic-max-output-bytes", type=int, default=DEFAULT_MAX_OUTPUT_BYTES
+    )
+    parser.add_argument("--automatic-plan-ttl-seconds", type=int, default=120)
     parser.add_argument("--perf-path", type=Path)
     parser.add_argument("--max-artifact-bytes", type=int, default=128 << 20)
     arguments = parser.parse_args()

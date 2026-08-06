@@ -7,17 +7,17 @@
 普通 Linux 用户应下载：
 
 ```text
-perflens-0.1.2-py3-none-any.whl
+perflens-0.1.3-py3-none-any.whl
 ```
 
-`.whl` 是 Python 安装包，不是需要解压后点击运行的 ZIP。不要提取它。解压后看到的 `perflens/` 和 `perflens-0.1.2.dist-info/` 只是程序模块与安装元数据。
+`.whl` 是 Python 安装包，不是需要解压后点击运行的 ZIP。不要提取它。解压后看到的 `perflens/` 和 `perflens-0.1.3.dist-info/` 只是程序模块与安装元数据。
 
 其他 Release 文件的用途：
 
-- `perflens_0.1.2-1_amd64.deb`：Debian 13 普通用户主安装包；
-- `perflens-collector_0.1.2-1_all.deb`：可选 Collector 管理入口，需配合同版本主包；
-- `perflens-0.1.2.tar.gz`：源码发行包；
-- `perflens-performance-analysis-0.1.2.zip`：只包含 Agent Skill；
+- `perflens_0.1.3-1_amd64.deb`：Debian 13 普通用户主安装包；
+- `perflens-collector_0.1.3-1_all.deb`：可选 Collector 管理入口，需配合同版本主包；
+- `perflens-0.1.3.tar.gz`：源码发行包；
+- `perflens-skill-0.1.3.zip`：只包含 Agent Skill；
 - `sbom.cdx.json`：依赖安全清单；
 - `SHA256SUMS`：下载校验和；
 - `Source code`：GitHub 自动生成的源码快照。
@@ -33,7 +33,7 @@ sha256sum --ignore-missing --check SHA256SUMS
 DEB、源码包、Skill、SBOM 和 `SHA256SUMS` 也可以用相同命令验证：
 
 ```bash
-gh attestation verify ./perflens-0.1.2-py3-none-any.whl \
+gh attestation verify ./perflens-0.1.3-py3-none-any.whl \
   --repo link0-o/PerfLens \
   --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -45,7 +45,7 @@ gh attestation verify ./perflens-0.1.2-py3-none-any.whl \
 Debian 13 `amd64` 用户推荐直接安装主 DEB，不需要 pipx：
 
 ```bash
-sudo apt install ./perflens_0.1.2-1_amd64.deb
+sudo apt install ./perflens_0.1.3-1_amd64.deb
 ```
 
 需要自动采集时再安装完全相同版本的 Collector DEB。安装软件包不会自动启动
@@ -57,7 +57,7 @@ sudo apt install ./perflens_0.1.2-1_amd64.deb
 
 ```bash
 cd ~/Downloads
-pipx install ./perflens-0.1.2-py3-none-any.whl
+pipx install ./perflens-0.1.3-py3-none-any.whl
 ```
 
 如果浏览器下载到了其他目录，请先在文件管理器中进入该目录，右键空白处选择
@@ -74,7 +74,7 @@ pipx ensurepath
 然后重新打开终端，再执行 wheel 安装命令。也可以使用：
 
 ```bash
-uv tool install ./perflens-0.1.2-py3-none-any.whl
+uv tool install ./perflens-0.1.3-py3-none-any.whl
 ```
 
 验证安装：
@@ -101,6 +101,16 @@ perflens init --client claude-code
 perflens init --read-only
 ```
 
+默认允许 `stat`、`record` 项目采集，MCP 上限是单次 30 秒、99 Hz、256 MiB，计划
+120 秒失效；已有 PID 附加默认关闭。Skill 常用约 10 秒作为起点，但会按工作负载调整。
+查看全部可调参数用 `perflens init --help`。例如仅开放 `stat` 且限制 15 秒：
+
+```bash
+perflens init --automatic-mode stat --automatic-max-duration-seconds 15
+```
+
+只有需要附加明确授权的已有进程时才加 `--allow-existing-pid-attach`。
+
 已有项目升级 PerfLens 或需要调整自动采集开关时运行：
 
 ```bash
@@ -111,6 +121,8 @@ perflens init --update
 `setup.json`、Claude MCP 记录和 Skill 内容指纹，只更新 PerfLens 确认拥有且未被用户
 修改的客户端内容。`perflens-setup` 本身是可重建托管目录，不应存放用户文件；存在额外
 文件时更新会拒绝。没有显式要求重新生成时，已有 `collector-assets` 会随更新保留。
+从 v0.1.2 升级时，未修改的旧 Skill 会自动迁移为更短的 `$perflens`/`/perflens`；
+用户改过的 Skill 会保留并要求人工处理。
 要从双客户端缩小到单客户端，先运行
 `perflens detach --client <不再使用的客户端>`，再按新的选择执行 `init --update`。
 使用自定义引导目录时，初始化、更新和 detach 都应传入同一个 `--setup-directory`。
@@ -120,7 +132,7 @@ PerfLens 的程序和 Skill 资源随软件包安装，但不会写入 Codex/Cla
 
 该命令只在所选项目内执行安全操作：
 
-- 安装或识别 PerfLens Performance Analysis Skill；
+- 安装或识别 PerfLens 分析与优化 Skill；
 - 安全创建或更新项目 `.codex/config.toml` 中由 PerfLens 标记管理的 MCP 配置块；
 - 安全合并项目 `.mcp.json` 中的 Claude Code MCP 服务并保留其他服务；
 - 按选择安装 `.agents/skills` 和/或 `.claude/skills` 项目 Skill；
@@ -186,7 +198,7 @@ perflens analyze-folded \
 重启 Codex，执行 `codex mcp list` 确认 `perflens` 已加载，然后在项目中说：
 
 ```text
-使用 $perflens-performance-analysis 分析这个项目的性能 Profile，
+使用 $perflens 分析这个项目的性能 Profile，
 区分直接证据、候选原因和缺失证据。
 ```
 
@@ -195,7 +207,7 @@ PerfLens 安全合并到项目 `.mcp.json`。首次使用时检查 Claude Code �
 然后说：
 
 ```text
-使用 /perflens-performance-analysis 分析并优化当前项目。
+使用 /perflens 优化当前项目的运行性能。
 ```
 
 如果创建 `.claude/skills` 时 Claude Code 已经在运行，需要重新启动一次；之后 Skill
@@ -248,7 +260,7 @@ perflens status \
 完成验收和 MCP 配置后，用户不需要查询 PID，可以直接对 Codex 说：
 
 ```text
-使用 $perflens-performance-analysis 优化当前项目的运行性能。
+使用 $perflens 优化当前项目的运行性能。
 允许运行我确认的项目可执行文件并采集最多 10 秒，不要附加其他已有进程。
 ```
 

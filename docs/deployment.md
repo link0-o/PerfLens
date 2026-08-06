@@ -104,7 +104,7 @@ remove these files manually; request a new MCP plan when a retry is needed.
 
 Long-running automatic collection is also bounded by `max_spool_bytes`,
 `max_spool_artifacts`, and `min_free_bytes`. The defaults cap logical artifact
-storage at 10 GiB and 1000 files while reserving 1 GiB on the spool filesystem.
+storage at 5 GiB and 500 files while reserving 2 GiB on the spool filesystem.
 The Collector reserves the plan's worst-case output before starting perf and
 returns `RESOURCE_LIMIT_EXCEEDED` when a boundary cannot be met. It never
 deletes or rotates old evidence automatically; an administrator must review and

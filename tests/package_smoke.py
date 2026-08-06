@@ -28,6 +28,11 @@ def main() -> None:
     assert "claude-code" in init_help
     assert "--setup-directory" in init_help
     assert "--update" in init_help
+    assert "--automatic-mode" in init_help
+    assert "--automatic-max-frequency-hz" in init_help
+    assert "--automatic-max-output-bytes" in init_help
+    assert "--automatic-plan-ttl-seconds" in init_help
+    assert "--allow-existing-pid-attach" in init_help
     detach_help = _run(perflens, "detach", "--help")
     assert "--dry-run" in detach_help
     assert "--json" in detach_help
@@ -194,7 +199,7 @@ def main() -> None:
             project
             / ".agents"
             / "skills"
-            / "perflens-performance-analysis"
+            / "perflens"
             / "SKILL.md"
         )
         assert skill.is_file()
@@ -211,11 +216,11 @@ def main() -> None:
         )
         assert (
             initialized_project
-            / ".agents/skills/perflens-performance-analysis/SKILL.md"
+            / ".agents/skills/perflens/SKILL.md"
         ).is_file()
         assert (
             initialized_project
-            / ".claude/skills/perflens-performance-analysis/SKILL.md"
+            / ".claude/skills/perflens/SKILL.md"
         ).is_file()
         assert (initialized_project / ".codex/config.toml").is_file()
         claude_project = json.loads(
@@ -261,6 +266,9 @@ def main() -> None:
         generated_mcp = (guided_setup / "codex-mcp.toml").read_text(encoding="utf-8")
         assert f'command = "{perflens_mcp}"' in generated_mcp
         assert '"--allow-project-execution"' in generated_mcp
+        assert '"--allow-pid-attach"' not in generated_mcp
+        assert '"268435456"' in generated_mcp
+        assert '"120"' in generated_mcp
         project_mcp = (project / ".codex/config.toml").read_text(encoding="utf-8")
         assert "BEGIN PerfLens managed MCP configuration" in project_mcp
         assert '"--allow-project-execution"' in project_mcp
@@ -294,13 +302,15 @@ def main() -> None:
             "/usr/bin/perf",
         )
         assert (collector_assets / "perflens-collector.service").is_file()
+        assert collector_assets.stat().st_mode & 0o777 == 0o700
+        assert (collector_assets / "collector.toml").stat().st_mode & 0o777 == 0o600
         policy_text = (collector_assets / "collector.toml").read_text(encoding="utf-8")
         service_text = (collector_assets / "perflens-collector.service").read_text(
             encoding="utf-8"
         )
         assert f"allowed_uids = [{os.geteuid()}]" in policy_text
         assert "policy_version = 1" in policy_text
-        assert "max_spool_bytes = 10737418240" in policy_text
+        assert "max_spool_bytes = 5368709120" in policy_text
         assert "exactly one UID is supported" in policy_text
         assert "允许连接 Collector 的唯一普通用户 UID" in policy_text
         assert "The only ordinary-user UID allowed to call this Collector" in policy_text
@@ -348,7 +358,7 @@ def main() -> None:
             encoding="utf-8"
         )
         assert detach_payload["codex_skill_status"] == "removed"
-        assert not (project / ".agents/skills/perflens-performance-analysis").exists()
+        assert not (project / ".agents/skills/perflens").exists()
         assert (project / "guided-setup/setup.json").is_file()
 
 

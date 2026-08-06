@@ -93,7 +93,7 @@ def main() -> None:
         ).read_text(encoding="utf-8")
         assert "policy_version = 1" in policy
         assert "策略格式版本" in policy
-        assert "max_spool_bytes = 10737418240" in policy
+        assert "max_spool_bytes = 5368709120" in policy
         assert "PerfLens never deletes old evidence automatically" in policy
         assert "perflens-admin spool-status checks quotas read-only" in policy
         assert "exactly one UID is supported" in policy

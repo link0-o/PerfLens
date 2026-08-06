@@ -35,7 +35,7 @@ def test_release_preparation_builds_skill_archive_and_checksums(tmp_path: Path) 
                 project_root
                 / ".agents"
                 / "skills"
-                / "perflens-performance-analysis"
+                / "perflens"
             ),
             "--tag",
             f"v{__version__}",
@@ -46,13 +46,13 @@ def test_release_preparation_builds_skill_archive_and_checksums(tmp_path: Path) 
         cwd=project_root,
     )
 
-    archive = dist / f"perflens-performance-analysis-{__version__}.zip"
+    archive = dist / f"perflens-skill-{__version__}.zip"
     checksums = dist / "SHA256SUMS"
     assert str(archive) in completed.stdout
     with zipfile.ZipFile(archive) as skill_zip:
         names = set(skill_zip.namelist())
-    assert "perflens-performance-analysis/SKILL.md" in names
-    assert "perflens-performance-analysis/agents/openai.yaml" in names
+    assert "perflens/SKILL.md" in names
+    assert "perflens/agents/openai.yaml" in names
 
     recorded = {
         name: digest
@@ -99,7 +99,7 @@ def test_release_preparation_rejects_stale_artifacts(tmp_path: Path) -> None:
             "--dist-dir",
             str(dist),
             "--skill-root",
-            str(project_root / ".agents" / "skills" / "perflens-performance-analysis"),
+            str(project_root / ".agents" / "skills" / "perflens"),
         ],
         check=False,
         capture_output=True,
@@ -126,7 +126,7 @@ def test_release_preparation_requires_native_debian_packages(tmp_path: Path) -> 
             "--dist-dir",
             str(dist),
             "--skill-root",
-            str(project_root / ".agents" / "skills/perflens-performance-analysis"),
+            str(project_root / ".agents" / "skills/perflens"),
         ],
         check=False,
         capture_output=True,

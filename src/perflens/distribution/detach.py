@@ -10,7 +10,12 @@ from perflens import __version__
 from perflens.contracts.artifacts import ProjectDetachmentArtifact, SetupArtifact
 from perflens.distribution.claude import plan_claude_project_config_removal
 from perflens.distribution.codex import plan_codex_project_config_removal
-from perflens.distribution.skill import SkillClient, plan_project_skill_removal
+from perflens.distribution.skill import (
+    SkillClient,
+    plan_project_skill_removal,
+    project_skill_candidates,
+    project_skill_path,
+)
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _MAX_SETUP_BYTES = 1 << 20
@@ -63,6 +68,7 @@ def detach_project_integration(
             project,
             client="codex",
             expected_fingerprint=(setup.skill_fingerprint if setup is not None else None),
+            recorded_path=(setup.skill_path if setup is not None else None),
         )
         if remove_skills and "codex" in selected
         else None
@@ -74,6 +80,7 @@ def detach_project_integration(
             expected_fingerprint=(
                 setup.claude_skill_fingerprint if setup is not None else None
             ),
+            recorded_path=(setup.claude_skill_path if setup is not None else None),
         )
         if remove_skills and "claude-code" in selected
         else None
@@ -156,11 +163,15 @@ def detach_project_integration(
         claude_config_path=str(project / ".mcp.json"),
         claude_config_status=claude_config_status,
         codex_skill_path=str(
-            project / ".agents/skills/perflens-performance-analysis"
+            codex_skill_plan.path
+            if codex_skill_plan is not None
+            else project_skill_path(project, client="codex")
         ),
         codex_skill_status=codex_skill_status,
         claude_skill_path=str(
-            project / ".claude/skills/perflens-performance-analysis"
+            claude_skill_plan.path
+            if claude_skill_plan is not None
+            else project_skill_path(project, client="claude-code")
         ),
         claude_skill_status=claude_skill_status,
         removed_paths=removed_paths,
@@ -259,9 +270,9 @@ def _preserved_paths(
 ) -> tuple[str, ...]:
     candidates = [setup_path or project / "perflens-setup", project / "perflens-results"]
     if not remove_skills or "codex" not in selected:
-        candidates.append(project / ".agents/skills/perflens-performance-analysis")
+        candidates.extend(project_skill_candidates(project, client="codex"))
     if not remove_skills or "claude-code" not in selected:
-        candidates.append(project / ".claude/skills/perflens-performance-analysis")
+        candidates.extend(project_skill_candidates(project, client="claude-code"))
     return tuple(
         str(path) for path in candidates if path.exists() or path.is_symlink()
     )

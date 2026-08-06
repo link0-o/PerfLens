@@ -898,7 +898,7 @@ def test_mcp_launches_exact_project_workload_then_collects_bound_pid(tmp_path: P
                 allow_writes=True,
                 allow_process_execution=True,
                 allow_active_collection=True,
-                allow_pid_attach=True,
+                allow_pid_attach=False,
                 allow_automatic_collection=True,
                 allow_project_execution=True,
                 collector_socket=broker.socket_path,

@@ -1,7 +1,7 @@
-# Project Workload Optimization
+# PerfLens project workload analysis and optimization
 
-Use this workflow when the user asks to optimize the current project's runtime performance without
-providing a Profile or PID.
+Use this workflow when the user asks to analyze or optimize the current project's runtime
+performance without providing a Profile or PID.
 
 ## Discover a reproducible workload
 

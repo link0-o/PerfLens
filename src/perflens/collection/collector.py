@@ -31,6 +31,7 @@ DEFAULT_STAT_EVENTS = (
     "cpu-migrations",
     "page-faults",
 )
+DEFAULT_MAX_OUTPUT_BYTES = 256 << 20
 CollectionMode = Literal["record", "stat", "sched", "lock", "off_cpu"]
 CallGraphMode = Literal["fp", "dwarf", "lbr"]
 
@@ -55,7 +56,7 @@ class CollectionRequest:
     call_graph: CallGraphMode = "dwarf"
     events: tuple[str, ...] = DEFAULT_STAT_EVENTS
     timeout_seconds: float = 300.0
-    max_output_bytes: int = 1 << 30
+    max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
 
 
 def collect_profile(request: CollectionRequest) -> CollectionArtifact:

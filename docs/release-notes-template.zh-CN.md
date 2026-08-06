@@ -47,7 +47,7 @@ uv tool install ./perflens-{version}-py3-none-any.whl
 - `perflens-collector_{version}-1_all.deb`：可选 Collector 管理入口，必须与
   同版本主 DEB 一起安装；安装时不会自动启用服务；
 - `perflens-{version}.tar.gz`：Python 源码发行包；
-- `perflens-performance-analysis-{version}.zip`：只安装独立 Skill 时使用；
+- `perflens-skill-{version}.zip`：只安装独立 Skill 时使用；
 - `sbom.cdx.json`：CycloneDX 依赖清单；
 - `SHA256SUMS`：六个正式发行产物的 SHA-256 校验。
 

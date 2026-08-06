@@ -1,5 +1,11 @@
 # Troubleshooting
 
+[简体中文](troubleshooting.zh-CN.md) | English
+
+For failures limited to a published version, first check
+[known issues, fixes, and bounded workarounds](known-issues.md), including the `v0.1.2`
+group-writable Collector policy generated under `umask 0002`.
+
 ## Start with one read-only status command
 
 Run:
@@ -109,8 +115,6 @@ real failure. Inspect service status and the journal; never bypass the handshake
 marker, trusted ownership, and no group/other write permission. Review rejected
 legacy or manually edited units with `systemctl cat perflens-collector.service`
 and migrate them explicitly; do not weaken the ownership check.
-
-[简体中文](troubleshooting.zh-CN.md) | English
 
 ## Active perf collection is denied
 

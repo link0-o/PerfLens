@@ -1,4 +1,4 @@
-# Performance Diagnosis
+# PerfLens Performance Diagnosis
 
 ## Problem definition
 

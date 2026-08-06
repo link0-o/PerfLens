@@ -45,9 +45,9 @@ PerfLens requires Python 3.12 or newer.
 For a GitHub release, download the wheel and install it as an isolated tool:
 
 ```bash
-pipx install ./perflens-0.1.2-py3-none-any.whl
+pipx install ./perflens-0.1.3-py3-none-any.whl
 # or
-uv tool install ./perflens-0.1.2-py3-none-any.whl
+uv tool install ./perflens-0.1.3-py3-none-any.whl
 ```
 
 Then opt one project in. Other projects do not see the Skill or MCP server:
@@ -328,7 +328,7 @@ perflens install-skill --client claude-code --project /absolute/path/to/workspac
 ```
 
 The command creates
-`.agents/skills/perflens-performance-analysis` and refuses to overwrite an
+`.agents/skills/perflens` and refuses to overwrite an
 existing Skill. To print a project-scoped MCP configuration:
 
 ```bash
@@ -354,13 +354,13 @@ codex mcp add perflens -- \
 Restart Codex, then ask:
 
 ```text
-$perflens-performance-analysis analyze ./profile.folded and report direct evidence, candidates, and missing evidence.
+$perflens analyze ./profile.folded and report direct evidence, candidates, and missing evidence.
 ```
 
 For Claude Code, `perflens init` installs the project Skill under
-`.claude/skills/perflens-performance-analysis` and safely merges `perflens`
+`.claude/skills/perflens` and safely merges `perflens`
 into the project `.mcp.json`. Claude Code asks the user to trust a project MCP
-server before first use. Invoke it with `/perflens-performance-analysis`.
+server before first use. Invoke it with `/perflens`.
 
 See [MCP server and Skill setup](docs/mcp-and-skill.md) for permissions,
 project-scoped configuration, process-execution opt-in, and the full tool flow.
@@ -418,8 +418,9 @@ See `docs/performance-budget.md` for the recorded environment and baseline.
 See [release readiness](docs/release-readiness.md),
 [release process](docs/releasing.md),
 [real-world profile acceptance](docs/real-world-acceptance.md), and
-[troubleshooting](docs/troubleshooting.md) for final verification evidence and
-operational failure guidance.
+[known issues](docs/known-issues.md), and
+[troubleshooting](docs/troubleshooting.md) for final verification evidence,
+published-version workarounds, and operational failure guidance.
 
 Chinese maintainer documentation is available in the
 [development guide](docs/development.zh-CN.md),

@@ -9,10 +9,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from perflens.collection.collector import DEFAULT_STAT_EVENTS, CollectionMode
+from perflens.collection.collector import (
+    DEFAULT_MAX_OUTPUT_BYTES,
+    DEFAULT_STAT_EVENTS,
+    CollectionMode,
+)
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 COLLECTOR_POLICY_VERSION = 1
+DEFAULT_MAX_SPOOL_BYTES = 5 << 30
+DEFAULT_MAX_SPOOL_ARTIFACTS = 500
+DEFAULT_MIN_FREE_BYTES = 2 << 30
+DEFAULT_MAX_PLAN_TTL_SECONDS = 120
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,11 +33,11 @@ class CollectorBrokerPolicy:
     allow_other_target_uids: bool = False
     max_duration_seconds: float = 30.0
     max_frequency_hz: int = 99
-    max_output_bytes: int = 1 << 30
-    max_spool_bytes: int = 10 << 30
-    max_spool_artifacts: int = 1000
-    min_free_bytes: int = 1 << 30
-    max_plan_ttl_seconds: int = 300
+    max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
+    max_spool_bytes: int = DEFAULT_MAX_SPOOL_BYTES
+    max_spool_artifacts: int = DEFAULT_MAX_SPOOL_ARTIFACTS
+    min_free_bytes: int = DEFAULT_MIN_FREE_BYTES
+    max_plan_ttl_seconds: int = DEFAULT_MAX_PLAN_TTL_SECONDS
     allowed_stat_events: tuple[str, ...] = DEFAULT_STAT_EVENTS
     socket_mode: int = 0o660
     artifact_mode: int = 0o640
@@ -207,11 +215,21 @@ def _parse_policy(section: dict[str, Any]) -> CollectorBrokerPolicy:
             allow_other_target_uids=allow_other,
             max_duration_seconds=_number_field(section, "max_duration_seconds", 30.0),
             max_frequency_hz=_integer_field(section, "max_frequency_hz", 99),
-            max_output_bytes=_integer_field(section, "max_output_bytes", 1 << 30),
-            max_spool_bytes=_integer_field(section, "max_spool_bytes", 10 << 30),
-            max_spool_artifacts=_integer_field(section, "max_spool_artifacts", 1000),
-            min_free_bytes=_integer_field(section, "min_free_bytes", 1 << 30),
-            max_plan_ttl_seconds=_integer_field(section, "max_plan_ttl_seconds", 300),
+            max_output_bytes=_integer_field(
+                section, "max_output_bytes", DEFAULT_MAX_OUTPUT_BYTES
+            ),
+            max_spool_bytes=_integer_field(
+                section, "max_spool_bytes", DEFAULT_MAX_SPOOL_BYTES
+            ),
+            max_spool_artifacts=_integer_field(
+                section, "max_spool_artifacts", DEFAULT_MAX_SPOOL_ARTIFACTS
+            ),
+            min_free_bytes=_integer_field(
+                section, "min_free_bytes", DEFAULT_MIN_FREE_BYTES
+            ),
+            max_plan_ttl_seconds=_integer_field(
+                section, "max_plan_ttl_seconds", DEFAULT_MAX_PLAN_TTL_SECONDS
+            ),
             allowed_stat_events=tuple(_string_value(event) for event in raw_events),
             socket_mode=socket_mode,
             artifact_mode=artifact_mode,

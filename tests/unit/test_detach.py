@@ -43,8 +43,8 @@ def test_detach_dry_run_and_removal_cover_both_clients_and_preserve_evidence(
     assert preview.claude_skill_status == "planned"
     assert config.read_text(encoding="utf-8") == before
     assert (project / ".mcp.json").is_file()
-    assert (project / ".agents/skills/perflens-performance-analysis").is_dir()
-    assert (project / ".claude/skills/perflens-performance-analysis").is_dir()
+    assert (project / ".agents/skills/perflens").is_dir()
+    assert (project / ".claude/skills/perflens").is_dir()
     assert str(project / "perflens-setup") in preview.preserved_paths
     assert str(results) in preview.preserved_paths
 
@@ -58,8 +58,8 @@ def test_detach_dry_run_and_removal_cover_both_clients_and_preserve_evidence(
     assert "perflens" not in json.loads(
         (project / ".mcp.json").read_text(encoding="utf-8")
     )["mcpServers"]
-    assert not (project / ".agents/skills/perflens-performance-analysis").exists()
-    assert not (project / ".claude/skills/perflens-performance-analysis").exists()
+    assert not (project / ".agents/skills/perflens").exists()
+    assert not (project / ".claude/skills/perflens").exists()
     assert (project / "perflens-setup/setup.json").is_file()
     assert results.is_dir()
     repeated = detach_project_integration(project)
@@ -95,7 +95,7 @@ def test_detach_can_select_one_client_and_preserve_skills(tmp_path: Path) -> Non
     assert "mcp_servers.perflens" in (project / ".codex/config.toml").read_text(
         encoding="utf-8"
     )
-    assert (project / ".claude/skills/perflens-performance-analysis/SKILL.md").is_file()
+    assert (project / ".claude/skills/perflens/SKILL.md").is_file()
 
 
 def test_detach_refuses_modified_skill_before_removing_any_config(tmp_path: Path) -> None:
@@ -112,7 +112,7 @@ def test_detach_refuses_modified_skill_before_removing_any_config(tmp_path: Path
     )
     codex_before = (project / ".codex/config.toml").read_text(encoding="utf-8")
     claude_before = (project / ".mcp.json").read_text(encoding="utf-8")
-    skill = project / ".claude/skills/perflens-performance-analysis/SKILL.md"
+    skill = project / ".claude/skills/perflens/SKILL.md"
     skill.write_text(skill.read_text(encoding="utf-8") + "\nuser edit\n", encoding="utf-8")
 
     with pytest.raises(PerfLensError) as modified:

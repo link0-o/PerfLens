@@ -1,6 +1,6 @@
 ---
-name: perflens-performance-analysis
-description: Diagnose and optimize Linux project performance with PerfLens MCP tools using an evidence-first workflow. Use when the user asks to optimize the current executable project, authorizes running a project workload for bounded automatic collection, provides an authorized live Linux PID, or needs FlameGraph, perf.data, perf script, folded-profile analysis, CPU hotspots, source attribution, regression analysis, or optimization validation. Do not use for general code review without a performance question or for live targets outside an approved collection policy.
+name: perflens
+description: Analyze and optimize Linux runtime performance with PerfLens MCP tools using an evidence-first workflow. Use for performance analysis or optimization of an executable project, authorized bounded workload or live-PID collection, FlameGraph, perf.data, perf script, folded profiles, CPU hotspots, source attribution, regressions, or matched A/B validation. 当用户要求性能分析、性能优化、CPU 热点、火焰图、perf.data、性能回归或授权采集时使用；不要用于没有性能问题的一般代码审查。
 ---
 
 # PerfLens Performance Analysis
@@ -10,6 +10,16 @@ Use PerfLens as the deterministic analysis engine and this skill as the investig
 ## Start with scope and evidence
 
 Before calling tools, establish the performance question, target metric, workload, environment, and available profile type. If the metric or workload is missing, state the assumption and ask for it when it changes the diagnosis.
+
+## Choose analysis or optimization intent
+
+- For **performance analysis**, collect or read evidence, diagnose hotspots, and recommend next
+  steps. Do not edit source unless the user also asks for changes.
+- For **performance optimization**, first establish a baseline and diagnose it. Change only code
+  supported by material evidence, run correctness tests, and repeat the same workload for matched
+  A/B validation. If evidence is insufficient, report the gap instead of guessing at a patch.
+- Words such as "deep" or “深度” request thoroughness but never grant process execution, PID
+  attachment, broader paths, longer collection, or source modification by themselves.
 
 Always read [evidence-model.md](references/evidence-model.md). Load the topic reference that matches the profile:
 

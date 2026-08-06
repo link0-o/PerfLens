@@ -26,7 +26,7 @@ from perflens.contracts.artifacts import (
     SetupArtifact,
 )
 from perflens.distribution.codex import validate_mcp_executable
-from perflens.distribution.skill import SKILL_NAME
+from perflens.distribution.skill import recorded_project_skill_path
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _MAX_SETUP_BYTES = 1 << 20
@@ -279,7 +279,22 @@ def _inspect_selected_skills(
         clients.append("claude-code")
     if not clients:
         return "missing"
-    statuses = tuple(_inspect_skill(project, client=client) for client in clients)
+    statuses = tuple(
+        _inspect_skill(
+            project,
+            client=client,
+            recorded_path=(
+                None
+                if artifact is None
+                else (
+                    artifact.skill_path
+                    if client == "codex"
+                    else artifact.claude_skill_path
+                )
+            ),
+        )
+        for client in clients
+    )
     if all(status == "ready" for status in statuses):
         return "ready"
     return "incomplete" if "incomplete" in statuses else "missing"
@@ -289,9 +304,16 @@ def _inspect_skill(
     project: Path,
     *,
     client: Literal["codex", "claude-code"] = "codex",
+    recorded_path: str | None = None,
 ) -> SkillStatus:
-    parent = ".agents" if client == "codex" else ".claude"
-    root = project / parent / "skills" / SKILL_NAME
+    try:
+        root = recorded_project_skill_path(
+            project,
+            client=client,
+            recorded_path=recorded_path,
+        )
+    except PerfLensError:
+        return "incomplete"
     skill = root / "SKILL.md"
     if not root.exists() and not root.is_symlink():
         return "missing"

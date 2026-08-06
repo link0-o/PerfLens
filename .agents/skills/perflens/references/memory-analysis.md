@@ -1,4 +1,4 @@
-# Allocation, copying, and memory candidates
+# PerfLens allocation, copying, and memory candidates
 
 Allocator frames do not establish that the allocator implementation is causal. Collect allocation counts, size distribution, lifetime, caller paths, peak memory, fragmentation, and cross-thread behavior.
 

@@ -9,7 +9,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from perflens.collection.collector import DEFAULT_STAT_EVENTS, CallGraphMode, CollectionMode
+from perflens.collection.collector import (
+    DEFAULT_MAX_OUTPUT_BYTES,
+    DEFAULT_STAT_EVENTS,
+    CallGraphMode,
+    CollectionMode,
+)
 from perflens.contracts.artifacts import CollectionCapabilityArtifact, CollectionPlanArtifact
 from perflens.domain.errors import ErrorCode, PerfLensError
 
@@ -23,8 +28,8 @@ class AutomaticCollectionPolicy:
     allow_other_uids: bool = False
     max_duration_seconds: float = 30.0
     max_frequency_hz: int = 99
-    max_output_bytes: int = 1 << 30
-    plan_ttl_seconds: int = 300
+    max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
+    plan_ttl_seconds: int = 120
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +40,7 @@ class CollectionPlanRequest:
     frequency_hz: int = 99
     call_graph: CallGraphMode = "dwarf"
     events: tuple[str, ...] = DEFAULT_STAT_EVENTS
-    max_output_bytes: int = 1 << 30
+    max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
 
 
 def create_collection_plan(

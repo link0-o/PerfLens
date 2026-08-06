@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from importlib import resources
 from importlib.resources.abc import Traversable
@@ -11,9 +12,9 @@ from pathlib import Path
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _ASSET_MAPPINGS = (
-    ("collector.example.toml", "collector.toml"),
-    ("perflens-collector.service", "perflens-collector.service"),
-    ("perflens.sysusers", "perflens.sysusers"),
+    ("collector.example.toml", "collector.toml", 0o600),
+    ("perflens-collector.service", "perflens-collector.service", 0o644),
+    ("perflens.sysusers", "perflens.sysusers", 0o644),
 )
 _MAX_ASSET_BYTES = 256 << 10
 
@@ -54,9 +55,9 @@ def install_collector_assets(
         )
     source = _bundled_collector_root()
     try:
-        target.mkdir()
+        target.mkdir(mode=0o700)
         total = 0
-        for source_name, output_name in _ASSET_MAPPINGS:
+        for source_name, output_name, output_mode in _ASSET_MAPPINGS:
             data = source.joinpath(source_name).read_bytes()
             if source_name == "collector.example.toml":
                 text = data.decode("utf-8")
@@ -90,6 +91,7 @@ def install_collector_assets(
                     "Bundled collector assets exceed their size limit",
                 )
             with (target / output_name).open("xb") as handle:
+                os.fchmod(handle.fileno(), output_mode)
                 handle.write(data)
     except PerfLensError:
         shutil.rmtree(target, ignore_errors=True)
@@ -153,10 +155,10 @@ def _replace_exact(text: str, marker: str, replacement: str, asset_name: str) ->
 
 def _bundled_collector_root() -> Traversable:
     packaged = resources.files("perflens").joinpath("_bundled").joinpath("collector")
-    if all(packaged.joinpath(name).is_file() for name, _ in _ASSET_MAPPINGS):
+    if all(packaged.joinpath(name).is_file() for name, _, _ in _ASSET_MAPPINGS):
         return packaged
     repository_copy = Path(__file__).resolve().parents[3] / "packaging" / "collector"
-    if all((repository_copy / name).is_file() for name, _ in _ASSET_MAPPINGS):
+    if all((repository_copy / name).is_file() for name, _, _ in _ASSET_MAPPINGS):
         return repository_copy
     raise PerfLensError(
         ErrorCode.INTERNAL_ERROR,

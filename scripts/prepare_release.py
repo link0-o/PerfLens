@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import cast
 
 from perflens import __version__
-from perflens.distribution.skill import SKILL_NAME
+from perflens.distribution.skill import SKILL_ARCHIVE_BASENAME, SKILL_NAME
 
 _ZIP_TIMESTAMP = (2020, 1, 1, 0, 0, 0)
 _MAX_SKILL_FILES = 64
@@ -76,7 +76,7 @@ def main() -> None:
     except OSError as exc:
         parser.error(f"unable to normalize release artifact permissions: {exc}")
 
-    archive = dist_dir / f"{SKILL_NAME}-{__version__}.zip"
+    archive = dist_dir / f"{SKILL_ARCHIVE_BASENAME}-{__version__}.zip"
     allowed_names = {
         wheel.name,
         source.name,

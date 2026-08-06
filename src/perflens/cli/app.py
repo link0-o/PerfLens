@@ -26,6 +26,7 @@ from perflens.artifacts.filesystem import (
 from perflens.collection.capabilities import inspect_collection_capabilities
 from perflens.collection.collector import (
     ACTIVE_COLLECTION_AUTHORIZATION,
+    DEFAULT_MAX_OUTPUT_BYTES,
     DEFAULT_STAT_EVENTS,
     PID_ATTACH_AUTHORIZATION,
     CollectionRequest,
@@ -303,6 +304,56 @@ def init_command(
             help="启用有界项目运行和自动采集, --read-only 只分析已有证据。",
         ),
     ] = True,
+    automatic_modes: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--automatic-mode",
+            help="允许的自动采集模式; 可重复传入, 默认 stat 和 record。",
+        ),
+    ] = None,
+    automatic_max_duration_seconds: Annotated[
+        float,
+        typer.Option(
+            "--automatic-max-duration-seconds",
+            min=0.001,
+            max=86_400,
+            help="MCP 自动采集单次最长秒数。",
+        ),
+    ] = 30.0,
+    automatic_max_frequency_hz: Annotated[
+        int,
+        typer.Option(
+            "--automatic-max-frequency-hz",
+            min=1,
+            max=10_000,
+            help="MCP record/off-CPU 最大采样频率 Hz。",
+        ),
+    ] = 99,
+    automatic_max_output_bytes: Annotated[
+        int,
+        typer.Option(
+            "--automatic-max-output-bytes",
+            min=1,
+            max=1 << 40,
+            help="MCP 单次自动采集最大输出字节数。",
+        ),
+    ] = DEFAULT_MAX_OUTPUT_BYTES,
+    automatic_plan_ttl_seconds: Annotated[
+        int,
+        typer.Option(
+            "--automatic-plan-ttl-seconds",
+            min=1,
+            max=3600,
+            help="一次性自动采集计划的有效秒数。",
+        ),
+    ] = 120,
+    allow_existing_pid_attach: Annotated[
+        bool,
+        typer.Option(
+            "--allow-existing-pid-attach",
+            help="额外允许自动计划附加用户明确授权的已有 PID; 默认关闭。",
+        ),
+    ] = False,
     prepare_collector: Annotated[
         bool,
         typer.Option(
@@ -343,6 +394,12 @@ def init_command(
             mcp_command=mcp_command,
             prepare_collector=prepare_collector,
             automatic_collection=automatic_collection,
+            allow_pid_attach=allow_existing_pid_attach,
+            automatic_modes=tuple(automatic_modes or ("stat", "record")),
+            automatic_max_duration_seconds=automatic_max_duration_seconds,
+            automatic_max_frequency_hz=automatic_max_frequency_hz,
+            automatic_max_output_bytes=automatic_max_output_bytes,
+            automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
             perf_path=perf_path,
             update_existing=update_existing,
         )
@@ -439,6 +496,56 @@ def setup_command(
             help="为已授权的普通用户项目运行和采集生成 MCP 策略。",
         ),
     ] = False,
+    automatic_modes: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--automatic-mode",
+            help="允许的自动采集模式; 可重复传入, 默认 stat 和 record。",
+        ),
+    ] = None,
+    automatic_max_duration_seconds: Annotated[
+        float,
+        typer.Option(
+            "--automatic-max-duration-seconds",
+            min=0.001,
+            max=86_400,
+            help="MCP 自动采集单次最长秒数。",
+        ),
+    ] = 30.0,
+    automatic_max_frequency_hz: Annotated[
+        int,
+        typer.Option(
+            "--automatic-max-frequency-hz",
+            min=1,
+            max=10_000,
+            help="MCP record/off-CPU 最大采样频率 Hz。",
+        ),
+    ] = 99,
+    automatic_max_output_bytes: Annotated[
+        int,
+        typer.Option(
+            "--automatic-max-output-bytes",
+            min=1,
+            max=1 << 40,
+            help="MCP 单次自动采集最大输出字节数。",
+        ),
+    ] = DEFAULT_MAX_OUTPUT_BYTES,
+    automatic_plan_ttl_seconds: Annotated[
+        int,
+        typer.Option(
+            "--automatic-plan-ttl-seconds",
+            min=1,
+            max=3600,
+            help="一次性自动采集计划的有效秒数。",
+        ),
+    ] = 120,
+    allow_existing_pid_attach: Annotated[
+        bool,
+        typer.Option(
+            "--allow-existing-pid-attach",
+            help="额外允许自动计划附加用户明确授权的已有 PID; 默认关闭。",
+        ),
+    ] = False,
     collector_uid: Annotated[
         int | None,
         typer.Option(
@@ -478,6 +585,12 @@ def setup_command(
             mcp_command=mcp_command,
             prepare_collector=prepare_collector,
             automatic_collection=automatic_collection,
+            allow_pid_attach=allow_existing_pid_attach,
+            automatic_modes=tuple(automatic_modes or ("stat", "record")),
+            automatic_max_duration_seconds=automatic_max_duration_seconds,
+            automatic_max_frequency_hz=automatic_max_frequency_hz,
+            automatic_max_output_bytes=automatic_max_output_bytes,
+            automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
             collector_uid=collector_uid,
             collector_command=collector_command,
             perf_path=perf_path,

@@ -158,11 +158,51 @@ def test_cli_exposes_version_and_release_setup_commands(tmp_path: Path) -> None:
     assert "检查当前状态: perflens status" in guided.output
     assert f"--setup-directory {guided_project / 'perflens-setup'}" in guided.output
     assert (guided_project / "perflens-setup/下一步.zh-CN.md").is_file()
-    assert (guided_project / ".agents/skills/perflens-performance-analysis/SKILL.md").is_file()
+    assert (guided_project / ".agents/skills/perflens/SKILL.md").is_file()
     generated_config = (guided_project / "perflens-setup/codex-mcp.toml").read_text(
         encoding="utf-8"
     )
     assert '"--allow-project-execution"' in generated_config
+    assert '"--allow-pid-attach"' not in generated_config
+
+
+def test_init_exposes_bounded_collection_policy_and_optional_pid_attach(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "policy-project"
+    project.mkdir()
+
+    initialized = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--client",
+            "codex",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+            "--automatic-mode",
+            "stat",
+            "--automatic-max-duration-seconds",
+            "12",
+            "--automatic-max-frequency-hz",
+            "77",
+            "--automatic-max-output-bytes",
+            "123456",
+            "--automatic-plan-ttl-seconds",
+            "45",
+            "--allow-existing-pid-attach",
+        ],
+    )
+
+    assert initialized.exit_code == 0, initialized.output
+    config = (project / ".codex/config.toml").read_text(encoding="utf-8")
+    assert config.count('"--automatic-mode"') == 1
+    for value in ("12.0", "77", "123456", "45"):
+        assert f'"{value}"' in config
+    assert '"--allow-pid-attach"' in config
 
 
 def test_init_activates_selected_clients_only_inside_the_project(tmp_path: Path) -> None:
@@ -190,7 +230,7 @@ def test_init_activates_selected_clients_only_inside_the_project(tmp_path: Path)
     assert "Codex Skill:" not in initialized.output
     assert not (project / ".agents").exists()
     assert not (project / ".codex").exists()
-    assert (project / ".claude/skills/perflens-performance-analysis/SKILL.md").is_file()
+    assert (project / ".claude/skills/perflens/SKILL.md").is_file()
     server = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))[
         "mcpServers"
     ]["perflens"]
@@ -216,9 +256,9 @@ def test_init_defaults_to_codex_and_claude_code_project_activation(tmp_path: Pat
     )
 
     assert initialized.exit_code == 0, initialized.output
-    assert (project / ".agents/skills/perflens-performance-analysis/SKILL.md").is_file()
+    assert (project / ".agents/skills/perflens/SKILL.md").is_file()
     assert (project / ".codex/config.toml").is_file()
-    assert (project / ".claude/skills/perflens-performance-analysis/SKILL.md").is_file()
+    assert (project / ".claude/skills/perflens/SKILL.md").is_file()
     assert (project / ".mcp.json").is_file()
 
     repeated = runner.invoke(
@@ -310,7 +350,7 @@ def test_cli_detach_one_client_then_updates_to_narrower_scope(tmp_path: Path) ->
     )
     assert detached.exit_code == 0, detached.output
     assert "Claude Code Skill: 已移除" in detached.output
-    assert not (project / ".claude/skills/perflens-performance-analysis").exists()
+    assert not (project / ".claude/skills/perflens").exists()
 
     updated = runner.invoke(
         app,
@@ -328,7 +368,7 @@ def test_cli_detach_one_client_then_updates_to_narrower_scope(tmp_path: Path) ->
         ],
     )
     assert updated.exit_code == 0, updated.output
-    assert not (project / ".claude/skills/perflens-performance-analysis").exists()
+    assert not (project / ".claude/skills/perflens").exists()
     assert "perflens" not in json.loads(
         (project / ".mcp.json").read_text(encoding="utf-8")
     )["mcpServers"]

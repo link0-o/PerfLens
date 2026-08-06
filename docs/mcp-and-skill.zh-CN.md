@@ -8,7 +8,7 @@ PerfLens 由三个可以分开使用的层组成：
 
 1. **Core + CLI**：确定性地解析 Profile、计算热点和调用路径、定位源码、生成分析产物。
 2. **MCP Server**：把上述能力作为本地 stdio 工具提供给 Codex、Claude Code 等客户端。
-3. **Performance Analysis Skill**：告诉 Agent 应该按什么顺序使用工具，以及哪些结论有证据、哪些只能算候选。
+3. **PerfLens Skill**：告诉 Agent 应该按什么顺序分析或优化，以及哪些结论有证据、哪些只能算候选。
 
 Core 和 MCP Server 都不会调用 LLM API。Skill 只是工作流和安全规则。因此 PerfLens 可以说是“带 Skill 的 MCP 工具项目”，但 MCP 与 Skill 是两个独立组成部分。
 
@@ -30,7 +30,29 @@ perflens init
 引导目录；更新模式也只更新所有权记录匹配的 MCP 配置和未修改 Skill。要停用已有客户端，
 先执行对应客户端的 `detach`，再用新的客户端范围更新。`perflens-setup` 是托管生成目录；
 额外用户文件会阻止更新，已有 Collector 暂存资产在未要求重新生成时保留。
+从 `v0.1.2` 升级时，`perflens init --update` 会把内容未修改的旧 Skill 目录
+`perflens-performance-analysis` 安全迁移为 `perflens`；检测到用户修改或新旧目录同时
+存在时会拒绝覆盖。
 完整的下载、安装和接入步骤见[《中文安装指南》](../INSTALL.zh-CN.md)。
+
+`perflens init` 默认开启项目工作负载自动采集，允许 `stat` 和 `record`，MCP 单次最长
+30 秒、`record` 最大 99 Hz、单次输出最大 256 MiB、一次性计划 120 秒失效；Skill
+通常先请求约 10 秒，并按程序长短调整，不会固定强制采集 10 秒。已有 PID 附加默认关闭。
+需要调整时可在首次 `init` 或后续 `init --update` 中使用：
+
+```bash
+perflens init --update \
+  --automatic-mode stat \
+  --automatic-mode record \
+  --automatic-max-duration-seconds 30 \
+  --automatic-max-frequency-hz 99 \
+  --automatic-max-output-bytes 268435456 \
+  --automatic-plan-ttl-seconds 120
+```
+
+这些是 MCP 第一层上限，不能突破 Collector 配置中的独立上限。只分析已有证据可用
+`perflens init --read-only`；仅在确实需要分析已有进程时才加
+`--allow-existing-pid-attach`。
 
 下面两条命令适合需要分别控制步骤的用户：
 
@@ -94,7 +116,7 @@ tool_timeout_sec = 300
 ## 连接 Claude Code
 
 `perflens init` 会把同一份 Agent Skill 安装到
-`.claude/skills/perflens-performance-analysis`，并把下面这种标准 stdio 服务安全合并到
+`.claude/skills/perflens`，并把下面这种标准 stdio 服务安全合并到
 项目 `.mcp.json`：
 
 ```json
@@ -115,7 +137,7 @@ PerfLens 保留其他 `mcpServers`，但拒绝覆盖名称相同且内容不同�
 已经运行，需要重启一次。显式调用方式为：
 
 ```text
-使用 /perflens-performance-analysis 分析并优化当前项目。
+使用 /perflens 优化当前项目的运行性能。
 ```
 
 对应机制见 Claude Code 官方的
@@ -142,21 +164,21 @@ codex mcp add perflens -- \
 Skill 位于：
 
 ```text
-.agents/skills/perflens-performance-analysis
-.claude/skills/perflens-performance-analysis
+.agents/skills/perflens
+.claude/skills/perflens
 ```
 
 在 Codex 中可以显式调用：
 
 ```text
-使用 $perflens-performance-analysis 分析 ./profile.folded，
+使用 $perflens 分析 ./profile.folded，
 列出最主要的热点、调用路径、直接证据、候选原因和缺失证据。
 ```
 
 Collector 已部署且引导时使用了 `--automatic-collection` 后，不需要先找 PID：
 
 ```text
-使用 $perflens-performance-analysis 优化当前项目的运行性能。
+使用 $perflens 优化当前项目的运行性能。
 允许运行我确认的项目可执行文件并采集最多 10 秒，不要附加其他已有进程。
 ```
 
@@ -167,7 +189,7 @@ Skill 会先识别并让用户确认精确可执行文件、参数和代表性�
 分析 `perf.data` 时可以说：
 
 ```text
-使用 $perflens-performance-analysis 分析 ./perf.data。
+使用 $perflens 分析 ./perf.data。
 先检查 Profile 元数据和符号质量，再解释 CPU 热点；
 不要把规则匹配直接当成根因。
 ```
@@ -175,11 +197,15 @@ Skill 会先识别并让用户确认精确可执行文件、参数和代表性�
 验证优化时可以说：
 
 ```text
-使用 $perflens-performance-analysis 比较 baseline 和 candidate。
+使用 $perflens 比较 baseline 和 candidate。
 先判断环境与工作负载是否可比，再说明哪些结论可以被验证。
 ```
 
-Skill 也允许在 Linux 性能诊断问题中隐式触发。显式写出 `$perflens-performance-analysis` 更容易确认本次使用的是这套流程。
+Skill 也允许在 Linux 性能诊断或优化问题中隐式触发。显式写出 `$perflens` 更容易确认
+本次使用的是这套流程。说“分析性能”时默认只诊断、不改源码；说“优化性能”时会在获得
+精确工作负载授权后建立基线、按证据修改代码、运行正确性测试，并以相同工作负载复测。
+“深度分析/深度优化”只影响调查充分程度，不会授予执行、PID 附加、扩大路径或修改代码等
+额外权限。
 
 ## MCP 工具的推荐流程
 
@@ -208,7 +234,7 @@ Agent 通常按以下顺序工作：
 | `READ_ONLY` | 热点、路径、分类结果、产物分页和源码上下文 | 只接受已配置的 artifact ID 和 allowed-root 内路径 |
 | `WRITES_ARTIFACTS` | 分析 Profile、生成诊断包 | 需要 `--allow-writes`，只能写 artifact root |
 | `PROCESS_EXECUTION` | 转换 perf.data、执行源码符号化程序 | 需要 `--allow-process-execution`，命令、输出和时长有边界 |
-| `ACTIVE_COLLECTION` | record/stat/sched/lock/off-CPU 采样 | 需要多个启动开关、逐次精确授权和全新输出路径 |
+| `ACTIVE_COLLECTION` | record/stat/sched/lock/off-CPU 采样 | 需要多个启动开关、逐次精确授权和全新输出路径；已有 PID 另需附加开关 |
 | `AUTOMATIC_COLLECTION` | 执行短期、单次、PID 绑定计划 | MCP 分类授权与 Collector 独立策略必须同时允许 |
 | `PROJECT_EXECUTION` | 启动一个已确认的项目可执行文件并采集其新 PID | 还需要自动采集、`--allow-project-execution`、逐次执行授权和项目路径边界 |
 
@@ -233,7 +259,13 @@ Agent 通常按以下顺序工作：
 I_EXPLICITLY_AUTHORIZE_TARGET_PROFILING
 ```
 
-若要附加已有 PID，还必须添加启动参数 `--allow-pid-attach`，并在调用中提供：
+若在初始化时就要允许附加已有 PID，显式增加：
+
+```bash
+perflens init --update --allow-existing-pid-attach
+```
+
+这会给生成的 MCP 启动参数增加底层 `--allow-pid-attach`。每次调用仍必须提供：
 
 ```text
 I_EXPLICITLY_AUTHORIZE_PID_ATTACH
@@ -247,7 +279,7 @@ PerfLens 不会请求 sudo，不会修改 `perf_event_paranoid`、capability 或
 - **已有 `perf script` 文本**：基础 MCP 配置即可。
 - **已有 `perf.data`**：增加 `--allow-process-execution`。
 - **只查看已经生成的产物**：不需要 `--allow-writes`。
-- **让 Agent 自动分析并解释**：同时使用 MCP 和 `$perflens-performance-analysis`。
+- **让 Agent 自动分析并解释**：同时使用 MCP 和 `$perflens`。
 - **直接优化当前可执行项目**：引导时开启 `--automatic-collection`，部署并验收 Collector，
   然后确认具体可执行文件和参数；不需要手工查 PID。
 - **只在终端处理文件**：直接使用 CLI，不需要 MCP 或 Skill。

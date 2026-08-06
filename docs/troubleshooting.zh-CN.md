@@ -2,6 +2,10 @@
 
 简体中文 | [English](troubleshooting.md)
 
+如果错误只出现在某个已发布版本，先查看[《已知问题与临时处理》](known-issues.zh-CN.md)。
+其中记录了 `v0.1.2` 在 `umask 0002` 下生成组可写 Collector 配置的问题，以及
+`v0.1.3` 的修复与旧版本临时处理。
+
 ## 先运行统一状态检查
 
 不确定问题出在哪一层时，先运行：
@@ -257,13 +261,13 @@ PerfLens 不直接解析 `perf.data` 二进制格式。
 Skill 位于仓库的：
 
 ```text
-.agents/skills/perflens-performance-analysis
+.agents/skills/perflens
 ```
 
 请确认从 PerfLens 仓库或包含该目录的工作区启动 Codex，然后显式输入：
 
 ```text
-使用 $perflens-performance-analysis 分析这个 Linux Profile。
+使用 $perflens 分析这个 Linux Profile。
 ```
 
 Skill 和 MCP 是独立组件。发现 Skill 不代表 MCP 已经连接；请另外用 `codex mcp list` 检查名为 `perflens` 的 MCP Server。

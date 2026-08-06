@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -63,6 +64,20 @@ def test_project_skill_install_rejects_parent_symlink_escape(tmp_path: Path) -> 
     assert not (outside / "skills").exists()
 
 
+def test_project_skill_install_refuses_legacy_destination(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    legacy = project / ".agents/skills/perflens-performance-analysis"
+    legacy.mkdir(parents=True)
+    (legacy / "SKILL.md").write_text("legacy", encoding="utf-8")
+
+    with pytest.raises(PerfLensError) as captured:
+        install_project_skill(project)
+
+    assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert legacy.is_dir()
+    assert not (legacy.parent / "perflens").exists()
+
+
 def test_project_skill_can_be_activated_only_for_claude_code(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -115,6 +130,28 @@ def test_skill_fingerprint_refresh_and_removal_are_content_bound(tmp_path: Path)
     assert refreshed.exists()
 
 
+def test_skill_refresh_migrates_unchanged_legacy_directory_name(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    installed = install_project_skill(project)
+    legacy = installed.with_name("perflens-performance-analysis")
+    installed.rename(legacy)
+    fingerprint = project_skill_fingerprint(legacy)
+
+    refreshed, status = refresh_project_skill(
+        project,
+        client="codex",
+        expected_fingerprint=fingerprint,
+        current_path=legacy,
+    )
+
+    assert status == "updated"
+    assert refreshed == project / ".agents/skills/perflens"
+    assert refreshed.is_dir()
+    assert not legacy.exists()
+    assert project_skill_fingerprint(refreshed) == bundled_skill_fingerprint()
+
+
 def test_skill_removal_refuses_wrong_fingerprint_and_symlink(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -160,7 +197,11 @@ def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
     assert "The only ordinary-user UID allowed to call this Collector" in policy
     assert "强烈建议保持 false" in policy
     assert "Security-sensitive; keep false" in policy
-    assert "max_spool_bytes = 10737418240" in policy
+    assert "max_output_bytes = 268435456" in policy
+    assert "max_spool_bytes = 5368709120" in policy
+    assert "max_spool_artifacts = 500" in policy
+    assert "min_free_bytes = 2147483648" in policy
+    assert "max_plan_ttl_seconds = 120" in policy
     assert "PerfLens never deletes old evidence automatically" in policy
     assert "perflens-admin spool-status checks quotas read-only" in policy
     assert "exactly one UID is supported" in policy
@@ -168,6 +209,23 @@ def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
     with pytest.raises(PerfLensError) as captured:
         install_collector_assets(target)
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+@pytest.mark.parametrize("process_umask", [0o002, 0o000])
+def test_collector_assets_have_fixed_safe_modes_independent_of_umask(
+    tmp_path: Path,
+    process_umask: int,
+) -> None:
+    previous = os.umask(process_umask)
+    try:
+        target = install_collector_assets(tmp_path / f"assets-{process_umask:o}")
+    finally:
+        os.umask(previous)
+
+    assert target.stat().st_mode & 0o777 == 0o700
+    assert (target / "collector.toml").stat().st_mode & 0o777 == 0o600
+    assert (target / "perflens-collector.service").stat().st_mode & 0o777 == 0o644
+    assert (target / "perflens.sysusers").stat().st_mode & 0o777 == 0o644
 
 
 def test_collector_asset_rendering_rejects_unsafe_deployment_values(tmp_path: Path) -> None:
@@ -276,6 +334,9 @@ def test_codex_config_generates_complete_project_collection_policy(tmp_path: Pat
         allow_project_execution=True,
         automatic_modes=("stat", "record", "stat"),
         automatic_max_duration_seconds=12,
+        automatic_max_frequency_hz=77,
+        automatic_max_output_bytes=123456,
+        automatic_plan_ttl_seconds=45,
         mcp_command=Path(sys.executable),
     )
 
@@ -286,6 +347,18 @@ def test_codex_config_generates_complete_project_collection_policy(tmp_path: Pat
     assert '  "--allow-project-execution"' in config
     assert config.count('  "--automatic-mode"') == 2
     assert '  "12"' in config
+    assert '  "77"' in config
+    assert '  "123456"' in config
+    assert '  "45"' in config
+    assert '  "--allow-pid-attach"' not in config
+
+    pid_config = render_codex_config(
+        workspace,
+        automatic_collection=True,
+        allow_pid_attach=True,
+        mcp_command=Path(sys.executable),
+    )
+    assert '  "--allow-pid-attach"' in pid_config
 
     with pytest.raises(PerfLensError):
         render_codex_config(

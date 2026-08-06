@@ -31,8 +31,10 @@ from perflens.distribution.skill import (
     SkillClient,
     bundled_skill_fingerprint,
     install_project_skill,
+    project_skill_candidates,
     project_skill_fingerprint,
     project_skill_path,
+    recorded_project_skill_path,
     refresh_project_skill,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -58,6 +60,12 @@ def run_project_setup(
     mcp_command: Path | None = None,
     prepare_collector: bool = False,
     automatic_collection: bool = False,
+    allow_pid_attach: bool = False,
+    automatic_modes: tuple[str, ...] = ("stat", "record"),
+    automatic_max_duration_seconds: float = 30.0,
+    automatic_max_frequency_hz: int = 99,
+    automatic_max_output_bytes: int = 256 << 20,
+    automatic_plan_ttl_seconds: int = 120,
     collector_uid: int | None = None,
     collector_command: Path | None = None,
     perf_path: Path = Path("/usr/bin/perf"),
@@ -97,6 +105,9 @@ def run_project_setup(
             if previous_artifact is not None
             else None
         ),
+        recorded_path=(
+            previous_artifact.skill_path if previous_artifact is not None else None
+        ),
     )
     claude_skill_path, claude_skill_status = _skill_preflight(
         project,
@@ -108,12 +119,23 @@ def run_project_setup(
             if previous_artifact is not None
             else None
         ),
+        recorded_path=(
+            previous_artifact.claude_skill_path
+            if previous_artifact is not None
+            else None
+        ),
     )
     configuration = render_codex_config(
         project,
         allow_process_execution=allow_process_execution,
         automatic_collection=automatic_collection,
         allow_project_execution=automatic_collection,
+        allow_pid_attach=allow_pid_attach,
+        automatic_modes=automatic_modes,
+        automatic_max_duration_seconds=automatic_max_duration_seconds,
+        automatic_max_frequency_hz=automatic_max_frequency_hz,
+        automatic_max_output_bytes=automatic_max_output_bytes,
+        automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
         mcp_command=mcp_command,
     )
     codex_plan: CodexConfigInstallPlan | None = (
@@ -124,6 +146,12 @@ def run_project_setup(
         allow_process_execution=allow_process_execution,
         automatic_collection=automatic_collection,
         allow_project_execution=automatic_collection,
+        allow_pid_attach=allow_pid_attach,
+        automatic_modes=automatic_modes,
+        automatic_max_duration_seconds=automatic_max_duration_seconds,
+        automatic_max_frequency_hz=automatic_max_frequency_hz,
+        automatic_max_output_bytes=automatic_max_output_bytes,
+        automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
         mcp_command=mcp_command,
     )
     claude_plan: ClaudeConfigInstallPlan | None = (
@@ -328,6 +356,15 @@ def run_project_setup(
                     previous_artifact,
                     client="codex",
                 ),
+                current_path=recorded_project_skill_path(
+                    project,
+                    client="codex",
+                    recorded_path=(
+                        previous_artifact.skill_path
+                        if previous_artifact is not None
+                        else None
+                    ),
+                ),
             )
         if claude_skill_status == "updated":
             claude_skill_path, _ = refresh_project_skill(
@@ -336,6 +373,15 @@ def run_project_setup(
                 expected_fingerprint=_expected_skill_fingerprint(
                     previous_artifact,
                     client="claude-code",
+                ),
+                current_path=recorded_project_skill_path(
+                    project,
+                    client="claude-code",
+                    recorded_path=(
+                        previous_artifact.claude_skill_path
+                        if previous_artifact is not None
+                        else None
+                    ),
                 ),
             )
         if backup is not None:
@@ -609,7 +655,10 @@ def _validate_disabled_clients_detached(
     if (
         not codex_enabled
         and artifact.skill_status != "skipped"
-        and (project / ".agents/skills/perflens-performance-analysis").exists()
+        and any(
+            path.exists() or path.is_symlink()
+            for path in project_skill_candidates(project, client="codex")
+        )
         and "codex" not in still_active
     ):
         still_active.append("codex")
@@ -626,7 +675,10 @@ def _validate_disabled_clients_detached(
     if (
         not claude_enabled
         and artifact.claude_skill_status != "skipped"
-        and (project / ".claude/skills/perflens-performance-analysis").exists()
+        and any(
+            path.exists() or path.is_symlink()
+            for path in project_skill_candidates(project, client="claude-code")
+        )
         and "claude-code" not in still_active
     ):
         still_active.append("claude-code")
@@ -677,9 +729,11 @@ def _owned_skill_fingerprint(
 ) -> str | None:
     if path is None or status == "skipped":
         return None
-    current = project_skill_fingerprint(path)
     bundled = bundled_skill_fingerprint()
-    if status in {"installed", "updated"} or current == bundled:
+    if status in {"installed", "updated"}:
+        return bundled
+    current = project_skill_fingerprint(path)
+    if current == bundled:
         return bundled
     return None
 
@@ -712,6 +766,7 @@ def _skill_preflight(
     client: SkillClient,
     update_existing: bool,
     expected_fingerprint: str | None,
+    recorded_path: str | None,
 ) -> tuple[
     Path | None,
     Literal["installed", "updated", "existing", "skipped"],
@@ -719,19 +774,24 @@ def _skill_preflight(
     target = project_skill_path(project, client=client)
     if not install_skill:
         return None, "skipped"
-    if not target.exists() and not target.is_symlink():
+    current_target = recorded_project_skill_path(
+        project,
+        client=client,
+        recorded_path=recorded_path,
+    )
+    if not current_target.exists() and not current_target.is_symlink():
         return target, "installed"
     try:
-        resolved = target.resolve(strict=True)
+        resolved = current_target.resolve(strict=True)
     except OSError as exc:
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
             "setup",
             "Existing Skill path cannot be resolved safely",
-            details={"path": str(target)},
+            details={"path": str(current_target)},
         ) from exc
     if (
-        target.is_symlink()
+        current_target.is_symlink()
         or not resolved.is_relative_to(project)
         or not resolved.is_dir()
         or not (resolved / "SKILL.md").is_file()
@@ -740,7 +800,7 @@ def _skill_preflight(
             ErrorCode.PATH_SAFETY_VIOLATION,
             "setup",
             "Existing PerfLens Skill path is incomplete or unsafe",
-            details={"path": str(target)},
+            details={"path": str(current_target)},
         )
     if update_existing:
         current = project_skill_fingerprint(resolved)
@@ -753,9 +813,9 @@ def _skill_preflight(
                 recoverable=True,
                 details={"path": str(resolved)},
             )
-        if current != bundled_skill_fingerprint():
-            return resolved, "updated"
-    return resolved, "existing"
+        if current_target != target or current != bundled_skill_fingerprint():
+            return target, "updated"
+    return current_target, "existing"
 
 
 def _collection_status(
@@ -883,7 +943,7 @@ perflens setup --project <项目> --prepare-collector --automatic-collection
 MCP 配置已包含自动采集和普通用户项目执行能力。Collector 部署并验收后，可以说：
 
 ```text
-使用 $perflens-performance-analysis 优化当前项目的运行性能。
+使用 $perflens 优化当前项目的运行性能。
 允许运行 `{project}` 内已经确认的可执行文件，并对本次启动的进程
 采集最多 10 秒；不要附加其他已有进程。
 ```
@@ -955,7 +1015,7 @@ Claude Code 会在首次使用项目级 MCP 时单独请求信任；PerfLens 不
 PerfLens Skill 位于项目的 `.agents/skills/{SKILL_NAME}`。可以对 Codex 说：
 
 ```text
-使用 $perflens-performance-analysis 分析这个项目的性能 Profile，区分直接证据、候选原因和缺失证据。
+使用 $perflens 分析这个项目的性能 Profile，区分直接证据、候选原因和缺失证据。
 ```
 """
         if codex_selected

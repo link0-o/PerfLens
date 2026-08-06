@@ -12,11 +12,16 @@ from pathlib import Path
 from typing import Literal, cast
 
 from perflens.artifacts.filesystem import write_text_atomic, write_text_new_atomic
+from perflens.collection.collector import DEFAULT_MAX_OUTPUT_BYTES
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _MAX_CODEX_CONFIG_BYTES = 1 << 20
 _MANAGED_BEGIN = "# BEGIN PerfLens managed MCP configuration"
 _MANAGED_END = "# END PerfLens managed MCP configuration"
+DEFAULT_AUTOMATIC_MODES = ("stat", "record")
+DEFAULT_AUTOMATIC_MAX_DURATION_SECONDS = 30.0
+DEFAULT_AUTOMATIC_MAX_FREQUENCY_HZ = 99
+DEFAULT_AUTOMATIC_PLAN_TTL_SECONDS = 120
 CodexConfigInstallStatus = Literal["installed", "updated", "existing"]
 
 
@@ -311,10 +316,14 @@ def render_codex_config(
     allow_process_execution: bool = False,
     automatic_collection: bool = False,
     allow_project_execution: bool = False,
+    allow_pid_attach: bool = False,
     collector_socket: Path = Path("/run/perflens/collector.sock"),
     collector_spool_root: Path = Path("/var/lib/perflens"),
-    automatic_modes: tuple[str, ...] = ("stat", "record"),
-    automatic_max_duration_seconds: float = 30.0,
+    automatic_modes: tuple[str, ...] = DEFAULT_AUTOMATIC_MODES,
+    automatic_max_duration_seconds: float = DEFAULT_AUTOMATIC_MAX_DURATION_SECONDS,
+    automatic_max_frequency_hz: int = DEFAULT_AUTOMATIC_MAX_FREQUENCY_HZ,
+    automatic_max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
+    automatic_plan_ttl_seconds: int = DEFAULT_AUTOMATIC_PLAN_TTL_SECONDS,
     mcp_command: Path | None = None,
 ) -> str:
     """Return a project-scoped TOML snippet for the installed MCP executable."""
@@ -324,10 +333,14 @@ def render_codex_config(
         allow_process_execution=allow_process_execution,
         automatic_collection=automatic_collection,
         allow_project_execution=allow_project_execution,
+        allow_pid_attach=allow_pid_attach,
         collector_socket=collector_socket,
         collector_spool_root=collector_spool_root,
         automatic_modes=automatic_modes,
         automatic_max_duration_seconds=automatic_max_duration_seconds,
+        automatic_max_frequency_hz=automatic_max_frequency_hz,
+        automatic_max_output_bytes=automatic_max_output_bytes,
+        automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
         mcp_command=mcp_command,
     )
     formatted_arguments = ",\n".join(
@@ -352,10 +365,14 @@ def build_mcp_launch_configuration(
     allow_process_execution: bool = False,
     automatic_collection: bool = False,
     allow_project_execution: bool = False,
+    allow_pid_attach: bool = False,
     collector_socket: Path = Path("/run/perflens/collector.sock"),
     collector_spool_root: Path = Path("/var/lib/perflens"),
-    automatic_modes: tuple[str, ...] = ("stat", "record"),
-    automatic_max_duration_seconds: float = 30.0,
+    automatic_modes: tuple[str, ...] = DEFAULT_AUTOMATIC_MODES,
+    automatic_max_duration_seconds: float = DEFAULT_AUTOMATIC_MAX_DURATION_SECONDS,
+    automatic_max_frequency_hz: int = DEFAULT_AUTOMATIC_MAX_FREQUENCY_HZ,
+    automatic_max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
+    automatic_plan_ttl_seconds: int = DEFAULT_AUTOMATIC_PLAN_TTL_SECONDS,
     mcp_command: Path | None = None,
 ) -> McpLaunchConfiguration:
     """Build one client-neutral, project-bounded MCP launch configuration."""
@@ -367,6 +384,12 @@ def build_mcp_launch_configuration(
             ErrorCode.INVALID_INPUT,
             "codex_config",
             "Project execution requires automatic collection",
+        )
+    if allow_pid_attach and not automatic_collection:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "codex_config",
+            "Existing PID attachment requires automatic collection",
         )
     arguments = [
         "--allowed-root",
@@ -390,18 +413,43 @@ def build_mcp_launch_configuration(
                 "codex_config",
                 "Automatic collection duration limit must be positive and at most one day",
             )
+        if not 1 <= automatic_max_frequency_hz <= 10_000:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "codex_config",
+                "Automatic collection frequency limit must be between 1 and 10000 Hz",
+            )
+        if not 1 <= automatic_max_output_bytes <= 1 << 40:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "codex_config",
+                "Automatic collection output limit must be between 1 byte and 1 TiB",
+            )
+        if not 1 <= automatic_plan_ttl_seconds <= 3600:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "codex_config",
+                "Automatic collection plan TTL must be between 1 and 3600 seconds",
+            )
         arguments[2:2] = ["--allowed-root", str(safe_spool)]
         arguments.extend(
             [
                 "--allow-active-collection",
-                "--allow-pid-attach",
                 "--allow-automatic-collection",
                 "--collector-socket",
                 str(safe_socket),
                 "--automatic-max-duration-seconds",
                 str(automatic_max_duration_seconds),
+                "--automatic-max-frequency-hz",
+                str(automatic_max_frequency_hz),
+                "--automatic-max-output-bytes",
+                str(automatic_max_output_bytes),
+                "--automatic-plan-ttl-seconds",
+                str(automatic_plan_ttl_seconds),
             ]
         )
+        if allow_pid_attach:
+            arguments.append("--allow-pid-attach")
         for mode in modes:
             arguments.extend(("--automatic-mode", mode))
         if allow_project_execution:

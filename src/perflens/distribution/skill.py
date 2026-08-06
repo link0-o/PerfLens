@@ -12,7 +12,9 @@ from typing import Literal, Protocol
 
 from perflens.domain.errors import ErrorCode, PerfLensError
 
-SKILL_NAME = "perflens-performance-analysis"
+SKILL_NAME = "perflens"
+SKILL_ARCHIVE_BASENAME = "perflens-skill"
+LEGACY_SKILL_NAMES = ("perflens-performance-analysis",)
 SkillClient = Literal["codex", "claude-code"]
 _MAX_SKILL_FILES = 64
 _MAX_SKILL_BYTES = 2 << 20
@@ -49,6 +51,41 @@ def project_skill_path(project_root: Path, *, client: SkillClient = "codex") -> 
     return root.joinpath(*parents, SKILL_NAME)
 
 
+def project_skill_candidates(
+    project_root: Path,
+    *,
+    client: SkillClient = "codex",
+) -> tuple[Path, ...]:
+    """Return current and legacy managed Skill paths for one client."""
+    root = _existing_directory(project_root, label="Project root")
+    parents = (".agents", "skills") if client == "codex" else (".claude", "skills")
+    return tuple(root.joinpath(*parents, name) for name in (SKILL_NAME, *LEGACY_SKILL_NAMES))
+
+
+def recorded_project_skill_path(
+    project_root: Path,
+    *,
+    client: SkillClient,
+    recorded_path: str | None,
+) -> Path:
+    """Resolve only a current or legacy path that could have been managed by PerfLens."""
+    candidates = project_skill_candidates(project_root, client=client)
+    if recorded_path is not None:
+        candidate = Path(recorded_path)
+        if candidate not in candidates:
+            raise _modified_skill_error(candidate)
+        return candidate
+    existing = tuple(path for path in candidates if path.exists() or path.is_symlink())
+    if len(existing) > 1:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "skill_install",
+            "Multiple current or legacy PerfLens Skill paths exist",
+            details={"paths": [str(path) for path in existing]},
+        )
+    return existing[0] if existing else candidates[0]
+
+
 def install_project_skill(
     project_root: Path,
     *,
@@ -60,15 +97,24 @@ def install_project_skill(
     agents_root = _safe_child_directory(root, client_directory)
     skills_root = _safe_child_directory(agents_root, "skills")
     target = skills_root / SKILL_NAME
-    if target.exists() or target.is_symlink():
+    occupied = next(
+        (
+            path
+            for path in (target, *(skills_root / name for name in LEGACY_SKILL_NAMES))
+            if path.exists() or path.is_symlink()
+        ),
+        None,
+    )
+    if occupied is not None:
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
             "skill_install",
-            "PerfLens Skill destination already exists",
+            "A current or legacy PerfLens Skill destination already exists",
             recoverable=True,
-            details={"path": str(target)},
+            details={"path": str(occupied)},
             suggested_actions=(
-                "Keep the existing Skill or remove it explicitly before reinstalling.",
+                "Use perflens init --update to migrate an unchanged legacy Skill, or preserve "
+                "user-modified content for manual review.",
             ),
         )
 
@@ -112,17 +158,28 @@ def refresh_project_skill(
     *,
     client: SkillClient,
     expected_fingerprint: str,
+    current_path: Path | None = None,
 ) -> tuple[Path, Literal["existing", "updated"]]:
     """Replace an unchanged managed Skill with the currently bundled version."""
     target = project_skill_path(project_root, client=client)
-    current = project_skill_fingerprint(target)
+    source = current_path or target
+    if source not in project_skill_candidates(project_root, client=client):
+        raise _modified_skill_error(source)
+    if source != target and (target.exists() or target.is_symlink()):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "skill_install",
+            "Current and legacy PerfLens Skill paths both exist",
+            details={"current": str(target), "legacy": str(source)},
+        )
+    current = project_skill_fingerprint(source)
     if current != expected_fingerprint:
         raise _modified_skill_error(target)
     bundled = bundled_skill_fingerprint()
-    if current == bundled:
+    if source == target and current == bundled:
         return target, "existing"
 
-    backup = target.with_name(f".{target.name}.perflens-backup")
+    backup = source.with_name(f".{source.name}.perflens-backup")
     if backup.exists() or backup.is_symlink():
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
@@ -130,7 +187,7 @@ def refresh_project_skill(
             "PerfLens Skill update backup path already exists",
             details={"path": str(backup)},
         )
-    target.rename(backup)
+    source.rename(backup)
     try:
         if project_skill_fingerprint(backup) != expected_fingerprint:
             raise _modified_skill_error(backup)
@@ -138,7 +195,7 @@ def refresh_project_skill(
     except BaseException:
         if target.exists() and not target.is_symlink():
             shutil.rmtree(target, ignore_errors=True)
-        backup.rename(target)
+        backup.rename(source)
         raise
     shutil.rmtree(backup)
     return installed, "updated"
@@ -149,9 +206,14 @@ def plan_project_skill_removal(
     *,
     client: SkillClient,
     expected_fingerprint: str | None,
+    recorded_path: str | None = None,
 ) -> SkillRemovalPlan | None:
     """Plan removal only when the project Skill still matches its recorded owner."""
-    target = project_skill_path(project_root, client=client)
+    target = recorded_project_skill_path(
+        project_root,
+        client=client,
+        recorded_path=recorded_path,
+    )
     if not target.exists() and not target.is_symlink():
         return None
     current = project_skill_fingerprint(target)

@@ -1,10 +1,10 @@
-# Active Collection Safety
+# PerfLens Active Collection Safety
 
 Use active collection when the performance question needs live evidence and the exact target is covered by a user- or administrator-approved scope. Once that scope exists, select and sequence bounded collection automatically.
 
 ## Automatic Broker gates
 
-- The MCP server requires `--allow-writes`, `--allow-process-execution`, `--allow-active-collection`, `--allow-pid-attach`, `--allow-automatic-collection`, and an explicit Collector socket.
+- Project-workload collection requires `--allow-writes`, `--allow-process-execution`, `--allow-active-collection`, `--allow-automatic-collection`, `--allow-project-execution`, and an explicit Collector socket. Existing-PID collection additionally requires `--allow-pid-attach`.
 - `plan_automatic_collection` binds the target UID and `/proc` start time, has a short expiration, and performs no sampling.
 - `execute_collection_plan` accepts only a stored, allowed, unexpired, single-use plan.
 - The Collector authenticates the Unix-socket peer and independently enforces allowed UIDs, target ownership, modes, duration, frequency, stat events, output size, perf path, and a fixed spool root.

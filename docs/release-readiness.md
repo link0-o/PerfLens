@@ -71,5 +71,5 @@ No rule match is a confirmed root cause. Profile percentage deltas are not absol
 Before publishing, follow [the release procedure](releasing.md) to synchronize
 versions, verify the changelog, run all quality gates, build the release assets,
 generate the SBOM and checksums, and create the tag. Published version tags must
-not be moved or overwritten. The current candidate is `v0.1.2`; after the release
-commit is pushed, create the new `v0.1.2` tag.
+not be moved or overwritten. The current candidate is `v0.1.3`; after the release
+commit is pushed, create the new `v0.1.3` tag.

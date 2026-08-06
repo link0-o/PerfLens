@@ -155,24 +155,27 @@ perflens-mcp \
   --allow-writes \
   --allow-process-execution \
   --allow-active-collection \
-  --allow-pid-attach \
   --allow-automatic-collection \
   --allow-project-execution \
   --collector-socket /run/perflens/collector.sock \
   --automatic-mode stat \
   --automatic-mode record \
   --automatic-max-duration-seconds 30 \
-  --automatic-max-frequency-hz 99
+  --automatic-max-frequency-hz 99 \
+  --automatic-max-output-bytes 268435456 \
+  --automatic-plan-ttl-seconds 120
 ```
 
 启动参数是 MCP 的分类授权；Collector TOML 是独立的第二层授权。两层都允许才会执行。
+上面是项目工作负载的默认边界，不开放已有 PID 附加。只有明确需要该能力时，才通过
+`perflens init --update --allow-existing-pid-attach` 增加 `--allow-pid-attach`。
 
 ## MCP + Skill 使用
 
 对于 PerfLens 负责启动的当前项目程序，不需要 PID。用户可以说：
 
 ```text
-使用 $perflens-performance-analysis 优化当前项目的运行性能。
+使用 $perflens 优化当前项目的运行性能。
 允许运行我确认的项目可执行文件并采集最多 10 秒，不要附加其他已有进程。
 ```
 
@@ -183,7 +186,7 @@ Agent 先识别候选构建产物、启动参数和代表性工作负载，再�
 已有进程仍需要明确给出 PID，例如：
 
 ```text
-使用 $perflens-performance-analysis 分析 PID 1234。
+使用 $perflens 分析 PID 1234。
 它属于我，允许在当前 MCP/Collector 策略范围内自动采集；
 先 stat，再根据缺失证据决定是否 record，每次不超过 20 秒。
 ```

@@ -1,4 +1,4 @@
-# Lock and scheduling analysis
+# PerfLens lock and scheduling analysis
 
 An on-CPU profile shows CPU time around synchronization code but omits most blocked time. A futex or mutex frame can represent contention, normal coordination, retry spinning, or a caller pattern.
 

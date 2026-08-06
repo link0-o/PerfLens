@@ -4,6 +4,44 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-06
+
+### Added
+
+- Project onboarding now exposes bounded automatic-collection policy controls:
+  repeatable modes, maximum duration, sampling frequency, output size, plan
+  lifetime, and an explicit opt-in for attaching to an already-running PID.
+- The single project Skill now distinguishes analysis from optimization. Analysis
+  reports evidence without changing source by default; optimization establishes a
+  baseline, changes only evidence-supported code, checks correctness, and repeats
+  the same workload for before/after validation.
+- Regression coverage for permissive process umasks, legacy Skill migration,
+  project-run collection without PID-attach permission, and every new onboarding
+  policy option.
+
+### Changed
+
+- The project Skill is now named `perflens`, with explicit invocations `$perflens`
+  in Codex and `/perflens` in Claude Code. `perflens init --update` safely migrates
+  an unchanged v0.1.2 `perflens-performance-analysis` directory and refuses to
+  overwrite user modifications.
+- Existing-PID attachment is disabled by default. Automatic project workloads
+  remain available after `perflens init`; PID attachment additionally requires
+  `--allow-existing-pid-attach` at onboarding and the existing per-call consent.
+- The default Collector/MCP policy keeps a 10-second requested sample and a
+  30-second maximum, while reducing per-plan output to 256 MiB, spool capacity to
+  5 GiB, artifact count to 500, and plan lifetime to 120 seconds. Minimum free
+  spool space is raised to 2 GiB; the default record frequency remains 99 Hz.
+- Standalone Skill release archives are now named
+  `perflens-skill-<version>.zip`.
+
+### Fixed
+
+- Collector staging now sets its directory to `0700`, `collector.toml` to `0600`,
+  and public unit/sysusers templates to `0644` explicitly. New assets therefore
+  pass `perflens-admin deploy --dry-run` under `umask 0002` or `0000` without
+  weakening deployment safety checks.
+
 ## [0.1.2] - 2026-08-05
 
 ### Added
@@ -284,7 +322,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - Tag-driven GitHub Release automation with wheel/sdist smoke tests, a
   standalone Skill archive, CycloneDX SBOM, and SHA-256 checksums.
 
-[Unreleased]: https://github.com/link0-o/PerfLens/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/link0-o/PerfLens/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/link0-o/PerfLens/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/link0-o/PerfLens/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/link0-o/PerfLens/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/link0-o/PerfLens/releases/tag/v0.1.0

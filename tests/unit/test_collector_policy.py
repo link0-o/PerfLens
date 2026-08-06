@@ -46,9 +46,11 @@ def test_policy_must_be_immutable_to_non_root_service_owner(tmp_path: Path) -> N
     assert policy.policy_version == 1
     assert policy.allowed_uids == (os.geteuid(),)
     assert policy.allowed_modes == ("record", "stat")
-    assert policy.max_spool_bytes == 10 << 30
-    assert policy.max_spool_artifacts == 1000
-    assert policy.min_free_bytes == 1 << 30
+    assert policy.max_output_bytes == 256 << 20
+    assert policy.max_spool_bytes == 5 << 30
+    assert policy.max_spool_artifacts == 500
+    assert policy.min_free_bytes == 2 << 30
+    assert policy.max_plan_ttl_seconds == 120
 
 
 def test_policy_rejects_unknown_fields(tmp_path: Path) -> None:
@@ -161,7 +163,7 @@ def test_broker_policy_limit_validation(tmp_path: Path) -> None:
         replace(base, max_frequency_hz=0),
         replace(base, max_frequency_hz=True),
         replace(base, max_output_bytes=0),
-        replace(base, max_spool_bytes=(1 << 30) - 1),
+        replace(base, max_spool_bytes=(256 << 20) - 1),
         replace(base, max_spool_bytes=(1 << 50) + 1),
         replace(base, max_spool_artifacts=0),
         replace(base, max_spool_artifacts=1_000_001),

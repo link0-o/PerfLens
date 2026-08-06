@@ -29,7 +29,7 @@ PerfLens 应拆成普通用户分析端和系统 Collector 两部分部署：
 ```bash
 sudo python3 -m venv /opt/perflens
 sudo /opt/perflens/bin/python -m pip install \
-  ./dist/perflens-0.1.2-py3-none-any.whl
+  ./dist/perflens-0.1.3-py3-none-any.whl
 ```
 
 这里的版本号只是示例，应替换为实际构建版本。正式离线部署应同时提供 wheelhouse 或完整系统包，不应在安装脚本中隐式访问网络。
@@ -141,7 +141,7 @@ Socket；systemd 管理的正常停止不会因为遗留 Socket 被误判为仍�
 
 长期自动采集还应检查三个累计存储边界：`max_spool_bytes` 限制全部产物的总逻辑
 字节数，`max_spool_artifacts` 限制文件数量，`min_free_bytes` 为 spool 所在文件系统
-保留空闲空间。默认分别为 10 GiB、1000 个文件和 1 GiB。Collector 会按本次计划的
+保留空闲空间。默认分别为 5 GiB、500 个文件和 2 GiB。Collector 会按本次计划的
 最坏输出大小预留空间；任何边界不足时都在启动 perf 前返回
 `RESOURCE_LIMIT_EXCEEDED`。PerfLens 不会自动删除、覆盖或轮转旧证据，管理员应先审查、
 归档，再明确删除不再需要的产物。
@@ -316,21 +316,25 @@ perflens-mcp \
   --allow-writes \
   --allow-process-execution \
   --allow-active-collection \
-  --allow-pid-attach \
   --allow-automatic-collection \
   --allow-project-execution \
   --collector-socket /run/perflens/collector.sock \
   --automatic-mode stat \
   --automatic-mode record \
-  --automatic-max-duration-seconds 30
+  --automatic-max-duration-seconds 30 \
+  --automatic-max-frequency-hz 99 \
+  --automatic-max-output-bytes 268435456 \
+  --automatic-plan-ttl-seconds 120
 ```
 
 MCP 参数是第一层授权，Collector TOML 是独立的第二层授权。Skill 只能在两层都允许的范围内选择采集顺序。
+项目启动不需要 `--allow-pid-attach`。只有产品明确开放已有 PID 分析时，才在初始化中
+增加 `--allow-existing-pid-attach`；每次 PID 调用仍要单独授权。
 
 完成配置后，用户可以用自然语言请求，不需要手工查 PID：
 
 ```text
-使用 $perflens-performance-analysis 优化当前项目的运行性能。
+使用 $perflens 优化当前项目的运行性能。
 允许运行我确认的项目可执行文件并采集最多 10 秒，不要附加其他已有进程。
 ```
 

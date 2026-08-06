@@ -35,6 +35,14 @@ before updating with a narrower client selection. The managed setup directory
 refuses unexpected user files and preserves staged Collector assets unless
 regeneration is explicitly requested.
 
+The default project policy allows `stat` and `record`, with MCP ceilings of 30
+seconds, 99 Hz, 256 MiB per collection, and a 120-second plan lifetime. The
+Skill normally starts near 10 seconds and adapts to the workload. Existing-PID
+attachment is disabled unless onboarding includes
+`--allow-existing-pid-attach`; project-run collection does not require it.
+An unchanged v0.1.2 Skill is migrated to the shorter `perflens` directory by
+`perflens init --update`, while user-modified content is preserved and refused.
+
 The individual commands remain available for users who want to control each
 step separately:
 
@@ -116,24 +124,29 @@ Restart Codex after changing MCP configuration, then use `/mcp` or `codex mcp li
 ## Connect Claude Code
 
 `perflens init` installs the same Agent Skill under
-`.claude/skills/perflens-performance-analysis` and safely merges the bounded
+`.claude/skills/perflens` and safely merges the bounded
 stdio server into the project `.mcp.json`. Existing unrelated servers are
 preserved, while a conflicting user-managed `perflens` entry is not overwritten.
 Claude Code asks the user to approve a project-scoped MCP server before use.
 If the top-level `.claude/skills` directory was created after Claude Code
-started, restart once, then invoke `/perflens-performance-analysis`.
+started, restart once, then invoke `/perflens`.
 See the official Claude Code [Skills](https://code.claude.com/docs/en/slash-commands)
 and [MCP](https://code.claude.com/docs/en/mcp) documentation for client behavior.
 
 ## Use the Skill
 
-The repository Skill is at `.agents/skills/perflens-performance-analysis`. In Codex, invoke it explicitly when desired:
+The repository Skill is at `.agents/skills/perflens`. In Codex, invoke it explicitly when desired:
 
 ```text
-$perflens-performance-analysis analyze ./perf.data and explain the strongest evidence and missing evidence.
+$perflens analyze ./perf.data and explain the strongest evidence and missing evidence.
 ```
 
-It may also trigger implicitly for Linux profile diagnosis. The Skill requires the Agent to inspect metadata and dominant paths, treat rule matches as candidates, state missing evidence, and reserve `Verified Improvement` for equivalent-workload A/B validation.
+It may also trigger implicitly for Linux profile diagnosis or optimization. An
+analysis request reports evidence and recommendations without source edits by
+default. An optimization request establishes a baseline, changes only
+evidence-supported code, runs correctness tests, and repeats the same workload
+for A/B validation. “Deep” requests more thorough investigation but never grants
+additional paths, PID attachment, execution, duration, or edit permission.
 
 With an administrator-deployed Collector and an MCP configuration generated
 with `--automatic-collection`, the user may ask to optimize the current project
@@ -167,7 +180,7 @@ Tool annotations are client hints. The authorization checks above are independen
 8. `read_artifact_page` for large output
 9. `analyze_benchmark`, `compare_profiles`, and `compare_benchmarks` for A/B work
 
-`collect_profile` is intentionally outside the default sequence. Use it only after the user approves the exact target and the [Skill safety rules](../.agents/skills/perflens-performance-analysis/references/active-collection-safety.md) have been applied.
+`collect_profile` is intentionally outside the default sequence. Use it only after the user approves the exact target and the [Skill safety rules](../.agents/skills/perflens/references/active-collection-safety.md) have been applied.
 
 For policy-approved live PIDs, use `inspect_collection_capabilities`,
 `plan_automatic_collection`, `execute_collection_plan`, and `analyze_collection`.

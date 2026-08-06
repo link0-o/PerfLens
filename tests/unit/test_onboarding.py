@@ -30,7 +30,7 @@ def test_setup_creates_guided_bundle_and_installs_skill(tmp_path: Path) -> None:
     assert artifact.schema_version == "1.0"
     assert artifact.skill_status == "installed"
     assert artifact.collection_status in {"available", "conditional", "blocked"}
-    assert (project / ".agents/skills/perflens-performance-analysis/SKILL.md").is_file()
+    assert (project / ".agents/skills/perflens/SKILL.md").is_file()
     assert (project / ".codex/config.toml").is_file()
     assert artifact.codex_project_config_status == "installed"
     assert artifact.codex_project_config_path == str(project / ".codex/config.toml")
@@ -143,7 +143,7 @@ def test_setup_can_activate_claude_code_without_exposing_codex_skill(tmp_path: P
     assert artifact.claude_project_config_managed is True
     assert not (project / ".agents").exists()
     assert not (project / ".codex").exists()
-    assert (project / ".claude/skills/perflens-performance-analysis/SKILL.md").is_file()
+    assert (project / ".claude/skills/perflens/SKILL.md").is_file()
     assert json.loads((project / ".mcp.json").read_text(encoding="utf-8"))[
         "mcpServers"
     ]["perflens"]
@@ -199,6 +199,56 @@ def test_setup_update_replaces_owned_bundle_and_both_client_configs(tmp_path: Pa
     assert not (project / ".perflens-setup.perflens-backup").exists()
 
 
+def test_setup_update_migrates_v012_legacy_skill_path(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    first = run_project_setup(
+        project,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+    current = project / ".agents/skills/perflens"
+    legacy = current.with_name("perflens-performance-analysis")
+    current.rename(legacy)
+    setup_path = project / "perflens-setup/setup.json"
+    payload = json.loads(setup_path.read_text(encoding="utf-8"))
+    payload["perflens_version"] = "0.1.2"
+    payload["skill_path"] = str(legacy)
+    setup_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    updated = run_project_setup(
+        project,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+        update_existing=True,
+    )
+
+    assert first.skill_fingerprint == updated.skill_fingerprint
+    assert updated.skill_status == "updated"
+    assert updated.skill_path == str(current)
+    assert current.is_dir()
+    assert not legacy.exists()
+
+
+def test_setup_without_update_records_existing_legacy_skill_path(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    current = install_project_skill(project)
+    legacy = current.with_name("perflens-performance-analysis")
+    current.rename(legacy)
+
+    artifact = run_project_setup(
+        project,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+
+    assert artifact.skill_status == "existing"
+    assert artifact.skill_path == str(legacy)
+    assert legacy.is_dir()
+    assert not current.exists()
+
+
 def test_setup_update_refuses_modified_skill_and_preserves_previous_setup(
     tmp_path: Path,
 ) -> None:
@@ -211,7 +261,7 @@ def test_setup_update_refuses_modified_skill_and_preserves_previous_setup(
     )
     setup_path = project / "perflens-setup/setup.json"
     before = setup_path.read_text(encoding="utf-8")
-    skill = project / ".agents/skills/perflens-performance-analysis/SKILL.md"
+    skill = project / ".agents/skills/perflens/SKILL.md"
     skill.write_text(skill.read_text(encoding="utf-8") + "\nuser change\n", encoding="utf-8")
 
     with pytest.raises(PerfLensError) as modified:
@@ -492,7 +542,7 @@ def test_setup_refuses_overwrite_escape_and_unsafe_existing_skill(tmp_path: Path
 
     skill_parent = project / ".agents" / "skills"
     skill_parent.mkdir(parents=True)
-    (skill_parent / "perflens-performance-analysis").symlink_to(
+    (skill_parent / "perflens").symlink_to(
         outside,
         target_is_directory=True,
     )

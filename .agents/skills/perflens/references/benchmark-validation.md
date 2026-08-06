@@ -1,4 +1,4 @@
-# Benchmark and optimization validation
+# PerfLens benchmark and optimization validation
 
 Before comparing, verify identical workload, input, build mode, CPU affinity, warmup, duration, concurrency, environment, event, sampling settings, and correctness criteria.
 

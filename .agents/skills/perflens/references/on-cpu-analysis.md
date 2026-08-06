@@ -1,4 +1,4 @@
-# On-CPU profile analysis
+# PerfLens on-CPU profile analysis
 
 Confirm the event and weight source before interpreting percentages. `cycles` approximates sampled CPU-cycle distribution; `instructions` measures a different property; folded sample count has no elapsed-time semantics.
 
