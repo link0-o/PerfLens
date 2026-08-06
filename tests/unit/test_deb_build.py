@@ -41,8 +41,7 @@ def test_deb_builder_removes_variable_install_metadata_and_record_entries(
     assert not cache.exists()
     assert not direct_url.exists()
     assert record.read_text(encoding="utf-8") == (
-        "example/__init__.py,sha256=abc,1\n"
-        "example-1.0.dist-info/RECORD,,\n"
+        "example/__init__.py,sha256=abc,1\nexample-1.0.dist-info/RECORD,,\n"
     )
 
 

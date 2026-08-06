@@ -45,9 +45,9 @@ PerfLens requires Python 3.12 or newer.
 For a GitHub release, download the wheel and install it as an isolated tool:
 
 ```bash
-pipx install ./perflens-0.1.3-py3-none-any.whl
+pipx install ./perflens-0.2.0-py3-none-any.whl
 # or
-uv tool install ./perflens-0.1.3-py3-none-any.whl
+uv tool install ./perflens-0.2.0-py3-none-any.whl
 ```
 
 Then opt one project in. Other projects do not see the Skill or MCP server:
@@ -84,6 +84,9 @@ to detach MCP only or `--client` to select one client.
 
 Debian 13 users can instead install the native, offline `.deb` packages. See
 [Debian packages](docs/debian-packages.md) for the split main/Collector flow.
+Version 0.2.0 also adds explicit `paranoid3_helper`: an unprivileged Python Broker passes typed PID
+plans to a bounded root Rust Helper while `perf_event_paranoid=3` remains unchanged. It is never
+enabled automatically and requires administrator acknowledgement of the `CAP_SYS_ADMIN` risk.
 
 Run a read-only readiness summary at any time:
 
@@ -295,7 +298,9 @@ Administrators can tune the bilingual policy without memorizing a manual
 restart sequence: copy it to a separate mode-`0600` candidate, run
 `perflens-admin update-policy --config <candidate> --dry-run`, then repeat with
 `sudo`. The command atomically applies and health-checks the policy, rolls back
-on activation failure, and refuses UID or fixed-spool migration.
+on activation failure, and refuses UID, fixed-spool, or privilege-mode migration.
+Switching between `cap_perfmon` and `paranoid3_helper` requires a reviewed
+undeploy and redeploy because the managed service topology is different.
 
 Deploy and upgrade require a bounded, read-only Collector health round trip and
 verify the responding PID/UID through kernel credentials. A stale, wrong-owner,

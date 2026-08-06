@@ -5,6 +5,20 @@
 This document records reproduced issues and their bounded workarounds, including
 resolved issues. Do not weaken deployment safety checks to work around them.
 
+## KL-2026-08-07: Rust Helper private-spool archival is not yet supported
+
+- Affected scope: `paranoid3_helper` mode in `v0.2.0`.
+- Not affected: collection, analysis, `sudo perflens-admin spool-status`, or the complete
+  archive/verify/prune flow for `cap_perfmon` mode.
+- Current behavior: archive, verification, and prune commands explicitly return
+  `UNSUPPORTED_FORMAT` instead of inspecting the wrong spool.
+- Reason: the root-owned Helper spool has a different directory and ownership boundary from the
+  Python Broker spool, so the existing cleanup identity assumptions cannot be reused safely.
+
+Preserve `/var/lib/perflens-helper` until a dedicated root-owned archival lifecycle is available.
+Do not manually delete unknown evidence or loosen directory permissions. This limitation does not
+block the v0.2.0 bounded collection and analysis path.
+
 ## KI-2026-08-06: native DEB upgrade can retain stale Python bytecode
 
 - Affected path: an in-place native DEB upgrade from `v0.1.2` to `v0.1.3`.

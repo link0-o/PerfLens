@@ -45,6 +45,9 @@ def _deployment_inputs(tmp_path: Path) -> tuple[Path, Path, Path, CollectorSyste
         service_path=tmp_path / "system/etc/systemd/perflens-collector.service",
         state_directory=tmp_path / "system/var/lib/perflens",
         socket_path=tmp_path / "system/run/perflens/collector.sock",
+        helper_service_path=tmp_path / "system/etc/systemd/perflens-privileged-helper.service",
+        helper_state_directory=tmp_path / "system/var/lib/perflens-helper",
+        helper_socket_path=tmp_path / "system/run/perflens-helper/helper.sock",
     )
     config = tmp_path / "collector.toml"
     config.write_text(
@@ -109,8 +112,9 @@ def test_admin_deploy_dry_run_is_read_only_and_cli_reports_chinese_or_json(
         *,
         dry_run: bool = False,
         collector_command: Path | None = None,
+        acknowledge_cap_sys_admin_risk: bool = False,
     ) -> CollectorDeploymentArtifact:
-        del dry_run, collector_command
+        del dry_run, collector_command, acknowledge_cap_sys_admin_risk
         return result
 
     monkeypatch.setattr("perflens.admin.app.deploy_collector", fake_deploy)
@@ -146,9 +150,7 @@ def test_admin_deploy_dry_run_is_read_only_and_cli_reports_chinese_or_json(
         ],
     )
     assert json_result.exit_code == 0, json_result.output
-    assert '"schema_version":"1.0"'.replace(" ", "") in json_result.output.replace(
-        " ", ""
-    )
+    assert '"schema_version":"1.0"'.replace(" ", "") in json_result.output.replace(" ", "")
     assert '"status":"dry_run"'.replace(" ", "") in json_result.output.replace(" ", "")
 
 
@@ -207,6 +209,63 @@ def test_admin_deploy_installs_fixed_assets_runs_allowlist_and_checks_socket(
     assert checked_service_uids == [os.geteuid(), os.geteuid()]
 
 
+def test_admin_deploy_paranoid3_helper_requires_risk_acknowledgement_and_two_units(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        .replace(
+            "[collector]\n",
+            '[collector]\nprivilege_mode = "paranoid3_helper"\n',
+        )
+        .replace("max_plan_ttl_seconds = 300", "max_plan_ttl_seconds = 120")
+        .replace("max_spool_bytes = 10737418240", "max_spool_bytes = 5368709120")
+        .replace("max_spool_artifacts = 1000", "max_spool_artifacts = 500")
+        .replace("min_free_bytes = 1073741824", "min_free_bytes = 2147483648"),
+        encoding="utf-8",
+    )
+    dry_run = deploy_collector(
+        config,
+        dry_run=True,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+    )
+    assert dry_run.privilege_mode == "paranoid3_helper"
+    assert any(
+        command[-1] == "perflens-privileged-helper.service" for command in dry_run.planned_commands
+    )
+    with pytest.raises(PerfLensError, match="risk acknowledgement"):
+        deploy_collector(
+            config,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+        )
+
+    commands: list[tuple[str, ...]] = []
+    deployed = deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=commands.append,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+        acknowledge_cap_sys_admin_risk=True,
+    )
+    assert deployed.status == "deployed"
+    broker_unit = layout.service_path.read_text(encoding="utf-8")
+    helper_unit = layout.helper_service_path.read_text(encoding="utf-8")
+    assert "CapabilityBoundingSet=" in broker_unit
+    assert "CAP_SYS_ADMIN" not in broker_unit
+    assert "CapabilityBoundingSet=CAP_PERFMON CAP_SYS_ADMIN" in helper_unit
+    assert f"--broker-uid {os.geteuid()}" in helper_unit
+    assert f"--allowed-uid {os.geteuid()}" in helper_unit
+    assert f"--artifact-gid {os.getegid()}" in helper_unit
+
+
 def test_admin_deploy_cli_reports_completed_health_and_acceptance_step(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -226,8 +285,9 @@ def test_admin_deploy_cli_reports_completed_health_and_acceptance_step(
         *,
         dry_run: bool = False,
         collector_command: Path | None = None,
+        acknowledge_cap_sys_admin_risk: bool = False,
     ) -> CollectorDeploymentArtifact:
-        del dry_run, collector_command
+        del dry_run, collector_command, acknowledge_cap_sys_admin_risk
         return deployed
 
     monkeypatch.setattr("perflens.admin.app.deploy_collector", fake_deploy)
@@ -638,9 +698,7 @@ def test_admin_policy_update_applies_tunables_and_preserves_service_and_data(
     assert layout.config_path.read_bytes() == candidate.read_bytes()
     assert layout.service_path.read_bytes() == service_before
     assert artifact.read_bytes() == b"evidence"
-    assert commands == [
-        ("/usr/bin/systemctl", "restart", "perflens-collector.service")
-    ]
+    assert commands == [("/usr/bin/systemctl", "restart", "perflens-collector.service")]
     assert sockets == [(layout.socket_path, os.geteuid())]
 
 
@@ -732,7 +790,9 @@ def test_admin_policy_update_reports_failed_service_recovery(tmp_path: Path) -> 
     assert layout.config_path.read_bytes() == previous
 
 
-def test_admin_policy_update_rejects_in_place_edit_and_uid_change(tmp_path: Path) -> None:
+def test_admin_policy_update_rejects_in_place_edit_uid_and_privilege_mode_change(
+    tmp_path: Path,
+) -> None:
     config, _perf, collector, layout = _deployment_inputs(tmp_path)
     deploy_collector(
         config,
@@ -770,6 +830,26 @@ def test_admin_policy_update_rejects_in_place_edit_and_uid_change(tmp_path: Path
         )
     assert changed_uid.value.code is ErrorCode.PATH_SAFETY_VIOLATION
     assert "cannot change the authorized user UID" in changed_uid.value.message
+
+    candidate.write_text(
+        layout.config_path.read_text(encoding="utf-8")
+        .replace("[collector]\n", '[collector]\nprivilege_mode = "paranoid3_helper"\n')
+        .replace("max_spool_bytes = 10737418240", "max_spool_bytes = 5368709120")
+        .replace("max_spool_artifacts = 1000", "max_spool_artifacts = 500")
+        .replace("min_free_bytes = 1073741824", "min_free_bytes = 2147483648")
+        .replace("max_plan_ttl_seconds = 300", "max_plan_ttl_seconds = 120"),
+        encoding="utf-8",
+    )
+    candidate.chmod(0o600)
+    with pytest.raises(PerfLensError) as changed_privilege_mode:
+        update_collector_policy(
+            candidate,
+            dry_run=True,
+            layout=layout,
+            require_root=False,
+        )
+    assert changed_privilege_mode.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert "cannot change the deployed privilege mode" in changed_privilege_mode.value.message
 
 
 def test_admin_undeploy_removes_only_service_and_preserves_data(tmp_path: Path) -> None:
@@ -869,9 +949,7 @@ def test_admin_spool_status_reports_versioned_read_only_capacity(tmp_path: Path)
     second = layout.state_directory / "plan-00000000000000000003.stat.csv"
     first.write_bytes(b"profile")
     second.write_bytes(b"{}")
-    replay_state = layout.state_directory / replay_marker_name(
-        "plan-00000000000000000001"
-    )
+    replay_state = layout.state_directory / replay_marker_name("plan-00000000000000000001")
     replay_state.touch(mode=0o600)
     before = {path.name: path.read_bytes() for path in layout.state_directory.iterdir()}
 
@@ -892,12 +970,41 @@ def test_admin_spool_status_reports_versioned_read_only_capacity(tmp_path: Path)
     assert {path.name: path.read_bytes() for path in layout.state_directory.iterdir()} == before
 
 
+def test_admin_spool_status_uses_private_helper_spool_in_paranoid3_mode(
+    tmp_path: Path,
+) -> None:
+    config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        .replace("[collector]\n", '[collector]\nprivilege_mode = "paranoid3_helper"\n')
+        .replace("max_spool_bytes = 10737418240", "max_spool_bytes = 5368709120")
+        .replace("max_spool_artifacts = 1000", "max_spool_artifacts = 500")
+        .replace("min_free_bytes = 1073741824", "min_free_bytes = 2147483648")
+        .replace("max_plan_ttl_seconds = 300", "max_plan_ttl_seconds = 120"),
+        encoding="utf-8",
+    )
+    config.chmod(0o600)
+    layout.state_directory.mkdir(parents=True)
+    layout.helper_state_directory.mkdir(parents=True)
+    artifact = layout.helper_state_directory / "plan-00000000000000000003.stat.csv"
+    artifact.write_bytes(b"metric")
+
+    result = inspect_collector_spool(
+        config,
+        layout=layout,
+        require_root_owned_tools=False,
+    )
+
+    assert result.status == "ready"
+    assert result.spool_root == str(layout.helper_state_directory)
+    assert result.observed_artifact_count == 1
+    assert result.observed_logical_bytes == 6
+
+
 def test_admin_spool_status_rejects_unsafe_replay_state(tmp_path: Path) -> None:
     config, _perf, _collector, layout = _deployment_inputs(tmp_path)
     layout.state_directory.mkdir(parents=True)
-    replay_state = layout.state_directory / replay_marker_name(
-        "plan-00000000000000000001"
-    )
+    replay_state = layout.state_directory / replay_marker_name("plan-00000000000000000001")
     replay_state.write_bytes(b"unexpected-content")
     replay_state.chmod(0o600)
 
@@ -1127,6 +1234,34 @@ def test_admin_spool_status_reports_unavailable_spool_and_cli_json(
     assert '"status": "unavailable"' in result.output
 
 
+def test_admin_spool_status_explains_private_helper_capacity_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    base = inspect_collector_spool(
+        config,
+        layout=layout,
+        require_root_owned_tools=False,
+    )
+    artifact = base.model_copy(
+        update={
+            "status": "warning",
+            "spool_root": "/var/lib/perflens-helper",
+        }
+    )
+
+    def fake_helper_status(_config: Path) -> CollectorSpoolStatusArtifact:
+        return artifact
+
+    monkeypatch.setattr("perflens.admin.app.inspect_collector_spool", fake_helper_status)
+    summary = CliRunner().invoke(app, ["spool-status", "--config", str(config)])
+
+    assert summary.exit_code == 0, summary.output
+    assert "停止新的采集并保留 Helper 私有证据" in summary.output
+    assert "尚不支持对该目录归档或清理" in summary.output
+
+
 def test_admin_helpers_reject_commands_and_report_system_failures(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1218,9 +1353,7 @@ def test_admin_socket_waiter_rejects_stale_unresponsive_socket(
     with pytest.raises(PerfLensError) as failed:
         wait_for_socket(tmp_path / "stale.sock")
     assert failed.value.code is ErrorCode.EXTERNAL_TOOL_FAILED
-    assert failed.value.details["last_error"] == (
-        "stale socket refused the health handshake"
-    )
+    assert failed.value.details["last_error"] == ("stale socket refused the health handshake")
 
 
 def test_admin_deploy_rejects_unsafe_policy_and_symlink(tmp_path: Path) -> None:

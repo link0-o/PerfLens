@@ -361,6 +361,13 @@ def init_command(
             help="同时生成供管理员审查的 Collector 部署资产, 不会执行 sudo。",
         ),
     ] = False,
+    collector_privilege_mode: Annotated[
+        Literal["cap_perfmon", "paranoid3_helper"],
+        typer.Option(
+            "--collector-privilege-mode",
+            help="Collector 权限模式: 非 root cap_perfmon, 或保留 paranoid=3 的 Rust Helper。",
+        ),
+    ] = "cap_perfmon",
     mcp_command: Annotated[
         Path | None,
         typer.Option("--mcp-command", dir_okay=False, help="可信 perflens-mcp 入口路径。"),
@@ -401,15 +408,14 @@ def init_command(
             automatic_max_output_bytes=automatic_max_output_bytes,
             automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
             perf_path=perf_path,
+            collector_privilege_mode=collector_privilege_mode,
             update_existing=update_existing,
         )
     except PerfLensError as exc:
         _fail(exc)
     typer.echo("PerfLens 已按项目激活, 其他未运行 init 的项目不会发现这些集成。")
     if update_existing:
-        typer.echo(
-            "更新模式: 已重建托管引导; 客户端配置与 Skill 的用户修改不会被覆盖。"
-        )
+        typer.echo("更新模式: 已重建托管引导; 客户端配置与 Skill 的用户修改不会被覆盖。")
     typer.echo(f"项目: {artifact.project_root}")
     if codex_selected:
         typer.echo(f"Codex Skill: {artifact.skill_path}")
@@ -417,9 +423,7 @@ def init_command(
     if claude_selected:
         typer.echo(f"Claude Code Skill: {artifact.claude_skill_path}")
         typer.echo(f"Claude Code MCP: {artifact.claude_project_config_path}")
-    typer.echo(
-        f"自动采集: {'已启用 (仍需每次工作负载授权)' if automatic_collection else '未启用'}"
-    )
+    typer.echo(f"自动采集: {'已启用 (仍需每次工作负载授权)' if automatic_collection else '未启用'}")
     typer.echo(f"中文下一步: {Path(artifact.output_directory) / '下一步.zh-CN.md'}")
 
 
@@ -459,9 +463,7 @@ def setup_command(
         bool,
         typer.Option(
             "--install-codex-config/--skip-codex-config",
-            help=(
-                "把生成的 MCP 表安全接入项目 .codex/config.toml。"
-            ),
+            help=("把生成的 MCP 表安全接入项目 .codex/config.toml。"),
         ),
     ] = True,
     install_claude_code: Annotated[
@@ -489,6 +491,13 @@ def setup_command(
             help="生成供管理员审查的 Collector 资产; 不会安装或提权。",
         ),
     ] = False,
+    collector_privilege_mode: Annotated[
+        Literal["cap_perfmon", "paranoid3_helper"],
+        typer.Option(
+            "--collector-privilege-mode",
+            help="Collector 权限模式: 非 root cap_perfmon, 或保留 paranoid=3 的 Rust Helper。",
+        ),
+    ] = "cap_perfmon",
     automatic_collection: Annotated[
         bool,
         typer.Option(
@@ -594,6 +603,7 @@ def setup_command(
             collector_uid=collector_uid,
             collector_command=collector_command,
             perf_path=perf_path,
+            collector_privilege_mode=collector_privilege_mode,
             update_existing=update_existing,
         )
     except PerfLensError as exc:
@@ -638,9 +648,7 @@ def setup_command(
     if artifact.claude_project_config_path is not None:
         typer.echo(f"Claude Code 配置路径: {artifact.claude_project_config_path}")
     typer.echo(f"采集状态: {collection_label}")
-    typer.echo(
-        f"项目自动运行: {'已启用' if artifact.automatic_collection_enabled else '未启用'}"
-    )
+    typer.echo(f"项目自动运行: {'已启用' if artifact.automatic_collection_enabled else '未启用'}")
     typer.echo(f"请继续阅读: {Path(artifact.output_directory) / '下一步.zh-CN.md'}")
     typer.echo(
         "检查当前状态: "
@@ -704,9 +712,7 @@ def detach_command(
 ) -> None:
     """解除项目 MCP 接入, 同时保留 Skill、引导文件和分析结果。"""
     try:
-        safe_output = (
-            validate_new_output_file(output_path) if output_path is not None else None
-        )
+        safe_output = validate_new_output_file(output_path) if output_path is not None else None
         artifact = detach_project_integration(
             project_root,
             client=client,
@@ -758,6 +764,13 @@ def stage_collector_assets_command(
             help="写入 Collector 策略的 perf 绝对路径。",
         ),
     ] = Path("/usr/bin/perf"),
+    privilege_mode: Annotated[
+        Literal["cap_perfmon", "paranoid3_helper"],
+        typer.Option(
+            "--privilege-mode",
+            help="写入策略的权限模式; paranoid3_helper 需要管理员显式风险确认。",
+        ),
+    ] = "cap_perfmon",
 ) -> None:
     """生成 Collector 策略和 systemd 模板, 不安装也不调用 sudo。"""
     try:
@@ -766,6 +779,7 @@ def stage_collector_assets_command(
             allowed_uids=(allowed_uid,),
             collector_command=collector_command,
             perf_path=perf_path,
+            privilege_mode=privilege_mode,
         )
     except PerfLensError as exc:
         _fail(exc)
@@ -969,36 +983,24 @@ def analyze_folded_command(
         Path,
         typer.Option("--output", dir_okay=False, help="带版本的 JSON 输出产物。"),
     ],
-    max_input_bytes: Annotated[
-        int, typer.Option(min=1, help="允许读取的最大输入字节数。")
-    ] = 1 << 30,
+    max_input_bytes: Annotated[int, typer.Option(min=1, help="允许读取的最大输入字节数。")] = 1
+    << 30,
     max_records: Annotated[
         int, typer.Option(min=1, help="允许解析的最大样本记录数。")
     ] = 10_000_000,
-    max_line_chars: Annotated[
-        int, typer.Option(min=16, help="单行允许的最大字符数。")
-    ] = 1 << 20,
-    max_stack_depth: Annotated[
-        int, typer.Option(min=1, help="单条调用栈允许的最大深度。")
-    ] = 4_096,
+    max_line_chars: Annotated[int, typer.Option(min=16, help="单行允许的最大字符数。")] = 1 << 20,
+    max_stack_depth: Annotated[int, typer.Option(min=1, help="单条调用栈允许的最大深度。")] = 4_096,
     max_unique_frames: Annotated[
         int, typer.Option(min=1, help="允许保留的最大唯一栈帧数。")
     ] = 2_000_000,
     max_unique_call_paths: Annotated[
         int, typer.Option(min=1, help="允许保留的最大唯一调用路径数。")
     ] = 1_000_000,
-    max_warnings: Annotated[
-        int, typer.Option(min=0, help="产物中最多保留的解析警告数。")
-    ] = 100,
-    top_n: Annotated[
-        int, typer.Option("--top-n", min=1, help="最多输出的热点数量。")
-    ] = 10_000,
-    call_path_limit: Annotated[
-        int, typer.Option(min=1, help="最多输出的调用路径数量。")
-    ] = 1_000,
-    max_output_bytes: Annotated[
-        int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")
-    ] = 128 << 20,
+    max_warnings: Annotated[int, typer.Option(min=0, help="产物中最多保留的解析警告数。")] = 100,
+    top_n: Annotated[int, typer.Option("--top-n", min=1, help="最多输出的热点数量。")] = 10_000,
+    call_path_limit: Annotated[int, typer.Option(min=1, help="最多输出的调用路径数量。")] = 1_000,
+    max_output_bytes: Annotated[int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")] = 128
+    << 20,
 ) -> None:
     """分析标准 FlameGraph folded 栈。"""
     limits = ResourceLimits(
@@ -1035,36 +1037,24 @@ def analyze_perf_script_command(
         Path,
         typer.Option("--output", dir_okay=False, help="带版本的 JSON 输出产物。"),
     ],
-    max_input_bytes: Annotated[
-        int, typer.Option(min=1, help="允许读取的最大输入字节数。")
-    ] = 1 << 30,
+    max_input_bytes: Annotated[int, typer.Option(min=1, help="允许读取的最大输入字节数。")] = 1
+    << 30,
     max_records: Annotated[
         int, typer.Option(min=1, help="允许解析的最大样本记录数。")
     ] = 10_000_000,
-    max_line_chars: Annotated[
-        int, typer.Option(min=16, help="单行允许的最大字符数。")
-    ] = 1 << 20,
-    max_stack_depth: Annotated[
-        int, typer.Option(min=1, help="单条调用栈允许的最大深度。")
-    ] = 4_096,
+    max_line_chars: Annotated[int, typer.Option(min=16, help="单行允许的最大字符数。")] = 1 << 20,
+    max_stack_depth: Annotated[int, typer.Option(min=1, help="单条调用栈允许的最大深度。")] = 4_096,
     max_unique_frames: Annotated[
         int, typer.Option(min=1, help="允许保留的最大唯一栈帧数。")
     ] = 2_000_000,
     max_unique_call_paths: Annotated[
         int, typer.Option(min=1, help="允许保留的最大唯一调用路径数。")
     ] = 1_000_000,
-    max_warnings: Annotated[
-        int, typer.Option(min=0, help="产物中最多保留的解析警告数。")
-    ] = 100,
-    top_n: Annotated[
-        int, typer.Option("--top-n", min=1, help="最多输出的热点数量。")
-    ] = 10_000,
-    call_path_limit: Annotated[
-        int, typer.Option(min=1, help="最多输出的调用路径数量。")
-    ] = 1_000,
-    max_output_bytes: Annotated[
-        int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")
-    ] = 128 << 20,
+    max_warnings: Annotated[int, typer.Option(min=0, help="产物中最多保留的解析警告数。")] = 100,
+    top_n: Annotated[int, typer.Option("--top-n", min=1, help="最多输出的热点数量。")] = 10_000,
+    call_path_limit: Annotated[int, typer.Option(min=1, help="最多输出的调用路径数量。")] = 1_000,
+    max_output_bytes: Annotated[int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")] = 128
+    << 20,
 ) -> None:
     """分析 PerfLens 约定字段格式的 perf script 文本。"""
     limits = ResourceLimits(
@@ -1105,39 +1095,25 @@ def analyze_perf_data_command(
         Path | None,
         typer.Option("--perf-path", dir_okay=False, help="明确指定 perf 程序路径。"),
     ] = None,
-    timeout_seconds: Annotated[
-        float, typer.Option(min=0.1, help="perf 转换超时秒数。")
-    ] = 300.0,
-    max_input_bytes: Annotated[
-        int, typer.Option(min=1, help="允许读取的最大输入字节数。")
-    ] = 1 << 30,
+    timeout_seconds: Annotated[float, typer.Option(min=0.1, help="perf 转换超时秒数。")] = 300.0,
+    max_input_bytes: Annotated[int, typer.Option(min=1, help="允许读取的最大输入字节数。")] = 1
+    << 30,
     max_records: Annotated[
         int, typer.Option(min=1, help="允许解析的最大样本记录数。")
     ] = 10_000_000,
-    max_line_chars: Annotated[
-        int, typer.Option(min=16, help="单行允许的最大字符数。")
-    ] = 1 << 20,
-    max_stack_depth: Annotated[
-        int, typer.Option(min=1, help="单条调用栈允许的最大深度。")
-    ] = 4_096,
+    max_line_chars: Annotated[int, typer.Option(min=16, help="单行允许的最大字符数。")] = 1 << 20,
+    max_stack_depth: Annotated[int, typer.Option(min=1, help="单条调用栈允许的最大深度。")] = 4_096,
     max_unique_frames: Annotated[
         int, typer.Option(min=1, help="允许保留的最大唯一栈帧数。")
     ] = 2_000_000,
     max_unique_call_paths: Annotated[
         int, typer.Option(min=1, help="允许保留的最大唯一调用路径数。")
     ] = 1_000_000,
-    max_warnings: Annotated[
-        int, typer.Option(min=0, help="产物中最多保留的解析警告数。")
-    ] = 100,
-    top_n: Annotated[
-        int, typer.Option("--top-n", min=1, help="最多输出的热点数量。")
-    ] = 10_000,
-    call_path_limit: Annotated[
-        int, typer.Option(min=1, help="最多输出的调用路径数量。")
-    ] = 1_000,
-    max_output_bytes: Annotated[
-        int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")
-    ] = 128 << 20,
+    max_warnings: Annotated[int, typer.Option(min=0, help="产物中最多保留的解析警告数。")] = 100,
+    top_n: Annotated[int, typer.Option("--top-n", min=1, help="最多输出的热点数量。")] = 10_000,
+    call_path_limit: Annotated[int, typer.Option(min=1, help="最多输出的调用路径数量。")] = 1_000,
+    max_output_bytes: Annotated[int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")] = 128
+    << 20,
 ) -> None:
     """通过系统 perf script 适配器分析 perf.data。"""
     limits = ResourceLimits(
@@ -1177,9 +1153,8 @@ def inspect_elf_command(
     output_path: Annotated[
         Path, typer.Option("--output", dir_okay=False, help="带版本的 JSON 输出产物。")
     ],
-    max_output_bytes: Annotated[
-        int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")
-    ] = 8 << 20,
+    max_output_bytes: Annotated[int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")] = 8
+    << 20,
 ) -> None:
     """检查 ELF 身份、Build ID 和调试信息能力。"""
     try:
@@ -1210,9 +1185,8 @@ def resolve_source_command(
         Path | None,
         typer.Option("--addr2line-path", dir_okay=False, help="可信 addr2line 程序路径。"),
     ] = None,
-    max_output_bytes: Annotated[
-        int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")
-    ] = 8 << 20,
+    max_output_bytes: Annotated[int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")] = 8
+    << 20,
 ) -> None:
     """把已验证的模块相对偏移解析为源码栈帧。"""
     try:
@@ -1245,15 +1219,10 @@ def source_context_command(
     output_path: Annotated[
         Path, typer.Option("--output", dir_okay=False, help="带版本的 JSON 输出产物。")
     ],
-    before: Annotated[
-        int, typer.Option(min=0, max=200, help="目标行之前读取的行数。")
-    ] = 20,
-    after: Annotated[
-        int, typer.Option(min=0, max=200, help="目标行之后读取的行数。")
-    ] = 20,
-    max_output_bytes: Annotated[
-        int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")
-    ] = 8 << 20,
+    before: Annotated[int, typer.Option(min=0, max=200, help="目标行之前读取的行数。")] = 20,
+    after: Annotated[int, typer.Option(min=0, max=200, help="目标行之后读取的行数。")] = 20,
+    max_output_bytes: Annotated[int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")] = 8
+    << 20,
 ) -> None:
     """在允许的工作区内有界读取源码上下文。"""
     try:
@@ -1279,12 +1248,10 @@ def classify_command(
     output_path: Annotated[
         Path, typer.Option("--output", dir_okay=False, help="诊断 JSON 输出路径。")
     ],
-    max_input_bytes: Annotated[
-        int, typer.Option(min=1, help="允许读取的最大输入字节数。")
-    ] = 128 << 20,
-    max_output_bytes: Annotated[
-        int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")
-    ] = 128 << 20,
+    max_input_bytes: Annotated[int, typer.Option(min=1, help="允许读取的最大输入字节数。")] = 128
+    << 20,
+    max_output_bytes: Annotated[int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")] = 128
+    << 20,
 ) -> None:
     """生成只包含候选结论的证据与诊断产物。"""
     try:
@@ -1310,9 +1277,8 @@ def report_command(
     target_metric: Annotated[
         str, typer.Option("--metric", help="关注的性能指标名称。")
     ] = "Not supplied.",
-    max_input_bytes: Annotated[
-        int, typer.Option(min=1, help="允许读取的最大输入字节数。")
-    ] = 128 << 20,
+    max_input_bytes: Annotated[int, typer.Option(min=1, help="允许读取的最大输入字节数。")] = 128
+    << 20,
     max_output_bytes: Annotated[
         int, typer.Option(min=1, help="Markdown 产物允许的最大字节数。")
     ] = 128 << 20,
@@ -1347,12 +1313,10 @@ def normalize_benchmark_command(
     benchmark_name: Annotated[
         str | None, typer.Option("--benchmark-name", help="多 Benchmark 文件中的目标名称。")
     ] = None,
-    max_input_bytes: Annotated[
-        int, typer.Option(min=1, help="允许读取的最大输入字节数。")
-    ] = 64 << 20,
-    max_output_bytes: Annotated[
-        int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")
-    ] = 64 << 20,
+    max_input_bytes: Annotated[int, typer.Option(min=1, help="允许读取的最大输入字节数。")] = 64
+    << 20,
+    max_output_bytes: Annotated[int, typer.Option(min=1, help="JSON 产物允许的最大字节数。")] = 64
+    << 20,
 ) -> None:
     """标准化受支持的第三方 Benchmark JSON。"""
     try:
@@ -1390,9 +1354,8 @@ def compare_profiles_command(
     max_input_bytes: Annotated[
         int, typer.Option(min=1, help="每个输入允许读取的最大字节数。")
     ] = 128 << 20,
-    max_output_bytes: Annotated[
-        int, typer.Option(min=1, help="每个输出允许的最大字节数。")
-    ] = 128 << 20,
+    max_output_bytes: Annotated[int, typer.Option(min=1, help="每个输出允许的最大字节数。")] = 128
+    << 20,
 ) -> None:
     """比较两个 PerfLens Profile 分析产物。"""
     try:
@@ -1443,12 +1406,10 @@ def compare_benchmarks_command(
     minimum_practical_impact_percent: Annotated[
         float, typer.Option(min=0, help="判定实际影响所需的最小百分比。")
     ] = 1.0,
-    max_input_bytes: Annotated[
-        int, typer.Option(min=1, help="每个输入允许读取的最大字节数。")
-    ] = 64 << 20,
-    max_output_bytes: Annotated[
-        int, typer.Option(min=1, help="每个输出允许的最大字节数。")
-    ] = 64 << 20,
+    max_input_bytes: Annotated[int, typer.Option(min=1, help="每个输入允许读取的最大字节数。")] = 64
+    << 20,
+    max_output_bytes: Annotated[int, typer.Option(min=1, help="每个输出允许的最大字节数。")] = 64
+    << 20,
 ) -> None:
     """比较两个标准化或受支持的第三方 Benchmark 文件。"""
     try:
@@ -1667,9 +1628,7 @@ def _render_doctor_chinese(artifact: CollectionCapabilityArtifact) -> None:
             "无法读取内核 perf_event_paranoid。"
         ),
         "Unable to read /proc/sys/kernel/kptr_restrict.": "无法读取内核 kptr_restrict。",
-        "Unable to read /proc/sys/kernel/yama/ptrace_scope.": (
-            "无法读取内核 ptrace_scope。"
-        ),
+        "Unable to read /proc/sys/kernel/yama/ptrace_scope.": ("无法读取内核 ptrace_scope。"),
     }
     recommendation_labels = {
         "Install a perf build matching the running Linux kernel.": (
@@ -1746,8 +1705,7 @@ def _render_doctor_chinese(artifact: CollectionCapabilityArtifact) -> None:
         )
     else:
         typer.echo(
-            "- Collector 已部署时运行 "
-            "`perflens accept-collector --authorize-host-acceptance`。"
+            "- Collector 已部署时运行 `perflens accept-collector --authorize-host-acceptance`。"
         )
     typer.echo("- 完整机器结果使用 `perflens doctor --json` 或 `--output <新文件.json>`。")
 
@@ -1758,8 +1716,7 @@ def _optional_integer(value: int | None) -> str:
 
 def _terminal_text(value: str, *, max_characters: int = 512) -> str:
     visible = "".join(
-        character if character.isprintable() and character != "\x1b" else "?"
-        for character in value
+        character if character.isprintable() and character != "\x1b" else "?" for character in value
     )
     if len(visible) <= max_characters:
         return visible
@@ -1841,10 +1798,7 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
             f"UID {artifact.collector_service_uid}"
         )
         typer.echo(f"Collector 策略版本: {artifact.collector_policy_version}")
-        typer.echo(
-            "Collector 允许模式: "
-            + (", ".join(artifact.collector_allowed_modes) or "无")
-        )
+        typer.echo("Collector 允许模式: " + (", ".join(artifact.collector_allowed_modes) or "无"))
         typer.echo(f"Collector 固定产物目录: {artifact.collector_spool_root}")
     typer.echo(f"本机 perf 权限: {host_labels[artifact.host_collection_status]}")
     typer.echo(f"自动采集: {automatic_labels[artifact.automatic_collection_status]}")
@@ -1902,9 +1856,7 @@ def _runtime_next_steps_chinese(artifact: RuntimeStatusArtifact) -> tuple[str, .
         setup_command.extend(("--prepare-collector", "--automatic-collection"))
         steps.append(f"重新生成完整自动采集资产: `{shlex.join(setup_command)}`")
     elif artifact.automatic_collection_status == "collector_unavailable":
-        steps.append(
-            f"打开 `{setup / '下一步.zh-CN.md'}`, 让管理员执行其中生成的部署/排错命令。"
-        )
+        steps.append(f"打开 `{setup / '下一步.zh-CN.md'}`, 让管理员执行其中生成的部署/排错命令。")
     elif artifact.automatic_collection_status == "access_denied":
         steps.append("退出当前 Linux 登录会话并重新登录, 使 perflens 用户组生效。")
         steps.append(f"重新登录后再次检查: `{status_command}`")
@@ -1965,7 +1917,8 @@ def _render_detachment_chinese(
         artifact.claude_skill_status,
     }:
         selected_client = (
-            "all" if set(artifact.selected_clients) == {"codex", "claude-code"}
+            "all"
+            if set(artifact.selected_clients) == {"codex", "claude-code"}
             else artifact.selected_clients[0]
         )
         command_parts = [
@@ -2074,8 +2027,10 @@ def _human_bytes(value: int) -> str:
 
 
 def _fail(error: PerfLensError) -> NoReturn:
-    output = error_json(error) if json_errors_enabled() else render_error_chinese(
-        error, executable="perflens"
+    output = (
+        error_json(error)
+        if json_errors_enabled()
+        else render_error_chinese(error, executable="perflens")
     )
     typer.echo(output, err=True)
     raise typer.Exit(ERROR_EXIT_CODES[error.code])

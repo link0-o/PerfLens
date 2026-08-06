@@ -847,9 +847,7 @@ def main() -> None:
     )
     parser.add_argument("--automatic-max-duration-seconds", type=float, default=30.0)
     parser.add_argument("--automatic-max-frequency-hz", type=int, default=99)
-    parser.add_argument(
-        "--automatic-max-output-bytes", type=int, default=DEFAULT_MAX_OUTPUT_BYTES
-    )
+    parser.add_argument("--automatic-max-output-bytes", type=int, default=DEFAULT_MAX_OUTPUT_BYTES)
     parser.add_argument("--automatic-plan-ttl-seconds", type=int, default=120)
     parser.add_argument("--perf-path", type=Path)
     parser.add_argument("--max-artifact-bytes", type=int, default=128 << 20)

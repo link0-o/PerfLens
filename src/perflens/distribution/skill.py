@@ -225,17 +225,12 @@ def plan_project_skill_removal(
 
 def _bundled_skill_root() -> Traversable:
     packaged = (
-        resources.files("perflens")
-        .joinpath("_bundled")
-        .joinpath("skills")
-        .joinpath(SKILL_NAME)
+        resources.files("perflens").joinpath("_bundled").joinpath("skills").joinpath(SKILL_NAME)
     )
     if packaged.joinpath("SKILL.md").is_file():
         return packaged
 
-    repository_copy = (
-        Path(__file__).resolve().parents[3] / ".agents" / "skills" / SKILL_NAME
-    )
+    repository_copy = Path(__file__).resolve().parents[3] / ".agents" / "skills" / SKILL_NAME
     if (repository_copy / "SKILL.md").is_file():
         return repository_copy
     raise PerfLensError(

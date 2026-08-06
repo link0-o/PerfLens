@@ -55,9 +55,10 @@ def test_detach_dry_run_and_removal_cover_both_clients_and_preserve_evidence(
     assert detached.codex_skill_status == "removed"
     assert detached.claude_skill_status == "removed"
     assert config.read_text(encoding="utf-8") == 'model = "keep-me"\n\n'
-    assert "perflens" not in json.loads(
-        (project / ".mcp.json").read_text(encoding="utf-8")
-    )["mcpServers"]
+    assert (
+        "perflens"
+        not in json.loads((project / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]
+    )
     assert not (project / ".agents/skills/perflens").exists()
     assert not (project / ".claude/skills/perflens").exists()
     assert (project / "perflens-setup/setup.json").is_file()
@@ -92,9 +93,7 @@ def test_detach_can_select_one_client_and_preserve_skills(tmp_path: Path) -> Non
     assert detached.codex_skill_status == "skipped"
     assert detached.claude_config_status == "removed"
     assert detached.claude_skill_status == "preserved"
-    assert "mcp_servers.perflens" in (project / ".codex/config.toml").read_text(
-        encoding="utf-8"
-    )
+    assert "mcp_servers.perflens" in (project / ".codex/config.toml").read_text(encoding="utf-8")
     assert (project / ".claude/skills/perflens/SKILL.md").is_file()
 
 

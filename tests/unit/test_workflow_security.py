@@ -40,8 +40,7 @@ def _steps(job: object, *, label: str) -> tuple[dict[str, object], ...]:
     job_mapping = _mapping(job, label=label)
     raw_steps = _sequence(job_mapping.get("steps"), label=f"{label}.steps")
     return tuple(
-        _mapping(step, label=f"{label}.steps[{index}]")
-        for index, step in enumerate(raw_steps)
+        _mapping(step, label=f"{label}.steps[{index}]") for index, step in enumerate(raw_steps)
     )
 
 
@@ -110,9 +109,7 @@ def test_release_write_token_is_isolated_from_checkout_and_project_code() -> Non
     assert "uv " not in publisher_command
     assert "python" not in publisher_command
     assert "scripts/" not in publisher_command
-    assert all(
-        not str(step.get("uses", "")).startswith("actions/checkout@") for step in steps
-    )
+    assert all(not str(step.get("uses", "")).startswith("actions/checkout@") for step in steps)
 
 
 def test_release_attestation_credentials_are_isolated_from_project_code() -> None:
@@ -199,16 +196,14 @@ def test_published_python_packages_are_rebuilt_and_compared() -> None:
         )
         assert len(builds) == 2
         assert all(
-            'SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"' in command
-            for command in builds
+            'SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"' in command for command in builds
         )
         assert "--out-dir dist" in builds[0]
         assert "--out-dir /tmp/perflens-python-reproducible" in builds[1]
         verifier_indexes = tuple(
             index
             for index, command in enumerate(commands)
-            if isinstance(command, str)
-            and "scripts/verify_python_reproducibility.py" in command
+            if isinstance(command, str) and "scripts/verify_python_reproducibility.py" in command
         )
         assert len(verifier_indexes) == 1
         assert commands.index(builds[1]) < verifier_indexes[0]
@@ -223,13 +218,9 @@ def test_debian_install_smoke_uses_the_production_perf_entry() -> None:
             label=f"{workflow_name}.debian-package",
         )
         commands = tuple(
-            cast(str, step["run"])
-            for step in steps
-            if isinstance(step.get("run"), str)
+            cast(str, step["run"]) for step in steps if isinstance(step.get("run"), str)
         )
-        prerequisites = next(
-            command for command in commands if "apt-get update" in command
-        )
+        prerequisites = next(command for command in commands if "apt-get update" in command)
         installed_smoke = next(
             command for command in commands if "perflens-admin deploy" in command
         )

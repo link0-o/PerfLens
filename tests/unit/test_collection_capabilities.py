@@ -31,9 +31,7 @@ def test_optional_executable_and_version_are_bounded(
     assert warnings
 
     warnings.clear()
-    assert (
-        capabilities._resolve_optional_executable(tmp_path / "missing", "perf", warnings) is None
-    )
+    assert capabilities._resolve_optional_executable(tmp_path / "missing", "perf", warnings) is None
     assert "cannot be resolved" in warnings[0]
 
     plain_file = tmp_path / "plain"
@@ -78,6 +76,7 @@ def test_file_capability_detection_and_failure(
         tmp_path,
         "print('perf cap_perfmon,cap_syslog=ep')",
     )
+
     def find_fake_getcap(_name: str) -> str:
         return str(fake_getcap)
 
@@ -86,6 +85,7 @@ def test_file_capability_detection_and_failure(
     assert capabilities._file_capabilities(perf, warnings) == ("cap_syslog", "cap_perfmon")
 
     failing_getcap = _executable(tmp_path, "raise SystemExit(1)")
+
     def find_failing_getcap(_name: str) -> str:
         return str(failing_getcap)
 

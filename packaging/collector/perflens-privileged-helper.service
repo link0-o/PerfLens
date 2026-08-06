@@ -1,0 +1,39 @@
+# Managed by PerfLens. Do not remove this marker from generated service units.
+[Unit]
+Description=PerfLens bounded Rust helper for Linux perf_event_paranoid=3
+Documentation=https://github.com/link0-o/PerfLens
+After=local-fs.target
+Before=perflens-collector.service
+
+[Service]
+Type=simple
+User=root
+Group=perflens-internal
+SupplementaryGroups=perflens
+ExecStart=/usr/lib/perflens/perflens-privileged-helper --broker-uid @PERFLENS_BROKER_UID@ --allowed-uid @PERFLENS_ALLOWED_UID@ --artifact-gid @PERFLENS_ARTIFACT_GID@
+RuntimeDirectory=perflens-helper
+RuntimeDirectoryMode=0750
+StateDirectory=perflens-helper
+StateDirectoryMode=0751
+UMask=0027
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_PERFMON CAP_SYS_ADMIN
+AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN
+SecureBits=keep-caps-locked noroot-locked
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+ReadOnlyPaths=/usr/bin/perf /usr/bin/sleep /proc
+ReadWritePaths=/run/perflens-helper /var/lib/perflens-helper
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

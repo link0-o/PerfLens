@@ -29,12 +29,13 @@ def main() -> None:
         main_package = candidates[0]
     else:
         main_package = arguments.main.resolve(strict=True)
-    collector_package = (
-        arguments.collector.resolve(strict=True)
-        if arguments.collector is not None
-        else directory / f"perflens-collector_{__version__}-1_all.deb"
-    )
-    collector_package = collector_package.resolve(strict=True)
+    if arguments.collector is None:
+        collector_candidates = tuple(directory.glob(f"perflens-collector_{__version__}-1_*.deb"))
+        if len(collector_candidates) != 1:
+            parser.error("expected exactly one architecture-specific Collector DEB")
+        collector_package = collector_candidates[0]
+    else:
+        collector_package = arguments.collector.resolve(strict=True)
     if arguments.reproducible_directory is not None:
         reproducible = arguments.reproducible_directory.resolve(strict=True)
         assert _same_file(main_package, reproducible / main_package.name)
@@ -51,9 +52,7 @@ def main() -> None:
         and f"python3 (<< 3.{int(abi.removeprefix('3.')) + 1})" in main_dependencies
         for abi in ("3.12", "3.13")
     )
-    assert f"perflens (= {__version__}-1)" in _field(
-        dpkg_deb, collector_package, "Depends"
-    )
+    assert f"perflens (= {__version__}-1)" in _field(dpkg_deb, collector_package, "Depends")
 
     with tempfile.TemporaryDirectory(prefix="perflens-deb-smoke-") as directory:
         root = Path(directory) / "root"
@@ -88,14 +87,18 @@ def main() -> None:
         assert "sys.pycache_prefix" in launcher_text
         assert (main_control / "postinst").stat().st_mode & 0o777 == 0o755
         assert not tuple((root / "usr/lib/perflens").glob("*.dist-info/uv_cache.json"))
+        helper = root / "usr/lib/perflens/perflens-privileged-helper"
+        assert helper.is_file()
+        assert helper.stat().st_mode & 0o777 == 0o755
         _assert_safe_modes(root)
-        policy = (
-            root / "usr/share/perflens/collector/collector.example.toml"
-        ).read_text(encoding="utf-8")
-        service = (
-            root / "usr/share/perflens/collector/perflens-collector.service"
-        ).read_text(encoding="utf-8")
+        policy = (root / "usr/share/perflens/collector/collector.example.toml").read_text(
+            encoding="utf-8"
+        )
+        service = (root / "usr/share/perflens/collector/perflens-collector.service").read_text(
+            encoding="utf-8"
+        )
         assert "policy_version = 1" in policy
+        assert 'privilege_mode = "cap_perfmon"' in policy
         assert "策略格式版本" in policy
         assert "max_spool_bytes = 5368709120" in policy
         assert "PerfLens never deletes old evidence automatically" in policy
@@ -121,7 +124,10 @@ def _assert_safe_modes(root: Path) -> None:
         if path.is_symlink():
             continue
         mode = stat.S_IMODE(path.stat().st_mode)
-        if path.is_dir() or path.name == "perflens-launcher":
+        if path.is_dir() or path.name in {
+            "perflens-launcher",
+            "perflens-privileged-helper",
+        }:
             assert mode == 0o755, (path, oct(mode))
         else:
             assert mode == 0o644, (path, oct(mode))
@@ -139,6 +145,14 @@ def _assert_shared_libraries(root: Path) -> None:
             text=True,
         )
         assert "not found" not in completed.stdout, shared_object
+    helper = root / "usr/lib/perflens/perflens-privileged-helper"
+    completed = subprocess.run(  # noqa: S603 - packaged fixed binary
+        [ldd, str(helper)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "not found" not in completed.stdout
 
 
 def _field(dpkg_deb: str, package: Path, field: str) -> str:

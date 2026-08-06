@@ -31,6 +31,11 @@ def main() -> None:
     parser.add_argument("--python", type=Path, default=Path("/usr/bin/python3"))
     parser.add_argument("--uv", type=Path)
     parser.add_argument(
+        "--helper-binary",
+        type=Path,
+        help="Prebuilt release perflens-privileged-helper binary.",
+    )
+    parser.add_argument(
         "--offline",
         action="store_true",
         help="Require every locked dependency to already exist in the uv cache.",
@@ -48,6 +53,11 @@ def main() -> None:
     if wheel.name != f"perflens-{version}-py3-none-any.whl":
         parser.error(f"wheel must be named perflens-{version}-py3-none-any.whl")
     output = _existing_directory(arguments.output_directory, parser, "output directory")
+    helper_binary = _executable(
+        arguments.helper_binary or project_root / "target/release/perflens-privileged-helper",
+        parser,
+        "Rust Helper binary",
+    )
     python = _executable(arguments.python, parser, "Python interpreter")
     uv_candidate = arguments.uv or _which_path("uv", parser)
     uv = _executable(uv_candidate, parser, "uv executable")
@@ -69,7 +79,7 @@ def main() -> None:
 
     debian_version = f"{version}-{_DEBIAN_REVISION}"
     main_output = output / f"perflens_{debian_version}_{architecture}.deb"
-    collector_output = output / f"perflens-collector_{debian_version}_all.deb"
+    collector_output = output / f"perflens-collector_{debian_version}_{architecture}.deb"
     for destination in (main_output, collector_output):
         if destination.exists() or destination.is_symlink():
             parser.error(f"refusing to overwrite existing package: {destination.name}")
@@ -96,6 +106,8 @@ def main() -> None:
             collector_root,
             project_root=project_root,
             version=debian_version,
+            architecture=architecture,
+            helper_binary=helper_binary,
         )
         _build_archive(dpkg_deb, main_root, main_output, project_root)
         _build_archive(dpkg_deb, collector_root, collector_output, project_root)
@@ -192,30 +204,43 @@ def _build_main_tree(
     _normalize_tree(root)
 
 
-def _build_collector_tree(root: Path, *, project_root: Path, version: str) -> None:
+def _build_collector_tree(
+    root: Path,
+    *,
+    project_root: Path,
+    version: str,
+    architecture: str,
+    helper_binary: Path,
+) -> None:
     binary_directory = root / "usr/bin"
     binary_directory.mkdir(parents=True)
     for command in ("perflens-admin", "perflens-collector"):
         (binary_directory / command).symlink_to("../lib/perflens/perflens-launcher")
+    helper_destination = root / "usr/lib/perflens/perflens-privileged-helper"
+    helper_destination.parent.mkdir(parents=True)
+    shutil.copyfile(helper_binary, helper_destination)
+    helper_destination.chmod(0o755)
     _install_docs(root, project_root, "perflens-collector")
     examples = root / "usr/share/perflens/collector"
     examples.mkdir(parents=True)
     for filename in (
         "collector.example.toml",
         "perflens-collector.service",
+        "perflens-collector-helper.service",
+        "perflens-privileged-helper.service",
         "perflens.sysusers",
     ):
         shutil.copyfile(project_root / "packaging/collector" / filename, examples / filename)
     control = _control_text(
         package="perflens-collector",
         version=version,
-        architecture="all",
-        depends=(f"perflens (= {version})", "systemd", "passwd"),
+        architecture=architecture,
+        depends=(f"perflens (= {version})", "systemd", "passwd", "libc6 (>= 2.17)"),
         recommends=("linux-perf",),
         installed_size=_tree_kib(root),
         description=(
-            "Optional policy-bounded Collector for PerfLens\n"
-            " This package adds explicit administrator and Collector entry points.\n"
+            "Optional policy-bounded Collector and Rust Helper for PerfLens\n"
+            " This package adds administrator, Collector, and privileged Helper entry points.\n"
             " Installation does not enable the service or alter kernel policy."
         ),
     )
@@ -336,6 +361,9 @@ def _normalize_tree(root: Path) -> None:
     launcher = root / "usr/lib/perflens/perflens-launcher"
     if launcher.is_file():
         launcher.chmod(0o755)
+    helper = root / "usr/lib/perflens/perflens-privileged-helper"
+    if helper.is_file():
+        helper.chmod(0o755)
     for script_name in ("postinst", "preinst", "prerm", "postrm"):
         maintainer_script = root / "DEBIAN" / script_name
         if maintainer_script.is_file():

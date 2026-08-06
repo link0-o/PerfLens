@@ -2,7 +2,7 @@
 
 简体中文 | [English](privileged-helper.md)
 
-状态：`v0.2.0` 设计基线，尚未表示当前已发布版本具备该功能。
+状态：`v0.2.0` 已实现并纳入原生 Debian Collector 包；正式启用仍需管理员显式选择和验收。
 
 ## 目标与非目标
 
@@ -35,10 +35,10 @@ Agent / Skill / MCP（普通用户）
 Python Collector Broker（无 capability）
               │ 私有、仅 Broker 可访问的 Unix Socket
               ▼
-Rust privileged Helper（专用 UID，受限 capability）
+Rust privileged Helper（root UID，systemd capability bounding set）
               │ 固定 /usr/bin/perf + 固定 PID 参数
               ▼
-         /var/lib/perflens
+      /var/lib/perflens-helper
 ```
 
 公共 Socket 和私有 Helper Socket 使用不同目录、组和权限。Helper 必须使用
@@ -69,11 +69,11 @@ Helper 只执行管理员策略中固定、root 所有且不可由非 root 写�
 ## Rust 与发布边界
 
 Rust 只用于 Helper。普通 wheel 不包含或构建 Helper，因此 Python 开发和只读分析不需要
-Rust。原生 DEB/未来 RPM 在 CI 中使用固定稳定工具链和 `Cargo.lock` 构建目标架构二进制；
+Rust。原生 DEB 在 CI 中使用固定稳定工具链和 `Cargo.lock` 构建目标架构二进制；
 最终用户不安装 Cargo 或 rustc。
 
 Rust 代码优先使用安全抽象。不可避免的 syscall FFI `unsafe` 必须集中、写明安全前提并有
-专项测试。依赖保持最少，版本锁定并进入 SBOM、许可证清单和供应链审计。
+专项测试。依赖保持最少，版本锁定并进入第三方许可证清单和 Rust 供应链审计。
 
 ## 必须通过的验收
 

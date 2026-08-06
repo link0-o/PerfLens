@@ -217,10 +217,7 @@ class ArtifactStore:
             return None
         except OSError as exc:
             raise ValueError("Artifact root cannot be inspected") from exc
-        if (
-            not stat.S_ISDIR(metadata.st_mode)
-            or metadata.st_uid != os.geteuid()
-        ):
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid():
             raise ValueError("Artifact root must be a user-owned directory")
         return (
             metadata.st_dev,

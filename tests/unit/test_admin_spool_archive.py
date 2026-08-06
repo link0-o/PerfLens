@@ -150,9 +150,7 @@ def test_archive_plan_copy_and_explicit_prune_form_a_verified_lifecycle(
     )
     third = _artifact(layout, 3, b"third", modified_at=now - timedelta(days=8))
     latest = _artifact(layout, 4, b"latest", modified_at=now - timedelta(days=1))
-    replay_state = layout.state_directory / replay_marker_name(
-        "plan-00000000000000000005"
-    )
+    replay_state = layout.state_directory / replay_marker_name("plan-00000000000000000005")
     replay_state.touch(mode=0o600)
     output = archive_directory / "evidence.zip"
 
@@ -289,9 +287,7 @@ def test_archive_refuses_unmanaged_spool_entries_and_output_inside_spool(
     assert unmanaged.read_text(encoding="utf-8") == "keep"
 
     unmanaged.unlink()
-    unsafe_replay_state = layout.state_directory / replay_marker_name(
-        "plan-00000000000000000009"
-    )
+    unsafe_replay_state = layout.state_directory / replay_marker_name("plan-00000000000000000009")
     unsafe_replay_state.write_bytes(b"not-empty")
     unsafe_replay_state.chmod(0o600)
     with pytest.raises(PerfLensError, match="unsafe replay marker") as replay_rejected:
@@ -479,6 +475,33 @@ def test_archive_rejects_missing_admin_and_unsafe_runtime_parameters(tmp_path: P
     assert unsafe_parent.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 
+def test_archive_lifecycle_rejects_private_helper_spool_until_supported(
+    tmp_path: Path,
+) -> None:
+    config, layout, archive_directory, now = _spool_inputs(tmp_path)
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        .replace("[collector]\n", '[collector]\nprivilege_mode = "paranoid3_helper"\n')
+        .replace("max_spool_bytes = 10737418240", "max_spool_bytes = 5368709120")
+        .replace("max_spool_artifacts = 1000", "max_spool_artifacts = 500")
+        .replace("min_free_bytes = 0", "min_free_bytes = 2147483648"),
+        encoding="utf-8",
+    )
+    config.chmod(0o600)
+    archive = archive_directory / "helper.zip"
+
+    with pytest.raises(PerfLensError, match="Rust Helper private spool") as create:
+        _archive(archive, config, layout, now, dry_run=True)
+    with pytest.raises(PerfLensError, match="Rust Helper private spool") as verify:
+        _verify(archive, config, layout)
+    with pytest.raises(PerfLensError, match="Rust Helper private spool") as prune:
+        _prune(archive, config, layout, dry_run=True)
+
+    assert create.value.code is ErrorCode.UNSUPPORTED_FORMAT
+    assert verify.value.code is ErrorCode.UNSUPPORTED_FORMAT
+    assert prune.value.code is ErrorCode.UNSUPPORTED_FORMAT
+
+
 def test_prune_rejects_changed_source_without_removing_anything(tmp_path: Path) -> None:
     config, layout, archive_directory, now = _spool_inputs(tmp_path)
     source = _artifact(layout, 1, b"original", modified_at=now - timedelta(days=10))
@@ -565,9 +588,7 @@ def test_prune_rejects_structurally_tampered_archives(
     )
     tampered = archive_directory / f"{tamper}.zip"
     with zipfile.ZipFile(original, "r") as source_bundle:
-        members = [
-            (info, source_bundle.read(info.filename)) for info in source_bundle.infolist()
-        ]
+        members = [(info, source_bundle.read(info.filename)) for info in source_bundle.infolist()]
     with zipfile.ZipFile(tampered, "w", compression=zipfile.ZIP_STORED) as output_bundle:
         for info, payload in members:
             if tamper == "missing_member" and info.filename.startswith("artifacts/"):

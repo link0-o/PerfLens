@@ -44,6 +44,8 @@ _MAX_SETUP_JSON_BYTES = 1 << 20
 _NATIVE_MAIN_COMMAND = Path("/usr/bin/perflens")
 _NATIVE_COLLECTOR_COMMAND = Path("/usr/bin/perflens-collector")
 _WHEEL_COLLECTOR_COMMAND = Path("/opt/perflens/bin/perflens-collector")
+_COLLECTOR_SPOOL_ROOT = Path("/var/lib/perflens")
+_HELPER_SPOOL_ROOT = Path("/var/lib/perflens-helper")
 
 
 def run_project_setup(
@@ -69,6 +71,7 @@ def run_project_setup(
     collector_uid: int | None = None,
     collector_command: Path | None = None,
     perf_path: Path = Path("/usr/bin/perf"),
+    collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon",
     update_existing: bool = False,
 ) -> SetupArtifact:
     """Create a bounded onboarding bundle inside one selected project."""
@@ -78,12 +81,28 @@ def run_project_setup(
         if prepare_collector
         else collector_command or _WHEEL_COLLECTOR_COMMAND
     )
+    if (
+        prepare_collector
+        and collector_privilege_mode == "paranoid3_helper"
+        and selected_collector_command != _NATIVE_COLLECTOR_COMMAND
+    ):
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "setup",
+            "paranoid3_helper requires the architecture-specific native Collector package",
+            recoverable=True,
+            suggested_actions=(
+                "Install the matching perflens and perflens-collector DEBs, then rerun init.",
+            ),
+        )
     admin_command = selected_collector_command.with_name("perflens-admin")
     output, previous_artifact = _setup_output_state(
         project,
         output_directory,
         update_existing=update_existing,
     )
+    if previous_artifact is not None and not prepare_collector:
+        collector_privilege_mode = previous_artifact.collector_privilege_mode
     previous_claude_configuration = _previous_claude_configuration(
         project,
         previous_artifact,
@@ -101,13 +120,9 @@ def run_project_setup(
         client="codex",
         update_existing=update_existing,
         expected_fingerprint=(
-            previous_artifact.skill_fingerprint
-            if previous_artifact is not None
-            else None
+            previous_artifact.skill_fingerprint if previous_artifact is not None else None
         ),
-        recorded_path=(
-            previous_artifact.skill_path if previous_artifact is not None else None
-        ),
+        recorded_path=(previous_artifact.skill_path if previous_artifact is not None else None),
     )
     claude_skill_path, claude_skill_status = _skill_preflight(
         project,
@@ -115,15 +130,16 @@ def run_project_setup(
         client="claude-code",
         update_existing=update_existing,
         expected_fingerprint=(
-            previous_artifact.claude_skill_fingerprint
-            if previous_artifact is not None
-            else None
+            previous_artifact.claude_skill_fingerprint if previous_artifact is not None else None
         ),
         recorded_path=(
-            previous_artifact.claude_skill_path
-            if previous_artifact is not None
-            else None
+            previous_artifact.claude_skill_path if previous_artifact is not None else None
         ),
+    )
+    collector_spool_root = (
+        _HELPER_SPOOL_ROOT
+        if collector_privilege_mode == "paranoid3_helper"
+        else _COLLECTOR_SPOOL_ROOT
     )
     configuration = render_codex_config(
         project,
@@ -136,6 +152,7 @@ def run_project_setup(
         automatic_max_frequency_hz=automatic_max_frequency_hz,
         automatic_max_output_bytes=automatic_max_output_bytes,
         automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
+        collector_spool_root=collector_spool_root,
         mcp_command=mcp_command,
     )
     codex_plan: CodexConfigInstallPlan | None = (
@@ -152,6 +169,7 @@ def run_project_setup(
         automatic_max_frequency_hz=automatic_max_frequency_hz,
         automatic_max_output_bytes=automatic_max_output_bytes,
         automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
+        collector_spool_root=collector_spool_root,
         mcp_command=mcp_command,
     )
     claude_plan: ClaudeConfigInstallPlan | None = (
@@ -221,6 +239,7 @@ def run_project_setup(
                 claude_plan,
                 codex_enabled,
                 claude_enabled,
+                collector_privilege_mode,
             ),
             chinese_guide_path,
             max_output_bytes=_MAX_GUIDE_BYTES,
@@ -238,6 +257,7 @@ def run_project_setup(
                 claude_plan,
                 codex_enabled,
                 claude_enabled,
+                collector_privilege_mode,
             ),
             english_guide_path,
             max_output_bytes=_MAX_GUIDE_BYTES,
@@ -256,6 +276,7 @@ def run_project_setup(
                 allowed_uids=(selected_uid,),
                 collector_command=selected_collector_command,
                 perf_path=perf_path,
+                privilege_mode=collector_privilege_mode,
             )
         elif preserved_collector_assets is not None:
             collector_assets_path = output / "collector-assets"
@@ -303,21 +324,15 @@ def run_project_setup(
             skill_path=str(skill_path) if skill_path is not None else None,
             skill_fingerprint=skill_fingerprint,
             mcp_config_path=str(mcp_config_path),
-            codex_project_config_path=(
-                str(codex_plan.path) if codex_plan is not None else None
-            ),
+            codex_project_config_path=(str(codex_plan.path) if codex_plan is not None else None),
             codex_project_config_status=(
                 codex_plan.status if codex_plan is not None else "skipped"
             ),
             claude_skill_status=claude_skill_status,
-            claude_skill_path=(
-                str(claude_skill_path) if claude_skill_path is not None else None
-            ),
+            claude_skill_path=(str(claude_skill_path) if claude_skill_path is not None else None),
             claude_skill_fingerprint=claude_skill_fingerprint,
             claude_mcp_config_path=str(claude_mcp_config_path),
-            claude_project_config_path=(
-                str(claude_plan.path) if claude_plan is not None else None
-            ),
+            claude_project_config_path=(str(claude_plan.path) if claude_plan is not None else None),
             claude_project_config_status=(
                 claude_plan.status if claude_plan is not None else "skipped"
             ),
@@ -336,6 +351,7 @@ def run_project_setup(
                 str(collector_assets_path) if collector_assets_path is not None else None
             ),
             automatic_collection_enabled=automatic_collection,
+            collector_privilege_mode=collector_privilege_mode,
             collection_status=collection_status,
             blocked_modes=blocked_modes,
             generated_files=tuple(str(path) for path in generated),
@@ -360,9 +376,7 @@ def run_project_setup(
                     project,
                     client="codex",
                     recorded_path=(
-                        previous_artifact.skill_path
-                        if previous_artifact is not None
-                        else None
+                        previous_artifact.skill_path if previous_artifact is not None else None
                     ),
                 ),
             )
@@ -392,11 +406,7 @@ def run_project_setup(
             _rollback_config_plan(claude_plan)
         if applied_codex_config and codex_plan is not None:
             _rollback_config_plan(codex_plan)
-        if (
-            moved_collector_assets
-            and backup is not None
-            and (output / "collector-assets").is_dir()
-        ):
+        if moved_collector_assets and backup is not None and (output / "collector-assets").is_dir():
             (output / "collector-assets").rename(backup / "collector-assets")
         if created:
             shutil.rmtree(output, ignore_errors=True)
@@ -609,11 +619,7 @@ def _previous_claude_configuration(
         return None
     setup = Path(artifact.output_directory)
     path = setup / "claude-mcp.json"
-    if (
-        not setup.is_relative_to(project)
-        or path.is_symlink()
-        or not path.is_file()
-    ):
+    if not setup.is_relative_to(project) or path.is_symlink() or not path.is_file():
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
             "setup",
@@ -715,9 +721,7 @@ def _expected_skill_fingerprint(
     recorded = None
     if artifact is not None:
         recorded = (
-            artifact.skill_fingerprint
-            if client == "codex"
-            else artifact.claude_skill_fingerprint
+            artifact.skill_fingerprint if client == "codex" else artifact.claude_skill_fingerprint
         )
     return recorded or bundled_skill_fingerprint()
 
@@ -891,6 +895,7 @@ def _chinese_guide(
     claude_plan: ClaudeConfigInstallPlan | None = None,
     codex_selected: bool = True,
     claude_selected: bool = False,
+    collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon",
 ) -> str:
     layout_note = _chinese_layout_note(admin_command, collector_command)
     policy_path = output / "collector-assets" / "collector.toml"
@@ -898,16 +903,25 @@ def _chinese_guide(
     dry_run_command = shlex.join(
         (str(admin_command), "deploy", "--config", str(policy_path), "--dry-run")
     )
-    deploy_command = shlex.join(
-        ("sudo", str(admin_command), "deploy", "--config", str(policy_path))
+    deploy_arguments = ["sudo", str(admin_command), "deploy", "--config", str(policy_path)]
+    if collector_privilege_mode == "paranoid3_helper":
+        deploy_arguments.append("--acknowledge-cap-sys-admin-risk")
+    deploy_command = shlex.join(deploy_arguments)
+    privilege_note = (
+        "当前选择 `paranoid3_helper`：保持 `perf_event_paranoid=3`，Python Broker 无权限，"
+        "仅 Rust Helper 以 root 身份和 CAP_PERFMON/CAP_SYS_ADMIN 边界执行固定 PID 采集。"
+        "该模式风险更高，正式部署必须带确认参数。"
+        if collector_privilege_mode == "paranoid3_helper"
+        else "当前选择默认 `cap_perfmon`：Collector 不以 root 运行；Debian "
+        "`perf_event_paranoid=3` 下通常需管理员按威胁模型调整到 2。"
     )
     collector_section = (
         f"""
 ## 需要自动采集时
 
-已生成 `{output / 'collector-assets'}`。
+已生成 `{output / "collector-assets"}`。
 这些只是待管理员检查的模板；PerfLens 没有执行 sudo、修改 sysctl 或启动服务。
-先检查 `{output / 'collector-assets' / 'collector.toml'}`，再由管理员执行：
+先检查 `{output / "collector-assets" / "collector.toml"}`，再由管理员执行：
 
 ```bash
 {dry_run_command}
@@ -915,6 +929,8 @@ def _chinese_guide(
 ```
 
 {layout_note}
+
+{privilege_note}
 
 部署命令默认输出中文摘要：预检会明确说明“尚未修改系统”，正式部署会明确说明健康
 握手是否通过，并给出重新登录和普通用户验收步骤。自动化程序需要完整版本化结果时
@@ -964,12 +980,12 @@ PID 并交给 Collector。用户不需要查找或输入 PID。
 `{codex_plan.path}`。PerfLens 只管理带有明确 PerfLens 托管标记的 MCP 配置块；
 已有其他 Codex 设置会保留。现在重启 Codex，再执行 `codex mcp list` 检查 `perflens`。
 
-同时保留了 `{output / 'codex-mcp.toml'}` 作为可检查、可迁移的独立配置片段。
+同时保留了 `{output / "codex-mcp.toml"}` 作为可检查、可迁移的独立配置片段。
 """
         if codex_plan is not None
         else (
             f"""本次使用了 `--skip-codex-config`，没有修改项目的 Codex 配置。打开
-`{output / 'codex-mcp.toml'}`，复制其中完整的 `[mcp_servers.perflens]` 配置块到
+`{output / "codex-mcp.toml"}`，复制其中完整的 `[mcp_servers.perflens]` 配置块到
 项目 `.codex/config.toml` 或用户配置；不要覆盖已有设置。保存后重启 Codex，再执行
 `codex mcp list` 检查 `perflens`。
 """
@@ -990,13 +1006,13 @@ PID 并交给 Collector。用户不需要查找或输入 PID。
 ```
 
 Claude Code 会在首次使用项目级 MCP 时单独请求信任；PerfLens 不会代替用户批准。
-独立配置副本保存在 `{output / 'claude-mcp.json'}`。
+独立配置副本保存在 `{output / "claude-mcp.json"}`。
 """
         if claude_plan is not None
         else (
             f"""## 3. Claude Code (需手动接入)
 
-本次没有修改 `.mcp.json`。请检查 `{output / 'claude-mcp.json'}` 后手动合并，
+本次没有修改 `.mcp.json`。请检查 `{output / "claude-mcp.json"}` 后手动合并，
 项目 Skill 位于 `.claude/skills/{SKILL_NAME}`。
 """
             if claude_selected
@@ -1005,7 +1021,7 @@ Claude Code 会在首次使用项目级 MCP 时单独请求信任；PerfLens 不
 当前项目没有安装 Claude Code Skill，也没有写入 `.mcp.json`，所以 Claude Code
 不会发现 PerfLens。需要时在一个尚未初始化的项目运行
 `perflens init --client claude-code`。可检查的配置模板保存在
-`{output / 'claude-mcp.json'}`。
+`{output / "claude-mcp.json"}`。
 """
         )
     )
@@ -1037,7 +1053,7 @@ PerfLens Skill 位于项目的 `.agents/skills/{SKILL_NAME}`。可以对 Codex �
 {claude_section}
 ## 4. 当前采集检查
 
-权限报告：`{output / 'collection-capabilities.json'}`
+权限报告：`{output / "collection-capabilities.json"}`
 
 综合状态：`{_collection_status_chinese(capabilities)}`。这只是权限诊断，不是成功采样证明。
 {collector_section}
@@ -1121,6 +1137,7 @@ def _english_guide(
     claude_plan: ClaudeConfigInstallPlan | None = None,
     codex_selected: bool = True,
     claude_selected: bool = False,
+    collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon",
 ) -> str:
     status_command = _status_command(project, output)
     layout = (
@@ -1171,10 +1188,10 @@ Project: `{project}`
 1. {codex}
 2. {claude}
 3. Use the selected project Skill for evidence-first analysis.
-4. Review `{output / 'collection-capabilities.json'}`; the aggregate status is
+4. Review `{output / "collection-capabilities.json"}`; the aggregate status is
    `{_collection_status(capabilities)[0]}` and is not proof of successful sampling.
 5. {collector}
-6. Project workload execution is {'enabled' if automatic_collection else 'disabled'} in the
+6. Project workload execution is {"enabled" if automatic_collection else "disabled"} in the
    generated MCP configuration. It always runs as the ordinary MCP user and still requires
    per-call authorization.
 7. Recheck this exact onboarding bundle with `{status_command}`. Keep

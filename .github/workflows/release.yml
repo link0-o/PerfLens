@@ -21,13 +21,18 @@ jobs:
       - name: Install Debian build prerequisites
         run: >-
           apt-get update && apt-get install --yes
-          ca-certificates dpkg-dev git linux-perf python3
+          ca-certificates curl dpkg-dev gcc git linux-perf python3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
+      - name: Install pinned Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - run: cargo build --release --locked --package perflens-privileged-helper
       - run: uv sync --all-groups --frozen --python /usr/bin/python3
       - run: uv build --no-sources
       - run: >-
@@ -50,7 +55,7 @@ jobs:
         run: |
           apt-get install --yes --no-install-recommends \
             ./dist/perflens_*_amd64.deb \
-            ./dist/perflens-collector_*_all.deb
+            ./dist/perflens-collector_*_amd64.deb
           perflens --version
           perflens-admin --version
           mkdir /tmp/perflens-installed-preflight

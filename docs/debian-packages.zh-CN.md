@@ -5,8 +5,8 @@
 PerfLens 为 Debian 13 `amd64` 提供两个职责分离的原生安装包：
 
 - `perflens_<版本>-1_amd64.deb`：普通用户 CLI、MCP Server、Skill 和锁定运行依赖；
-- `perflens-collector_<版本>-1_all.deb`：可选的 `perflens-admin` 与
-  `perflens-collector` 入口和部署示例，依赖同版本主包。
+- `perflens-collector_<版本>-1_amd64.deb`：可选的 `perflens-admin`、
+  `perflens-collector`、同架构 Rust Helper 和部署示例，依赖同版本主包。
 
 包中的 `/usr/bin/perflens-mcp` 和 `/usr/bin/perflens-collector` 是指向私有运行时启动器
 的 root 管理入口。引导与部署器会在验证入口、目标和父目录均可信后，把入口路径原样
@@ -16,7 +16,7 @@ PerfLens 为 Debian 13 `amd64` 提供两个职责分离的原生安装包：
 只分析已有 Profile、不需要自动采集时，只安装主包：
 
 ```bash
-sudo apt install ./perflens_0.1.3-1_amd64.deb
+sudo apt install ./perflens_0.2.0-1_amd64.deb
 cd /绝对路径/你的项目
 perflens init
 ```
@@ -25,8 +25,8 @@ perflens init
 
 ```bash
 sudo apt install \
-  ./perflens_0.1.3-1_amd64.deb \
-  ./perflens-collector_0.1.3-1_all.deb
+  ./perflens_0.2.0-1_amd64.deb \
+  ./perflens-collector_0.2.0-1_amd64.deb
 
 perflens setup \
   --project /绝对路径/你的项目 \
@@ -39,6 +39,18 @@ perflens setup \
 下一步指南，不需要用户判断安装布局或补传路径。如果只安装了主包却要求准备 Collector，
 命令会在写文件前明确提示安装同版本 `perflens-collector` 包。显式
 `--collector-command` 只用于受控的自定义安装布局。
+
+Debian 默认生成 `cap_perfmon` 非 root 模式；主机若保持
+`perf_event_paranoid=3`，可以在首次生成资产时明确选择 Rust Helper：
+
+```bash
+perflens init --prepare-collector \
+  --collector-privilege-mode paranoid3_helper
+```
+
+生成的中文指南会给出带 `--acknowledge-cap-sys-admin-risk` 的精确管理员命令。该选择
+不会让 Python Broker、MCP、Skill 或 Agent 变成 root，也不会自动修改 sysctl；只有
+固定 Rust Helper unit 获得收窄后的 capability bounding set。
 
 版本号只是示例，应替换为下载文件的实际版本。安装包不会自动启动服务、写入
 `/etc/perflens`、修改 sysctl/capability 或授予用户权限。检查引导生成的双语

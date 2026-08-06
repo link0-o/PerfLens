@@ -7,7 +7,7 @@ import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from perflens.collection.collector import (
     DEFAULT_MAX_OUTPUT_BYTES,
@@ -21,6 +21,11 @@ DEFAULT_MAX_SPOOL_BYTES = 5 << 30
 DEFAULT_MAX_SPOOL_ARTIFACTS = 500
 DEFAULT_MIN_FREE_BYTES = 2 << 30
 DEFAULT_MAX_PLAN_TTL_SECONDS = 120
+PARANOID3_HELPER_MAX_DURATION_SECONDS = 30.0
+PARANOID3_HELPER_MAX_FREQUENCY_HZ = 99
+PARANOID3_HELPER_MAX_OUTPUT_BYTES = 256 << 20
+PARANOID3_HELPER_MODES = frozenset({"record", "stat"})
+PrivilegeMode = Literal["cap_perfmon", "paranoid3_helper"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +33,7 @@ class CollectorBrokerPolicy:
     spool_root: Path
     perf_path: Path
     allowed_uids: tuple[int, ...]
+    privilege_mode: PrivilegeMode = "cap_perfmon"
     policy_version: int = COLLECTOR_POLICY_VERSION
     allowed_modes: tuple[CollectionMode, ...] = ("record", "stat")
     allow_other_target_uids: bool = False
@@ -70,10 +76,7 @@ def validate_broker_policy(policy: CollectorBrokerPolicy) -> CollectorBrokerPoli
     spool_root = _secure_spool_root(policy.spool_root)
     perf_path = _executable(policy.perf_path)
     supported_modes = {"record", "stat", "sched", "lock", "off_cpu"}
-    if (
-        not _is_integer(policy.policy_version)
-        or policy.policy_version != COLLECTOR_POLICY_VERSION
-    ):
+    if not _is_integer(policy.policy_version) or policy.policy_version != COLLECTOR_POLICY_VERSION:
         raise ValueError(
             f"Unsupported Collector policy version: {policy.policy_version}; "
             f"expected {COLLECTOR_POLICY_VERSION}"
@@ -83,12 +86,13 @@ def validate_broker_policy(policy: CollectorBrokerPolicy) -> CollectorBrokerPoli
     ):
         raise ValueError("Collector policy requires exactly one non-negative allowed UID")
     if not policy.allowed_modes or any(
-        not _is_string(mode) or mode not in supported_modes
-        for mode in policy.allowed_modes
+        not _is_string(mode) or mode not in supported_modes for mode in policy.allowed_modes
     ):
         raise ValueError("Collector policy contains an unsupported or empty mode set")
     if not _is_boolean(policy.allow_other_target_uids):
         raise ValueError("Collector cross-UID policy must be boolean")
+    if policy.privilege_mode not in {"cap_perfmon", "paranoid3_helper"}:
+        raise ValueError("Collector privilege_mode is unsupported")
     if not _is_number(policy.max_duration_seconds) or not math.isfinite(
         policy.max_duration_seconds
     ):
@@ -119,6 +123,22 @@ def validate_broker_policy(policy: CollectorBrokerPolicy) -> CollectorBrokerPoli
         or policy.max_plan_ttl_seconds > 3600
     ):
         raise ValueError("Collector policy limits are invalid")
+    if policy.privilege_mode == "paranoid3_helper" and (
+        set(policy.allowed_modes) - PARANOID3_HELPER_MODES
+        or policy.allow_other_target_uids
+        or policy.max_duration_seconds > PARANOID3_HELPER_MAX_DURATION_SECONDS
+        or policy.max_frequency_hz > PARANOID3_HELPER_MAX_FREQUENCY_HZ
+        or policy.max_output_bytes > PARANOID3_HELPER_MAX_OUTPUT_BYTES
+        or policy.max_plan_ttl_seconds > DEFAULT_MAX_PLAN_TTL_SECONDS
+        or policy.max_spool_bytes != DEFAULT_MAX_SPOOL_BYTES
+        or policy.max_spool_artifacts != DEFAULT_MAX_SPOOL_ARTIFACTS
+        or policy.min_free_bytes != DEFAULT_MIN_FREE_BYTES
+        or any(event not in DEFAULT_STAT_EVENTS for event in policy.allowed_stat_events)
+    ):
+        raise ValueError(
+            "paranoid3_helper requires owner-only record/stat collection within immutable "
+            "Helper limits"
+        )
     if (
         not policy.allowed_stat_events
         or len(policy.allowed_stat_events) > 64
@@ -136,10 +156,7 @@ def validate_broker_policy(policy: CollectorBrokerPolicy) -> CollectorBrokerPoli
         or policy.socket_mode & 0o600 != 0o600
     ):
         raise ValueError("Collector socket mode must not grant access to other users")
-    if (
-        not _is_integer(policy.artifact_mode)
-        or policy.artifact_mode not in {0o440, 0o640}
-    ):
+    if not _is_integer(policy.artifact_mode) or policy.artifact_mode not in {0o440, 0o640}:
         raise ValueError(
             "Collector artifact mode must be 0440 or 0640 so the authorized group is "
             "read-only and other users have no access"
@@ -148,6 +165,7 @@ def validate_broker_policy(policy: CollectorBrokerPolicy) -> CollectorBrokerPoli
         spool_root=spool_root,
         perf_path=perf_path,
         allowed_uids=tuple(sorted(set(policy.allowed_uids))),
+        privilege_mode=policy.privilege_mode,
         policy_version=policy.policy_version,
         allowed_modes=tuple(dict.fromkeys(policy.allowed_modes)),
         allow_other_target_uids=policy.allow_other_target_uids,
@@ -170,6 +188,7 @@ def _parse_policy(section: dict[str, Any]) -> CollectorBrokerPolicy:
         "spool_root",
         "perf_path",
         "allowed_uids",
+        "privilege_mode",
         "allowed_modes",
         "allow_other_target_uids",
         "max_duration_seconds",
@@ -210,23 +229,21 @@ def _parse_policy(section: dict[str, Any]) -> CollectorBrokerPolicy:
             spool_root=Path(_string_value(section["spool_root"])),
             perf_path=Path(_string_value(section["perf_path"])),
             allowed_uids=tuple(_integer_value(uid) for uid in section["allowed_uids"]),
+            privilege_mode=cast(
+                PrivilegeMode,
+                _string_value(section.get("privilege_mode", "cap_perfmon")),
+            ),
             policy_version=policy_version,
             allowed_modes=cast(tuple[CollectionMode, ...], raw_modes),
             allow_other_target_uids=allow_other,
             max_duration_seconds=_number_field(section, "max_duration_seconds", 30.0),
             max_frequency_hz=_integer_field(section, "max_frequency_hz", 99),
-            max_output_bytes=_integer_field(
-                section, "max_output_bytes", DEFAULT_MAX_OUTPUT_BYTES
-            ),
-            max_spool_bytes=_integer_field(
-                section, "max_spool_bytes", DEFAULT_MAX_SPOOL_BYTES
-            ),
+            max_output_bytes=_integer_field(section, "max_output_bytes", DEFAULT_MAX_OUTPUT_BYTES),
+            max_spool_bytes=_integer_field(section, "max_spool_bytes", DEFAULT_MAX_SPOOL_BYTES),
             max_spool_artifacts=_integer_field(
                 section, "max_spool_artifacts", DEFAULT_MAX_SPOOL_ARTIFACTS
             ),
-            min_free_bytes=_integer_field(
-                section, "min_free_bytes", DEFAULT_MIN_FREE_BYTES
-            ),
+            min_free_bytes=_integer_field(section, "min_free_bytes", DEFAULT_MIN_FREE_BYTES),
             max_plan_ttl_seconds=_integer_field(
                 section, "max_plan_ttl_seconds", DEFAULT_MAX_PLAN_TTL_SECONDS
             ),

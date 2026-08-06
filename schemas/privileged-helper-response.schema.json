@@ -1,5 +1,81 @@
 {
   "$defs": {
+    "HelperCollectionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_name": {
+          "pattern": "^plan-[a-f0-9]{20}\\.(stat\\.csv|perf\\.data)$",
+          "title": "Artifact Name",
+          "type": "string"
+        },
+        "finished_at_unix_milliseconds": {
+          "exclusiveMinimum": 0,
+          "title": "Finished At Unix Milliseconds",
+          "type": "integer"
+        },
+        "kind": {
+          "const": "collection",
+          "title": "Kind",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "record",
+            "stat"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "output_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 1099511627776,
+          "title": "Output Bytes",
+          "type": "integer"
+        },
+        "output_format": {
+          "enum": [
+            "perf_data",
+            "perf_stat_delimited"
+          ],
+          "title": "Output Format",
+          "type": "string"
+        },
+        "output_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Output Sha256",
+          "type": "string"
+        },
+        "plan_id": {
+          "pattern": "^plan-[a-f0-9]{20}$",
+          "title": "Plan Id",
+          "type": "string"
+        },
+        "started_at_unix_milliseconds": {
+          "exclusiveMinimum": 0,
+          "title": "Started At Unix Milliseconds",
+          "type": "integer"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "plan_id",
+        "mode",
+        "target_pid",
+        "artifact_name",
+        "output_bytes",
+        "output_sha256",
+        "output_format",
+        "started_at_unix_milliseconds",
+        "finished_at_unix_milliseconds"
+      ],
+      "title": "HelperCollectionResult",
+      "type": "object"
+    },
     "HelperErrorBody": {
       "additionalProperties": false,
       "properties": {
@@ -55,6 +131,11 @@
           "title": "Helper Version",
           "type": "string"
         },
+        "kind": {
+          "const": "health",
+          "title": "Kind",
+          "type": "string"
+        },
         "privilege_mode": {
           "const": "paranoid3_helper",
           "title": "Privilege Mode",
@@ -67,6 +148,7 @@
         }
       },
       "required": [
+        "kind",
         "helper_version",
         "helper_pid",
         "helper_uid",
@@ -102,13 +184,28 @@
     "result": {
       "anyOf": [
         {
-          "$ref": "#/$defs/HelperHealthResult"
+          "discriminator": {
+            "mapping": {
+              "collection": "#/$defs/HelperCollectionResult",
+              "health": "#/$defs/HelperHealthResult"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/HelperHealthResult"
+            },
+            {
+              "$ref": "#/$defs/HelperCollectionResult"
+            }
+          ]
         },
         {
           "type": "null"
         }
       ],
-      "default": null
+      "default": null,
+      "title": "Result"
     },
     "schema_version": {
       "const": "1.0",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import logging
 import math
@@ -11,6 +12,7 @@ import os
 import shutil
 import signal
 import socket
+import stat
 import struct
 import sys
 import threading
@@ -55,6 +57,9 @@ from perflens.contracts.artifacts import (
     CollectorHealthArtifact,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError, stable_error_id
+from perflens.metrics.perf_stat import PerfStatMetricAdapter
+from perflens.privileged_helper.client import HelperClient
+from perflens.privileged_helper.protocol import HelperCollectionResult
 
 _PEER_CREDENTIALS = struct.Struct("3i")
 _MAX_TRACKED_PLANS = 4096
@@ -63,6 +68,9 @@ _MAX_OPERATIONAL_EVENT_BYTES = 2048
 _LOGGER = logging.getLogger("perflens.collector")
 _LOGGER.addHandler(logging.NullHandler())
 _LOGGER.propagate = False
+_HELPER_SOCKET = Path("/run/perflens-helper/helper.sock")
+_HELPER_SPOOL_ROOT = Path("/var/lib/perflens-helper")
+_ROOT_UID = 0
 
 
 class CollectorBrokerServer:
@@ -74,6 +82,9 @@ class CollectorBrokerServer:
         policy: CollectorBrokerPolicy,
         *,
         request_timeout_seconds: float = _MAX_REQUEST_FRAME_TIMEOUT_SECONDS,
+        helper_client: HelperClient | None = None,
+        helper_spool_root: Path = _HELPER_SPOOL_ROOT,
+        expected_helper_uid: int = _ROOT_UID,
     ) -> None:
         if (
             isinstance(request_timeout_seconds, bool)
@@ -86,6 +97,16 @@ class CollectorBrokerServer:
                 f"{_MAX_REQUEST_FRAME_TIMEOUT_SECONDS:g} seconds"
             )
         self._policy = validate_broker_policy(policy)
+        self._helper_client = helper_client
+        self._helper_spool_root = helper_spool_root
+        self._expected_helper_uid = expected_helper_uid
+        if self._policy.privilege_mode == "paranoid3_helper" and self._helper_client is None:
+            self._helper_client = HelperClient(
+                _HELPER_SOCKET,
+                expected_helper_uid=expected_helper_uid,
+                timeout_seconds=45,
+            )
+            self._helper_client.health()
         self._socket_path = _new_socket_path(socket_path)
         self._request_timeout_seconds = float(request_timeout_seconds)
         self._stop = threading.Event()
@@ -204,6 +225,8 @@ class CollectorBrokerServer:
         plan = request.plan
         self._authorize(peer_uid, plan)
         assert_plan_current(plan)
+        if self._policy.privilege_mode == "paranoid3_helper":
+            return self._collect_with_helper(peer_uid, plan)
         self._authorize_spool_capacity(plan)
         self._consume_plan(plan)
         suffix = ".stat.csv" if plan.mode == "stat" else ".perf.data"
@@ -238,6 +261,111 @@ class CollectorBrokerServer:
             ) from exc
         return artifact
 
+    def _collect_with_helper(
+        self,
+        peer_uid: int,
+        plan: CollectionPlanArtifact,
+    ) -> CollectionArtifact:
+        helper = self._helper_client
+        if helper is None:
+            raise PerfLensError(
+                ErrorCode.INTERNAL_ERROR,
+                "privileged_helper",
+                "Privileged Helper client was not initialized",
+            )
+        result = helper.collect(plan, caller_uid=peer_uid)
+        output_path = self._verify_helper_artifact(plan, result)
+        metrics, warnings = (
+            PerfStatMetricAdapter().parse(output_path) if plan.mode == "stat" else ((), ())
+        )
+        started = datetime.fromtimestamp(
+            result.started_at_unix_milliseconds / 1000,
+            tz=UTC,
+        )
+        finished = datetime.fromtimestamp(
+            result.finished_at_unix_milliseconds / 1000,
+            tz=UTC,
+        )
+        identity = f"{plan.plan_id}\0{result.output_sha256}\0paranoid3_helper"
+        return CollectionArtifact(
+            collection_id=f"collection-{hashlib.sha256(identity.encode()).hexdigest()[:16]}",
+            mode=plan.mode,
+            target_type="pid",
+            target_argument_count=0,
+            target_pid=plan.target_pid,
+            output_path=str(output_path),
+            output_sha256=result.output_sha256,
+            output_bytes=result.output_bytes,
+            output_format=result.output_format,
+            output_owner_uid=self._expected_helper_uid,
+            perf_executable="/usr/bin/perf",
+            started_at=started.isoformat(),
+            finished_at=finished.isoformat(),
+            duration_seconds=max(0.0, (finished - started).total_seconds()),
+            frequency_hz=plan.frequency_hz if plan.mode == "record" else None,
+            call_graph=plan.call_graph if plan.mode == "record" else None,
+            events=plan.events if plan.mode == "stat" else (),
+            metrics=metrics,
+            warnings=warnings,
+        )
+
+    def _verify_helper_artifact(
+        self,
+        plan: CollectionPlanArtifact,
+        result: HelperCollectionResult,
+    ) -> Path:
+        candidate = self._helper_spool_root / result.artifact_name
+        descriptor = -1
+        try:
+            root = self._helper_spool_root.resolve(strict=True)
+            root_metadata = root.stat(follow_symlinks=False)
+            if (
+                root != self._helper_spool_root
+                or not stat.S_ISDIR(root_metadata.st_mode)
+                or root_metadata.st_uid != self._expected_helper_uid
+                or root_metadata.st_mode & 0o022
+            ):
+                raise _unsafe_helper_artifact()
+            descriptor = os.open(candidate, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or metadata.st_uid != self._expected_helper_uid
+                or metadata.st_gid != os.getegid()
+                or stat.S_IMODE(metadata.st_mode) != 0o640
+                or metadata.st_size != result.output_bytes
+                or candidate.parent / result.artifact_name != candidate
+            ):
+                raise _unsafe_helper_artifact()
+            digest = hashlib.sha256()
+            total = 0
+            while chunk := os.read(descriptor, min(1 << 20, result.output_bytes - total + 1)):
+                total += len(chunk)
+                if total > result.output_bytes:
+                    raise _unsafe_helper_artifact()
+                digest.update(chunk)
+            if total != result.output_bytes or digest.hexdigest() != result.output_sha256:
+                raise _unsafe_helper_artifact()
+        except PerfLensError:
+            raise
+        except OSError as exc:
+            raise PerfLensError(
+                ErrorCode.OUTPUT_WRITE_FAILED,
+                "privileged_helper",
+                "Privileged Helper artifact cannot be verified",
+                recoverable=True,
+            ) from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+        expected_name = (
+            f"{plan.plan_id}.stat.csv" if plan.mode == "stat" else f"{plan.plan_id}.perf.data"
+        )
+        if result.artifact_name != expected_name:
+            raise _unsafe_helper_artifact()
+        return candidate
+
     def _health(self, peer_uid: int) -> CollectorHealthArtifact:
         if peer_uid != 0 and peer_uid not in self._policy.allowed_uids:
             raise PerfLensError(
@@ -253,7 +381,12 @@ class CollectorBrokerServer:
             service_uid=os.geteuid(),
             peer_uid=peer_uid,
             allowed_modes=tuple(self._policy.allowed_modes),
-            spool_root=str(self._policy.spool_root),
+            spool_root=str(
+                self._helper_spool_root
+                if self._policy.privilege_mode == "paranoid3_helper"
+                else self._policy.spool_root
+            ),
+            privilege_mode=self._policy.privilege_mode,
         )
 
     def _authorize(self, peer_uid: int, plan: CollectionPlanArtifact) -> None:
@@ -531,6 +664,15 @@ def _error_response(request_id: str, error: PerfLensError) -> BrokerResponse:
             message=error.message,
             recoverable=error.recoverable,
         ),
+    )
+
+
+def _unsafe_helper_artifact() -> PerfLensError:
+    return PerfLensError(
+        ErrorCode.PATH_SAFETY_VIOLATION,
+        "privileged_helper",
+        "Privileged Helper artifact identity, permissions, or digest are unsafe",
+        recoverable=True,
     )
 
 

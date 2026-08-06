@@ -7,17 +7,17 @@
 普通 Linux 用户应下载：
 
 ```text
-perflens-0.1.3-py3-none-any.whl
+perflens-0.2.0-py3-none-any.whl
 ```
 
-`.whl` 是 Python 安装包，不是需要解压后点击运行的 ZIP。不要提取它。解压后看到的 `perflens/` 和 `perflens-0.1.3.dist-info/` 只是程序模块与安装元数据。
+`.whl` 是 Python 安装包，不是需要解压后点击运行的 ZIP。不要提取它。解压后看到的 `perflens/` 和 `perflens-0.2.0.dist-info/` 只是程序模块与安装元数据。
 
 其他 Release 文件的用途：
 
-- `perflens_0.1.3-1_amd64.deb`：Debian 13 普通用户主安装包；
-- `perflens-collector_0.1.3-1_all.deb`：可选 Collector 管理入口，需配合同版本主包；
-- `perflens-0.1.3.tar.gz`：源码发行包；
-- `perflens-skill-0.1.3.zip`：只包含 Agent Skill；
+- `perflens_0.2.0-1_amd64.deb`：Debian 13 普通用户主安装包；
+- `perflens-collector_0.2.0-1_amd64.deb`：可选 Collector 与 Rust Helper，需配合同版本主包；
+- `perflens-0.2.0.tar.gz`：源码发行包；
+- `perflens-skill-0.2.0.zip`：只包含 Agent Skill；
 - `sbom.cdx.json`：依赖安全清单；
 - `SHA256SUMS`：下载校验和；
 - `Source code`：GitHub 自动生成的源码快照。
@@ -33,7 +33,7 @@ sha256sum --ignore-missing --check SHA256SUMS
 DEB、源码包、Skill、SBOM 和 `SHA256SUMS` 也可以用相同命令验证：
 
 ```bash
-gh attestation verify ./perflens-0.1.3-py3-none-any.whl \
+gh attestation verify ./perflens-0.2.0-py3-none-any.whl \
   --repo link0-o/PerfLens \
   --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -45,11 +45,24 @@ gh attestation verify ./perflens-0.1.3-py3-none-any.whl \
 Debian 13 `amd64` 用户推荐直接安装主 DEB，不需要 pipx：
 
 ```bash
-sudo apt install ./perflens_0.1.3-1_amd64.deb
+sudo apt install ./perflens_0.2.0-1_amd64.deb
 ```
 
 需要自动采集时再安装完全相同版本的 Collector DEB。安装软件包不会自动启动
 特权服务，完整流程见[《Debian 安装包》](docs/debian-packages.zh-CN.md)。
+
+首次生成 Collector 资产时有两种明确模式。默认 `cap_perfmon` 不以 root 运行，但
+Debian `perf_event_paranoid=3` 通常需要管理员按主机威胁模型改为 2；如果必须保持 3，
+运行：
+
+```bash
+perflens init --prepare-collector \
+  --collector-privilege-mode paranoid3_helper
+```
+
+这会生成无 capability 的 Python Broker 加 root Rust Helper 两个 unit，中文指南会自动
+给出带风险确认参数的部署命令。它不会自动修改 sysctl，也不会让 MCP/Skill/Agent 变成
+root。只分析已有 Profile 时不需要选择或部署任何 Collector。
 
 ## 第一步：安装 wheel（非 Debian 或不使用 DEB 时）
 
@@ -57,7 +70,7 @@ sudo apt install ./perflens_0.1.3-1_amd64.deb
 
 ```bash
 cd ~/Downloads
-pipx install ./perflens-0.1.3-py3-none-any.whl
+pipx install ./perflens-0.2.0-py3-none-any.whl
 ```
 
 如果浏览器下载到了其他目录，请先在文件管理器中进入该目录，右键空白处选择
@@ -74,7 +87,7 @@ pipx ensurepath
 然后重新打开终端，再执行 wheel 安装命令。也可以使用：
 
 ```bash
-uv tool install ./perflens-0.1.3-py3-none-any.whl
+uv tool install ./perflens-0.2.0-py3-none-any.whl
 ```
 
 验证安装：
@@ -292,7 +305,9 @@ perflens-admin update-policy --config "$PWD/collector.next.toml" --dry-run
 sudo perflens-admin update-policy --config "$PWD/collector.next.toml"
 ```
 
-它会自动重启、健康检查并在失败时恢复原配置，但拒绝改变授权 UID 和固定 spool。
+它会自动重启、健康检查并在失败时恢复原配置，但拒绝改变授权 UID、固定 spool 和
+`privilege_mode`。两种权限模式使用不同的 systemd 服务拓扑，切换时必须先审查并执行
+`undeploy`，再用新模式重新部署，不能通过策略热更新切换。
 
 长期使用后需要释放采集目录空间时，不要手工按文件时间直接删除。使用
 `perflens-admin archive-spool` 先生成带哈希 manifest 的 root 管理归档，再通过

@@ -66,10 +66,7 @@ def test_setup_creates_guided_bundle_and_installs_skill(tmp_path: Path) -> None:
     guide = (project / "setup-two/下一步.zh-CN.md").read_text(encoding="utf-8")
     assert "用户不需要查找或输入 PID" in guide
     assert "/opt/perflens/bin/perflens-admin deploy" in guide
-    assert (
-        f"perflens status --project {project} --setup-directory {project / 'setup-two'}"
-        in guide
-    )
+    assert f"perflens status --project {project} --setup-directory {project / 'setup-two'}" in guide
 
 
 def test_setup_uses_trusted_native_package_layout(
@@ -144,9 +141,7 @@ def test_setup_can_activate_claude_code_without_exposing_codex_skill(tmp_path: P
     assert not (project / ".agents").exists()
     assert not (project / ".codex").exists()
     assert (project / ".claude/skills/perflens/SKILL.md").is_file()
-    assert json.loads((project / ".mcp.json").read_text(encoding="utf-8"))[
-        "mcpServers"
-    ]["perflens"]
+    assert json.loads((project / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["perflens"]
     guide = (project / "perflens-setup/下一步.zh-CN.md").read_text(encoding="utf-8")
     assert "Codex Skill (未启用)" in guide
     assert "Claude Code (已启用)" in guide
@@ -169,9 +164,7 @@ def test_setup_update_replaces_owned_bundle_and_both_client_configs(tmp_path: Pa
     old_setup = (project / "perflens-setup/setup.json").read_text(encoding="utf-8")
     assert first.skill_fingerprint is not None
     assert first.claude_skill_fingerprint is not None
-    assert "--allow-automatic-collection" in (project / ".mcp.json").read_text(
-        encoding="utf-8"
-    )
+    assert "--allow-automatic-collection" in (project / ".mcp.json").read_text(encoding="utf-8")
 
     updated = run_project_setup(
         project,
@@ -189,12 +182,10 @@ def test_setup_update_replaces_owned_bundle_and_both_client_configs(tmp_path: Pa
     assert updated.automatic_collection_enabled is False
     assert updated.codex_project_config_status == "updated"
     assert updated.claude_project_config_status == "updated"
-    assert "--allow-automatic-collection" not in (project / ".mcp.json").read_text(
+    assert "--allow-automatic-collection" not in (project / ".mcp.json").read_text(encoding="utf-8")
+    assert "--allow-automatic-collection" not in (project / ".codex/config.toml").read_text(
         encoding="utf-8"
     )
-    assert "--allow-automatic-collection" not in (
-        project / ".codex/config.toml"
-    ).read_text(encoding="utf-8")
     assert (project / "perflens-setup/setup.json").read_text(encoding="utf-8") != old_setup
     assert not (project / ".perflens-setup.perflens-backup").exists()
 
@@ -416,6 +407,76 @@ def test_setup_update_refuses_extra_files_and_preserves_staged_collector_assets(
     )
     assert updated.collector_assets_path == str(project / "perflens-setup/collector-assets")
     assert "# reviewed" in policy.read_text(encoding="utf-8")
+
+
+def test_setup_can_select_paranoid3_helper_and_generates_exact_acknowledged_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    def native_collector(_command: Path | None) -> Path:
+        return Path("/usr/bin/perflens-collector")
+
+    monkeypatch.setattr(
+        "perflens.distribution.onboarding._collector_command_for_setup",
+        native_collector,
+    )
+    artifact = run_project_setup(
+        project,
+        prepare_collector=True,
+        automatic_collection=True,
+        collector_privilege_mode="paranoid3_helper",
+        collector_command=Path("/usr/bin/perflens-collector"),
+        collector_uid=os.geteuid(),
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+    policy = project / "perflens-setup/collector-assets/collector.toml"
+    guide = project / "perflens-setup/下一步.zh-CN.md"
+    assert artifact.collector_privilege_mode == "paranoid3_helper"
+    assert 'privilege_mode = "paranoid3_helper"' in policy.read_text(encoding="utf-8")
+    codex_config = (project / ".codex/config.toml").read_text(encoding="utf-8")
+    claude_template = (project / "perflens-setup/claude-mcp.json").read_text(encoding="utf-8")
+    assert '"/var/lib/perflens-helper"' in codex_config
+    assert '"/var/lib/perflens-helper"' in claude_template
+    assert '"/var/lib/perflens"' not in codex_config
+    guide_text = guide.read_text(encoding="utf-8")
+    assert "--acknowledge-cap-sys-admin-risk" in guide_text
+    assert "保持 `perf_event_paranoid=3`" in guide_text
+
+    updated = run_project_setup(
+        project,
+        automatic_collection=True,
+        update_existing=True,
+        collector_uid=os.geteuid(),
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+    updated_codex_config = (project / ".codex/config.toml").read_text(encoding="utf-8")
+    assert updated.collector_privilege_mode == "paranoid3_helper"
+    assert '"/var/lib/perflens-helper"' in updated_codex_config
+    assert 'privilege_mode = "paranoid3_helper"' in policy.read_text(encoding="utf-8")
+
+
+def test_setup_rejects_paranoid3_helper_without_native_collector_package(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    collector = tmp_path / "perflens-collector"
+    collector.write_text(f"#!{sys.executable}\n", encoding="utf-8")
+    collector.chmod(0o555)
+    with pytest.raises(PerfLensError, match="architecture-specific native"):
+        run_project_setup(
+            project,
+            prepare_collector=True,
+            collector_privilege_mode="paranoid3_helper",
+            collector_command=collector,
+            mcp_command=Path(sys.executable),
+            perf_path=Path("/bin/true"),
+        )
 
 
 def test_setup_artifact_accepts_payload_before_project_config_fields(tmp_path: Path) -> None:

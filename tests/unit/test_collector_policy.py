@@ -188,6 +188,34 @@ def test_broker_policy_limit_validation(tmp_path: Path) -> None:
     assert validate_broker_policy(replace(base, artifact_mode=0o440)).artifact_mode == 0o440
 
 
+def test_paranoid3_helper_policy_is_owner_only_and_immutably_bounded(
+    tmp_path: Path,
+) -> None:
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    spool.chmod(0o750)
+    base = CollectorBrokerPolicy(
+        spool_root=spool,
+        perf_path=_fake_perf(tmp_path),
+        allowed_uids=(os.geteuid(),),
+        privilege_mode="paranoid3_helper",
+    )
+    assert validate_broker_policy(base).privilege_mode == "paranoid3_helper"
+    denied = (
+        replace(base, allowed_modes=("record", "sched")),
+        replace(base, allow_other_target_uids=True),
+        replace(base, max_duration_seconds=31),
+        replace(base, max_frequency_hz=100),
+        replace(base, max_output_bytes=(256 << 20) + 1),
+        replace(base, max_plan_ttl_seconds=121),
+        replace(base, max_spool_artifacts=499),
+        replace(base, allowed_stat_events=("cycles:u",)),
+    )
+    for policy in denied:
+        with pytest.raises(ValueError, match="immutable Helper limits"):
+            validate_broker_policy(policy)
+
+
 def test_broker_policy_rejects_unsafe_paths(tmp_path: Path) -> None:
     spool = tmp_path / "spool"
     spool.mkdir()

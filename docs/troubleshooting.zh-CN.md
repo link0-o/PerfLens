@@ -129,7 +129,8 @@ perflens-collector.service` 审查差异，不要放宽检查。
 `perflens-admin update-policy` 要求一个独立、属主可信、组和其他用户不可写、最大
 256 KiB 的 UTF-8 TOML 候选文件；不要直接把
 `/etc/perflens/collector.toml` 作为候选。先执行 `--dry-run`。它会拒绝未知字段、越界
-参数、改变唯一授权 UID、迁移固定 spool、符号链接或不可信的 `perf` 路径。
+参数、改变唯一授权 UID、迁移固定 spool 或 `privilege_mode`、符号链接或不可信的
+`perf` 路径。权限模式切换需要审查后停机卸载并重新部署，因为 systemd 服务拓扑不同。
 
 如果候选已写入但重启或身份验证健康检查失败，命令会原子恢复原策略并再次重启。
 看到 “previous policy could not be fully restored” 时不要连续重试；检查当前配置哈希、

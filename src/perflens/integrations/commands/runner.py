@@ -139,9 +139,7 @@ class CommandRunner:
                         try:
                             stdout.write(chunk)
                         except (OSError, ValueError) as exc:
-                            self._terminate_group(
-                                process, effective_limits.terminate_grace_seconds
-                            )
+                            self._terminate_group(process, effective_limits.terminate_grace_seconds)
                             raise PerfLensError(
                                 ErrorCode.OUTPUT_WRITE_FAILED,
                                 "external_tool",

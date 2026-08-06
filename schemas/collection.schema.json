@@ -179,6 +179,19 @@
       "title": "Output Format",
       "type": "string"
     },
+    "output_owner_uid": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Output Owner Uid"
+    },
     "output_path": {
       "title": "Output Path",
       "type": "string"

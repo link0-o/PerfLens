@@ -481,6 +481,7 @@ class CollectionArtifact(ContractModel):
     output_sha256: str
     output_bytes: int = Field(gt=0)
     output_format: Literal["perf_data", "perf_stat_delimited"]
+    output_owner_uid: int | None = Field(default=None, ge=0)
     perf_executable: str
     started_at: str
     finished_at: str
@@ -546,6 +547,7 @@ class CollectorHealthArtifact(ContractModel):
     peer_uid: int = Field(ge=0)
     allowed_modes: tuple[str, ...]
     spool_root: str
+    privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon"
 
 
 class CollectorDeploymentArtifact(ContractModel):
@@ -557,6 +559,7 @@ class CollectorDeploymentArtifact(ContractModel):
     service_path: str
     collector_command: str
     allowed_uids: tuple[int, ...]
+    privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon"
     planned_commands: tuple[tuple[str, ...], ...]
     warnings: tuple[str, ...] = ()
     next_steps: tuple[str, ...] = ()
@@ -715,9 +718,9 @@ class CollectorSpoolPruneArtifact(ContractModel):
     already_absent_artifact_count: int = Field(ge=0)
     removed_artifact_count: int = Field(ge=0)
     removed_logical_bytes: int = Field(ge=0)
-    authorization_required: Literal[
+    authorization_required: Literal["I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE"] = (
         "I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE"
-    ] = "I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE"
+    )
     archive_preserved: bool = True
     next_steps: tuple[str, ...] = ()
 
@@ -737,9 +740,9 @@ class RuntimeStatusArtifact(ContractModel):
     collector_socket: str
     collector_socket_status: Literal["missing", "invalid", "inaccessible", "ready"]
     collector_group_status: Literal["missing", "not_member", "member"]
-    collector_health_status: Literal[
-        "not_checked", "ready", "unreachable", "rejected"
-    ] = "not_checked"
+    collector_health_status: Literal["not_checked", "ready", "unreachable", "rejected"] = (
+        "not_checked"
+    )
     collector_health_error_code: str | None = None
     collector_service_pid: int | None = Field(default=None, gt=0)
     collector_service_uid: int | None = Field(default=None, ge=0)
@@ -769,25 +772,18 @@ class SetupArtifact(ContractModel):
     skill_fingerprint: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     mcp_config_path: str
     codex_project_config_path: str | None = None
-    codex_project_config_status: Literal[
-        "installed", "updated", "existing", "skipped"
-    ] = "skipped"
-    claude_skill_status: Literal[
-        "installed", "updated", "existing", "skipped"
-    ] = "skipped"
+    codex_project_config_status: Literal["installed", "updated", "existing", "skipped"] = "skipped"
+    claude_skill_status: Literal["installed", "updated", "existing", "skipped"] = "skipped"
     claude_skill_path: str | None = None
-    claude_skill_fingerprint: str | None = Field(
-        default=None, pattern=r"^[a-f0-9]{64}$"
-    )
+    claude_skill_fingerprint: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     claude_mcp_config_path: str | None = None
     claude_project_config_path: str | None = None
-    claude_project_config_status: Literal[
-        "installed", "updated", "existing", "skipped"
-    ] = "skipped"
+    claude_project_config_status: Literal["installed", "updated", "existing", "skipped"] = "skipped"
     claude_project_config_managed: bool = False
     capability_report_path: str
     collector_assets_path: str | None = None
     automatic_collection_enabled: bool = False
+    collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon"
     collection_status: Literal["available", "conditional", "blocked"]
     blocked_modes: tuple[str, ...] = ()
     generated_files: tuple[str, ...]
@@ -806,17 +802,15 @@ class ProjectDetachmentArtifact(ContractModel):
     codex_config_path: str
     codex_config_status: Literal["not_found", "planned", "removed", "skipped"]
     claude_config_path: str | None = None
-    claude_config_status: Literal[
-        "not_found", "planned", "removed", "skipped"
-    ] = "skipped"
+    claude_config_status: Literal["not_found", "planned", "removed", "skipped"] = "skipped"
     codex_skill_path: str | None = None
-    codex_skill_status: Literal[
-        "not_found", "planned", "removed", "preserved", "skipped"
-    ] = "skipped"
+    codex_skill_status: Literal["not_found", "planned", "removed", "preserved", "skipped"] = (
+        "skipped"
+    )
     claude_skill_path: str | None = None
-    claude_skill_status: Literal[
-        "not_found", "planned", "removed", "preserved", "skipped"
-    ] = "skipped"
+    claude_skill_status: Literal["not_found", "planned", "removed", "preserved", "skipped"] = (
+        "skipped"
+    )
     removed_paths: tuple[str, ...] = ()
     preserved_paths: tuple[str, ...] = ()
     next_steps: tuple[str, ...] = ()

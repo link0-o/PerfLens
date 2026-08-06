@@ -16,11 +16,11 @@ Symbol Provider                ─→ 已验证的源码定位
 管理员显式部署 ─→ 版本化 TOML ─→ perflens-admin ─→ systemd
 ```
 
-`v0.2.0` 为 Debian `perf_event_paranoid=3` 规划第二条可选执行边界：公共 Python Broker
+`v0.2.0` 为 Debian `perf_event_paranoid=3` 实现第二条可选执行边界：公共 Python Broker
 保持无 capability，只把已经两次验证的类型化 PID 计划交给独立 Rust Helper。Helper 使用
 私有 Socket、专用身份和单独的 root 管理策略；普通用户、Agent、MCP 和 Skill 无法直接
-连接。详细约束见[《高权限 Helper 设计》](privileged-helper.zh-CN.md)。该设计在完成实现和
-验收前不代表当前发行版已经支持等级 3。
+连接。详细约束见[《高权限 Helper 设计》](privileged-helper.zh-CN.md)。软件安装本身不会
+自动启用等级 3 Helper；管理员仍需显式选择、确认风险并完成真实短时验收。
 
 ## Core 与边界层
 

@@ -1,5 +1,7 @@
 //! Strict protocol boundary for the optional `PerfLens` privileged Helper.
 
+mod execution;
+
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -14,9 +16,11 @@ use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use nix::unistd::geteuid;
 use serde::{Deserialize, Serialize};
 
+use crate::execution::{ExecutionPlan, execute_production_plan};
+
 pub const HELPER_SCHEMA_VERSION: &str = "1.0";
 pub const MAX_HELPER_MESSAGE_BYTES: usize = 64 << 10;
-pub const MAX_HELPER_PLAN_TTL_MILLISECONDS: u64 = 3_600_000;
+pub const MAX_HELPER_PLAN_TTL_MILLISECONDS: u64 = 120_000;
 pub const MAX_HELPER_DURATION_MILLISECONDS: u64 = 86_400_000;
 pub const MAX_HELPER_OUTPUT_BYTES: u64 = 1 << 40;
 pub const MAX_HELPER_FREQUENCY_HZ: u32 = 10_000;
@@ -32,14 +36,14 @@ pub struct HelperTarget {
     pub start_time_ticks: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CollectionMode {
     Record,
     Stat,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CallGraph {
     Dwarf,
@@ -58,6 +62,7 @@ pub enum HelperRequest {
         schema_version: String,
         request_id: String,
         plan_id: String,
+        caller_uid: u32,
         target: HelperTarget,
         mode: CollectionMode,
         duration_milliseconds: u64,
@@ -70,12 +75,26 @@ pub enum HelperRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct HelperHealthResult {
-    pub helper_version: &'static str,
-    pub helper_pid: u32,
-    pub helper_uid: u32,
-    pub privilege_mode: &'static str,
-    pub ready: bool,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HelperResult {
+    Health {
+        helper_version: &'static str,
+        helper_pid: u32,
+        helper_uid: u32,
+        privilege_mode: &'static str,
+        ready: bool,
+    },
+    Collection {
+        plan_id: String,
+        mode: CollectionMode,
+        target_pid: u32,
+        artifact_name: String,
+        output_bytes: u64,
+        output_sha256: String,
+        output_format: &'static str,
+        started_at_unix_milliseconds: u64,
+        finished_at_unix_milliseconds: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -92,7 +111,7 @@ pub struct HelperResponse {
     pub request_id: String,
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<HelperHealthResult>,
+    pub result: Option<HelperResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<HelperErrorBody>,
 }
@@ -100,6 +119,8 @@ pub struct HelperResponse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HelperServerPolicy {
     pub broker_uid: u32,
+    pub allowed_uid: u32,
+    pub artifact_gid: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,7 +249,7 @@ pub fn handle_connection(
             schema_version: HELPER_SCHEMA_VERSION,
             request_id,
             ok: true,
-            result: Some(HelperHealthResult {
+            result: Some(HelperResult::Health {
                 helper_version: env!("CARGO_PKG_VERSION"),
                 helper_pid: std::process::id(),
                 helper_uid: geteuid().as_raw(),
@@ -237,12 +258,70 @@ pub fn handle_connection(
             }),
             error: None,
         },
-        Ok(HelperRequest::CollectPid { request_id, .. }) => rejected_response(
-            &request_id,
-            "INTERNAL_ERROR",
-            "privileged_helper",
-            "Privileged collection is not enabled in this build milestone",
-        ),
+        Ok(HelperRequest::CollectPid {
+            request_id,
+            caller_uid,
+            target,
+            ..
+        }) if caller_uid != policy.allowed_uid || target.uid != policy.allowed_uid => {
+            rejected_response(
+                &request_id,
+                "PATH_SAFETY_VIOLATION",
+                "authorization",
+                "Privileged Helper policy rejected the caller or target UID",
+            )
+        }
+        Ok(HelperRequest::CollectPid {
+            request_id,
+            plan_id,
+            caller_uid,
+            target,
+            mode,
+            duration_milliseconds,
+            frequency_hz,
+            call_graph,
+            events,
+            max_output_bytes,
+            ..
+        }) => {
+            let target_pid = target.pid;
+            match execute_production_plan(
+                &ExecutionPlan {
+                    plan_id: plan_id.clone(),
+                    caller_uid,
+                    target,
+                    mode,
+                    duration_milliseconds,
+                    frequency_hz,
+                    call_graph,
+                    events,
+                    max_output_bytes,
+                },
+                policy.allowed_uid,
+                policy.artifact_gid,
+            ) {
+                Ok(result) => HelperResponse {
+                    schema_version: HELPER_SCHEMA_VERSION,
+                    request_id,
+                    ok: true,
+                    result: Some(HelperResult::Collection {
+                        plan_id,
+                        mode,
+                        target_pid,
+                        artifact_name: result.artifact_name,
+                        output_bytes: result.output_bytes,
+                        output_sha256: result.output_sha256,
+                        output_format: result.output_format,
+                        started_at_unix_milliseconds: result.started_at_unix_milliseconds,
+                        finished_at_unix_milliseconds: result.finished_at_unix_milliseconds,
+                    }),
+                    error: None,
+                },
+                Err(error) => {
+                    rejected_response(&request_id, error.code, error.stage, error.message)
+                }
+            }
+        }
         Err(error) => rejected_response(
             "unknown",
             "INVALID_INPUT",
@@ -359,6 +438,7 @@ fn validate_request(
             schema_version,
             request_id,
             plan_id,
+            caller_uid,
             target,
             mode,
             duration_milliseconds,
@@ -372,6 +452,7 @@ fn validate_request(
             if !valid_identifier(plan_id, "plan-", 20, 20)
                 || target.pid == 0
                 || target.pid > i32::MAX.cast_unsigned()
+                || *caller_uid != target.uid
                 || target.start_time_ticks == 0
                 || *duration_milliseconds == 0
                 || *duration_milliseconds > MAX_HELPER_DURATION_MILLISECONDS
@@ -547,6 +628,8 @@ mod tests {
                 &mut server,
                 HelperServerPolicy {
                     broker_uid: geteuid().as_raw(),
+                    allowed_uid: geteuid().as_raw(),
+                    artifact_gid: nix::unistd::getegid().as_raw(),
                 },
                 NOW_MILLISECONDS,
             )
@@ -586,6 +669,8 @@ mod tests {
                 &mut connection,
                 HelperServerPolicy {
                     broker_uid: geteuid().as_raw(),
+                    allowed_uid: geteuid().as_raw(),
+                    artifact_gid: nix::unistd::getegid().as_raw(),
                 },
                 NOW_MILLISECONDS,
             )
@@ -606,5 +691,35 @@ mod tests {
         std::fs::remove_file(&socket_path).expect("remove socket");
         std::fs::remove_dir(&directory).expect("remove directory");
         assert!(response.contains("\"ok\":true"));
+    }
+
+    #[test]
+    fn authenticated_collection_denies_disallowed_uid_over_unix_socket() {
+        let (mut client, mut server) = UnixStream::pair().expect("socket pair");
+        let server_thread = thread::spawn(move || {
+            handle_connection(
+                &mut server,
+                HelperServerPolicy {
+                    broker_uid: geteuid().as_raw(),
+                    allowed_uid: 999,
+                    artifact_gid: nix::unistd::getegid().as_raw(),
+                },
+                NOW_MILLISECONDS,
+            )
+        });
+        client
+            .write_all(include_bytes!(
+                "../../../tests/fixtures/privileged_helper/valid/stat.jsonl"
+            ))
+            .expect("write typed request");
+        let mut response = String::new();
+        client.read_to_string(&mut response).expect("read denial");
+        server_thread
+            .join()
+            .expect("server join")
+            .expect("server response");
+        assert!(response.contains("\"ok\":false"));
+        assert!(response.contains("PATH_SAFETY_VIOLATION"));
+        assert!(response.contains("policy rejected the caller or target UID"));
     }
 }

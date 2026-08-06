@@ -65,9 +65,7 @@ def inspect_runtime_status(
     """Inspect generated onboarding and local Collector access without sampling."""
     project = _project_directory(project_root)
     setup = _setup_path(project, setup_directory)
-    setup_status, automatic_requested, setup_issues, setup_artifact = _inspect_setup(
-        project, setup
-    )
+    setup_status, automatic_requested, setup_issues, setup_artifact = _inspect_setup(project, setup)
     skill_status = _inspect_selected_skills(project, setup_artifact)
     mcp_status = _inspect_selected_project_configs(project, setup, setup_artifact)
     assets_status = _inspect_assets(setup, automatic_requested=automatic_requested)
@@ -136,11 +134,7 @@ def inspect_runtime_status(
             str(health.artifact.service_pid if health.artifact is not None else ""),
             str(health.artifact.service_uid if health.artifact is not None else ""),
             str(health.artifact.policy_version if health.artifact is not None else ""),
-            (
-                ",".join(health.artifact.allowed_modes)
-                if health.artifact is not None
-                else ""
-            ),
+            (",".join(health.artifact.allowed_modes) if health.artifact is not None else ""),
             health.artifact.spool_root if health.artifact is not None else "",
             capabilities.capability_id,
         )
@@ -173,9 +167,7 @@ def inspect_runtime_status(
         collector_allowed_modes=(
             health.artifact.allowed_modes if health.artifact is not None else ()
         ),
-        collector_spool_root=(
-            health.artifact.spool_root if health.artifact is not None else None
-        ),
+        collector_spool_root=(health.artifact.spool_root if health.artifact is not None else None),
         capability_id=capabilities.capability_id,
         host_collection_status=host_status,
         automatic_collection_status=automatic_status,
@@ -286,11 +278,7 @@ def _inspect_selected_skills(
             recorded_path=(
                 None
                 if artifact is None
-                else (
-                    artifact.skill_path
-                    if client == "codex"
-                    else artifact.claude_skill_path
-                )
+                else (artifact.skill_path if client == "codex" else artifact.claude_skill_path)
             ),
         )
         for client in clients
@@ -344,12 +332,7 @@ def _inspect_codex_project_config(project: Path, setup: Path) -> McpStatus:
     path = parent / "config.toml"
     if not path.exists() and not path.is_symlink():
         return "missing"
-    if (
-        parent.is_symlink()
-        or not parent.is_dir()
-        or path.is_symlink()
-        or not path.is_file()
-    ):
+    if parent.is_symlink() or not parent.is_dir() or path.is_symlink() or not path.is_file():
         return "incomplete"
     project_status, project_table = _read_perflens_mcp_table(path)
     if project_status != "ready" or project_table is None:
@@ -447,8 +430,10 @@ def _inspect_assets(setup: Path, *, automatic_requested: bool) -> AssetsStatus:
         root / "perflens-collector.service",
         root / "perflens.sysusers",
     )
-    if root.is_symlink() or not root.is_dir() or any(
-        path.is_symlink() or not path.is_file() for path in required
+    if (
+        root.is_symlink()
+        or not root.is_dir()
+        or any(path.is_symlink() or not path.is_file() for path in required)
     ):
         return "incomplete"
     return "ready"

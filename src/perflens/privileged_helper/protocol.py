@@ -12,7 +12,7 @@ from perflens.domain.errors import ErrorCode, PerfLensError
 
 HELPER_SCHEMA_VERSION = "1.0"
 MAX_HELPER_MESSAGE_BYTES = 64 << 10
-MAX_HELPER_PLAN_TTL_MILLISECONDS = 3_600_000
+MAX_HELPER_PLAN_TTL_MILLISECONDS = 120_000
 MAX_HELPER_DURATION_MILLISECONDS = 86_400_000
 MAX_HELPER_OUTPUT_BYTES = 1 << 40
 MAX_HELPER_FREQUENCY_HZ = 10_000
@@ -36,6 +36,7 @@ class HelperCollectPidRequest(ContractModel):
     operation: Literal["collect_pid"] = "collect_pid"
     request_id: str = Field(pattern=r"^request-[a-f0-9]{16,64}$")
     plan_id: str = Field(pattern=r"^plan-[a-f0-9]{20}$")
+    caller_uid: int = Field(ge=0, le=4_294_967_295)
     target: HelperTarget
     mode: Literal["record", "stat"]
     duration_milliseconds: int = Field(gt=0, le=MAX_HELPER_DURATION_MILLISECONDS)
@@ -67,11 +68,25 @@ HELPER_REQUEST_ADAPTER: TypeAdapter[HelperRequest] = TypeAdapter(HelperRequest)
 
 
 class HelperHealthResult(ContractModel):
+    kind: Literal["health"]
     helper_version: str = Field(min_length=1, max_length=64)
     helper_pid: int = Field(gt=0)
     helper_uid: int = Field(ge=0, le=4_294_967_295)
     privilege_mode: Literal["paranoid3_helper"]
     ready: Literal[True]
+
+
+class HelperCollectionResult(ContractModel):
+    kind: Literal["collection"]
+    plan_id: str = Field(pattern=r"^plan-[a-f0-9]{20}$")
+    mode: Literal["record", "stat"]
+    target_pid: int = Field(gt=0)
+    artifact_name: str = Field(pattern=r"^plan-[a-f0-9]{20}\.(stat\.csv|perf\.data)$")
+    output_bytes: int = Field(gt=0, le=MAX_HELPER_OUTPUT_BYTES)
+    output_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    output_format: Literal["perf_data", "perf_stat_delimited"]
+    started_at_unix_milliseconds: int = Field(gt=0)
+    finished_at_unix_milliseconds: int = Field(gt=0)
 
 
 class HelperErrorBody(ContractModel):
@@ -85,7 +100,13 @@ class HelperResponse(ContractModel):
     schema_version: Literal["1.0"] = HELPER_SCHEMA_VERSION
     request_id: str = Field(pattern=r"^(unknown|request-[a-f0-9]{16,64})$")
     ok: bool
-    result: HelperHealthResult | None = None
+    result: (
+        Annotated[
+            HelperHealthResult | HelperCollectionResult,
+            Field(discriminator="kind"),
+        ]
+        | None
+    ) = None
     error: HelperErrorBody | None = None
 
     @model_validator(mode="after")

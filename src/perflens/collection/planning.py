@@ -238,9 +238,7 @@ def _validate_request(request: CollectionPlanRequest) -> None:
                 "perf stat requires between 1 and 64 events",
             )
         if any(
-            not event
-            or len(event) > 128
-            or any(character in event for character in "\0\n\r,;")
+            not event or len(event) > 128 or any(character in event for character in "\0\n\r,;")
             for event in request.events
         ):
             raise PerfLensError(

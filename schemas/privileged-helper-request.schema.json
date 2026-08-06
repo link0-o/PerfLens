@@ -20,6 +20,12 @@
           "default": null,
           "title": "Call Graph"
         },
+        "caller_uid": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "title": "Caller Uid",
+          "type": "integer"
+        },
         "duration_milliseconds": {
           "exclusiveMinimum": 0,
           "maximum": 86400000,
@@ -97,6 +103,7 @@
       "required": [
         "request_id",
         "plan_id",
+        "caller_uid",
         "target",
         "mode",
         "duration_milliseconds",

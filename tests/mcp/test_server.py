@@ -78,9 +78,7 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["collect_project_workload"].meta == {
                 "perflens/permission": "PROJECT_EXECUTION"
             }
-            assert tools["analyze_collection"].meta == {
-                "perflens/permission": "PROCESS_EXECUTION"
-            }
+            assert tools["analyze_collection"].meta == {"perflens/permission": "PROCESS_EXECUTION"}
 
     asyncio.run(exercise())
 
@@ -332,9 +330,7 @@ def test_active_collection_requires_server_and_per_call_authorization(tmp_path: 
             assert collected["artifact_type"] == "collection"
             assert collected["summary"]["mode"] == "record"
             assert (tmp_path / "profile.data").read_bytes() == b"PERFILE2"
-            stored = artifact_root / (
-                f"{collected['artifact_id']}.collection.json"
-            )
+            stored = artifact_root / (f"{collected['artifact_id']}.collection.json")
             assert json.loads(stored.read_text(encoding="utf-8"))["authorization"] == "explicit"
 
     asyncio.run(exercise())

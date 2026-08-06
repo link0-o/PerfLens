@@ -359,18 +359,12 @@ def test_runtime_status_distinguishes_collector_access_and_verification(
                 "rejected",
             )
 
-    monkeypatch.setattr(
-        "perflens.distribution.status._inspect_socket", reported_socket_status
-    )
+    monkeypatch.setattr("perflens.distribution.status._inspect_socket", reported_socket_status)
     monkeypatch.setattr(
         "perflens.distribution.status._collector_group_status", reported_group_status
     )
-    monkeypatch.setattr(
-        "perflens.distribution.status._collector_service_uid", reported_service_uid
-    )
-    monkeypatch.setattr(
-        "perflens.distribution.status.CollectorBrokerClient", ReportedBrokerClient
-    )
+    monkeypatch.setattr("perflens.distribution.status._collector_service_uid", reported_service_uid)
+    monkeypatch.setattr("perflens.distribution.status.CollectorBrokerClient", ReportedBrokerClient)
 
     artifact = inspect_runtime_status(tmp_path, perf_path=Path("/bin/true"))
 
@@ -394,12 +388,8 @@ def test_runtime_status_rejects_stale_socket_as_unreachable(
     stale_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     stale_socket.bind(str(socket_path))
     stale_socket.close()
-    monkeypatch.setattr(
-        "perflens.distribution.status._collector_group_status", lambda: "member"
-    )
-    monkeypatch.setattr(
-        "perflens.distribution.status._collector_service_uid", lambda: 456
-    )
+    monkeypatch.setattr("perflens.distribution.status._collector_group_status", lambda: "member")
+    monkeypatch.setattr("perflens.distribution.status._collector_service_uid", lambda: 456)
 
     artifact = inspect_runtime_status(
         tmp_path,
@@ -423,15 +413,9 @@ def test_runtime_status_requires_dedicated_collector_service_user(
     def ready_socket(_path: Path) -> str:
         return "ready"
 
-    monkeypatch.setattr(
-        "perflens.distribution.status._inspect_socket", ready_socket
-    )
-    monkeypatch.setattr(
-        "perflens.distribution.status._collector_group_status", lambda: "member"
-    )
-    monkeypatch.setattr(
-        "perflens.distribution.status._collector_service_uid", lambda: None
-    )
+    monkeypatch.setattr("perflens.distribution.status._inspect_socket", ready_socket)
+    monkeypatch.setattr("perflens.distribution.status._collector_group_status", lambda: "member")
+    monkeypatch.setattr("perflens.distribution.status._collector_service_uid", lambda: None)
 
     artifact = inspect_runtime_status(tmp_path, perf_path=Path("/bin/true"))
 

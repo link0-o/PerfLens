@@ -53,6 +53,25 @@ class _SpoolSnapshot:
     metadata: os.stat_result
 
 
+def _require_broker_managed_spool(
+    policy: CollectorDeploymentPolicy,
+    *,
+    stage: str,
+) -> None:
+    if policy.privilege_mode == "paranoid3_helper":
+        raise PerfLensError(
+            ErrorCode.UNSUPPORTED_FORMAT,
+            stage,
+            "Archive and prune do not yet support the Rust Helper private spool",
+            recoverable=True,
+            details={"privilege_mode": policy.privilege_mode},
+            suggested_actions=(
+                "Use perflens-admin spool-status for read-only capacity inspection.",
+                "Preserve /var/lib/perflens-helper and do not delete evidence manually.",
+            ),
+        )
+
+
 def archive_collector_spool(
     output_path: Path,
     *,
@@ -86,6 +105,7 @@ def archive_collector_spool(
         require_root_owned_tools=require_root_owned_tools,
         stage=stage,
     )
+    _require_broker_managed_spool(policy, stage=stage)
     if os.geteuid() not in {0, policy.allowed_uids[0]}:
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
@@ -234,6 +254,7 @@ def verify_collector_spool_archive(
         require_root_owned_tools=require_root,
         stage=stage,
     )
+    _require_broker_managed_spool(policy, stage=stage)
     resolved_archive, archive_sha256, manifest = _verify_archive(
         archive_path,
         policy=policy,
@@ -303,6 +324,7 @@ def prune_archived_collector_spool(
         require_root_owned_tools=require_root,
         stage=stage,
     )
+    _require_broker_managed_spool(policy, stage=stage)
     expected_service_uid, expected_service_gid = _collector_service_identity(
         service_uid,
         service_gid,
@@ -539,11 +561,7 @@ def _new_archive_path(
             "Collector archive parent cannot be resolved",
         ) from exc
     expected_owners = {0} if require_root_owner else {0, invoking_uid()}
-    if (
-        not parent.is_dir()
-        or metadata.st_uid not in expected_owners
-        or metadata.st_mode & 0o022
-    ):
+    if not parent.is_dir() or metadata.st_uid not in expected_owners or metadata.st_mode & 0o022:
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
             stage,
@@ -594,8 +612,7 @@ def _open_spool(
         or metadata.st_uid != expected_service_uid
         or metadata.st_gid != expected_service_gid
         or metadata.st_mode & 0o022
-        or (metadata.st_dev, metadata.st_ino)
-        != (path_metadata.st_dev, path_metadata.st_ino)
+        or (metadata.st_dev, metadata.st_ino) != (path_metadata.st_dev, path_metadata.st_ino)
     ):
         os.close(descriptor)
         raise PerfLensError(
@@ -962,9 +979,9 @@ def _write_archive(
                 pass
             else:
                 if (
-                    (current.st_dev, current.st_ino) == published_identity
-                    and current.st_mode & 0o777 != 0o600
-                ):
+                    current.st_dev,
+                    current.st_ino,
+                ) == published_identity and current.st_mode & 0o777 != 0o600:
                     output.unlink(missing_ok=True)
 
 
@@ -1351,14 +1368,20 @@ def _trusted_file_sha256(path: Path, *, max_bytes: int, stage: str) -> str:
             stage,
             "Published Collector archive path disappeared while hashing",
         ) from exc
-    if read_bytes != metadata.st_size or (
-        metadata.st_dev,
-        metadata.st_ino,
-        metadata.st_mtime_ns,
-    ) != (after.st_dev, after.st_ino, after.st_mtime_ns) or (
-        path_after.st_dev,
-        path_after.st_ino,
-    ) != (after.st_dev, after.st_ino):
+    if (
+        read_bytes != metadata.st_size
+        or (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_mtime_ns,
+        )
+        != (after.st_dev, after.st_ino, after.st_mtime_ns)
+        or (
+            path_after.st_dev,
+            path_after.st_ino,
+        )
+        != (after.st_dev, after.st_ino)
+    ):
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
             stage,
@@ -1413,9 +1436,7 @@ def _archive_verification_result(
     absent_source_artifact_count: int | None,
 ) -> CollectorSpoolArchiveVerificationArtifact:
     checked_at = datetime.now(tz=UTC).isoformat()
-    identity = "\0".join(
-        (archive_sha256, checked_at, str(source_artifacts_checked))
-    )
+    identity = "\0".join((archive_sha256, checked_at, str(source_artifacts_checked)))
     next_steps = [
         "Keep the verified archive on independent storage for the required retention period."
     ]

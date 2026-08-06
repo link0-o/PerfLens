@@ -13,14 +13,14 @@ import tempfile
 import time
 import tomllib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
 from perflens import __version__
 from perflens.artifacts.filesystem import write_text_atomic
-from perflens.collection.collector import DEFAULT_MAX_OUTPUT_BYTES
+from perflens.collection.collector import DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_STAT_EVENTS
 from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.collector_broker.policy import (
     COLLECTOR_POLICY_VERSION,
@@ -28,6 +28,10 @@ from perflens.collector_broker.policy import (
     DEFAULT_MAX_SPOOL_ARTIFACTS,
     DEFAULT_MAX_SPOOL_BYTES,
     DEFAULT_MIN_FREE_BYTES,
+    PARANOID3_HELPER_MAX_DURATION_SECONDS,
+    PARANOID3_HELPER_MAX_FREQUENCY_HZ,
+    PARANOID3_HELPER_MAX_OUTPUT_BYTES,
+    PARANOID3_HELPER_MODES,
 )
 from perflens.collector_broker.state import (
     collection_artifact_name,
@@ -57,6 +61,9 @@ class CollectorSystemLayout:
     service_path: Path = Path("/etc/systemd/system/perflens-collector.service")
     state_directory: Path = Path("/var/lib/perflens")
     socket_path: Path = Path("/run/perflens/collector.sock")
+    helper_service_path: Path = Path("/etc/systemd/system/perflens-privileged-helper.service")
+    helper_state_directory: Path = Path("/var/lib/perflens-helper")
+    helper_socket_path: Path = Path("/run/perflens-helper/helper.sock")
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +72,7 @@ class CollectorDeploymentPolicy:
     spool_root: Path
     perf_path: Path
     allowed_uids: tuple[int, ...]
+    privilege_mode: Literal["cap_perfmon", "paranoid3_helper"]
     allowed_modes: tuple[str, ...]
     max_output_bytes: int
     max_spool_bytes: int
@@ -99,6 +107,7 @@ def deploy_collector(
     command_executor: CommandExecutor | None = None,
     socket_waiter: SocketWaiter | None = None,
     service_identity: tuple[int, int] | None = None,
+    acknowledge_cap_sys_admin_risk: bool = False,
 ) -> CollectorDeploymentArtifact:
     """Deploy fixed Collector assets from one strictly validated data-only policy."""
     effective_layout = layout or CollectorSystemLayout()
@@ -112,11 +121,16 @@ def deploy_collector(
         collector_command,
         require_root_owner=require_root,
     )
-    commands = _planned_commands(policy.allowed_uids)
-    warnings = (
+    commands = _planned_commands(policy.allowed_uids, policy.privilege_mode)
+    warnings = [
         "Host perf/kernel policy is not changed; a real collection can still be blocked.",
         "Users added to the perflens group must start a new login session.",
-    )
+    ]
+    if policy.privilege_mode == "paranoid3_helper":
+        warnings.append(
+            "The Rust Helper runs in a root service with only CAP_PERFMON/CAP_SYS_ADMIN in its "
+            "capability bounding set; this is a larger host-security boundary."
+        )
     next_steps = (
         "Start a new login session for every newly authorized user.",
         "Run perflens accept-collector --authorize-host-acceptance as an ordinary user.",
@@ -129,9 +143,20 @@ def deploy_collector(
             effective_layout,
             command,
             policy.allowed_uids,
+            policy.privilege_mode,
             commands,
-            warnings,
+            tuple(warnings),
             next_steps,
+        )
+    if policy.privilege_mode == "paranoid3_helper" and not acknowledge_cap_sys_admin_risk:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "collector_deploy",
+            "paranoid3_helper deployment requires explicit CAP_SYS_ADMIN risk acknowledgement",
+            recoverable=True,
+            suggested_actions=(
+                "Review the dry-run and security guide, then add --acknowledge-cap-sys-admin-risk.",
+            ),
         )
     if require_root and os.geteuid() != 0:
         raise PerfLensError(
@@ -147,6 +172,7 @@ def deploy_collector(
     staged: Path | None = None
     installed_config = False
     installed_service = False
+    installed_helper_service = False
     try:
         with tempfile.TemporaryDirectory(prefix="perflens-admin-") as temporary:
             staged = install_collector_assets(
@@ -172,12 +198,40 @@ def deploy_collector(
                 effective_layout.config_path,
                 mode=0o644,
             )
-            service_text = (staged / "perflens-collector.service").read_text(encoding="utf-8")
+            service_asset = (
+                "perflens-collector-helper.service"
+                if policy.privilege_mode == "paranoid3_helper"
+                else "perflens-collector.service"
+            )
+            service_text = (staged / service_asset).read_text(encoding="utf-8")
             installed_service = _install_new_or_identical_text(
                 service_text,
                 effective_layout.service_path,
                 mode=0o644,
             )
+            if policy.privilege_mode == "paranoid3_helper":
+                helper_text = (staged / "perflens-privileged-helper.service").read_text(
+                    encoding="utf-8"
+                )
+                helper_text = helper_text.replace(
+                    "@PERFLENS_BROKER_UID@",
+                    str(identity[0]),
+                )
+                helper_text = helper_text.replace(
+                    "@PERFLENS_ARTIFACT_GID@",
+                    str(identity[1]),
+                )
+                if "@PERFLENS_" in helper_text:
+                    raise PerfLensError(
+                        ErrorCode.INTERNAL_ERROR,
+                        "collector_deploy",
+                        "Privileged Helper unit contains an unresolved identity marker",
+                    )
+                installed_helper_service = _install_new_or_identical_text(
+                    helper_text,
+                    effective_layout.helper_service_path,
+                    mode=0o644,
+                )
             for group_command in commands[1:-2]:
                 executor(group_command)
             executor(commands[-2])
@@ -192,6 +246,8 @@ def deploy_collector(
     except BaseException:
         if installed_service:
             effective_layout.service_path.unlink(missing_ok=True)
+        if installed_helper_service:
+            effective_layout.helper_service_path.unlink(missing_ok=True)
         if installed_config:
             effective_layout.config_path.unlink(missing_ok=True)
         raise
@@ -202,8 +258,9 @@ def deploy_collector(
         effective_layout,
         command,
         policy.allowed_uids,
+        policy.privilege_mode,
         commands,
-        warnings,
+        tuple(warnings),
         next_steps,
     )
 
@@ -262,10 +319,11 @@ def upgrade_collector(
         require_root_owner=require_root,
         stage=stage,
     )
-    commands = (
-        ("/usr/bin/systemctl", "daemon-reload"),
-        ("/usr/bin/systemctl", "restart", "perflens-collector.service"),
-    )
+    commands: list[tuple[str, ...]] = [("/usr/bin/systemctl", "daemon-reload")]
+    if policy.privilege_mode == "paranoid3_helper":
+        commands.append(("/usr/bin/systemctl", "restart", "perflens-privileged-helper.service"))
+    commands.append(("/usr/bin/systemctl", "restart", "perflens-collector.service"))
+    planned_commands = tuple(commands)
     warnings = (
         "Administrator policy and collected artifacts are preserved.",
         "Package installation must complete before this command is run.",
@@ -283,7 +341,12 @@ def upgrade_collector(
             collector_command=command,
             perf_path=policy.perf_path,
         )
-        candidate = (staged / "perflens-collector.service").read_bytes()
+        service_asset = (
+            "perflens-collector-helper.service"
+            if policy.privilege_mode == "paranoid3_helper"
+            else "perflens-collector.service"
+        )
+        candidate = (staged / service_asset).read_bytes()
         if len(candidate) > _MAX_SERVICE_BYTES:
             raise PerfLensError(
                 ErrorCode.RESOURCE_LIMIT_EXCEEDED,
@@ -301,7 +364,7 @@ def upgrade_collector(
                 candidate,
                 update_required=update_required,
                 service_updated=False,
-                commands=commands,
+                commands=planned_commands,
                 warnings=warnings,
                 next_steps=next_steps,
             )
@@ -336,7 +399,7 @@ def upgrade_collector(
                     candidate,
                     stage=stage,
                 )
-            for planned in commands:
+            for planned in planned_commands:
                 executor(planned)
             if socket_waiter is not None:
                 socket_waiter(effective_layout.socket_path)
@@ -396,7 +459,7 @@ def upgrade_collector(
         candidate,
         update_required=update_required,
         service_updated=service_updated,
-        commands=commands,
+        commands=planned_commands,
         warnings=warnings,
         next_steps=next_steps,
     )
@@ -458,6 +521,20 @@ def update_collector_policy(
             },
             suggested_actions=(
                 "Use an explicit administrator identity-migration procedure instead.",
+            ),
+        )
+    if candidate_policy.privilege_mode != current_policy.privilege_mode:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Collector policy update cannot change the deployed privilege mode",
+            recoverable=True,
+            details={
+                "deployed_privilege_mode": current_policy.privilege_mode,
+                "candidate_privilege_mode": candidate_policy.privilege_mode,
+            },
+            suggested_actions=(
+                "Use an explicit administrator undeploy and reviewed redeployment instead.",
             ),
         )
     _verify_managed_service(
@@ -621,10 +698,22 @@ def undeploy_collector(
     """
     effective_layout = layout or CollectorSystemLayout()
     service = effective_layout.service_path
-    commands = (
-        ("/usr/bin/systemctl", "disable", "--now", "perflens-collector.service"),
-        ("/usr/bin/systemctl", "daemon-reload"),
-    )
+    helper_service = effective_layout.helper_service_path
+    helper_present = helper_service.exists() or helper_service.is_symlink()
+    commands: list[tuple[str, ...]] = [
+        ("/usr/bin/systemctl", "disable", "--now", "perflens-collector.service")
+    ]
+    if helper_present:
+        commands.append(
+            (
+                "/usr/bin/systemctl",
+                "disable",
+                "--now",
+                "perflens-privileged-helper.service",
+            )
+        )
+    commands.append(("/usr/bin/systemctl", "daemon-reload"))
+    planned_commands = tuple(commands)
     warnings = (
         "Collector policy and collected artifacts are preserved.",
         "The perflens system user and group are preserved for artifact ownership.",
@@ -633,13 +722,17 @@ def undeploy_collector(
         f"Review and remove {effective_layout.config_path} only if its policy is no longer needed.",
         f"Review {effective_layout.state_directory} before deleting any performance artifacts.",
     )
-    if not service.exists() and not service.is_symlink():
-        return _undeployment_result(
-            "already_absent", effective_layout, (), warnings, next_steps
-        )
-    _verify_managed_service(service, require_root_owner=require_root)
+    if not service.exists() and not service.is_symlink() and not helper_present:
+        return _undeployment_result("already_absent", effective_layout, (), warnings, next_steps)
+    service_present = service.exists() or service.is_symlink()
+    if service_present:
+        _verify_managed_service(service, require_root_owner=require_root)
+    if helper_present:
+        _verify_managed_service(helper_service, require_root_owner=require_root)
     if dry_run:
-        return _undeployment_result("dry_run", effective_layout, commands, warnings, next_steps)
+        return _undeployment_result(
+            "dry_run", effective_layout, planned_commands, warnings, next_steps
+        )
     if require_root and os.geteuid() != 0:
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
@@ -649,10 +742,15 @@ def undeploy_collector(
             suggested_actions=("Run sudo perflens-admin undeploy.",),
         )
     executor = command_executor or _run_admin_undeploy_command
-    executor(commands[0])
-    _unlink_verified_managed_service(service, require_root_owner=require_root)
-    executor(commands[1])
-    return _undeployment_result("removed", effective_layout, commands, warnings, next_steps)
+    executor(planned_commands[0])
+    if helper_present:
+        executor(planned_commands[1])
+    if service_present:
+        _unlink_verified_managed_service(service, require_root_owner=require_root)
+    if helper_present:
+        _unlink_verified_managed_service(helper_service, require_root_owner=require_root)
+    executor(planned_commands[-1])
+    return _undeployment_result("removed", effective_layout, planned_commands, warnings, next_steps)
 
 
 def inspect_collector_spool(
@@ -670,6 +768,8 @@ def inspect_collector_spool(
         require_root_owned_tools=require_root_owned_tools,
         stage="collector_spool_status",
     )
+    if policy.privilege_mode == "paranoid3_helper":
+        policy = replace(policy, spool_root=effective_layout.helper_state_directory)
     return _inspect_spool(source.path, policy)
 
 
@@ -771,6 +871,7 @@ def parse_collector_deployment_policy(
         "spool_root",
         "perf_path",
         "allowed_uids",
+        "privilege_mode",
         "allowed_modes",
         "allow_other_target_uids",
         "max_duration_seconds",
@@ -796,32 +897,21 @@ def parse_collector_deployment_policy(
         if isinstance(policy_version, bool) or not isinstance(policy_version, int):
             raise TypeError("policy_version must be an integer")
         spool = Path(_strict_string(values["spool_root"])).expanduser().resolve(strict=False)
+        privilege_mode = _strict_string(values.get("privilege_mode", "cap_perfmon"))
         perf_candidate = Path(_strict_string(values["perf_path"])).expanduser()
         perf = perf_candidate.resolve(strict=True)
         uids = tuple(sorted(set(_strict_integer(value) for value in values["allowed_uids"])))
-        modes = tuple(
-            dict.fromkeys(_strict_string(value) for value in values["allowed_modes"])
-        )
+        modes = tuple(dict.fromkeys(_strict_string(value) for value in values["allowed_modes"]))
         duration = _strict_number(values.get("max_duration_seconds", 30.0))
         frequency = _strict_integer(values.get("max_frequency_hz", 99))
-        output_bytes = _strict_integer(
-            values.get("max_output_bytes", DEFAULT_MAX_OUTPUT_BYTES)
-        )
-        spool_bytes = _strict_integer(
-            values.get("max_spool_bytes", DEFAULT_MAX_SPOOL_BYTES)
-        )
+        output_bytes = _strict_integer(values.get("max_output_bytes", DEFAULT_MAX_OUTPUT_BYTES))
+        spool_bytes = _strict_integer(values.get("max_spool_bytes", DEFAULT_MAX_SPOOL_BYTES))
         spool_artifacts = _strict_integer(
             values.get("max_spool_artifacts", DEFAULT_MAX_SPOOL_ARTIFACTS)
         )
-        min_free_bytes = _strict_integer(
-            values.get("min_free_bytes", DEFAULT_MIN_FREE_BYTES)
-        )
-        plan_ttl = _strict_integer(
-            values.get("max_plan_ttl_seconds", DEFAULT_MAX_PLAN_TTL_SECONDS)
-        )
-        events = tuple(
-            _strict_string(value) for value in values.get("allowed_stat_events", ())
-        )
+        min_free_bytes = _strict_integer(values.get("min_free_bytes", DEFAULT_MIN_FREE_BYTES))
+        plan_ttl = _strict_integer(values.get("max_plan_ttl_seconds", DEFAULT_MAX_PLAN_TTL_SECONDS))
+        events = tuple(_strict_string(value) for value in values.get("allowed_stat_events", ()))
         socket_mode_raw = values.get("socket_mode", "0660")
         artifact_mode_raw = values.get("artifact_mode", "0640")
         socket_mode = _strict_mode(socket_mode_raw)
@@ -836,6 +926,7 @@ def parse_collector_deployment_policy(
     allow_other = values.get("allow_other_target_uids", False)
     if (
         policy_version != COLLECTOR_POLICY_VERSION
+        or privilege_mode not in {"cap_perfmon", "paranoid3_helper"}
         or spool != expected_spool.resolve(strict=False)
         or not perf.is_file()
         or not os.access(perf, os.X_OK)
@@ -861,6 +952,20 @@ def parse_collector_deployment_policy(
         or socket_mode & 0o007
         or socket_mode & 0o600 != 0o600
         or artifact_mode not in {0o440, 0o640}
+        or (
+            privilege_mode == "paranoid3_helper"
+            and (
+                set(modes) - PARANOID3_HELPER_MODES
+                or duration > PARANOID3_HELPER_MAX_DURATION_SECONDS
+                or frequency > PARANOID3_HELPER_MAX_FREQUENCY_HZ
+                or output_bytes > PARANOID3_HELPER_MAX_OUTPUT_BYTES
+                or plan_ttl > DEFAULT_MAX_PLAN_TTL_SECONDS
+                or spool_bytes != DEFAULT_MAX_SPOOL_BYTES
+                or spool_artifacts != DEFAULT_MAX_SPOOL_ARTIFACTS
+                or min_free_bytes != DEFAULT_MIN_FREE_BYTES
+                or any(event not in DEFAULT_STAT_EVENTS for event in events)
+            )
+        )
     ):
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
@@ -872,6 +977,10 @@ def parse_collector_deployment_policy(
         spool_root=spool,
         perf_path=perf,
         allowed_uids=uids,
+        privilege_mode=cast(
+            Literal["cap_perfmon", "paranoid3_helper"],
+            privilege_mode,
+        ),
         allowed_modes=modes,
         max_output_bytes=output_bytes,
         max_spool_bytes=spool_bytes,
@@ -890,9 +999,7 @@ def _inspect_spool(
     scan_complete = False
     issues: list[str] = []
     descriptor = -1
-    status: Literal["ready", "warning", "exhausted", "unsafe", "unavailable"] = (
-        "unavailable"
-    )
+    status: Literal["ready", "warning", "exhausted", "unsafe", "unavailable"] = "unavailable"
     try:
         descriptor = os.open(
             policy.spool_root,
@@ -1022,9 +1129,7 @@ def _spool_status_result(
         if scan_complete or count_quota_exhausted
         else None
     )
-    free_above_reserve = (
-        None if free_bytes is None else max(0, free_bytes - policy.min_free_bytes)
-    )
+    free_above_reserve = None if free_bytes is None else max(0, free_bytes - policy.min_free_bytes)
     collectable_bytes: int | None = None
     if (
         scan_complete
@@ -1054,9 +1159,7 @@ def _spool_status_result(
     )
     next_steps = {
         "ready": ("Continue monitoring spool capacity before long collection sessions.",),
-        "warning": (
-            "Review and archive old evidence before the remaining capacity is exhausted.",
-        ),
+        "warning": ("Review and archive old evidence before the remaining capacity is exhausted.",),
         "exhausted": (
             "Review and archive old evidence, then explicitly remove only files no longer needed.",
         ),
@@ -1067,6 +1170,11 @@ def _spool_status_result(
             "Verify the deployed policy, spool path, permissions, and filesystem availability.",
         ),
     }[status]
+    if policy.privilege_mode == "paranoid3_helper" and status in {"warning", "exhausted"}:
+        next_steps = (
+            "Preserve the Rust Helper private spool and stop new collection if capacity is low.",
+            "The v0.2.0 archive/prune workflow does not support this private spool.",
+        )
     return CollectorSpoolStatusArtifact(
         perflens_version=__version__,
         status_id=f"spool-status-{hashlib.sha256(identity.encode()).hexdigest()[:16]}",
@@ -1144,8 +1252,7 @@ def _collector_command(
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
             stage,
-            "perflens-collector must be a trusted-owner executable not writable by group or "
-            "other",
+            "perflens-collector must be a trusted-owner executable not writable by group or other",
             details={"path": str(resolved)},
         )
     if stat.S_ISLNK(entry_metadata.st_mode):
@@ -1176,7 +1283,10 @@ def _collector_command(
     return resolved
 
 
-def _planned_commands(allowed_uids: tuple[int, ...]) -> tuple[tuple[str, ...], ...]:
+def _planned_commands(
+    allowed_uids: tuple[int, ...],
+    privilege_mode: Literal["cap_perfmon", "paranoid3_helper"],
+) -> tuple[tuple[str, ...], ...]:
     commands: list[tuple[str, ...]] = [
         ("/usr/bin/systemd-sysusers", "perflens.sysusers"),
     ]
@@ -1191,12 +1301,17 @@ def _planned_commands(allowed_uids: tuple[int, ...]) -> tuple[tuple[str, ...], .
                 details={"uid": uid},
             ) from exc
         commands.append(("/usr/sbin/usermod", "-aG", "perflens", username))
-    commands.extend(
-        (
-            ("/usr/bin/systemctl", "daemon-reload"),
-            ("/usr/bin/systemctl", "enable", "--now", "perflens-collector.service"),
+    commands.append(("/usr/bin/systemctl", "daemon-reload"))
+    if privilege_mode == "paranoid3_helper":
+        commands.append(
+            (
+                "/usr/bin/systemctl",
+                "enable",
+                "--now",
+                "perflens-privileged-helper.service",
+            )
         )
-    )
+    commands.append(("/usr/bin/systemctl", "enable", "--now", "perflens-collector.service"))
     return tuple(commands)
 
 
@@ -1553,6 +1668,7 @@ def _result(
     layout: CollectorSystemLayout,
     command: Path,
     allowed_uids: tuple[int, ...],
+    privilege_mode: Literal["cap_perfmon", "paranoid3_helper"],
     commands: tuple[tuple[str, ...], ...],
     warnings: tuple[str, ...],
     next_steps: tuple[str, ...],
@@ -1565,6 +1681,7 @@ def _result(
         service_path=str(layout.service_path),
         collector_command=str(command),
         allowed_uids=allowed_uids,
+        privilege_mode=privilege_mode,
         planned_commands=commands,
         warnings=warnings,
         next_steps=next_steps,

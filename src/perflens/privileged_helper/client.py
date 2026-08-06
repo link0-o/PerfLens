@@ -7,14 +7,19 @@ import socket
 import stat
 import struct
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
+from perflens.contracts.artifacts import CollectionPlanArtifact
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.privileged_helper.protocol import (
     MAX_HELPER_MESSAGE_BYTES,
+    HelperCollectionResult,
+    HelperCollectPidRequest,
     HelperHealthRequest,
     HelperHealthResult,
     HelperResponse,
+    HelperTarget,
     parse_helper_response_frame,
 )
 
@@ -45,8 +50,8 @@ class HelperClient:
     ) -> None:
         if expected_helper_uid < 0:
             raise ValueError("expected Helper UID must be non-negative")
-        if timeout_seconds <= 0 or timeout_seconds > 5:
-            raise ValueError("Helper timeout must be between zero and five seconds")
+        if timeout_seconds <= 0 or timeout_seconds > 45:
+            raise ValueError("Helper timeout must be between zero and 45 seconds")
         self._socket_path = socket_path
         self._expected_helper_uid = expected_helper_uid
         self._timeout_seconds = timeout_seconds
@@ -68,7 +73,7 @@ class HelperClient:
                 recoverable=True,
             )
         result = response.result
-        if (
+        if not isinstance(result, HelperHealthResult) or (
             result.helper_uid != self._expected_helper_uid
             or result.helper_pid != peer_pid
             or result.privilege_mode != "paranoid3_helper"
@@ -77,9 +82,80 @@ class HelperClient:
             raise _unsafe_helper_identity()
         return result
 
-    def _exchange(
-        self, payload: bytes, *, expected_request_id: str
-    ) -> tuple[HelperResponse, int]:
+    def collect(
+        self,
+        plan: CollectionPlanArtifact,
+        *,
+        caller_uid: int,
+    ) -> HelperCollectionResult:
+        """Submit one already-authorized typed PID plan to the Rust Helper."""
+        try:
+            expires_at = datetime.fromisoformat(plan.expires_at)
+            expires_milliseconds = int(expires_at.timestamp() * 1000)
+            duration_milliseconds = round(plan.duration_seconds * 1000)
+        except (OverflowError, ValueError) as exc:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "privileged_helper",
+                "Collection plan timestamps cannot be represented by the Helper protocol",
+            ) from exc
+        if plan.mode not in {"record", "stat"}:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "privileged_helper",
+                "Privileged Helper supports only record and stat PID plans",
+            )
+        helper_mode = "record" if plan.mode == "record" else "stat"
+        request = HelperCollectPidRequest(
+            request_id=f"request-{secrets.token_hex(16)}",
+            plan_id=plan.plan_id,
+            caller_uid=caller_uid,
+            target=HelperTarget(
+                pid=plan.target_pid,
+                uid=plan.target_uid,
+                start_time_ticks=plan.target_start_time_ticks,
+            ),
+            mode=helper_mode,
+            duration_milliseconds=duration_milliseconds,
+            frequency_hz=plan.frequency_hz,
+            call_graph=plan.call_graph,
+            events=plan.events,
+            max_output_bytes=plan.max_output_bytes,
+            expires_at_unix_milliseconds=expires_milliseconds,
+        )
+        response, _peer_pid = self._exchange(
+            request.model_dump_json().encode("utf-8") + b"\n",
+            expected_request_id=request.request_id,
+        )
+        if not response.ok or response.result is None:
+            error = response.error
+            try:
+                code = ErrorCode(error.code) if error is not None else ErrorCode.INTERNAL_ERROR
+            except ValueError:
+                code = ErrorCode.INTERNAL_ERROR
+            raise PerfLensError(
+                code,
+                error.stage if error is not None else "privileged_helper",
+                error.message if error is not None else "Privileged Helper rejected collection",
+                recoverable=error.recoverable if error is not None else False,
+            )
+        result = response.result
+        expected_name = (
+            f"{plan.plan_id}.stat.csv" if plan.mode == "stat" else f"{plan.plan_id}.perf.data"
+        )
+        expected_format = "perf_stat_delimited" if plan.mode == "stat" else "perf_data"
+        if not isinstance(result, HelperCollectionResult) or (
+            result.plan_id != plan.plan_id
+            or result.mode != plan.mode
+            or result.target_pid != plan.target_pid
+            or result.artifact_name != expected_name
+            or result.output_format != expected_format
+            or result.finished_at_unix_milliseconds < result.started_at_unix_milliseconds
+        ):
+            raise _unsafe_helper_identity()
+        return result
+
+    def _exchange(self, payload: bytes, *, expected_request_id: str) -> tuple[HelperResponse, int]:
         identity = _safe_socket_identity(self._socket_path, self._expected_helper_uid)
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:

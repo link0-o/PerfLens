@@ -138,6 +138,15 @@
       "default": null,
       "title": "Collector Assets Path"
     },
+    "collector_privilege_mode": {
+      "default": "cap_perfmon",
+      "enum": [
+        "cap_perfmon",
+        "paranoid3_helper"
+      ],
+      "title": "Collector Privilege Mode",
+      "type": "string"
+    },
     "generated_files": {
       "items": {
         "type": "string"

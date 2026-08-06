@@ -128,23 +128,17 @@ def plan_codex_project_config(
             if len(begins) != 1 or len(ends) != 1 or begins[0] >= ends[0]:
                 raise _managed_block_error(target)
             _validate_managed_block(lines, begins[0], ends[0], target)
-            replacement = "".join(lines[: begins[0]]) + managed + "".join(
-                lines[ends[0] + 1 :]
-            )
+            replacement = "".join(lines[: begins[0]]) + managed + "".join(lines[ends[0] + 1 :])
             try:
                 tomllib.loads(replacement)
             except tomllib.TOMLDecodeError as exc:
                 raise _managed_block_error(target) from exc
-            status: CodexConfigInstallStatus = (
-                "existing" if replacement == expected else "updated"
-            )
+            status: CodexConfigInstallStatus = "existing" if replacement == expected else "updated"
             return CodexConfigInstallPlan(target, status, replacement, expected)
 
         current = parsed.get("mcp_servers")
         perflens = (
-            cast(dict[str, object], current).get("perflens")
-            if isinstance(current, dict)
-            else None
+            cast(dict[str, object], current).get("perflens") if isinstance(current, dict) else None
         )
         desired_root = cast(dict[str, object], tomllib.loads(configuration))
         desired_servers = cast(dict[str, object], desired_root["mcp_servers"])
@@ -210,9 +204,7 @@ def plan_codex_project_config_removal(
     if not begins and not ends:
         servers = parsed.get("mcp_servers")
         perflens = (
-            cast(dict[str, object], servers).get("perflens")
-            if isinstance(servers, dict)
-            else None
+            cast(dict[str, object], servers).get("perflens") if isinstance(servers, dict) else None
         )
         if perflens is None:
             return None
@@ -239,12 +231,8 @@ def plan_codex_project_config_removal(
 
 
 def _managed_marker_lines(lines: list[str]) -> tuple[list[int], list[int]]:
-    begins = [
-        index for index, line in enumerate(lines) if line.rstrip("\r\n") == _MANAGED_BEGIN
-    ]
-    ends = [
-        index for index, line in enumerate(lines) if line.rstrip("\r\n") == _MANAGED_END
-    ]
+    begins = [index for index, line in enumerate(lines) if line.rstrip("\r\n") == _MANAGED_BEGIN]
+    ends = [index for index, line in enumerate(lines) if line.rstrip("\r\n") == _MANAGED_END]
     return begins, ends
 
 
@@ -343,9 +331,7 @@ def render_codex_config(
         automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
         mcp_command=mcp_command,
     )
-    formatted_arguments = ",\n".join(
-        f"  {_toml_string(value)}" for value in launch.arguments
-    )
+    formatted_arguments = ",\n".join(f"  {_toml_string(value)}" for value in launch.arguments)
     return (
         "[mcp_servers.perflens]\n"
         f"command = {_toml_string(str(launch.command))}\n"

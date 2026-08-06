@@ -98,7 +98,7 @@ policy and spool evidence are not deleted.
 
 `perflens-admin update-policy` requires a separate trusted, non-group-writable,
 bounded UTF-8 TOML candidate. It rejects the live deployed path, unknown or
-unbounded values, UID changes, fixed-spool migration, symlinks, and untrusted
+unbounded values, UID changes, fixed-spool or privilege-mode migration, symlinks, and untrusted
 perf paths. Run `--dry-run` first. If restart or authenticated health checking
 fails after replacement, it restores the exact prior policy and restarts again.
 If rollback itself fails, stop retrying and inspect the current policy,

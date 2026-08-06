@@ -47,14 +47,10 @@ def detach_project_integration(
             details={"path": str(project)},
         )
     setup = _load_setup_artifact(project, setup_directory)
-    selected: tuple[SkillClient, ...] = (
-        ("codex", "claude-code") if client == "all" else (client,)
-    )
+    selected: tuple[SkillClient, ...] = ("codex", "claude-code") if client == "all" else (client,)
     managed_claude = _recorded_claude_configuration(project, setup)
 
-    codex_config_plan = (
-        plan_codex_project_config_removal(project) if "codex" in selected else None
-    )
+    codex_config_plan = plan_codex_project_config_removal(project) if "codex" in selected else None
     claude_config_plan = (
         plan_claude_project_config_removal(
             project,
@@ -77,9 +73,7 @@ def detach_project_integration(
         plan_project_skill_removal(
             project,
             client="claude-code",
-            expected_fingerprint=(
-                setup.claude_skill_fingerprint if setup is not None else None
-            ),
+            expected_fingerprint=(setup.claude_skill_fingerprint if setup is not None else None),
             recorded_path=(setup.claude_skill_path if setup is not None else None),
         )
         if remove_skills and "claude-code" in selected
@@ -145,9 +139,7 @@ def detach_project_integration(
     next_steps.append(
         "Setup guidance and performance evidence were preserved for audit or later re-init."
     )
-    next_steps.append(
-        "Uninstall PerfLens only after detaching every configured project."
-    )
+    next_steps.append("Uninstall PerfLens only after detaching every configured project.")
     return ProjectDetachmentArtifact(
         perflens_version=__version__,
         detachment_id=f"detachment-{hashlib.sha256(identity.encode()).hexdigest()[:16]}",
@@ -273,9 +265,7 @@ def _preserved_paths(
         candidates.extend(project_skill_candidates(project, client="codex"))
     if not remove_skills or "claude-code" not in selected:
         candidates.extend(project_skill_candidates(project, client="claude-code"))
-    return tuple(
-        str(path) for path in candidates if path.exists() or path.is_symlink()
-    )
+    return tuple(str(path) for path in candidates if path.exists() or path.is_symlink())
 
 
 def _unsafe_setup(path: Path) -> PerfLensError:

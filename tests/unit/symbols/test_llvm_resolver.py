@@ -87,9 +87,7 @@ def test_llvm_provider_bounds_large_query_batches(tmp_path: Path) -> None:
         debug_file_candidates=(),
         architecture="test",
     )
-    locations = tuple(
-        ModuleLocation(value, address_kind="module_offset") for value in range(600)
-    )
+    locations = tuple(ModuleLocation(value, address_kind="module_offset") for value in range(600))
 
     with LlvmSymbolizerResolver(fake) as resolver:
         resolved = resolver.resolve_many(identity, locations)

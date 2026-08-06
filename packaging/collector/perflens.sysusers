@@ -1,1 +1,2 @@
 u perflens - "PerfLens collector service" /var/lib/perflens
+g perflens-internal -

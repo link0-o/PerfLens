@@ -22,6 +22,15 @@
       "title": "Policy Version",
       "type": "integer"
     },
+    "privilege_mode": {
+      "default": "cap_perfmon",
+      "enum": [
+        "cap_perfmon",
+        "paranoid3_helper"
+      ],
+      "title": "Privilege Mode",
+      "type": "string"
+    },
     "schema_version": {
       "const": "1.0",
       "default": "1.0",

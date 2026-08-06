@@ -2,13 +2,19 @@
 
 English | [简体中文](INSTALL.zh-CN.md)
 
-Download `perflens-0.1.3-py3-none-any.whl` for the normal CLI/MCP installation. A wheel is an installable Python package: do not extract it. The extracted `perflens/` and `.dist-info/` directories are modules and metadata, not a graphical launcher.
+Download `perflens-0.2.0-py3-none-any.whl` for the normal CLI/MCP installation. A wheel is an installable Python package: do not extract it. The extracted `perflens/` and `.dist-info/` directories are modules and metadata, not a graphical launcher.
 
 On Debian 13 `amd64`, the recommended alternative is
-`sudo apt install ./perflens_0.1.3-1_amd64.deb`. Add the exact-version
-`perflens-collector_0.1.3-1_all.deb` only for automatic collection. Package
+`sudo apt install ./perflens_0.2.0-1_amd64.deb`. Add the exact-version
+`perflens-collector_0.2.0-1_amd64.deb` only for automatic collection. Package
 installation does not activate a privileged service. See
 [Debian packages](docs/debian-packages.md).
+
+Collector onboarding defaults to non-root `cap_perfmon`. To keep Debian
+`perf_event_paranoid=3`, generate the explicit advanced layout with
+`perflens init --prepare-collector --collector-privilege-mode paranoid3_helper`; the generated
+guide includes the mandatory administrator risk acknowledgement. MCP, Skill, and Agent remain
+unprivileged in both modes.
 
 Verify downloaded release files before installation. `--ignore-missing` allows
 checking only the assets you downloaded, but each selected file must report
@@ -16,7 +22,7 @@ checking only the assets you downloaded, but each selected file must report
 
 ```bash
 sha256sum --ignore-missing --check SHA256SUMS
-gh attestation verify ./perflens-0.1.3-py3-none-any.whl \
+gh attestation verify ./perflens-0.2.0-py3-none-any.whl \
   --repo link0-o/PerfLens \
   --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -32,9 +38,9 @@ PerfLens requires Linux and Python 3.12 or 3.13. Install the wheel as an isolate
 
 ```bash
 cd ~/Downloads
-pipx install ./perflens-0.1.3-py3-none-any.whl
+pipx install ./perflens-0.2.0-py3-none-any.whl
 # or
-uv tool install ./perflens-0.1.3-py3-none-any.whl
+uv tool install ./perflens-0.2.0-py3-none-any.whl
 ```
 
 Verify it and run the project-scoped onboarding command:
@@ -142,7 +148,8 @@ or `--output ./collector-acceptance.json` to preserve it safely.
 To tune collection policy without reinstalling, copy the deployed TOML to a
 separate mode-`0600` candidate, run `perflens-admin update-policy --config
 <candidate> --dry-run`, then repeat with `sudo`. It restarts, health-checks, and
-rolls back on failure while preserving the authorized UID and fixed spool.
+rolls back on failure while preserving the authorized UID, fixed spool, and
+privilege mode. Changing privilege mode requires a reviewed undeploy/redeploy.
 
 For long-term evidence retention, use the administrator archive-then-prune
 workflow instead of deleting spool files by age. It creates a root-managed ZIP

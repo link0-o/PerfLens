@@ -2,8 +2,8 @@
 
 [简体中文](privileged-helper.zh-CN.md) | English
 
-Status: `v0.2.0` design baseline. This document does not claim that the currently released version
-already implements this mode.
+Status: implemented in `v0.2.0` and packaged in the native Debian Collector package. Enabling it
+still requires explicit administrator selection, risk acknowledgement, and real acceptance.
 
 ## Goal and non-goals
 
@@ -35,10 +35,10 @@ ordinary Agent / Skill / MCP
 Python Collector Broker (no capabilities)
         │ private Broker-only Unix socket
         ▼
-Rust privileged Helper (dedicated UID, bounded capabilities)
+Rust privileged Helper (root UID, systemd capability bounding set)
         │ fixed perf executable and typed PID target
         ▼
-fixed /var/lib/perflens spool
+fixed /var/lib/perflens-helper spool
 ```
 
 Public and private sockets use different directories, groups, and modes. The Helper verifies the
@@ -75,8 +75,8 @@ Rust is used only for the Helper. Ordinary wheels neither contain nor build it, 
 does not need a Rust toolchain. Native packages build target-specific binaries in CI with a pinned
 stable toolchain and checked-in `Cargo.lock`; users install no Cargo or rustc.
 
-Unsafe Rust is isolated, justified with safety comments, and covered by focused tests. Dependencies
-stay minimal, locked, licensed, audited, and represented in the SBOM.
+Unsafe Rust is forbidden in the current crate and covered by focused tests. Dependencies stay
+minimal, locked, listed in third-party notices, and checked by Rust supply-chain audits.
 
 ## Required acceptance
 

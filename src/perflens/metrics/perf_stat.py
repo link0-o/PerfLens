@@ -22,12 +22,7 @@ class PerfStatMetricAdapter:
         max_metrics: int = 256,
         max_warnings: int = 32,
     ) -> None:
-        if (
-            max_input_bytes < 1
-            or max_line_chars < 1
-            or max_metrics < 1
-            or max_warnings < 0
-        ):
+        if max_input_bytes < 1 or max_line_chars < 1 or max_metrics < 1 or max_warnings < 0:
             raise ValueError("perf stat resource limits are invalid")
         self.max_input_bytes = max_input_bytes
         self.max_line_chars = max_line_chars

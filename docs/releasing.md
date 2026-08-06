@@ -9,7 +9,7 @@ archive. A release contains:
 - `perflens-<version>.tar.gz`
 - `perflens-skill-<version>.zip`
 - `perflens_<version>-1_amd64.deb`
-- `perflens-collector_<version>-1_all.deb`
+- `perflens-collector_<version>-1_<architecture>.deb`
 - `sbom.cdx.json`
 - `SHA256SUMS`
 
@@ -44,19 +44,19 @@ uv run python scripts/build_deb.py \
 uv run python tests/deb_package_smoke.py --directory dist
 
 uv run --isolated --no-project \
-  --with dist/perflens-0.1.3-py3-none-any.whl \
+  --with dist/perflens-0.2.0-py3-none-any.whl \
   tests/package_smoke.py
 uv run --isolated --no-project \
-  --with dist/perflens-0.1.3.tar.gz \
+  --with dist/perflens-0.2.0.tar.gz \
   tests/package_smoke.py
 
 uv export --locked --no-dev --no-emit-project \
   --preview-features sbom-export \
   --format cyclonedx1.5 \
   --output-file dist/sbom.cdx.json
-uv run python scripts/prepare_release.py --tag v0.1.3
+uv run python scripts/prepare_release.py --tag v0.2.0
 uv run python scripts/render_release_notes.py \
-  --tag v0.1.3 \
+  --tag v0.2.0 \
   --output /tmp/perflens-release-notes.md
 sha256sum --check dist/SHA256SUMS
 ```
@@ -76,8 +76,8 @@ Create and push an annotated version tag only after the release commit is on
 `main`:
 
 ```bash
-git tag -a v0.1.3 -m "PerfLens v0.1.3"
-git push origin v0.1.3
+git tag -a v0.2.0 -m "PerfLens v0.2.0"
+git push origin v0.2.0
 ```
 
 `.github/workflows/release.yml` checks that the tag matches the package
@@ -110,7 +110,7 @@ publisher runs only after attestation succeeds. After publication, spot-check
 at least one asset:
 
 ```bash
-gh attestation verify ./dist/perflens-0.1.3-py3-none-any.whl \
+gh attestation verify ./dist/perflens-0.2.0-py3-none-any.whl \
   --repo link0-o/PerfLens \
   --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -124,8 +124,8 @@ not the Skill archive or SBOM:
 
 ```bash
 uv publish \
-  dist/perflens-0.1.3-py3-none-any.whl \
-  dist/perflens-0.1.3.tar.gz
+  dist/perflens-0.2.0-py3-none-any.whl \
+  dist/perflens-0.2.0.tar.gz
 ```
 
 PyPI versions are immutable. If a release is wrong, fix it in a new version

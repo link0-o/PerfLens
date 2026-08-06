@@ -300,8 +300,8 @@ def _verify_collection_artifact(
     socket_identity: _SocketIdentity,
     server_uid: int,
 ) -> None:
-    expected_name = f"{plan.plan_id}.stat.csv" if plan.mode == "stat" else (
-        f"{plan.plan_id}.perf.data"
+    expected_name = (
+        f"{plan.plan_id}.stat.csv" if plan.mode == "stat" else (f"{plan.plan_id}.perf.data")
     )
     expected_format = "perf_stat_delimited" if plan.mode == "stat" else "perf_data"
     candidate = Path(artifact.output_path).expanduser()
@@ -324,14 +324,17 @@ def _verify_collection_artifact(
             details={"path": str(candidate)},
         ) from exc
     mode = stat.S_IMODE(metadata.st_mode)
+    expected_output_uid = (
+        artifact.output_owner_uid if artifact.output_owner_uid is not None else server_uid
+    )
     if (
         candidate != resolved
         or not stat.S_ISREG(metadata.st_mode)
         or metadata.st_nlink != 1
-        or metadata.st_uid != server_uid
+        or metadata.st_uid != expected_output_uid
         or metadata.st_gid != socket_identity.gid
         or mode not in {0o440, 0o640}
-        or parent_metadata.st_uid != server_uid
+        or parent_metadata.st_uid != expected_output_uid
         or parent_metadata.st_mode & 0o022
     ):
         raise _unsafe_collection_artifact()

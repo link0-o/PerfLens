@@ -6,8 +6,8 @@ PerfLens publishes two role-separated native packages for Debian 13 `amd64`:
 
 - `perflens_<version>-1_amd64.deb` contains the unprivileged CLI, MCP server,
   Skill, and hash-locked runtime dependencies;
-- `perflens-collector_<version>-1_all.deb` adds the optional administrator and
-  Collector entry points and depends on the exact same main-package version.
+- `perflens-collector_<version>-1_amd64.deb` adds the optional administrator,
+  Collector, target-native Rust Helper, and depends on the exact same main-package version.
 
 The root-managed `/usr/bin/perflens-mcp` and `/usr/bin/perflens-collector`
 entry points link to the private runtime launcher. Onboarding and deployment
@@ -18,7 +18,7 @@ MCP or Collector identity. Links in writable directories are rejected.
 For offline profile analysis, install only the main package:
 
 ```bash
-sudo apt install ./perflens_0.1.3-1_amd64.deb
+sudo apt install ./perflens_0.2.0-1_amd64.deb
 cd /absolute/path/to/project
 perflens init
 ```
@@ -27,8 +27,8 @@ For automatic collection, install both packages and generate a reviewed policy:
 
 ```bash
 sudo apt install \
-  ./perflens_0.1.3-1_amd64.deb \
-  ./perflens-collector_0.1.3-1_all.deb
+  ./perflens_0.2.0-1_amd64.deb \
+  ./perflens-collector_0.2.0-1_amd64.deb
 
 perflens setup \
   --project /absolute/path/to/project \
@@ -43,6 +43,11 @@ select an installation layout. If the main native package is present without
 its matching Collector package, setup stops before writing files and explains
 which package is missing. `--collector-command` remains available for a
 deliberately managed custom layout.
+
+Debian defaults to the non-root `cap_perfmon` mode. To keep
+`perf_event_paranoid=3`, explicitly generate the advanced Rust Helper layout with
+`perflens init --prepare-collector --collector-privilege-mode paranoid3_helper`.
+The generated guide includes the required `--acknowledge-cap-sys-admin-risk` administrator flag.
 
 Package installation never enables a service, writes `/etc/perflens`, changes
 sysctl/capabilities, or grants user access. After reviewing the generated policy,

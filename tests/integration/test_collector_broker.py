@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import signal
@@ -40,6 +41,8 @@ from perflens.distribution.onboarding import run_project_setup
 from perflens.distribution.status import inspect_runtime_status
 from perflens.domain.errors import ErrorCode, PerfLensError, stable_error_id
 from perflens.mcp.server import ServerConfig, create_server
+from perflens.privileged_helper.client import HelperClient
+from perflens.privileged_helper.protocol import HelperCollectionResult
 from perflens.workloads.project import PROJECT_EXECUTION_AUTHORIZATION
 
 
@@ -479,6 +482,96 @@ def test_broker_collects_verified_pid_to_fixed_spool(tmp_path: Path) -> None:
         assert Path(artifact.output_path).stat().st_mode & 0o777 == 0o640
         assert _collection_artifacts(spool) == (Path(artifact.output_path),)
         assert (spool / replay_marker_name(plan.plan_id)).is_file()
+    finally:
+        target.terminate()
+        target.wait(timeout=5)
+
+
+def test_broker_delegates_paranoid3_collection_to_typed_helper(tmp_path: Path) -> None:
+    spool = tmp_path / "spool"
+    helper_spool = tmp_path / "helper-spool"
+    runtime = tmp_path / "run"
+    for directory in (spool, helper_spool, runtime):
+        directory.mkdir()
+        directory.chmod(0o750)
+    target = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        start_new_session=True,
+    )
+
+    class FakeHelper:
+        def collect(
+            self,
+            plan: CollectionPlanArtifact,
+            *,
+            caller_uid: int,
+        ) -> HelperCollectionResult:
+            assert caller_uid == os.geteuid()
+            payload = b"100;;cycles;10;100.0\n200;;instructions;10;100.0\n"
+            output = helper_spool / f"{plan.plan_id}.stat.csv"
+            output.write_bytes(payload)
+            output.chmod(0o640)
+            return HelperCollectionResult(
+                kind="collection",
+                plan_id=plan.plan_id,
+                mode="stat",
+                target_pid=plan.target_pid,
+                artifact_name=output.name,
+                output_bytes=len(payload),
+                output_sha256=hashlib.sha256(payload).hexdigest(),
+                output_format="perf_stat_delimited",
+                started_at_unix_milliseconds=1_000,
+                finished_at_unix_milliseconds=1_100,
+            )
+
+    try:
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode="stat",
+                pid=target.pid,
+                duration_seconds=0.1,
+                max_output_bytes=1024,
+            ),
+            policy=AutomaticCollectionPolicy(enabled=True),
+            capabilities=_capabilities(),
+        )
+        policy = CollectorBrokerPolicy(
+            spool_root=spool,
+            perf_path=_fake_perf(tmp_path),
+            allowed_uids=(os.geteuid(),),
+            privilege_mode="paranoid3_helper",
+            max_duration_seconds=1,
+            max_output_bytes=1024,
+        )
+        server = CollectorBrokerServer(
+            runtime / "collector.sock",
+            policy,
+            helper_client=cast(HelperClient, FakeHelper()),
+            helper_spool_root=helper_spool,
+            expected_helper_uid=os.geteuid(),
+        )
+        with server:
+            health_worker = threading.Thread(target=server.serve_once, daemon=True)
+            health_worker.start()
+            health = CollectorBrokerClient(server.socket_path, timeout_seconds=5).health()
+            health_worker.join(timeout=5)
+            worker = threading.Thread(target=server.serve_once, daemon=True)
+            worker.start()
+            artifact = CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(plan)
+            worker.join(timeout=5)
+
+        assert not health_worker.is_alive()
+        assert health.privilege_mode == "paranoid3_helper"
+        assert health.spool_root == str(helper_spool)
+        assert not worker.is_alive()
+        assert artifact.output_path.startswith(str(helper_spool))
+        assert artifact.output_owner_uid == os.geteuid()
+        assert {metric.event for metric in artifact.metrics} == {
+            "cycles",
+            "instructions",
+            "instructions-per-cycle",
+        }
+        assert list(spool.iterdir()) == []
     finally:
         target.terminate()
         target.wait(timeout=5)

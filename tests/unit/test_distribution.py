@@ -186,12 +186,15 @@ def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
     assert {path.name for path in target.iterdir()} == {
         "collector.toml",
         "perflens-collector.service",
+        "perflens-collector-helper.service",
+        "perflens-privileged-helper.service",
         "perflens.sysusers",
     }
     policy = (target / "collector.toml").read_text(encoding="utf-8")
     service = (target / "perflens-collector.service").read_text(encoding="utf-8")
     assert "allowed_uids = [1000]" in policy
     assert "policy_version = 1" in policy
+    assert 'privilege_mode = "cap_perfmon"' in policy
     assert 'perf_path = "/usr/lib/linux-tools/perf"' in policy
     assert "允许连接 Collector 的唯一普通用户 UID" in policy
     assert "The only ordinary-user UID allowed to call this Collector" in policy
@@ -225,6 +228,8 @@ def test_collector_assets_have_fixed_safe_modes_independent_of_umask(
     assert target.stat().st_mode & 0o777 == 0o700
     assert (target / "collector.toml").stat().st_mode & 0o777 == 0o600
     assert (target / "perflens-collector.service").stat().st_mode & 0o777 == 0o644
+    assert (target / "perflens-collector-helper.service").stat().st_mode & 0o777 == 0o644
+    assert (target / "perflens-privileged-helper.service").stat().st_mode & 0o777 == 0o644
     assert (target / "perflens.sysusers").stat().st_mode & 0o777 == 0o644
 
 
@@ -398,13 +403,7 @@ def test_claude_project_config_preserves_other_servers_and_refuses_conflicts(
     workspace.mkdir()
     path = workspace / ".mcp.json"
     path.write_text(
-        json.dumps(
-            {
-                "mcpServers": {
-                    "keep": {"type": "stdio", "command": "/bin/true", "args": []}
-                }
-            }
-        ),
+        json.dumps({"mcpServers": {"keep": {"type": "stdio", "command": "/bin/true", "args": []}}}),
         encoding="utf-8",
     )
     generated = render_claude_config(workspace, mcp_command=Path(sys.executable))
@@ -557,9 +556,7 @@ def test_codex_project_config_install_refuses_user_table_and_unsafe_path(
     with pytest.raises(PerfLensError) as conflict:
         plan_codex_project_config(workspace, generated)
     assert conflict.value.code is ErrorCode.PATH_SAFETY_VIOLATION
-    assert config_path.read_text(encoding="utf-8").endswith(
-        'command = "/custom/perflens-mcp"\n'
-    )
+    assert config_path.read_text(encoding="utf-8").endswith('command = "/custom/perflens-mcp"\n')
 
     config_path.unlink()
     config_dir.rmdir()
@@ -601,8 +598,7 @@ def test_codex_managed_block_rejects_mixed_user_configuration(tmp_path: Path) ->
     config.write_text(
         content.replace(
             "# END PerfLens managed MCP configuration",
-            '[mcp_servers.other]\ncommand = "/keep/me"\n'
-            "# END PerfLens managed MCP configuration",
+            '[mcp_servers.other]\ncommand = "/keep/me"\n# END PerfLens managed MCP configuration',
         ),
         encoding="utf-8",
     )
@@ -611,6 +607,4 @@ def test_codex_managed_block_rejects_mixed_user_configuration(tmp_path: Path) ->
         plan_codex_project_config(workspace, generated)
     with pytest.raises(PerfLensError, match="markers"):
         plan_codex_project_config_removal(workspace)
-    assert '[mcp_servers.other]\ncommand = "/keep/me"' in config.read_text(
-        encoding="utf-8"
-    )
+    assert '[mcp_servers.other]\ncommand = "/keep/me"' in config.read_text(encoding="utf-8")

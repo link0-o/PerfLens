@@ -41,9 +41,7 @@ def main() -> None:
             f"{project_version!r} does not match runtime version {__version__!r}"
         )
     if arguments.tag is not None and arguments.tag != f"v{__version__}":
-        parser.error(
-            f"release tag {arguments.tag!r} does not match package version v{__version__}"
-        )
+        parser.error(f"release tag {arguments.tag!r} does not match package version v{__version__}")
 
     try:
         dist_dir = arguments.dist_dir.resolve(strict=True)
@@ -64,10 +62,13 @@ def main() -> None:
     _validate_sbom(sbom, parser)
 
     main_debs = tuple(dist_dir.glob(f"perflens_{__version__}-1_*.deb"))
-    collector = dist_dir / f"perflens-collector_{__version__}-1_all.deb"
+    collector_debs = tuple(dist_dir.glob(f"perflens-collector_{__version__}-1_*.deb"))
     if len(main_debs) != 1:
         parser.error("release requires exactly one architecture-specific perflens DEB")
+    if len(collector_debs) != 1:
+        parser.error("release requires exactly one architecture-specific Collector DEB")
     main_deb = main_debs[0]
+    collector = collector_debs[0]
     for deb in (main_deb, collector):
         _validate_deb(deb, parser)
     try:

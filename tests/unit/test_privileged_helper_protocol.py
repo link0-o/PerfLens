@@ -25,9 +25,7 @@ def test_checked_in_privileged_helper_schema_matches_python_model() -> None:
     )
     assert checked_in == helper_request_schema()
     checked_in_response = json.loads(
-        (root / "schemas/privileged-helper-response.schema.json").read_text(
-            encoding="utf-8"
-        )
+        (root / "schemas/privileged-helper-response.schema.json").read_text(encoding="utf-8")
     )
     assert checked_in_response == helper_response_schema()
 
@@ -48,24 +46,17 @@ def test_privileged_helper_valid_golden_frames() -> None:
 @pytest.mark.parametrize(
     "fixture",
     sorted(
-        (Path(__file__).resolve().parents[1] / "fixtures/privileged_helper/invalid").glob(
-            "*.jsonl"
-        )
+        (Path(__file__).resolve().parents[1] / "fixtures/privileged_helper/invalid").glob("*.jsonl")
     ),
     ids=lambda path: path.name,
 )
 def test_privileged_helper_invalid_golden_frames_are_rejected(fixture: Path) -> None:
     with pytest.raises(PerfLensError):
-        parse_helper_request_frame(
-            fixture.read_bytes(), now_unix_milliseconds=_NOW_MILLISECONDS
-        )
+        parse_helper_request_frame(fixture.read_bytes(), now_unix_milliseconds=_NOW_MILLISECONDS)
 
 
 def test_privileged_helper_rejects_missing_newline_and_trailing_frame() -> None:
-    valid = (
-        b'{"schema_version":"1.0","operation":"health",'
-        b'"request_id":"request-0123456789abcdef"}'
-    )
+    valid = b'{"schema_version":"1.0","operation":"health","request_id":"request-0123456789abcdef"}'
     with pytest.raises(PerfLensError):
         parse_helper_request_frame(valid, now_unix_milliseconds=_NOW_MILLISECONDS)
     with pytest.raises(PerfLensError):

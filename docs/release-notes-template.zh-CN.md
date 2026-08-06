@@ -44,7 +44,7 @@ uv tool install ./perflens-{version}-py3-none-any.whl
 - `perflens-{version}-py3-none-any.whl`：安装 CLI、MCP、Skill、Collector 和
   显式管理员部署入口；
 - `perflens_{version}-1_amd64.deb`：Debian 13 普通用户主安装包；
-- `perflens-collector_{version}-1_all.deb`：可选 Collector 管理入口，必须与
+- `perflens-collector_{version}-1_<架构>.deb`：可选 Collector 与 Rust Helper，必须与
   同版本主 DEB 一起安装；安装时不会自动启用服务；
 - `perflens-{version}.tar.gz`：Python 源码发行包；
 - `perflens-skill-{version}.zip`：只安装独立 Skill 时使用；

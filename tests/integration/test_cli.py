@@ -231,9 +231,9 @@ def test_init_activates_selected_clients_only_inside_the_project(tmp_path: Path)
     assert not (project / ".agents").exists()
     assert not (project / ".codex").exists()
     assert (project / ".claude/skills/perflens/SKILL.md").is_file()
-    server = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))[
-        "mcpServers"
-    ]["perflens"]
+    server = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"][
+        "perflens"
+    ]
     assert "--allow-writes" in server["args"]
     assert "--allow-automatic-collection" not in server["args"]
 
@@ -369,9 +369,10 @@ def test_cli_detach_one_client_then_updates_to_narrower_scope(tmp_path: Path) ->
     )
     assert updated.exit_code == 0, updated.output
     assert not (project / ".claude/skills/perflens").exists()
-    assert "perflens" not in json.loads(
-        (project / ".mcp.json").read_text(encoding="utf-8")
-    )["mcpServers"]
+    assert (
+        "perflens"
+        not in json.loads((project / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]
+    )
 
 
 def test_doctor_translates_mode_reasons_warnings_and_recommendations(
@@ -583,9 +584,7 @@ def test_cli_refuses_to_overwrite_source(tmp_path: Path) -> None:
         env={"PERFLENS_JSON_ERRORS": "1"},
     )
     assert environment_result.exit_code == 5
-    assert json.loads(environment_result.stderr)["error"]["code"] == (
-        "PATH_SAFETY_VIOLATION"
-    )
+    assert json.loads(environment_result.stderr)["error"]["code"] == ("PATH_SAFETY_VIOLATION")
     assert source.read_text() == "main 1\n"
 
 

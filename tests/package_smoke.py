@@ -50,9 +50,7 @@ def main() -> None:
         expected="PerfLens 采集能力检查 (只读)",
     )
     assert "采集模式:" in doctor_summary
-    doctor_payload = json.loads(
-        _run(perflens, "doctor", "--perf-path", "/bin/true", "--json")
-    )
+    doctor_payload = json.loads(_run(perflens, "doctor", "--perf-path", "/bin/true", "--json"))
     assert doctor_payload["schema_version"] == "1.0"
     deploy_help = _run(
         perflens_admin,
@@ -195,13 +193,7 @@ def main() -> None:
         assert json.loads(admin_machine_error)["error"]["code"] == "INVALID_INPUT"
 
         _run(perflens, "install-skill", "--project", str(project))
-        skill = (
-            project
-            / ".agents"
-            / "skills"
-            / "perflens"
-            / "SKILL.md"
-        )
+        skill = project / ".agents" / "skills" / "perflens" / "SKILL.md"
         assert skill.is_file()
 
         _run(
@@ -214,18 +206,10 @@ def main() -> None:
             "--perf-path",
             "/bin/true",
         )
-        assert (
-            initialized_project
-            / ".agents/skills/perflens/SKILL.md"
-        ).is_file()
-        assert (
-            initialized_project
-            / ".claude/skills/perflens/SKILL.md"
-        ).is_file()
+        assert (initialized_project / ".agents/skills/perflens/SKILL.md").is_file()
+        assert (initialized_project / ".claude/skills/perflens/SKILL.md").is_file()
         assert (initialized_project / ".codex/config.toml").is_file()
-        claude_project = json.loads(
-            (initialized_project / ".mcp.json").read_text(encoding="utf-8")
-        )
+        claude_project = json.loads((initialized_project / ".mcp.json").read_text(encoding="utf-8"))
         assert claude_project["mcpServers"]["perflens"]["type"] == "stdio"
         _run(
             perflens,
@@ -256,9 +240,7 @@ def main() -> None:
         guided_setup = project / "guided-setup"
         chinese_guide = (guided_setup / "下一步.zh-CN.md").read_text(encoding="utf-8")
         assert f"--setup-directory {guided_setup}" in chinese_guide
-        setup_payload = json.loads(
-            (guided_setup / "setup.json").read_text(encoding="utf-8")
-        )
+        setup_payload = json.loads((guided_setup / "setup.json").read_text(encoding="utf-8"))
         assert setup_payload["schema_version"] == "1.0"
         assert setup_payload["skill_status"] == "existing"
         assert setup_payload["automatic_collection_enabled"] is True
@@ -305,9 +287,7 @@ def main() -> None:
         assert collector_assets.stat().st_mode & 0o777 == 0o700
         assert (collector_assets / "collector.toml").stat().st_mode & 0o777 == 0o600
         policy_text = (collector_assets / "collector.toml").read_text(encoding="utf-8")
-        service_text = (collector_assets / "perflens-collector.service").read_text(
-            encoding="utf-8"
-        )
+        service_text = (collector_assets / "perflens-collector.service").read_text(encoding="utf-8")
         assert f"allowed_uids = [{os.geteuid()}]" in policy_text
         assert "policy_version = 1" in policy_text
         assert "max_spool_bytes = 5368709120" in policy_text

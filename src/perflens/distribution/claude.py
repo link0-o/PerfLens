@@ -171,9 +171,7 @@ def plan_claude_project_config(
                 "Existing user-managed PerfLens Claude MCP configuration was preserved",
                 recoverable=True,
                 details={"path": str(target)},
-                suggested_actions=(
-                    "Review perflens-setup/claude-mcp.json and merge it manually.",
-                ),
+                suggested_actions=("Review perflens-setup/claude-mcp.json and merge it manually.",),
             )
         cast(dict[str, object], servers)["perflens"] = desired
         return ClaudeConfigInstallPlan(target, "updated", _render_document(payload), expected)

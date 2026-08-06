@@ -42,9 +42,9 @@ PerfLens 不包含 LLM API、Web UI、自动修改源码功能、Benchmark 执�
 从 GitHub Releases 下载 wheel 后，推荐作为独立工具安装：
 
 ```bash
-pipx install ./perflens-0.1.3-py3-none-any.whl
+pipx install ./perflens-0.2.0-py3-none-any.whl
 # 或者
-uv tool install ./perflens-0.1.3-py3-none-any.whl
+uv tool install ./perflens-0.2.0-py3-none-any.whl
 ```
 
 不要手工提取 wheel。安装成功后进入要分析的项目，首次运行：
@@ -73,6 +73,9 @@ Codex 配置写入项目 `.codex/config.toml`；Claude Code 配置安全合并�
 
 Debian 13 用户也可以直接安装原生 `.deb`，不需要自己创建 Python 环境。主包与
 可选 Collector 包的选择、安装和安全卸载见[《Debian 安装包》](docs/debian-packages.zh-CN.md)。
+`v0.2.0` 还提供显式 `paranoid3_helper` 模式：在保持
+`perf_event_paranoid=3` 时，由无 capability Python Broker 把 typed PID 计划交给受限
+root Rust Helper；该模式不会自动启用，必须由管理员确认 `CAP_SYS_ADMIN` 风险。
 
 随时可以运行只读状态检查，不需要记住多条排错命令：
 
@@ -346,15 +349,19 @@ Skill 本身不是授权。
 
 部署后只需运行 `perflens-admin spool-status`，即可用中文查看 spool 文件数、逻辑大小、
 磁盘保留余量和当前最多可采集数据量；该命令只读，不删除旧证据。机器可读输出使用
-`perflens-admin spool-status --json`。
+`perflens-admin spool-status --json`。`paranoid3_helper` 的真实 spool 是仅特权服务可列举的
+`/var/lib/perflens-helper`，因此该模式应由管理员运行 `sudo perflens-admin spool-status`。
 
-旧证据不会自动轮转。管理员可以先用 `perflens-admin archive-spool --dry-run` 生成精确
+`cap_perfmon` 模式下旧证据不会自动轮转。管理员可以先用
+`perflens-admin archive-spool --dry-run` 生成精确
 计划，再创建带版本化 manifest 和逐文件 SHA-256 的只读 ZIP；源文件此时仍全部保留。
 使用 `verify-spool-archive` 可以完全只读地验证归档；加 `--verify-sources` 还会核对仍
 存在的原文件。只有把归档放到独立存储、运行 `prune-archived-spool --dry-run` 并逐项
 审查后，才能输入 `I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE` 清理完全匹配的
 原文件。完整命令见
 [《产品部署指南》](docs/deployment.zh-CN.md)。Agent 不应自动执行该清理流程。
+v0.2.0 的归档和清理入口尚不支持 Rust Helper 私有 spool，会明确返回
+`UNSUPPORTED_FORMAT`，不会误操作普通 spool；高级模式证据必须先保留。
 
 首次部署和后续升级都会完成只读健康协议往返，并通过内核凭据复核服务 PID/UID；仅
 存在 Socket 文件不会被当作成功，因此旧文件、错误身份或未监听服务会在自动采集前

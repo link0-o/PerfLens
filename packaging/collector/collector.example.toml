@@ -10,6 +10,15 @@
 
 [collector]
 
+# 特权模式。默认 cap_perfmon 不以 root 运行，但 Debian paranoid=3 通常要求先改为 2。
+# Privilege mode. cap_perfmon stays non-root, but Debian paranoid=3 usually must be changed to 2.
+# 若必须保留 paranoid=3，可改为 paranoid3_helper；部署时还必须显式确认 CAP_SYS_ADMIN 风险。
+# To keep paranoid=3, select paranoid3_helper and explicitly acknowledge CAP_SYS_ADMIN risk.
+# 该高级模式只支持同 UID 的 stat/record，并要求保留下方 30 秒、99 Hz、256 MiB、
+# 5 GiB、500 文件、2 GiB 空闲量和 120 秒计划有效期边界；Rust Helper 会独立执行它们。
+# Advanced mode is owner-only stat/record and keeps the documented immutable ceilings below.
+privilege_mode = "cap_perfmon"
+
 # 策略格式版本。用于拒绝尚不支持的新格式；通常不要修改。
 # Policy format version. Used to reject unsupported future formats; usually unchanged.
 policy_version = 1

@@ -10,15 +10,11 @@ from perflens.metrics.perf_stat import PerfStatMetricAdapter
 
 
 def test_perf_stat_fixture_matches_golden(fixture_root: Path) -> None:
-    metrics, warnings = PerfStatMetricAdapter().parse(
-        fixture_root / "perf_stat" / "linux-6.12.csv"
-    )
+    metrics, warnings = PerfStatMetricAdapter().parse(fixture_root / "perf_stat" / "linux-6.12.csv")
     actual = {
         "events": [metric.event for metric in metrics],
         "ipc": next(metric.value for metric in metrics if metric.event == "instructions-per-cycle"),
-        "not_supported": [
-            metric.event for metric in metrics if metric.status == "not_supported"
-        ],
+        "not_supported": [metric.event for metric in metrics if metric.status == "not_supported"],
         "warning_count": len(warnings),
     }
     expected = json.loads(

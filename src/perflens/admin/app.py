@@ -87,6 +87,13 @@ def deploy_command(
         bool,
         typer.Option("--json", help="输出完整的版本化 JSON 结果。"),
     ] = False,
+    acknowledge_cap_sys_admin_risk: Annotated[
+        bool,
+        typer.Option(
+            "--acknowledge-cap-sys-admin-risk",
+            help="确认 paranoid=3 Rust Helper 的 CAP_SYS_ADMIN/root 服务风险。",
+        ),
+    ] = False,
 ) -> None:
     """校验或部署 Collector; 默认输出中文摘要。"""
     try:
@@ -94,6 +101,7 @@ def deploy_command(
             config,
             dry_run=dry_run,
             collector_command=collector_command,
+            acknowledge_cap_sys_admin_risk=acknowledge_cap_sys_admin_risk,
         )
     except PerfLensError as exc:
         _fail(exc)
@@ -336,11 +344,10 @@ def _render_deployment_chinese(artifact: CollectorDeploymentArtifact) -> None:
     typer.echo(f"系统策略位置: {artifact.config_path}")
     typer.echo(f"systemd 服务位置: {artifact.service_path}")
     typer.echo(f"Collector 程序: {artifact.collector_command}")
+    typer.echo(f"权限模式: {artifact.privilege_mode}")
     typer.echo("授权普通用户 UID: " + ", ".join(str(uid) for uid in artifact.allowed_uids))
     command_label = (
-        "计划执行的固定系统命令"
-        if artifact.status == "dry_run"
-        else "已执行的固定系统命令"
+        "计划执行的固定系统命令" if artifact.status == "dry_run" else "已执行的固定系统命令"
     )
     typer.echo(f"{command_label}:")
     if artifact.planned_commands:
@@ -354,20 +361,19 @@ def _render_deployment_chinese(artifact: CollectorDeploymentArtifact) -> None:
             typer.echo(f"- {warning_labels.get(warning, warning)}")
     typer.echo("下一步:")
     if artifact.status == "dry_run":
-        trusted_admin = str(
-            Path(artifact.collector_command).with_name("perflens-admin")
-        )
-        deploy_command = shlex.join(
-            (
-                "sudo",
-                trusted_admin,
-                "deploy",
-                "--config",
-                artifact.config_source,
-                "--collector-command",
-                artifact.collector_command,
-            )
-        )
+        trusted_admin = str(Path(artifact.collector_command).with_name("perflens-admin"))
+        deploy_arguments = [
+            "sudo",
+            trusted_admin,
+            "deploy",
+            "--config",
+            artifact.config_source,
+            "--collector-command",
+            artifact.collector_command,
+        ]
+        if artifact.privilege_mode == "paranoid3_helper":
+            deploy_arguments.append("--acknowledge-cap-sys-admin-risk")
+        deploy_command = shlex.join(deploy_arguments)
         typer.echo("- 确认以上路径、UID 和命令符合预期后; 再执行正式部署:")
         typer.echo(f"  {deploy_command}")
     else:
@@ -404,26 +410,26 @@ def _render_spool_status_chinese(artifact: CollectorSpoolStatusArtifact) -> None
         "unsafe": "停止 Collector。在不跟随链接的前提下检查异常目录项。",
         "unavailable": "检查已部署策略、spool 路径、权限和文件系统状态。",
     }
+    if artifact.spool_root == "/var/lib/perflens-helper" and artifact.status in {
+        "warning",
+        "exhausted",
+    }:
+        advice_labels[artifact.status] = (
+            "停止新的采集并保留 Helper 私有证据。v0.2.0 尚不支持对该目录归档或清理。"
+        )
     typer.echo("PerfLens Collector 存储检查 (只读)")
     typer.echo(f"状态: {status_labels[artifact.status]}")
     typer.echo(f"目录: {artifact.spool_root}")
-    typer.echo(
-        "产物文件: "
-        f"{artifact.observed_artifact_count} / {artifact.max_spool_artifacts}"
-    )
+    typer.echo(f"产物文件: {artifact.observed_artifact_count} / {artifact.max_spool_artifacts}")
     typer.echo(
         "产物逻辑大小: "
         f"{_human_bytes(artifact.observed_logical_bytes)} / "
         f"{_human_bytes(artifact.max_spool_bytes)}"
     )
-    typer.echo(
-        "文件系统可用空间: "
-        f"{_optional_human_bytes(artifact.filesystem_free_bytes)}"
-    )
+    typer.echo(f"文件系统可用空间: {_optional_human_bytes(artifact.filesystem_free_bytes)}")
     typer.echo(f"策略保留空间: {_human_bytes(artifact.min_free_bytes)}")
     typer.echo(
-        "当前单次最多可采集: "
-        f"{_optional_human_bytes(artifact.max_collectable_output_bytes)}"
+        f"当前单次最多可采集: {_optional_human_bytes(artifact.max_collectable_output_bytes)}"
     )
     typer.echo(f"目录扫描完整: {'是' if artifact.scan_complete else '否'}")
     if artifact.issues:
@@ -475,8 +481,10 @@ def _human_bytes(value: int) -> str:
 
 
 def _fail(error: PerfLensError) -> NoReturn:
-    output = error_json(error) if json_errors_enabled() else render_error_chinese(
-        error, executable="perflens-admin"
+    output = (
+        error_json(error)
+        if json_errors_enabled()
+        else render_error_chinese(error, executable="perflens-admin")
     )
     typer.echo(output, err=True)
     raise typer.Exit(code=ERROR_EXIT_CODES[error.code])

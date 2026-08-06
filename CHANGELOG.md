@@ -4,6 +4,44 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-07
+
+### Added
+
+- Optional Rust privileged Helper for Debian `perf_event_paranoid=3`. It accepts only versioned,
+  short-lived, single-use owner-PID `record`/`stat` plans over an authenticated private Unix
+  socket and independently verifies PID identity, immutable policy, replay state, fixed tools,
+  spool quotas, output bounds, permissions, and SHA-256.
+- Explicit `cap_perfmon` and `paranoid3_helper` onboarding modes. The advanced mode generates a
+  capability-free Python Broker unit plus a root Rust Helper unit and requires
+  `--acknowledge-cap-sys-admin-risk` during administrator deployment.
+- Cross-language Pydantic/Serde protocol schemas, golden fixtures, denial tests, real Unix-socket
+  tests, fixed-argv execution tests, Rust supply-chain checks, and Chinese/English security guides.
+
+### Changed
+
+- Native `perflens-collector` DEBs are now architecture-specific and contain the compiled Rust
+  Helper; wheels remain Python-only and require no Rust toolchain.
+- Helper artifacts and replay markers use the fixed private `/var/lib/perflens-helper` spool while
+  the ordinary Broker, MCP server, Skill, and Agent remain unprivileged. Project onboarding adds
+  that private spool to the MCP read allowlist, and `spool-status` inspects the active mode's real
+  spool.
+- Privilege mode is immutable during `update-policy`; changing the systemd service topology
+  requires a reviewed undeploy and redeploy.
+- `perflens init --update` preserves the project's existing Collector privilege mode when
+  Collector assets are not being regenerated, so advanced-mode MCP paths cannot silently fall
+  back to the standard spool.
+- CI and release builds use the pinned Rust 1.97.1 toolchain, locked dependencies, strict Clippy,
+  `cargo audit`, `cargo deny`, and target-native Debian package smoke tests.
+
+### Security
+
+- `paranoid3_helper` does not accept shell commands, argv, environments, working directories,
+  arbitrary output paths, cross-UID targets, or system-wide collection. Package installation and
+  project onboarding still never invoke sudo, change sysctl, or enable a service automatically.
+- The v0.2.0 archive/verify/prune workflow is intentionally limited to the `cap_perfmon` Broker
+  spool and safely rejects the Rust Helper private spool until a dedicated lifecycle is available.
+
 ## [0.1.3] - 2026-08-06
 
 ### Added
@@ -322,7 +360,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - Tag-driven GitHub Release automation with wheel/sdist smoke tests, a
   standalone Skill archive, CycloneDX SBOM, and SHA-256 checksums.
 
-[Unreleased]: https://github.com/link0-o/PerfLens/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/link0-o/PerfLens/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/link0-o/PerfLens/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/link0-o/PerfLens/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/link0-o/PerfLens/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/link0-o/PerfLens/compare/v0.1.0...v0.1.1

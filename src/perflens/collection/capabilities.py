@@ -134,9 +134,7 @@ def _process_capabilities(warnings: list[str]) -> tuple[str, ...]:
     try:
         lines = Path("/proc/self/status").read_text(encoding="ascii", errors="replace").splitlines()
         raw = next(
-            line.split(":", maxsplit=1)[1].strip()
-            for line in lines
-            if line.startswith("CapEff:")
+            line.split(":", maxsplit=1)[1].strip() for line in lines if line.startswith("CapEff:")
         )
         mask = int(raw, 16)
     except (OSError, StopIteration, ValueError):

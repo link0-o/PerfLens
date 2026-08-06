@@ -34,9 +34,7 @@ def test_performance_skill_has_valid_minimal_frontmatter_and_resources() -> None
 
 def test_skill_declares_mcp_dependency_and_explicit_invocation_prompt() -> None:
     root = Path(__file__).resolve().parents[2]
-    config_path = (
-        root / ".agents" / "skills" / "perflens" / "agents" / "openai.yaml"
-    )
+    config_path = root / ".agents" / "skills" / "perflens" / "agents" / "openai.yaml"
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
     assert "$perflens" in config["interface"]["default_prompt"]

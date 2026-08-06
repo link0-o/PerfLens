@@ -11,7 +11,9 @@ PerfLens 应拆成普通用户分析端和系统 Collector 两部分部署：
 ```text
 普通用户：perflens + perflens-mcp + Skill
                        │ Unix Socket
-系统服务：专用 perflens 用户 + perflens-collector + CAP_PERFMON
+系统服务：专用 perflens 用户 + perflens-collector
+          ├─ 默认：CAP_PERFMON
+          └─ 可选：无 capability Broker → root Rust Helper（CAP_PERFMON/CAP_SYS_ADMIN）
 ```
 
 管理员只负责首次安装、策略和主机权限。日常 Agent、MCP 和分析命令不使用 sudo，也不持有 perf capability。
@@ -29,7 +31,7 @@ PerfLens 应拆成普通用户分析端和系统 Collector 两部分部署：
 ```bash
 sudo python3 -m venv /opt/perflens
 sudo /opt/perflens/bin/python -m pip install \
-  ./dist/perflens-0.1.3-py3-none-any.whl
+  ./dist/perflens-0.2.0-py3-none-any.whl
 ```
 
 这里的版本号只是示例，应替换为实际构建版本。正式离线部署应同时提供 wheelhouse 或完整系统包，不应在安装脚本中隐式访问网络。
@@ -139,6 +141,26 @@ Socket；systemd 管理的正常停止不会因为遗留 Socket 被误判为仍�
 
 正式策略默认位于 `/etc/perflens/collector.toml`。保持 `allow_other_target_uids = false`，先只开放 `stat` 和 `record`，并保持短时长、低频率和固定 spool。
 
+### Debian `perf_event_paranoid=3` 的两种选择
+
+生成资产时可明确选择权限模式，默认不变：
+
+```bash
+# 默认：非 root Collector；paranoid=3 通常需管理员按威胁模型调整为 2
+perflens init --prepare-collector --collector-privilege-mode cap_perfmon
+
+# 高级：保持 paranoid=3，只有 Rust Helper 进入 root/CAP_SYS_ADMIN 边界
+perflens init --prepare-collector --collector-privilege-mode paranoid3_helper
+```
+
+第二种模式的生成指南会自动在正式部署命令后加入
+`--acknowledge-cap-sys-admin-risk`。安装包和 `init` 都不会自动改 sysctl、启用服务或代替
+管理员确认风险。Helper 只接受同一授权 UID 的短期 `record/stat` PID 计划，固定使用
+`/usr/bin/perf`、`/usr/bin/sleep` 和 `/var/lib/perflens-helper`；它不接受命令、环境、
+输出路径或全系统采集。Python Broker 在该模式没有 capability，普通 MCP/Skill/Agent
+仍不能连接私有 Helper 或调用 sudo。详细边界见
+[《paranoid=3 高权限 Helper》](privileged-helper.zh-CN.md)。
+
 长期自动采集还应检查三个累计存储边界：`max_spool_bytes` 限制全部产物的总逻辑
 字节数，`max_spool_artifacts` 限制文件数量，`min_free_bytes` 为 spool 所在文件系统
 保留空闲空间。默认分别为 5 GiB、500 个文件和 2 GiB。Collector 会按本次计划的
@@ -169,12 +191,21 @@ perflens-admin spool-status --json
 扫描 spool 的直接子项，不跟随链接；达到文件数或字节配额后会提前停止，因此此时
 `scan_complete` 为 `false`，已观察数值是下界而不是完整目录总量。
 
+在 `paranoid3_helper` 模式中，该命令会检查真实的
+`/var/lib/perflens-helper`，不会误看空的普通 spool。由于普通用户不能列举这个私有目录，
+应运行 `sudo perflens-admin spool-status`；不加 sudo 时只会返回“目录不可用”，不会放宽
+权限或修改目录。
+
 这是时点检查，不会替下一次采集预留空间；最终仍以 Collector 启动 perf 前的独立
 配额复核为准，并发产生的新证据可能让后续采集被安全拒绝。
 
 ## 归档并安全清理旧证据
 
-PerfLens 不按时间自动删除性能证据。需要释放 spool 空间时，管理员先在独立磁盘或
+以下归档/验证/清理流程在 v0.2.0 只支持 `cap_perfmon` 的 Broker spool。
+`paranoid3_helper` 使用 root 管理的私有 spool，相关入口会明确返回
+`UNSUPPORTED_FORMAT`，不会错误操作普通目录；在专用归档流程完成前必须保留其中证据。
+
+PerfLens 不按时间自动删除性能证据。需要释放 Broker spool 空间时，管理员先在独立磁盘或
 备份位置准备一个 root 管理、不可组写的目录；下面路径只是示例：
 
 ```bash
@@ -261,9 +292,10 @@ sudo perflens-admin update-policy --config "$PWD/collector.next.toml"
 写文件或重启。重启或健康检查失败时会恢复原配置，再重启并验证旧配置；如果恢复本身
 失败则返回稳定错误，要求管理员人工检查。
 
-此入口只用于参数调整：不允许改变唯一授权 UID 或固定 spool，也不会修改 service
+此入口只用于参数调整：不允许改变唯一授权 UID、固定 spool 或 `privilege_mode`，也不会修改 service
 unit、历史产物、用户/组、sysctl 或 capability。候选文件中的中英文注释会原样保留。
-若确实需要迁移用户身份或存储目录，应作为单独的停机管理员流程处理，不能借
+两种权限模式的 systemd 服务拓扑不同；若确实需要迁移用户身份、存储目录或权限模式，
+应审查后执行停机卸载和重新部署，不能借
 `update-policy` 绕过隔离边界。
 
 ## 内核权限

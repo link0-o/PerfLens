@@ -8,12 +8,23 @@ import shutil
 from importlib import resources
 from importlib.resources.abc import Traversable
 from pathlib import Path
+from typing import Literal
 
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _ASSET_MAPPINGS = (
     ("collector.example.toml", "collector.toml", 0o600),
     ("perflens-collector.service", "perflens-collector.service", 0o644),
+    (
+        "perflens-collector-helper.service",
+        "perflens-collector-helper.service",
+        0o644,
+    ),
+    (
+        "perflens-privileged-helper.service",
+        "perflens-privileged-helper.service",
+        0o644,
+    ),
     ("perflens.sysusers", "perflens.sysusers", 0o644),
 )
 _MAX_ASSET_BYTES = 256 << 10
@@ -25,6 +36,7 @@ def install_collector_assets(
     allowed_uids: tuple[int, ...] = (1000,),
     collector_command: Path = Path("/usr/bin/perflens-collector"),
     perf_path: Path = Path("/usr/bin/perf"),
+    privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon",
 ) -> Path:
     """Copy service templates to a new staging directory; never install or elevate."""
     rendered_uids, rendered_collector, rendered_perf = _deployment_values(
@@ -32,6 +44,12 @@ def install_collector_assets(
         collector_command,
         perf_path,
     )
+    if privilege_mode not in {"cap_perfmon", "paranoid3_helper"}:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "collector_assets",
+            "Collector privilege mode is unsupported",
+        )
     candidate = output_directory.expanduser()
     if not candidate.is_absolute():
         candidate = Path.cwd() / candidate
@@ -73,13 +91,31 @@ def install_collector_assets(
                     f"perf_path = {rendered_perf}",
                     source_name,
                 )
+                text = _replace_exact(
+                    text,
+                    'privilege_mode = "cap_perfmon"',
+                    f'privilege_mode = "{privilege_mode}"',
+                    source_name,
+                )
                 data = text.encode("utf-8")
-            elif source_name == "perflens-collector.service":
+            elif source_name in {
+                "perflens-collector.service",
+                "perflens-collector-helper.service",
+            }:
                 text = data.decode("utf-8")
                 text = _replace_exact(
                     text,
                     "ExecStart=/usr/bin/perflens-collector ",
                     f"ExecStart={rendered_collector} ",
+                    source_name,
+                )
+                data = text.encode("utf-8")
+            elif source_name == "perflens-privileged-helper.service":
+                text = data.decode("utf-8")
+                text = _replace_exact(
+                    text,
+                    "@PERFLENS_ALLOWED_UID@",
+                    str(allowed_uids[0]),
                     source_name,
                 )
                 data = text.encode("utf-8")

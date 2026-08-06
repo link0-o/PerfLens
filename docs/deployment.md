@@ -121,6 +121,9 @@ contains an unmanaged file, directory, symbolic link, another non-regular
 entry, or a modified replay tombstone; the command does not follow or remove
 it. A quota-short-circuited scan reports
 `scan_complete = false`, so observed values are lower bounds.
+In `paranoid3_helper` mode it inspects the actual private
+`/var/lib/perflens-helper` spool; because an ordinary user cannot list that
+directory, run this read-only command through `sudo` in advanced mode.
 
 This is a point-in-time inspection, not a reservation. The Collector still
 rechecks capacity immediately before starting perf, and concurrent artifacts
@@ -144,6 +147,11 @@ archive. This command never prunes evidence. If reclamation is intended, next
 run `prune-archived-spool --dry-run`. Only after reviewing every planned name,
 pass `--authorization I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE`.
 
+The archive/verify/prune lifecycle in v0.2.0 applies only to the
+Broker-managed `cap_perfmon` spool. It explicitly returns `UNSUPPORTED_FORMAT`
+for the Rust Helper private spool; preserve those artifacts until a dedicated
+root-owned archival flow is available.
+
 Pruning requires a root-managed archive and parent, verifies the ZIP, manifest,
 archived bytes, and each source device/inode/size/mtime/owner/mode/SHA-256 before
 any removal, then rechecks each source immediately before unlinking. The archive
@@ -165,10 +173,11 @@ The command strictly validates both policies, atomically replaces only the
 fixed deployed policy, restarts the Collector, and completes the authenticated
 health handshake. Byte-identical input returns `unchanged` without mutation or
 restart. Activation failure restores the exact previous policy and verifies it
-after another restart. This command cannot change the authorized UID or fixed
-spool and never changes the unit, retained artifacts, users/groups, sysctl, or
-capabilities. Candidate comments are preserved verbatim. Identity or spool
-migration requires a separate stopped-service administrator procedure.
+after another restart. This command cannot change the authorized UID, fixed
+spool, or privilege mode and never changes the unit, retained artifacts,
+users/groups, sysctl, or capabilities. Candidate comments are preserved
+verbatim. Identity, spool, or privilege-topology migration requires a reviewed
+stopped-service administrator procedure.
 
 `accept-collector` starts a fixed, self-owned CPU probe and performs a real,
 policy-bounded perf-stat collection of at most five seconds. It always cleans up

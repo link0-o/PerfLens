@@ -20,8 +20,8 @@ For `v0.2.0`, Debian `perf_event_paranoid=3` has a second, optional execution bo
 Python Broker remains capability-free and forwards only independently validated typed PID plans to
 a separate Rust Helper. A private socket, dedicated identity, and separate root-owned policy prevent
 ordinary users, Agents, MCP, and the Skill from calling it directly. See the
-[privileged Helper design](privileged-helper.md). Until implementation and acceptance are complete,
-this design is not a claim that the current release supports level 3.
+[privileged Helper design](privileged-helper.md). Package installation does not enable this mode;
+an administrator must explicitly select it, acknowledge the risk, and run real acceptance.
 
 The domain layer uses frozen/slotted records, integer Frame IDs, and standard
 library protocols. It imports neither Pydantic nor Typer. Format adapters own
