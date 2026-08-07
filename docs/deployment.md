@@ -201,10 +201,10 @@ Collector plus a controlled Unix socket is preferred over a privileged container
 For upgrades, install the new wheel or system packages first, then run `sudo
 perflens-admin upgrade --dry-run` and `sudo perflens-admin upgrade`. The command
 reads only the fixed deployed policy, compares SHA-256 hashes of the current and
-packaged units, replaces only a verified PerfLens-managed unit, and restarts the
-service to load the new program. Policy and spool data are preserved. A failure
-after unit replacement triggers an attempted atomic unit rollback and service
-reload; the same rollback applies when the health handshake fails. Run
+packaged units, and replaces only verified PerfLens-managed units. In
+`paranoid3_helper` mode the Broker and Rust Helper units are upgraded and rolled
+back together. Policy and spool data are preserved. A restart or health failure
+restores every unit changed by that attempt before reloading the services. Run
 ordinary-user `perflens accept-collector
 --authorize-host-acceptance` again after every upgrade.
 

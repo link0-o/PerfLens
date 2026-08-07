@@ -227,3 +227,26 @@ def test_debian_install_smoke_uses_the_production_perf_entry() -> None:
         assert "linux-perf" in prerequisites
         assert "--perf-path /usr/bin/perf" in installed_smoke
         assert "--perf-path /usr/bin/true" not in installed_smoke
+
+
+def test_release_debian_assets_are_gated_by_full_rust_helper_checks() -> None:
+    release = _workflows()["release.yml"]
+    jobs = _jobs(release, label="release.yml")
+    rust_steps = _steps(jobs["rust-helper"], label="release.yml.rust-helper")
+    commands = tuple(
+        cast(str, step["run"]) for step in rust_steps if isinstance(step.get("run"), str)
+    )
+    combined = "\n".join(commands)
+
+    assert _mapping(jobs["debian-package"], label="release.yml.debian-package").get("needs") == (
+        "rust-helper"
+    )
+    assert "cargo fmt --all --check" in commands
+    assert (
+        "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings" in commands
+    )
+    assert "cargo test --workspace --locked" in commands
+    assert "cargo install cargo-audit --locked --version 0.22.2" in combined
+    assert "cargo install cargo-deny --locked --version 0.20.2" in combined
+    assert "cargo audit --deny warnings" in commands
+    assert "cargo deny check" in commands

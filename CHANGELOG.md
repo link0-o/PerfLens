@@ -33,6 +33,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   back to the standard spool.
 - CI and release builds use the pinned Rust 1.97.1 toolchain, locked dependencies, strict Clippy,
   `cargo audit`, `cargo deny`, and target-native Debian package smoke tests.
+- Advanced upgrades now verify, hash, update, restart, and roll back the Broker and privileged
+  Helper systemd units together. The versioned upgrade artifact reports both unit identities.
 
 ### Security
 
@@ -41,6 +43,17 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   project onboarding still never invoke sudo, change sysctl, or enable a service automatically.
 - The v0.2.0 archive/verify/prune workflow is intentionally limited to the `cap_perfmon` Broker
   spool and safely rejects the Rust Helper private spool until a dedicated lifecycle is available.
+- Failed first deployments stop newly attempted Broker/Helper services in reverse order before
+  removing their managed units. PID attachment now uses perf's disabled-event control barrier and
+  revalidates owner/start time only after perf has bound the target, closing the numeric-PID reuse
+  window before collection is enabled.
+- The Helper executes the administrator-configured, independently verified perf path and no longer
+  launches a sleep process. Generated units reject systemd path-expansion characters. Strict crash
+  recovery removes only provably internal temporary files; malformed worker connections no longer
+  terminate the listening Helper service.
+- Helper spool scans no longer follow symbolic links disguised as artifacts. Artifact and replay
+  state names, owners, groups, modes, and link counts are independently checked, while expired
+  single-use markers are durably pruned under a fixed bounded-capacity policy.
 
 ## [0.1.3] - 2026-08-06
 

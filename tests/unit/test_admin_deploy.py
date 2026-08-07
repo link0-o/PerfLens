@@ -70,6 +70,21 @@ def _deployment_inputs(tmp_path: Path) -> tuple[Path, Path, Path, CollectorSyste
     return config, perf, collector, layout
 
 
+def _configure_paranoid3(config: Path) -> None:
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        .replace(
+            "[collector]\n",
+            '[collector]\nprivilege_mode = "paranoid3_helper"\n',
+        )
+        .replace("max_plan_ttl_seconds = 300", "max_plan_ttl_seconds = 120")
+        .replace("max_spool_bytes = 10737418240", "max_spool_bytes = 5368709120")
+        .replace("max_spool_artifacts = 1000", "max_spool_artifacts = 500")
+        .replace("min_free_bytes = 1073741824", "min_free_bytes = 2147483648"),
+        encoding="utf-8",
+    )
+
+
 def test_admin_cli_help_is_chinese_first_and_keeps_stable_commands() -> None:
     runner = CliRunner()
     root_help = runner.invoke(app, ["--help"])
@@ -213,18 +228,7 @@ def test_admin_deploy_paranoid3_helper_requires_risk_acknowledgement_and_two_uni
     tmp_path: Path,
 ) -> None:
     config, _perf, collector, layout = _deployment_inputs(tmp_path)
-    config.write_text(
-        config.read_text(encoding="utf-8")
-        .replace(
-            "[collector]\n",
-            '[collector]\nprivilege_mode = "paranoid3_helper"\n',
-        )
-        .replace("max_plan_ttl_seconds = 300", "max_plan_ttl_seconds = 120")
-        .replace("max_spool_bytes = 10737418240", "max_spool_bytes = 5368709120")
-        .replace("max_spool_artifacts = 1000", "max_spool_artifacts = 500")
-        .replace("min_free_bytes = 1073741824", "min_free_bytes = 2147483648"),
-        encoding="utf-8",
-    )
+    _configure_paranoid3(config)
     dry_run = deploy_collector(
         config,
         dry_run=True,
@@ -365,11 +369,57 @@ def test_admin_deploy_rejects_collector_symlink_in_writable_directory(
     assert "trusted directory" in captured.value.message
 
 
+def test_admin_deploy_rejects_perf_symlink_to_a_different_executable(tmp_path: Path) -> None:
+    config, perf, collector, layout = _deployment_inputs(tmp_path)
+    replacement = tmp_path / "different-tool"
+    replacement.write_text(f"#!{sys.executable}\nraise SystemExit(0)\n", encoding="utf-8")
+    replacement.chmod(0o555)
+    perf.unlink()
+    perf.symlink_to(replacement.name)
+
+    with pytest.raises(PerfLensError) as captured:
+        deploy_collector(
+            config,
+            dry_run=True,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+        )
+
+    assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_admin_dry_run_rejects_systemd_path_expansion_characters(tmp_path: Path) -> None:
+    config, perf, collector, layout = _deployment_inputs(tmp_path)
+    unsafe_directory = tmp_path / "perf-%u"
+    unsafe_directory.mkdir()
+    unsafe_perf = unsafe_directory / "perf"
+    unsafe_perf.write_bytes(perf.read_bytes())
+    unsafe_perf.chmod(0o555)
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(str(perf), str(unsafe_perf)),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PerfLensError) as captured:
+        deploy_collector(
+            config,
+            dry_run=True,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+        )
+
+    assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
 def test_admin_deploy_rolls_back_new_files_after_service_failure(tmp_path: Path) -> None:
     config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    commands: list[tuple[str, ...]] = []
 
     def fail_on_enable(command: tuple[str, ...]) -> None:
-        if command[-1] == "perflens-collector.service":
+        commands.append(command)
+        if "enable" in command and command[-1] == "perflens-collector.service":
             raise PerfLensError(ErrorCode.EXTERNAL_TOOL_FAILED, "test", "failed")
 
     with pytest.raises(PerfLensError):
@@ -385,6 +435,82 @@ def test_admin_deploy_rolls_back_new_files_after_service_failure(tmp_path: Path)
 
     assert not layout.config_path.exists()
     assert not layout.service_path.exists()
+    assert (
+        "/usr/bin/systemctl",
+        "disable",
+        "--now",
+        "perflens-collector.service",
+    ) in commands
+    assert commands[-1] == ("/usr/bin/systemctl", "daemon-reload")
+
+
+def test_admin_deploy_failure_stops_new_helper_and_broker_before_removing_units(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_paranoid3(config)
+    commands: list[tuple[str, ...]] = []
+
+    def execute(command: tuple[str, ...]) -> None:
+        commands.append(command)
+
+    def fail_health(_path: Path) -> None:
+        raise PerfLensError(ErrorCode.EXTERNAL_TOOL_FAILED, "test", "health failed")
+
+    with pytest.raises(PerfLensError, match="health failed"):
+        deploy_collector(
+            config,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+            command_executor=execute,
+            socket_waiter=fail_health,
+            service_identity=(os.geteuid(), os.getegid()),
+            acknowledge_cap_sys_admin_risk=True,
+        )
+
+    rollback = [command for command in commands if "disable" in command]
+    assert rollback == [
+        ("/usr/bin/systemctl", "disable", "--now", "perflens-collector.service"),
+        (
+            "/usr/bin/systemctl",
+            "disable",
+            "--now",
+            "perflens-privileged-helper.service",
+        ),
+    ]
+    assert commands[-1] == ("/usr/bin/systemctl", "daemon-reload")
+    assert not layout.config_path.exists()
+    assert not layout.service_path.exists()
+    assert not layout.helper_service_path.exists()
+
+
+def test_admin_deploy_preserves_unit_and_policy_when_failed_service_cannot_be_stopped(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+
+    def fail_health(_path: Path) -> None:
+        raise PerfLensError(ErrorCode.EXTERNAL_TOOL_FAILED, "test", "health failed")
+
+    def fail_rollback_stop(command: tuple[str, ...]) -> None:
+        if "disable" in command:
+            raise PerfLensError(ErrorCode.EXTERNAL_TOOL_FAILED, "test", "stop failed")
+
+    with pytest.raises(PerfLensError, match="could not be fully rolled back") as failed:
+        deploy_collector(
+            config,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+            command_executor=fail_rollback_stop,
+            socket_waiter=fail_health,
+            service_identity=(os.geteuid(), os.getegid()),
+        )
+
+    assert failed.value.code is ErrorCode.OUTPUT_WRITE_FAILED
+    assert layout.config_path.is_file()
+    assert layout.service_path.is_file()
 
 
 def test_admin_upgrade_dry_run_and_restart_preserve_policy_and_data(
@@ -544,6 +670,109 @@ def test_admin_upgrade_rolls_back_unit_when_restart_fails(tmp_path: Path) -> Non
     assert failed.value.message == "restart failed"
     assert restart_attempts == 2
     assert layout.service_path.read_text(encoding="utf-8") == old_service
+
+
+def test_admin_upgrade_updates_broker_and_helper_units_together(tmp_path: Path) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_paranoid3(config)
+    identity = (os.geteuid(), os.getegid())
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        acknowledge_cap_sys_admin_risk=True,
+    )
+    old_broker = layout.service_path.read_text(encoding="utf-8") + "# old broker\n"
+    old_helper = layout.helper_service_path.read_text(encoding="utf-8") + "# old helper\n"
+    layout.service_path.write_text(old_broker, encoding="utf-8")
+    layout.helper_service_path.write_text(old_helper, encoding="utf-8")
+
+    dry_run = upgrade_collector(
+        layout.config_path,
+        dry_run=True,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        service_identity=identity,
+    )
+    assert dry_run.service_update_required is True
+    assert dry_run.helper_service_update_required is True
+    assert dry_run.previous_helper_service_sha256 != dry_run.candidate_helper_service_sha256
+    assert dry_run.helper_service_path == str(layout.helper_service_path)
+
+    upgraded = upgrade_collector(
+        layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+    )
+    assert upgraded.status == "upgraded"
+    assert upgraded.service_updated is True
+    assert upgraded.helper_service_updated is True
+    assert "# old broker" not in layout.service_path.read_text(encoding="utf-8")
+    helper_text = layout.helper_service_path.read_text(encoding="utf-8")
+    assert "# old helper" not in helper_text
+    assert f"--perf-path {_perf}" in helper_text
+
+
+def test_admin_upgrade_rolls_back_broker_and_helper_when_activation_fails(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_paranoid3(config)
+    identity = (os.geteuid(), os.getegid())
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        acknowledge_cap_sys_admin_risk=True,
+    )
+    old_broker = layout.service_path.read_text(encoding="utf-8") + "# retained broker\n"
+    old_helper = layout.helper_service_path.read_text(encoding="utf-8") + "# retained helper\n"
+    layout.service_path.write_text(old_broker, encoding="utf-8")
+    layout.helper_service_path.write_text(old_helper, encoding="utf-8")
+    commands: list[tuple[str, ...]] = []
+    broker_restart_failed = False
+
+    def fail_first_broker_restart(command: tuple[str, ...]) -> None:
+        nonlocal broker_restart_failed
+        commands.append(command)
+        if (
+            command[1] == "restart"
+            and command[-1] == "perflens-collector.service"
+            and not broker_restart_failed
+        ):
+            broker_restart_failed = True
+            raise PerfLensError(ErrorCode.EXTERNAL_TOOL_FAILED, "test", "activation failed")
+
+    with pytest.raises(PerfLensError, match="activation failed"):
+        upgrade_collector(
+            layout.config_path,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+            command_executor=fail_first_broker_restart,
+            socket_waiter=lambda _path: None,
+            service_identity=identity,
+        )
+
+    assert layout.service_path.read_text(encoding="utf-8") == old_broker
+    assert layout.helper_service_path.read_text(encoding="utf-8") == old_helper
+    assert (
+        commands.count(("/usr/bin/systemctl", "restart", "perflens-privileged-helper.service")) == 2
+    )
+    assert commands.count(("/usr/bin/systemctl", "restart", "perflens-collector.service")) == 2
 
 
 def test_admin_upgrade_rejects_alternate_policy_and_unmanaged_unit(tmp_path: Path) -> None:

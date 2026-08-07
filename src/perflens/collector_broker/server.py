@@ -298,7 +298,7 @@ class CollectorBrokerServer:
             output_bytes=result.output_bytes,
             output_format=result.output_format,
             output_owner_uid=self._expected_helper_uid,
-            perf_executable="/usr/bin/perf",
+            perf_executable=str(self._policy.perf_path),
             started_at=started.isoformat(),
             finished_at=finished.isoformat(),
             duration_seconds=max(0.0, (finished - started).total_seconds()),

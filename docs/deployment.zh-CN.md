@@ -155,9 +155,10 @@ perflens init --prepare-collector --collector-privilege-mode paranoid3_helper
 
 第二种模式的生成指南会自动在正式部署命令后加入
 `--acknowledge-cap-sys-admin-risk`。安装包和 `init` 都不会自动改 sysctl、启用服务或代替
-管理员确认风险。Helper 只接受同一授权 UID 的短期 `record/stat` PID 计划，固定使用
-`/usr/bin/perf`、`/usr/bin/sleep` 和 `/var/lib/perflens-helper`；它不接受命令、环境、
-输出路径或全系统采集。Python Broker 在该模式没有 capability，普通 MCP/Skill/Agent
+管理员确认风险。Helper 只接受同一授权 UID 的短期 `record/stat` PID 计划，只执行配置中
+经过 root 所有权和不可写权限复核的 perf 绝对路径，并固定写入
+`/var/lib/perflens-helper`；它不启动 `sleep` 或其他工作负载，也不接受命令、环境、输出
+路径或全系统采集。Python Broker 在该模式没有 capability，普通 MCP/Skill/Agent
 仍不能连接私有 Helper 或调用 sudo。详细边界见
 [《paranoid=3 高权限 Helper》](privileged-helper.zh-CN.md)。
 
@@ -383,17 +384,21 @@ PerfLens 以普通用户启动该文件并取得新 PID；Collector 只收到 PI
 sudo perflens-admin upgrade --dry-run
 ```
 
-结果中的 `previous_service_sha256` 与 `candidate_service_sha256` 用于确认 unit 是否变化；
-`service_update_required: false` 仍是正常情况，因为服务仍需重启来加载新程序。确认后只需：
+结果中的 `previous_service_sha256` 与 `candidate_service_sha256` 用于确认 Broker unit 是否
+变化；高级模式还会返回 `previous_helper_service_sha256`、
+`candidate_helper_service_sha256` 和 `helper_service_update_required`。更新任一 unit 都会把
+状态标为 `upgraded`；两个 `update_required` 都为 `false` 仍是正常情况，因为服务仍需重启
+来加载新程序。确认后只需：
 
 ```bash
 sudo perflens-admin upgrade
 ```
 
 `upgrade` 只读取固定的已部署策略，只更新带 PerfLens 托管标记且所有者、权限可信的
-systemd unit，再执行固定的 `daemon-reload` 和 `restart`。它不会接受项目目录中的替代
+systemd unit；高级模式会把 Broker 与 Rust Helper 两个 unit 作为同一次升级处理，再执行
+固定的 `daemon-reload` 和 `restart`。它不会接受项目目录中的替代
 策略，不修改 sysctl/capability，也不删除配置或 `/var/lib/perflens` 证据。若更新 unit
-后重启或健康协议握手失败，会尝试原子恢复旧 unit 并重新加载；此时应按错误提示检查
+后重启或健康协议握手失败，会逆序恢复本轮更改的全部旧 unit 并重新加载；此时应按错误提示检查
 `systemctl status` 和日志。升级成功后，再以普通用户运行一次：
 
 ```bash

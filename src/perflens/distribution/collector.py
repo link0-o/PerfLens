@@ -39,7 +39,7 @@ def install_collector_assets(
     privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon",
 ) -> Path:
     """Copy service templates to a new staging directory; never install or elevate."""
-    rendered_uids, rendered_collector, rendered_perf = _deployment_values(
+    rendered_uids, rendered_collector, rendered_perf, rendered_helper_perf = _deployment_values(
         allowed_uids,
         collector_command,
         perf_path,
@@ -118,6 +118,18 @@ def install_collector_assets(
                     str(allowed_uids[0]),
                     source_name,
                 )
+                text = _replace_exact(
+                    text,
+                    "@PERFLENS_PERF_EXECUTABLE@",
+                    rendered_helper_perf,
+                    source_name,
+                )
+                text = _replace_exact(
+                    text,
+                    "@PERFLENS_PERF_READONLY_PATH@",
+                    rendered_helper_perf,
+                    source_name,
+                )
                 data = text.encode("utf-8")
             total += len(data)
             if total > _MAX_ASSET_BYTES:
@@ -147,7 +159,7 @@ def _deployment_values(
     allowed_uids: tuple[int, ...],
     collector_command: Path,
     perf_path: Path,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str]:
     unique_uids = tuple(sorted(set(allowed_uids)))
     if len(unique_uids) != 1 or any(uid < 0 for uid in unique_uids):
         raise PerfLensError(
@@ -157,24 +169,30 @@ def _deployment_values(
         )
     collector_text = str(collector_command.expanduser())
     perf_text = str(perf_path.expanduser())
-    if not collector_command.expanduser().is_absolute() or any(
-        character.isspace() or character in "\0\"'" for character in collector_text
-    ):
+    if not systemd_safe_absolute_path(collector_text):
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
             "collector_assets",
-            "Collector command must be an absolute path without whitespace or quotes",
+            "Collector command must use a systemd-safe absolute path",
         )
-    if not perf_path.expanduser().is_absolute() or "\0" in perf_text:
+    if not systemd_safe_absolute_path(perf_text):
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
             "collector_assets",
-            "perf path must be an absolute path without NUL characters",
+            "perf executable must use a systemd-safe absolute path",
         )
     return (
         json.dumps(list(unique_uids), separators=(",", ":")),
         collector_text,
         json.dumps(perf_text),
+        perf_text,
+    )
+
+
+def systemd_safe_absolute_path(value: str) -> bool:
+    """Return whether an absolute path is inert in unquoted systemd unit directives."""
+    return Path(value).is_absolute() and all(
+        character.isascii() and (character.isalnum() or character in "/._+-") for character in value
     )
 
 

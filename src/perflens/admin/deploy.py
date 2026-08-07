@@ -45,7 +45,7 @@ from perflens.contracts.artifacts import (
     CollectorUndeploymentArtifact,
     CollectorUpgradeArtifact,
 )
-from perflens.distribution.collector import install_collector_assets
+from perflens.distribution.collector import install_collector_assets, systemd_safe_absolute_path
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _MAX_CONFIG_BYTES = 256 << 10
@@ -173,6 +173,7 @@ def deploy_collector(
     installed_config = False
     installed_service = False
     installed_helper_service = False
+    attempted_new_services: list[str] = []
     try:
         with tempfile.TemporaryDirectory(prefix="perflens-admin-") as temporary:
             staged = install_collector_assets(
@@ -210,32 +211,28 @@ def deploy_collector(
                 mode=0o644,
             )
             if policy.privilege_mode == "paranoid3_helper":
-                helper_text = (staged / "perflens-privileged-helper.service").read_text(
-                    encoding="utf-8"
+                helper_text = _render_helper_service(
+                    (staged / "perflens-privileged-helper.service").read_text(encoding="utf-8"),
+                    identity,
+                    stage="collector_deploy",
                 )
-                helper_text = helper_text.replace(
-                    "@PERFLENS_BROKER_UID@",
-                    str(identity[0]),
-                )
-                helper_text = helper_text.replace(
-                    "@PERFLENS_ARTIFACT_GID@",
-                    str(identity[1]),
-                )
-                if "@PERFLENS_" in helper_text:
-                    raise PerfLensError(
-                        ErrorCode.INTERNAL_ERROR,
-                        "collector_deploy",
-                        "Privileged Helper unit contains an unresolved identity marker",
-                    )
                 installed_helper_service = _install_new_or_identical_text(
                     helper_text,
                     effective_layout.helper_service_path,
                     mode=0o644,
                 )
-            for group_command in commands[1:-2]:
-                executor(group_command)
-            executor(commands[-2])
-            executor(commands[-1])
+            for planned in commands[1:]:
+                service_name = planned[-1]
+                if planned[0] == "/usr/bin/systemctl" and "enable" in planned:
+                    new_service = (
+                        service_name == "perflens-collector.service" and installed_service
+                    ) or (
+                        service_name == "perflens-privileged-helper.service"
+                        and installed_helper_service
+                    )
+                    if new_service:
+                        attempted_new_services.append(service_name)
+                executor(planned)
             if socket_waiter is not None:
                 socket_waiter(effective_layout.socket_path)
             else:
@@ -243,13 +240,28 @@ def deploy_collector(
                     effective_layout.socket_path,
                     expected_service_uid=identity[0],
                 )
-    except BaseException:
-        if installed_service:
-            effective_layout.service_path.unlink(missing_ok=True)
-        if installed_helper_service:
-            effective_layout.helper_service_path.unlink(missing_ok=True)
-        if installed_config:
-            effective_layout.config_path.unlink(missing_ok=True)
+    except BaseException as exc:
+        rollback_errors = _rollback_new_deployment(
+            executor,
+            effective_layout,
+            attempted_new_services=tuple(attempted_new_services),
+            installed_service=installed_service,
+            installed_helper_service=installed_helper_service,
+            installed_config=installed_config,
+        )
+        if rollback_errors:
+            raise PerfLensError(
+                ErrorCode.OUTPUT_WRITE_FAILED,
+                "collector_deploy",
+                "Collector deployment failed and newly installed services could not be fully "
+                "rolled back",
+                recoverable=True,
+                details={"rollback_errors": rollback_errors},
+                suggested_actions=(
+                    "Inspect both PerfLens services and remove only verified managed units before "
+                    "retrying.",
+                ),
+            ) from exc
         raise
 
     return _result(
@@ -274,6 +286,7 @@ def upgrade_collector(
     require_root: bool = True,
     command_executor: CommandExecutor | None = None,
     socket_waiter: SocketWaiter | None = None,
+    service_identity: tuple[int, int] | None = None,
 ) -> CollectorUpgradeArtifact:
     """Upgrade only a verified managed unit while preserving policy and evidence."""
     stage = "collector_upgrade"
@@ -319,6 +332,25 @@ def upgrade_collector(
         require_root_owner=require_root,
         stage=stage,
     )
+    previous_helper: _ManagedServiceSnapshot | None = None
+    identity = service_identity
+    if policy.privilege_mode == "paranoid3_helper":
+        previous_helper = _verify_managed_service(
+            effective_layout.helper_service_path,
+            require_root_owner=require_root,
+            stage=stage,
+        )
+        if identity is None:
+            try:
+                account = pwd.getpwnam("perflens")
+            except KeyError as exc:
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    stage,
+                    "Dedicated perflens service account does not exist",
+                    suggested_actions=("Deploy the Collector before running upgrade.",),
+                ) from exc
+            identity = (account.pw_uid, account.pw_gid)
     commands: list[tuple[str, ...]] = [("/usr/bin/systemctl", "daemon-reload")]
     if policy.privilege_mode == "paranoid3_helper":
         commands.append(("/usr/bin/systemctl", "restart", "perflens-privileged-helper.service"))
@@ -340,6 +372,7 @@ def upgrade_collector(
             allowed_uids=policy.allowed_uids,
             collector_command=command,
             perf_path=policy.perf_path,
+            privilege_mode=policy.privilege_mode,
         )
         service_asset = (
             "perflens-collector-helper.service"
@@ -353,7 +386,27 @@ def upgrade_collector(
                 stage,
                 "Bundled Collector service exceeds its upgrade size limit",
             )
+        helper_candidate: bytes | None = None
+        if previous_helper is not None:
+            if identity is None:
+                raise AssertionError("paranoid3_helper upgrade identity was not resolved")
+            helper_candidate = _render_helper_service(
+                (staged / "perflens-privileged-helper.service").read_text(encoding="utf-8"),
+                identity,
+                stage=stage,
+            ).encode("utf-8")
+            if len(helper_candidate) > _MAX_SERVICE_BYTES:
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    stage,
+                    "Bundled Privileged Helper service exceeds its upgrade size limit",
+                )
         update_required = previous.raw != candidate
+        helper_update_required = (
+            previous_helper is not None
+            and helper_candidate is not None
+            and previous_helper.raw != helper_candidate
+        )
         if dry_run:
             return _upgrade_result(
                 "dry_run",
@@ -364,6 +417,10 @@ def upgrade_collector(
                 candidate,
                 update_required=update_required,
                 service_updated=False,
+                previous_helper=previous_helper.raw if previous_helper is not None else None,
+                helper_candidate=helper_candidate,
+                helper_update_required=helper_update_required,
+                helper_service_updated=False,
                 commands=planned_commands,
                 warnings=warnings,
                 next_steps=next_steps,
@@ -390,15 +447,31 @@ def upgrade_collector(
                     suggested_actions=("Deploy the Collector before running upgrade.",),
                 ) from exc
         service_updated = False
+        helper_service_updated = False
+        updated_services: list[tuple[Path, _ManagedServiceSnapshot, bytes]] = []
         try:
+            if helper_update_required:
+                if previous_helper is None or helper_candidate is None:
+                    raise AssertionError("Helper update was requested without a managed unit")
+                _replace_verified_managed_service(
+                    effective_layout.helper_service_path,
+                    previous_helper,
+                    helper_candidate,
+                    stage=stage,
+                )
+                helper_service_updated = True
+                updated_services.append(
+                    (effective_layout.helper_service_path, previous_helper, helper_candidate)
+                )
             if update_required:
-                service_updated = True
                 _replace_verified_managed_service(
                     effective_layout.service_path,
                     previous,
                     candidate,
                     stage=stage,
                 )
+                service_updated = True
+                updated_services.append((effective_layout.service_path, previous, candidate))
             for planned in planned_commands:
                 executor(planned)
             if socket_waiter is not None:
@@ -410,28 +483,29 @@ def upgrade_collector(
                 )
         except BaseException as exc:
             rollback_errors: list[str] = []
-            if service_updated:
+            if updated_services:
                 try:
-                    current = _verify_managed_service(
-                        effective_layout.service_path,
-                        require_root_owner=require_root,
-                        stage=stage,
-                    )
-                    if current.raw == previous.raw:
-                        service_updated = False
-                    elif current.raw != candidate:
-                        raise PerfLensError(
-                            ErrorCode.PATH_SAFETY_VIOLATION,
-                            stage,
-                            "Collector service changed before upgrade rollback",
-                        )
-                    else:
-                        _replace_verified_managed_service(
-                            effective_layout.service_path,
-                            current,
-                            previous.raw,
+                    for path, prior, installed_candidate in reversed(updated_services):
+                        current = _verify_managed_service(
+                            path,
+                            require_root_owner=require_root,
                             stage=stage,
-                            mode=stat.S_IMODE(previous.metadata.st_mode),
+                        )
+                        if current.raw == prior.raw:
+                            continue
+                        if current.raw != installed_candidate:
+                            raise PerfLensError(
+                                ErrorCode.PATH_SAFETY_VIOLATION,
+                                stage,
+                                "A managed service changed before upgrade rollback",
+                                details={"path": str(path)},
+                            )
+                        _replace_verified_managed_service(
+                            path,
+                            current,
+                            prior.raw,
+                            stage=stage,
+                            mode=stat.S_IMODE(prior.metadata.st_mode),
                         )
                     for rollback_command in commands:
                         executor(rollback_command)
@@ -451,7 +525,7 @@ def upgrade_collector(
             raise
 
     return _upgrade_result(
-        "upgraded" if update_required else "restarted",
+        "upgraded" if update_required or helper_update_required else "restarted",
         deployed_config,
         effective_layout,
         command,
@@ -459,6 +533,10 @@ def upgrade_collector(
         candidate,
         update_required=update_required,
         service_updated=service_updated,
+        previous_helper=previous_helper.raw if previous_helper is not None else None,
+        helper_candidate=helper_candidate,
+        helper_update_required=helper_update_required,
+        helper_service_updated=helper_service_updated,
         commands=planned_commands,
         warnings=warnings,
         next_steps=next_steps,
@@ -931,8 +1009,11 @@ def parse_collector_deployment_policy(
         or not perf.is_file()
         or not os.access(perf, os.X_OK)
         or perf_candidate.name != "perf"
+        or perf.name != "perf"
+        or not systemd_safe_absolute_path(str(perf))
         or perf_metadata.st_uid not in ({0} if require_root_owned_tools else {os.geteuid()})
         or perf_metadata.st_mode & 0o022
+        or (require_root_owned_tools and not _root_owned_directory_chain(perf.parent))
         or len(uids) != 1
         or any(uid <= 0 for uid in uids)
         or not modes
@@ -1223,6 +1304,16 @@ def _strict_mode(value: object) -> int:
     return _strict_integer(value)
 
 
+def _root_owned_directory_chain(path: Path) -> bool:
+    try:
+        return all(
+            stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == 0 and not metadata.st_mode & 0o022
+            for metadata in (candidate.stat() for candidate in (path, *path.parents))
+        )
+    except OSError:
+        return False
+
+
 def _collector_command(
     explicit: Path | None,
     *,
@@ -1231,6 +1322,13 @@ def _collector_command(
 ) -> Path:
     candidate = explicit or Path(sys.executable).resolve().parent / "perflens-collector"
     lexical = Path(os.path.abspath(candidate.expanduser()))
+    if not systemd_safe_absolute_path(str(lexical)):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "perflens-collector executable path is unsafe for a systemd unit",
+            details={"path": str(lexical)},
+        )
     try:
         entry_metadata = lexical.lstat()
         resolved = lexical.resolve(strict=True)
@@ -1313,6 +1411,78 @@ def _planned_commands(
         )
     commands.append(("/usr/bin/systemctl", "enable", "--now", "perflens-collector.service"))
     return tuple(commands)
+
+
+def _rollback_new_deployment(
+    executor: CommandExecutor,
+    layout: CollectorSystemLayout,
+    *,
+    attempted_new_services: tuple[str, ...],
+    installed_service: bool,
+    installed_helper_service: bool,
+    installed_config: bool,
+) -> tuple[str, ...]:
+    """Stop attempted new units before removing their files after a failed deployment."""
+    errors: list[str] = []
+    failed_services: set[str] = set()
+    for service_name in reversed(attempted_new_services):
+        try:
+            executor(("/usr/bin/systemctl", "disable", "--now", service_name))
+        except BaseException as exc:
+            failed_services.add(service_name)
+            errors.append(f"disable:{service_name}:{type(exc).__name__}")
+    for installed, service_name, path in (
+        (installed_service, "perflens-collector.service", layout.service_path),
+        (
+            installed_helper_service,
+            "perflens-privileged-helper.service",
+            layout.helper_service_path,
+        ),
+    ):
+        if not installed or service_name in failed_services:
+            continue
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            errors.append(f"unlink:{path}:{type(exc).__name__}")
+    if installed_config and not failed_services:
+        try:
+            layout.config_path.unlink(missing_ok=True)
+        except OSError as exc:
+            errors.append(f"unlink:{layout.config_path}:{type(exc).__name__}")
+    if installed_service or installed_helper_service:
+        try:
+            executor(("/usr/bin/systemctl", "daemon-reload"))
+        except BaseException as exc:
+            errors.append(f"daemon-reload:{type(exc).__name__}")
+    return tuple(errors)
+
+
+def _render_helper_service(
+    text: str,
+    identity: tuple[int, int],
+    *,
+    stage: str,
+) -> str:
+    rendered = text
+    for marker, value in (
+        ("@PERFLENS_BROKER_UID@", str(identity[0])),
+        ("@PERFLENS_ARTIFACT_GID@", str(identity[1])),
+    ):
+        if rendered.count(marker) != 1:
+            raise PerfLensError(
+                ErrorCode.INTERNAL_ERROR,
+                stage,
+                "Privileged Helper unit contains a missing or ambiguous deployment marker",
+            )
+        rendered = rendered.replace(marker, value)
+    if "@PERFLENS_" in rendered:
+        raise PerfLensError(
+            ErrorCode.INTERNAL_ERROR,
+            stage,
+            "Privileged Helper unit contains an unresolved deployment marker",
+        )
+    return rendered
 
 
 def _prepare_system_directories(
@@ -1698,6 +1868,10 @@ def _upgrade_result(
     *,
     update_required: bool,
     service_updated: bool,
+    previous_helper: bytes | None,
+    helper_candidate: bytes | None,
+    helper_update_required: bool,
+    helper_service_updated: bool,
     commands: tuple[tuple[str, ...], ...],
     warnings: tuple[str, ...],
     next_steps: tuple[str, ...],
@@ -1712,6 +1886,17 @@ def _upgrade_result(
         candidate_service_sha256=hashlib.sha256(candidate).hexdigest(),
         service_update_required=update_required,
         service_updated=service_updated,
+        helper_service_path=(
+            str(layout.helper_service_path) if previous_helper is not None else None
+        ),
+        previous_helper_service_sha256=(
+            hashlib.sha256(previous_helper).hexdigest() if previous_helper is not None else None
+        ),
+        candidate_helper_service_sha256=(
+            hashlib.sha256(helper_candidate).hexdigest() if helper_candidate is not None else None
+        ),
+        helper_service_update_required=helper_update_required,
+        helper_service_updated=helper_service_updated,
         planned_commands=commands,
         warnings=warnings,
         next_steps=next_steps,

@@ -36,7 +36,7 @@ Python Collector Broker（无 capability）
               │ 私有、仅 Broker 可访问的 Unix Socket
               ▼
 Rust privileged Helper（root UID，systemd capability bounding set）
-              │ 固定 /usr/bin/perf + 固定 PID 参数
+              │ 管理员配置并由 Helper 复核的 perf + 固定 PID 参数
               ▼
       /var/lib/perflens-helper
 ```
@@ -62,9 +62,20 @@ Helper 只执行管理员策略中固定、root 所有且不可由非 root 写�
 固定 spool；路径身份、软/硬链接、权限、所有者、大小、摘要、配额和文件系统空闲余量
 都必须复核。
 
+为消除数字 PID 在“身份检查后、perf 附加前”被复用的窗口，Helper 先让 perf 以事件禁用
+状态打开目标，并通过继承的本地控制 FD 完成一次 `disable/ack` 屏障；屏障后再次核对 PID
+所有者和启动时间，只有一致时才发送 `enable`。此后内核事件 FD 已绑定到 perf 实际打开
+的任务。Helper 只启动 perf 本身，由控制通道和信号限定采集时长，不再通过 perf 启动
+`sleep` 或任何其他程序。
+
 计划在启动 perf 前持久化为单次已消费状态。失败、超时、Helper/Broker 重启都不能让同一
 计划再次执行。Helper 进程或 perf 子进程超时、超限时必须终止整个受控子进程并返回有界
 错误，不记录 Profile、任意 stderr、目标命令或敏感路径。
+
+Helper 重启时会只清理名称、属主、权限、链接数和 inode 关系均符合内部规则的遗留临时
+文件；不符合规则的条目继续让 spool 失败关闭，绝不会为了恢复可用性删除未知文件。容量
+检查不跟随软链接，并独立核对产物与重放标记的精确名称、属主、属组、权限及链接数。重放
+标记会保留到协议允许的最长计划生命周期结束，再在固定数量上限内持久清理。
 
 ## Rust 与发布边界
 

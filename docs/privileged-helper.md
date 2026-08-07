@@ -65,9 +65,20 @@ policy. Arguments are derived from enums and allowlists without a shell. Artifac
 from plan IDs and are published into the fixed spool after identity, symlink/link, ownership, mode,
 size, digest, quota, and free-space checks.
 
+To close PID reuse between identity validation and attachment, perf first opens the target with
+events disabled. An inherited control-FD `disable/ack` barrier proves that binding completed; the
+Helper then revalidates owner and start time before sending `enable`. The resulting kernel event
+descriptors remain bound to the task perf actually opened. The Helper launches only perf and uses
+the control channel plus signals for duration enforcement, never a sleep process or workload.
+
 A plan is durably consumed before perf starts. Failure, timeout, and Broker/Helper restart do not
 make it reusable. Timeout or overflow terminates the controlled process and returns a bounded error;
 operational logs exclude profiles, arbitrary stderr, target commands, and sensitive paths.
+After a crash, only internal temporary files whose names, ownership, modes, link counts, and inode
+relationships all match the immutable recovery rules are removed; unknown spool entries still fail
+closed. Capacity scans use no-follow metadata and independently validate exact artifact and replay
+marker names, owners, groups, modes, and link counts. Replay markers are retained for the protocol's
+maximum plan lifetime, then durably pruned under a fixed count ceiling.
 
 ## Rust and release boundary
 

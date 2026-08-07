@@ -2,23 +2,24 @@
 
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::sys::signal::{Signal, killpg};
 use nix::sys::statvfs::statvfs;
-use nix::unistd::{Pid, geteuid};
+use nix::unistd::{Pid, getegid, geteuid};
 use sha2::{Digest, Sha256};
 
 use crate::{CallGraph, CollectionMode, HelperTarget};
 
-const PERF_PATH: &str = "/usr/bin/perf";
-const SLEEP_PATH: &str = "/usr/bin/sleep";
 const SPOOL_ROOT: &str = "/var/lib/perflens-helper";
 const MAX_DURATION_MILLISECONDS: u64 = 30_000;
 const MAX_FREQUENCY_HZ: u32 = 99;
@@ -26,6 +27,8 @@ const MAX_OUTPUT_BYTES: u64 = 256 << 20;
 const MAX_SPOOL_BYTES: u64 = 5 << 30;
 const MAX_SPOOL_ARTIFACTS: usize = 500;
 const MIN_FREE_BYTES: u64 = 2 << 30;
+const MAX_TRACKED_PLANS: usize = 4096;
+const REPLAY_RETENTION: Duration = Duration::from_mins(2);
 const ALLOWED_STAT_EVENTS: &[&str] = &[
     "cycles",
     "instructions",
@@ -72,15 +75,39 @@ pub fn execute_production_plan(
     plan: &ExecutionPlan,
     allowed_uid: u32,
     artifact_gid: u32,
+    configured_perf_path: &Path,
 ) -> Result<ExecutionResult, ExecutionError> {
     validate_plan(plan, allowed_uid)?;
     assert_pid_identity(&plan.target)?;
-    let perf_path = trusted_root_executable(Path::new(PERF_PATH))?;
-    let sleep_path = trusted_root_executable(Path::new(SLEEP_PATH))?;
+    let perf_path = trusted_root_executable(configured_perf_path)?;
     let spool_root = trusted_spool(Path::new(SPOOL_ROOT))?;
-    authorize_spool_capacity(&spool_root, plan.max_output_bytes)?;
+    recover_stale_temporary_files(&spool_root, artifact_gid)?;
+    let active_markers = prune_replay_markers(&spool_root, Some(&plan.plan_id))?;
+    if active_markers >= MAX_TRACKED_PLANS {
+        return Err(resource_error(
+            "Privileged Helper replay state reached its bounded capacity",
+        ));
+    }
+    authorize_spool_capacity(&spool_root, plan.max_output_bytes, artifact_gid)?;
     consume_plan(&spool_root, &plan.plan_id)?;
-    execute_perf(plan, &perf_path, &sleep_path, &spool_root, artifact_gid)
+    execute_perf(
+        plan,
+        &perf_path,
+        &spool_root,
+        artifact_gid,
+        &assert_pid_identity,
+    )
+}
+
+pub fn prepare_production_environment(
+    configured_perf_path: &Path,
+    artifact_gid: u32,
+) -> Result<(), ExecutionError> {
+    trusted_root_executable(configured_perf_path)?;
+    let spool_root = trusted_spool(Path::new(SPOOL_ROOT))?;
+    recover_stale_temporary_files(&spool_root, artifact_gid)?;
+    prune_replay_markers(&spool_root, None)?;
+    validate_spool_entries(&spool_root, artifact_gid).map(|_usage| ())
 }
 
 fn validate_plan(plan: &ExecutionPlan, allowed_uid: u32) -> Result<(), ExecutionError> {
@@ -133,22 +160,37 @@ fn assert_pid_identity(target: &HelperTarget) -> Result<(), ExecutionError> {
 }
 
 fn trusted_root_executable(path: &Path) -> Result<PathBuf, ExecutionError> {
+    if !path.is_absolute() || path.file_name().is_none_or(|name| name != "perf") {
+        return Err(denied("Configured perf executable path is not canonical"));
+    }
     let resolved = path
         .canonicalize()
         .map_err(|_error| denied("Fixed executable cannot be resolved"))?;
     let metadata = resolved
         .metadata()
         .map_err(|_error| denied("Fixed executable cannot be inspected"))?;
-    if !metadata.is_file()
+    if resolved != path
+        || !metadata.is_file()
         || metadata.uid() != 0
         || metadata.mode() & 0o022 != 0
         || metadata.mode() & 0o111 == 0
+        || !trusted_root_directory_chain(resolved.parent())
     {
         return Err(denied(
             "Fixed executable identity or permissions are unsafe",
         ));
     }
     Ok(resolved)
+}
+
+fn trusted_root_directory_chain(parent: Option<&Path>) -> bool {
+    parent.is_some_and(|directory| {
+        directory.ancestors().all(|ancestor| {
+            ancestor.metadata().is_ok_and(|metadata| {
+                metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0
+            })
+        })
+    })
 }
 
 fn trusted_spool(path: &Path) -> Result<PathBuf, ExecutionError> {
@@ -168,29 +210,76 @@ fn trusted_spool(path: &Path) -> Result<PathBuf, ExecutionError> {
     Ok(resolved)
 }
 
-fn authorize_spool_capacity(spool: &Path, requested: u64) -> Result<(), ExecutionError> {
-    let mut count = 0_usize;
-    let mut bytes = 0_u64;
+fn recover_stale_temporary_files(spool: &Path, artifact_gid: u32) -> Result<(), ExecutionError> {
+    let mut removed_any = false;
     for entry in fs::read_dir(spool).map_err(|_error| spool_error())? {
         let entry = entry.map_err(|_error| spool_error())?;
         let name = entry.file_name();
         let name = name.to_str().ok_or_else(spool_error)?;
-        let metadata = entry.metadata().map_err(|_error| spool_error())?;
-        if name.starts_with(".perflens-consumed-plan-") {
-            if !metadata.is_file() || metadata.len() != 0 || metadata.mode() & 0o777 != 0o600 {
-                return Err(spool_error());
-            }
+        let Some(plan_suffix) = name
+            .strip_prefix(".perflens-helper-plan-")
+            .and_then(|value| value.strip_suffix(".tmp"))
+        else {
             continue;
-        }
-        if !(name.starts_with("plan-")
-            && (name.ends_with(".stat.csv") || name.ends_with(".perf.data")))
-            || !metadata.is_file()
-        {
+        };
+        if !valid_plan_suffix(plan_suffix) {
             return Err(spool_error());
         }
-        count += 1;
-        bytes = bytes.checked_add(metadata.len()).ok_or_else(spool_error)?;
+        let temporary = entry.path();
+        let metadata = temporary
+            .symlink_metadata()
+            .map_err(|_error| spool_error())?;
+        let safe_incomplete = metadata.is_file()
+            && metadata.uid() == geteuid().as_raw()
+            && metadata.nlink() == 1
+            && ((metadata.mode() & 0o777 == 0o600 && metadata.gid() == getegid().as_raw())
+                || (metadata.mode() & 0o777 == 0o640 && metadata.gid() == artifact_gid));
+        let published_outputs = [".stat.csv", ".perf.data"]
+            .iter()
+            .map(|suffix| spool.join(format!("plan-{plan_suffix}{suffix}")))
+            .filter(|output| {
+                output.symlink_metadata().is_ok_and(|output_metadata| {
+                    output_metadata.is_file()
+                        && output_metadata.uid() == metadata.uid()
+                        && output_metadata.gid() == metadata.gid()
+                        && output_metadata.mode() & 0o777 == 0o640
+                        && output_metadata.nlink() == 2
+                        && output_metadata.dev() == metadata.dev()
+                        && output_metadata.ino() == metadata.ino()
+                })
+            })
+            .collect::<Vec<_>>();
+        let safe_published = metadata.is_file()
+            && metadata.uid() == geteuid().as_raw()
+            && metadata.gid() == artifact_gid
+            && metadata.mode() & 0o777 == 0o640
+            && metadata.nlink() == 2
+            && published_outputs.len() == 1;
+        if !safe_incomplete && !safe_published {
+            return Err(spool_error());
+        }
+        if safe_published {
+            File::open(&published_outputs[0])
+                .and_then(|file| file.sync_all())
+                .map_err(|_error| spool_error())?;
+        }
+        fs::remove_file(&temporary).map_err(|_error| spool_error())?;
+        removed_any = true;
     }
+    if removed_any {
+        File::open(spool)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_error| spool_error())?;
+    }
+    Ok(())
+}
+
+fn authorize_spool_capacity(
+    spool: &Path,
+    requested: u64,
+    artifact_gid: u32,
+) -> Result<(), ExecutionError> {
+    let (count, bytes) = validate_spool_entries(spool, artifact_gid)?;
     let filesystem = statvfs(spool).map_err(|_error| spool_error())?;
     let free_bytes = filesystem
         .blocks_available()
@@ -199,13 +288,121 @@ fn authorize_spool_capacity(spool: &Path, requested: u64) -> Result<(), Executio
         || bytes.saturating_add(requested) > MAX_SPOOL_BYTES
         || free_bytes.saturating_sub(requested) < MIN_FREE_BYTES
     {
-        return Err(ExecutionError {
-            code: "RESOURCE_LIMIT_EXCEEDED",
-            stage: "privileged_helper",
-            message: "Privileged Helper spool capacity policy rejected the plan",
-        });
+        return Err(resource_error(
+            "Privileged Helper spool capacity policy rejected the plan",
+        ));
     }
     Ok(())
+}
+
+fn validate_spool_entries(spool: &Path, artifact_gid: u32) -> Result<(usize, u64), ExecutionError> {
+    let mut count = 0_usize;
+    let mut bytes = 0_u64;
+    for entry in fs::read_dir(spool).map_err(|_error| spool_error())? {
+        let entry = entry.map_err(|_error| spool_error())?;
+        let name = entry.file_name();
+        let name = name.to_str().ok_or_else(spool_error)?;
+        let metadata = entry
+            .path()
+            .symlink_metadata()
+            .map_err(|_error| spool_error())?;
+        if valid_replay_marker_name(name) {
+            if !safe_replay_marker_metadata(&metadata) {
+                return Err(spool_error());
+            }
+            continue;
+        }
+        if !valid_artifact_name(name)
+            || !metadata.is_file()
+            || metadata.uid() != geteuid().as_raw()
+            || metadata.gid() != artifact_gid
+            || metadata.mode() & 0o777 != 0o640
+            || metadata.nlink() != 1
+            || metadata.len() == 0
+            || metadata.len() > MAX_OUTPUT_BYTES
+        {
+            return Err(spool_error());
+        }
+        count += 1;
+        bytes = bytes.checked_add(metadata.len()).ok_or_else(spool_error)?;
+    }
+    Ok((count, bytes))
+}
+
+fn prune_replay_markers(
+    spool: &Path,
+    preserve_plan_id: Option<&str>,
+) -> Result<usize, ExecutionError> {
+    let preserve_name = preserve_plan_id.map(|plan_id| format!(".perflens-consumed-{plan_id}"));
+    let cutoff = SystemTime::now()
+        .checked_sub(REPLAY_RETENTION)
+        .ok_or_else(spool_error)?;
+    let mut active = 0_usize;
+    let mut removed_any = false;
+    for entry in fs::read_dir(spool).map_err(|_error| spool_error())? {
+        let entry = entry.map_err(|_error| spool_error())?;
+        let name = entry.file_name();
+        let name = name.to_str().ok_or_else(spool_error)?;
+        if !valid_replay_marker_name(name) {
+            continue;
+        }
+        let metadata = entry
+            .path()
+            .symlink_metadata()
+            .map_err(|_error| spool_error())?;
+        if !safe_replay_marker_metadata(&metadata) {
+            return Err(spool_error());
+        }
+        if preserve_name.as_deref() == Some(name) {
+            return Err(denied("Privileged Helper plan was already consumed"));
+        }
+        if metadata.modified().map_err(|_error| spool_error())? <= cutoff {
+            fs::remove_file(entry.path()).map_err(|_error| spool_error())?;
+            removed_any = true;
+        } else {
+            active = active.checked_add(1).ok_or_else(spool_error)?;
+            if active > MAX_TRACKED_PLANS {
+                return Err(resource_error(
+                    "Privileged Helper replay state exceeded its bounded capacity",
+                ));
+            }
+        }
+    }
+    if removed_any {
+        File::open(spool)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_error| spool_error())?;
+    }
+    Ok(active)
+}
+
+fn valid_plan_suffix(value: &str) -> bool {
+    value.len() == 20
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn valid_replay_marker_name(name: &str) -> bool {
+    name.strip_prefix(".perflens-consumed-plan-")
+        .is_some_and(valid_plan_suffix)
+}
+
+fn valid_artifact_name(name: &str) -> bool {
+    [".stat.csv", ".perf.data"].iter().any(|suffix| {
+        name.strip_prefix("plan-")
+            .and_then(|value| value.strip_suffix(suffix))
+            .is_some_and(valid_plan_suffix)
+    })
+}
+
+fn safe_replay_marker_metadata(metadata: &fs::Metadata) -> bool {
+    metadata.is_file()
+        && metadata.uid() == geteuid().as_raw()
+        && metadata.gid() == getegid().as_raw()
+        && metadata.mode() & 0o777 == 0o600
+        && metadata.nlink() == 1
+        && metadata.len() == 0
 }
 
 fn consume_plan(spool: &Path, plan_id: &str) -> Result<(), ExecutionError> {
@@ -224,13 +421,16 @@ fn consume_plan(spool: &Path, plan_id: &str) -> Result<(), ExecutionError> {
         .map_err(|_error| spool_error())
 }
 
-fn execute_perf(
+fn execute_perf<V>(
     plan: &ExecutionPlan,
     perf_path: &Path,
-    sleep_path: &Path,
     spool: &Path,
     artifact_gid: u32,
-) -> Result<ExecutionResult, ExecutionError> {
+    target_validator: &V,
+) -> Result<ExecutionResult, ExecutionError>
+where
+    V: Fn(&HelperTarget) -> Result<(), ExecutionError>,
+{
     let suffix = if plan.mode == CollectionMode::Stat {
         ".stat.csv"
     } else {
@@ -253,11 +453,11 @@ fn execute_perf(
     let outcome = execute_perf_inner(
         plan,
         perf_path,
-        sleep_path,
         &temporary,
         &output,
         artifact_name,
         artifact_gid,
+        target_validator,
     );
     if outcome.is_err() {
         let _ignored = fs::remove_file(&temporary);
@@ -266,20 +466,36 @@ fn execute_perf(
 }
 
 #[allow(clippy::too_many_lines)] // Linear lifecycle keeps spawn, watchdog, and publication ordered.
-fn execute_perf_inner(
+fn execute_perf_inner<V>(
     plan: &ExecutionPlan,
     perf_path: &Path,
-    sleep_path: &Path,
     temporary: &Path,
     output: &Path,
     artifact_name: String,
     artifact_gid: u32,
-) -> Result<ExecutionResult, ExecutionError> {
-    let duration = format!(
-        "{}.{:03}",
-        plan.duration_milliseconds / 1000,
-        plan.duration_milliseconds % 1000
+    target_validator: &V,
+) -> Result<ExecutionResult, ExecutionError>
+where
+    V: Fn(&HelperTarget) -> Result<(), ExecutionError>,
+{
+    let (mut control_writer, control_reader) =
+        UnixStream::pair().map_err(|_error| external_error())?;
+    let (ack_writer, ack_reader) = UnixStream::pair().map_err(|_error| external_error())?;
+    fcntl(&control_reader, FcntlArg::F_SETFD(FdFlag::empty()))
+        .map_err(|_error| external_error())?;
+    fcntl(&ack_writer, FcntlArg::F_SETFD(FdFlag::empty())).map_err(|_error| external_error())?;
+    control_writer
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .map_err(|_error| external_error())?;
+    ack_reader
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|_error| external_error())?;
+    let control_argument = format!(
+        "fd:{},{}",
+        control_reader.as_raw_fd(),
+        ack_writer.as_raw_fd()
     );
+    let mut acknowledgements = BufReader::new(ack_reader);
     let mut command = Command::new(perf_path);
     match plan.mode {
         CollectionMode::Stat => {
@@ -317,35 +533,97 @@ fn execute_perf_inner(
         }
     }
     command
-        .args(["-p", &plan.target.pid.to_string(), "--"])
-        .arg(sleep_path)
-        .arg(duration)
+        .args(["-D", "-1", "--control", &control_argument])
+        .args(["-p", &plan.target.pid.to_string()])
         .current_dir("/")
         .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);
-    let started_at_unix_milliseconds = unix_milliseconds()?;
-    let started = Instant::now();
     let mut child = command.spawn().map_err(|_error| external_error())?;
-    let timeout = Duration::from_millis(plan.duration_milliseconds.saturating_add(10_000));
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(|_error| external_error())? {
-            break status;
+    drop(control_reader);
+    drop(ack_writer);
+    // `-D -1` makes perf open its target events disabled. A successful control ACK proves that
+    // perf completed that binding. Revalidating the original owner/start-time identity after this
+    // barrier ensures a recycled numeric PID is rejected before any event can be enabled; after
+    // the barrier the kernel event descriptors remain bound to the task perf actually opened.
+    if send_perf_control(&mut control_writer, &mut acknowledgements, "disable").is_err() {
+        terminate_perf(&mut child, Signal::SIGKILL);
+        return Err(external_error());
+    }
+    if let Err(error) = target_validator(&plan.target) {
+        terminate_perf(&mut child, Signal::SIGKILL);
+        return Err(error);
+    }
+    if send_perf_control(&mut control_writer, &mut acknowledgements, "enable").is_err() {
+        terminate_perf(&mut child, Signal::SIGKILL);
+        return Err(external_error());
+    }
+    let started_at_unix_milliseconds = match unix_milliseconds() {
+        Ok(value) => value,
+        Err(error) => {
+            terminate_perf(&mut child, Signal::SIGKILL);
+            return Err(error);
+        }
+    };
+    let started = Instant::now();
+    let duration = Duration::from_millis(plan.duration_milliseconds);
+    let mut status = None;
+    while started.elapsed() < duration {
+        let completed = match child.try_wait() {
+            Ok(value) => value,
+            Err(_error) => {
+                terminate_perf(&mut child, Signal::SIGKILL);
+                return Err(external_error());
+            }
+        };
+        if let Some(completed) = completed {
+            status = Some(completed);
+            break;
         }
         let size = temporary.metadata().map_or(0, |metadata| metadata.len());
-        if started.elapsed() > timeout || size > plan.max_output_bytes {
-            let _ignored = killpg(Pid::from_raw(child.id().cast_signed()), Signal::SIGKILL);
-            let _ignored = child.wait();
+        if size > plan.max_output_bytes {
+            terminate_perf(&mut child, Signal::SIGKILL);
             return Err(ExecutionError {
                 code: "RESOURCE_LIMIT_EXCEEDED",
                 stage: "external_tool",
-                message: "Privileged perf exceeded its time or output limit",
+                message: "Privileged perf exceeded its output limit",
             });
         }
         thread::sleep(Duration::from_millis(20));
-    };
+    }
+    if status.is_none() {
+        if send_perf_control(&mut control_writer, &mut acknowledgements, "disable").is_err() {
+            terminate_perf(&mut child, Signal::SIGKILL);
+            return Err(external_error());
+        }
+        let _ignored = killpg(Pid::from_raw(child.id().cast_signed()), Signal::SIGINT);
+        let shutdown_deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let completed = match child.try_wait() {
+                Ok(value) => value,
+                Err(_error) => {
+                    terminate_perf(&mut child, Signal::SIGKILL);
+                    return Err(external_error());
+                }
+            };
+            if let Some(completed) = completed {
+                status = Some(completed);
+                break;
+            }
+            if Instant::now() >= shutdown_deadline {
+                terminate_perf(&mut child, Signal::SIGKILL);
+                return Err(ExecutionError {
+                    code: "RESOURCE_LIMIT_EXCEEDED",
+                    stage: "external_tool",
+                    message: "Privileged perf did not stop within its shutdown limit",
+                });
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+    let status = status.ok_or_else(external_error)?;
     if !status.success() {
         return Err(external_error());
     }
@@ -363,11 +641,15 @@ fn execute_perf_inner(
     std::os::unix::fs::chown(temporary, None, Some(artifact_gid))
         .map_err(|_error| spool_error())?;
     let digest = sha256_file(temporary)?;
-    fs::hard_link(temporary, output).map_err(|_error| spool_error())?;
-    fs::remove_file(temporary).map_err(|_error| spool_error())?;
-    File::open(output)
+    File::open(temporary)
         .and_then(|file| file.sync_all())
-        .and_then(|()| File::open(output.parent().unwrap_or_else(|| Path::new("/"))))
+        .map_err(|_error| spool_error())?;
+    fs::hard_link(temporary, output).map_err(|_error| spool_error())?;
+    File::open(output.parent().unwrap_or_else(|| Path::new("/")))
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_error| spool_error())?;
+    fs::remove_file(temporary).map_err(|_error| spool_error())?;
+    File::open(output.parent().unwrap_or_else(|| Path::new("/")))
         .and_then(|directory| directory.sync_all())
         .map_err(|_error| spool_error())?;
     Ok(ExecutionResult {
@@ -382,6 +664,32 @@ fn execute_perf_inner(
         started_at_unix_milliseconds,
         finished_at_unix_milliseconds: unix_milliseconds()?,
     })
+}
+
+fn send_perf_control(
+    control: &mut UnixStream,
+    acknowledgements: &mut BufReader<UnixStream>,
+    operation: &str,
+) -> Result<(), ExecutionError> {
+    control
+        .write_all(format!("{operation}\n").as_bytes())
+        .map_err(|_error| external_error())?;
+    let mut acknowledgement = String::new();
+    acknowledgements
+        .read_line(&mut acknowledgement)
+        .map_err(|_error| external_error())?;
+    if acknowledgement != "ack\n" {
+        return Err(external_error());
+    }
+    Ok(())
+}
+
+fn terminate_perf(child: &mut std::process::Child, signal: Signal) {
+    let _ignored = killpg(Pid::from_raw(child.id().cast_signed()), signal);
+    if signal == Signal::SIGKILL {
+        let _ignored = child.kill();
+    }
+    let _ignored = child.wait();
 }
 
 fn sha256_file(path: &Path) -> Result<String, ExecutionError> {
@@ -431,17 +739,30 @@ const fn external_error() -> ExecutionError {
     }
 }
 
+const fn resource_error(message: &'static str) -> ExecutionError {
+    ExecutionError {
+        code: "RESOURCE_LIMIT_EXCEEDED",
+        stage: "privileged_helper",
+        message,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, SystemTime};
 
     use super::{
-        ExecutionPlan, MAX_DURATION_MILLISECONDS, consume_plan, execute_perf, validate_plan,
+        ExecutionPlan, MAX_DURATION_MILLISECONDS, REPLAY_RETENTION, authorize_spool_capacity,
+        consume_plan, denied, execute_perf, prune_replay_markers, recover_stale_temporary_files,
+        trusted_root_executable, validate_plan, validate_spool_entries,
     };
     use crate::{CallGraph, CollectionMode, HelperTarget};
 
     static TEST_ID: AtomicU64 = AtomicU64::new(0);
+    static EXECUTION_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn record_plan() -> ExecutionPlan {
         ExecutionPlan {
@@ -459,6 +780,47 @@ mod tests {
             events: Vec::new(),
             max_output_bytes: 8 << 20,
         }
+    }
+
+    fn write_fake_perf(path: &std::path::Path) {
+        std::fs::write(
+            path,
+            r#"#!/bin/sh
+set -eu
+out=''
+control=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) shift; out=$1 ;;
+    --control) shift; control=$1 ;;
+    --) exit 91 ;;
+  esac
+  shift
+done
+descriptors=${control#fd:}
+ctl_fd=${descriptors%,*}
+ack_fd=${descriptors#*,}
+finish() {
+  printf '1000;count;cycles;1;100.00;;\n' > "$out"
+  exit 0
+}
+trap finish INT TERM
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'disable' ]
+eval "printf 'ack\n' >&${ack_fd}"
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'enable' ]
+eval "printf 'ack\n' >&${ack_fd}"
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'disable' ]
+trap '' INT TERM
+eval "printf 'ack\n' >&${ack_fd}"
+finish
+"#,
+        )
+        .expect("write perf test double");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .expect("make test double executable");
     }
 
     #[test]
@@ -485,7 +847,30 @@ mod tests {
     }
 
     #[test]
+    fn configured_perf_path_rejects_non_root_and_symlinked_executables() {
+        let directory = std::env::temp_dir().join(format!(
+            "perflens-perf-path-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).expect("create tool directory");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("secure tool directory");
+        let owned = directory.join("perf");
+        std::fs::write(&owned, b"not root owned").expect("write untrusted tool");
+        std::fs::set_permissions(&owned, std::fs::Permissions::from_mode(0o700))
+            .expect("make untrusted tool executable");
+        assert!(trusted_root_executable(&owned).is_err());
+        std::fs::remove_file(&owned).expect("remove untrusted tool");
+        std::os::unix::fs::symlink("/bin/sh", &owned).expect("link misleading perf path");
+        assert!(trusted_root_executable(&owned).is_err());
+        std::fs::remove_file(owned).expect("remove misleading tool link");
+        std::fs::remove_dir(directory).expect("remove tool directory");
+    }
+
+    #[test]
     fn fixed_argv_execution_publishes_a_bounded_new_artifact() {
+        let _execution_guard = EXECUTION_TEST_LOCK.lock().expect("lock execution test");
         let directory = std::env::temp_dir().join(format!(
             "perflens-execution-{}-{}",
             std::process::id(),
@@ -495,24 +880,19 @@ mod tests {
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
             .expect("secure spool");
         let fake_perf = directory.join("perf-test-double");
-        std::fs::write(
-            &fake_perf,
-            "#!/bin/sh\nset -eu\nout=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '-o' ]; then shift; out=$1; fi\n  shift\ndone\nprintf '1000;count;cycles;1;100.00;;\n' > \"$out\"\n",
-        )
-        .expect("write perf test double");
-        std::fs::set_permissions(&fake_perf, std::fs::Permissions::from_mode(0o700))
-            .expect("make test double executable");
+        write_fake_perf(&fake_perf);
         let mut plan = record_plan();
         plan.mode = CollectionMode::Stat;
         plan.frequency_hz = None;
         plan.call_graph = None;
         plan.events = vec!["cycles".to_owned()];
+        plan.duration_milliseconds = 40;
         let result = execute_perf(
             &plan,
             &fake_perf,
-            std::path::Path::new("/usr/bin/sleep"),
             &directory,
             nix::unistd::getegid().as_raw(),
+            &|_target| Ok(()),
         )
         .expect("execute fixed argv test double");
         let artifact = directory.join(&result.artifact_name);
@@ -532,6 +912,91 @@ mod tests {
         assert_eq!(result.output_sha256.len(), 64);
         std::fs::remove_file(artifact).expect("remove artifact");
         std::fs::remove_file(fake_perf).expect("remove test double");
+        std::fs::remove_dir(directory).expect("remove spool");
+    }
+
+    #[test]
+    fn pid_identity_change_after_perf_binding_is_denied_before_enable() {
+        let _execution_guard = EXECUTION_TEST_LOCK.lock().expect("lock execution test");
+        let directory = std::env::temp_dir().join(format!(
+            "perflens-pid-reuse-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).expect("create spool");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("secure spool");
+        let fake_perf = directory.join("perf-test-double");
+        write_fake_perf(&fake_perf);
+        let mut plan = record_plan();
+        plan.mode = CollectionMode::Stat;
+        plan.frequency_hz = None;
+        plan.call_graph = None;
+        plan.events = vec!["cycles".to_owned()];
+        let error = execute_perf(
+            &plan,
+            &fake_perf,
+            &directory,
+            nix::unistd::getegid().as_raw(),
+            &|_target| Err(denied("Target PID owner or start time changed")),
+        )
+        .expect_err("reused PID must be rejected after perf opens disabled events");
+        assert_eq!(error.code, "PATH_SAFETY_VIOLATION");
+        assert!(
+            !directory
+                .join(format!("{}.stat.csv", plan.plan_id))
+                .exists()
+        );
+        assert!(
+            !directory
+                .join(format!(".perflens-helper-{}.tmp", plan.plan_id))
+                .exists()
+        );
+        std::fs::remove_file(fake_perf).expect("remove test double");
+        std::fs::remove_dir(directory).expect("remove spool");
+    }
+
+    #[test]
+    fn stale_safe_worker_files_recover_but_unsafe_entries_fail_closed() {
+        let directory = std::env::temp_dir().join(format!(
+            "perflens-worker-recovery-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).expect("create spool");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("secure spool");
+        let stale = directory.join(".perflens-helper-plan-0123456789abcdefabcd.tmp");
+        std::fs::write(&stale, b"partial").expect("write stale temporary");
+        std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o600))
+            .expect("secure stale temporary");
+        recover_stale_temporary_files(&directory, nix::unistd::getegid().as_raw())
+            .expect("recover safe stale file");
+        assert!(!stale.exists());
+
+        let published = directory.join("plan-0123456789abcdefabce.stat.csv");
+        let published_temporary = directory.join(".perflens-helper-plan-0123456789abcdefabce.tmp");
+        std::fs::write(&published, b"durable evidence").expect("write published evidence");
+        std::fs::set_permissions(&published, std::fs::Permissions::from_mode(0o640))
+            .expect("secure published evidence");
+        std::fs::hard_link(&published, &published_temporary)
+            .expect("simulate crash after publication link");
+        recover_stale_temporary_files(&directory, nix::unistd::getegid().as_raw())
+            .expect("complete safe published recovery");
+        assert!(!published_temporary.exists());
+        assert_eq!(
+            std::fs::read(&published).expect("read recovered evidence"),
+            b"durable evidence"
+        );
+
+        std::fs::write(&stale, b"unsafe").expect("write unsafe temporary");
+        std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o666))
+            .expect("make unsafe temporary");
+        assert!(
+            recover_stale_temporary_files(&directory, nix::unistd::getegid().as_raw()).is_err()
+        );
+        std::fs::remove_file(stale).expect("remove unsafe temporary");
+        std::fs::remove_file(published).expect("remove recovered evidence");
         std::fs::remove_dir(directory).expect("remove spool");
     }
 
@@ -556,6 +1021,95 @@ mod tests {
         );
         assert!(consume_plan(&directory, "plan-0123456789abcdefabcd").is_err());
         std::fs::remove_file(marker).expect("remove marker");
+        std::fs::remove_dir(directory).expect("remove spool");
+    }
+
+    #[test]
+    fn spool_capacity_rejects_symlinked_or_malformed_managed_entries() {
+        let directory = std::env::temp_dir().join(format!(
+            "perflens-spool-entry-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).expect("create spool");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("secure spool");
+        let outside = std::env::temp_dir().join(format!(
+            "perflens-outside-artifact-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::write(&outside, b"outside").expect("write outside target");
+        let disguised = directory.join("plan-0123456789abcdefabcd.stat.csv");
+        std::os::unix::fs::symlink(&outside, &disguised).expect("create disguised symlink");
+        assert!(authorize_spool_capacity(&directory, 0, nix::unistd::getegid().as_raw()).is_err());
+        std::fs::remove_file(disguised).expect("remove disguised symlink");
+
+        let malformed = directory.join("plan-0123456789abcdefabcd.perf.data");
+        std::fs::write(&malformed, b"unsafe mode").expect("write malformed artifact");
+        std::fs::set_permissions(&malformed, std::fs::Permissions::from_mode(0o666))
+            .expect("make malformed artifact writable");
+        assert!(authorize_spool_capacity(&directory, 0, nix::unistd::getegid().as_raw()).is_err());
+        std::fs::remove_file(malformed).expect("remove malformed artifact");
+        std::fs::remove_file(outside).expect("remove outside target");
+        std::fs::remove_dir(directory).expect("remove spool");
+    }
+
+    #[test]
+    fn startup_spool_validation_does_not_apply_new_collection_quota() {
+        let directory = std::env::temp_dir().join(format!(
+            "perflens-full-spool-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).expect("create spool");
+        let artifact_gid = nix::unistd::getegid().as_raw();
+        for index in 0..500_u64 {
+            let artifact = directory.join(format!("plan-{index:020x}.stat.csv"));
+            std::fs::write(&artifact, b"x").expect("write retained artifact");
+            std::fs::set_permissions(&artifact, std::fs::Permissions::from_mode(0o640))
+                .expect("secure retained artifact");
+        }
+        assert_eq!(
+            validate_spool_entries(&directory, artifact_gid).expect("validate full spool"),
+            (500, 500)
+        );
+        assert!(authorize_spool_capacity(&directory, 1, artifact_gid).is_err());
+        for entry in std::fs::read_dir(&directory).expect("read full spool") {
+            std::fs::remove_file(entry.expect("read retained artifact").path())
+                .expect("remove retained artifact");
+        }
+        std::fs::remove_dir(directory).expect("remove spool");
+    }
+
+    #[test]
+    fn replay_state_prunes_expired_markers_and_rejects_reuse() {
+        let directory = std::env::temp_dir().join(format!(
+            "perflens-replay-prune-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).expect("create spool");
+        let plan_id = "plan-0123456789abcdefabcd";
+        consume_plan(&directory, plan_id).expect("consume plan");
+        assert!(prune_replay_markers(&directory, Some(plan_id)).is_err());
+
+        let marker = directory.join(".perflens-consumed-plan-0123456789abcdefabcd");
+        let stale = SystemTime::now()
+            .checked_sub(REPLAY_RETENTION + Duration::from_secs(1))
+            .expect("stale timestamp");
+        let times = std::fs::FileTimes::new().set_modified(stale);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&marker)
+            .expect("open marker")
+            .set_times(times)
+            .expect("make marker stale");
+        assert_eq!(
+            prune_replay_markers(&directory, None).expect("prune stale marker"),
+            0
+        );
+        assert!(!marker.exists());
         std::fs::remove_dir(directory).expect("remove spool");
     }
 }

@@ -192,6 +192,7 @@ def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
     }
     policy = (target / "collector.toml").read_text(encoding="utf-8")
     service = (target / "perflens-collector.service").read_text(encoding="utf-8")
+    helper_service = (target / "perflens-privileged-helper.service").read_text(encoding="utf-8")
     assert "allowed_uids = [1000]" in policy
     assert "policy_version = 1" in policy
     assert 'privilege_mode = "cap_perfmon"' in policy
@@ -209,6 +210,9 @@ def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
     assert "perflens-admin spool-status checks quotas read-only" in policy
     assert "exactly one UID is supported" in policy
     assert "ExecStart=/opt/perflens/bin/perflens-collector " in service
+    assert "--perf-path /usr/lib/linux-tools/perf" in helper_service
+    assert "ReadOnlyPaths=/usr/lib/linux-tools/perf /proc" in helper_service
+    assert "@PERFLENS_PERF_" not in helper_service
     with pytest.raises(PerfLensError) as captured:
         install_collector_assets(target)
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
@@ -253,6 +257,21 @@ def test_collector_asset_rendering_rejects_unsafe_deployment_values(tmp_path: Pa
         )
     with pytest.raises(PerfLensError):
         install_collector_assets(tmp_path / "perf", perf_path=Path("perf"))
+    with pytest.raises(PerfLensError):
+        install_collector_assets(
+            tmp_path / "perf-space",
+            perf_path=Path("/opt/Perf Tools/perf"),
+        )
+    with pytest.raises(PerfLensError):
+        install_collector_assets(
+            tmp_path / "perf-systemd-specifier",
+            perf_path=Path("/opt/perf-%u/perf"),
+        )
+    with pytest.raises(PerfLensError):
+        install_collector_assets(
+            tmp_path / "collector-systemd-variable",
+            collector_command=Path("/opt/$COLLECTOR/perflens-collector"),
+        )
 
 
 def test_codex_config_uses_canonical_paths_and_optional_process_gate(tmp_path: Path) -> None:

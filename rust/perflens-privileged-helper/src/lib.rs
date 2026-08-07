@@ -9,14 +9,14 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use nix::unistd::geteuid;
 use serde::{Deserialize, Serialize};
 
-use crate::execution::{ExecutionPlan, execute_production_plan};
+use crate::execution::{ExecutionPlan, execute_production_plan, prepare_production_environment};
 
 pub const HELPER_SCHEMA_VERSION: &str = "1.0";
 pub const MAX_HELPER_MESSAGE_BYTES: usize = 64 << 10;
@@ -116,11 +116,12 @@ pub struct HelperResponse {
     pub error: Option<HelperErrorBody>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HelperServerPolicy {
     pub broker_uid: u32,
     pub allowed_uid: u32,
     pub artifact_gid: u32,
+    pub perf_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,19 +162,43 @@ impl Error for ProtocolError {}
 /// # Errors
 ///
 /// Returns an I/O error when the socket boundary is unsafe or cannot accept connections.
-pub fn serve_private_socket(socket_path: &Path, policy: HelperServerPolicy) -> io::Result<()> {
+pub fn serve_private_socket(socket_path: &Path, policy: &HelperServerPolicy) -> io::Result<()> {
+    prepare_production_environment(&policy.perf_path, policy.artifact_gid).map_err(|_error| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "privileged Helper production environment is unsafe",
+        )
+    })?;
     let listener = bind_private_socket(socket_path)?;
+    serve_listener(&listener, policy, None)
+}
+
+fn serve_listener(
+    listener: &UnixListener,
+    policy: &HelperServerPolicy,
+    connection_limit: Option<usize>,
+) -> io::Result<()> {
+    let mut handled = 0_usize;
     for accepted in listener.incoming() {
         let mut connection = accepted?;
-        connection.set_read_timeout(Some(Duration::from_secs(5)))?;
-        connection.set_write_timeout(Some(Duration::from_secs(5)))?;
+        if connection
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .and_then(|()| connection.set_write_timeout(Some(Duration::from_secs(5))))
+            .is_err()
+        {
+            continue;
+        }
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(io::Error::other)?
             .as_millis()
             .try_into()
             .map_err(io::Error::other)?;
-        handle_connection(&mut connection, policy, now)?;
+        let _connection_result = handle_connection(&mut connection, policy, now);
+        handled += 1;
+        if connection_limit.is_some_and(|limit| handled >= limit) {
+            break;
+        }
     }
     Ok(())
 }
@@ -227,7 +252,7 @@ fn unsafe_socket_error() -> io::Error {
 /// Returns an I/O error when peer credential lookup, bounded reading, or response writing fails.
 pub fn handle_connection(
     connection: &mut UnixStream,
-    policy: HelperServerPolicy,
+    policy: &HelperServerPolicy,
     now_unix_milliseconds: u64,
 ) -> io::Result<()> {
     let credentials = getsockopt(&*connection, PeerCredentials).map_err(io::Error::other)?;
@@ -299,6 +324,7 @@ pub fn handle_connection(
                 },
                 policy.allowed_uid,
                 policy.artifact_gid,
+                &policy.perf_path,
             ) {
                 Ok(result) => HelperResponse {
                     schema_version: HELPER_SCHEMA_VERSION,
@@ -535,6 +561,7 @@ const fn expired_error() -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Write};
+    use std::net::Shutdown;
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixStream;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -543,12 +570,21 @@ mod tests {
     use nix::unistd::geteuid;
 
     use super::{
-        HelperRequest, HelperServerPolicy, ProtocolErrorKind, bind_private_socket,
-        handle_connection, parse_request_frame,
+        HelperRequest, HelperServerPolicy, MAX_HELPER_MESSAGE_BYTES, ProtocolErrorKind,
+        bind_private_socket, handle_connection, parse_request_frame, serve_listener,
     };
 
     const NOW_MILLISECONDS: u64 = 4_102_444_700_000;
     static TEST_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn server_policy(allowed_uid: u32) -> HelperServerPolicy {
+        HelperServerPolicy {
+            broker_uid: geteuid().as_raw(),
+            allowed_uid,
+            artifact_gid: nix::unistd::getegid().as_raw(),
+            perf_path: "/usr/bin/perf".into(),
+        }
+    }
 
     #[test]
     fn accepts_shared_valid_golden_frames() {
@@ -626,11 +662,7 @@ mod tests {
         let server_thread = thread::spawn(move || {
             handle_connection(
                 &mut server,
-                HelperServerPolicy {
-                    broker_uid: geteuid().as_raw(),
-                    allowed_uid: geteuid().as_raw(),
-                    artifact_gid: nix::unistd::getegid().as_raw(),
-                },
+                &server_policy(geteuid().as_raw()),
                 NOW_MILLISECONDS,
             )
         });
@@ -667,11 +699,7 @@ mod tests {
             let (mut connection, _address) = listener.accept().expect("accept connection");
             handle_connection(
                 &mut connection,
-                HelperServerPolicy {
-                    broker_uid: geteuid().as_raw(),
-                    allowed_uid: geteuid().as_raw(),
-                    artifact_gid: nix::unistd::getegid().as_raw(),
-                },
+                &server_policy(geteuid().as_raw()),
                 NOW_MILLISECONDS,
             )
         });
@@ -697,15 +725,7 @@ mod tests {
     fn authenticated_collection_denies_disallowed_uid_over_unix_socket() {
         let (mut client, mut server) = UnixStream::pair().expect("socket pair");
         let server_thread = thread::spawn(move || {
-            handle_connection(
-                &mut server,
-                HelperServerPolicy {
-                    broker_uid: geteuid().as_raw(),
-                    allowed_uid: 999,
-                    artifact_gid: nix::unistd::getegid().as_raw(),
-                },
-                NOW_MILLISECONDS,
-            )
+            handle_connection(&mut server, &server_policy(999), NOW_MILLISECONDS)
         });
         client
             .write_all(include_bytes!(
@@ -721,5 +741,47 @@ mod tests {
         assert!(response.contains("\"ok\":false"));
         assert!(response.contains("PATH_SAFETY_VIOLATION"));
         assert!(response.contains("policy rejected the caller or target UID"));
+    }
+
+    #[test]
+    fn malformed_worker_connection_does_not_terminate_the_helper_listener() {
+        let directory = std::env::temp_dir().join(format!(
+            "perflens-helper-worker-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).expect("create private directory");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("set private directory mode");
+        let socket_path = directory.join("helper.sock");
+        let listener = bind_private_socket(&socket_path).expect("bind private socket");
+        let server_thread = thread::spawn(move || {
+            serve_listener(&listener, &server_policy(geteuid().as_raw()), Some(2))
+        });
+
+        let mut malformed = UnixStream::connect(&socket_path).expect("connect malformed client");
+        malformed
+            .write_all(&vec![b'x'; MAX_HELPER_MESSAGE_BYTES + 1])
+            .expect("write oversized frame");
+        malformed
+            .shutdown(Shutdown::Write)
+            .expect("finish malformed frame");
+        drop(malformed);
+
+        let mut healthy = UnixStream::connect(&socket_path).expect("connect healthy client");
+        healthy
+            .write_all(include_bytes!(
+                "../../../tests/fixtures/privileged_helper/valid/health.jsonl"
+            ))
+            .expect("write health request");
+        let mut response = String::new();
+        healthy.read_to_string(&mut response).expect("read health");
+        server_thread
+            .join()
+            .expect("server join")
+            .expect("listener survives malformed worker");
+        std::fs::remove_file(&socket_path).expect("remove socket");
+        std::fs::remove_dir(&directory).expect("remove directory");
+        assert!(response.contains("\"ok\":true"));
     }
 }

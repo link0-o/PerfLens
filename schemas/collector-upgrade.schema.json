@@ -1,6 +1,19 @@
 {
   "additionalProperties": false,
   "properties": {
+    "candidate_helper_service_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate Helper Service Sha256"
+    },
     "candidate_service_sha256": {
       "pattern": "^[a-f0-9]{64}$",
       "title": "Candidate Service Sha256",
@@ -17,6 +30,28 @@
     "config_preserved": {
       "default": true,
       "title": "Config Preserved",
+      "type": "boolean"
+    },
+    "helper_service_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Helper Service Path"
+    },
+    "helper_service_update_required": {
+      "default": false,
+      "title": "Helper Service Update Required",
+      "type": "boolean"
+    },
+    "helper_service_updated": {
+      "default": false,
+      "title": "Helper Service Updated",
       "type": "boolean"
     },
     "next_steps": {
@@ -40,6 +75,19 @@
       },
       "title": "Planned Commands",
       "type": "array"
+    },
+    "previous_helper_service_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Previous Helper Service Sha256"
     },
     "previous_service_sha256": {
       "pattern": "^[a-f0-9]{64}$",
