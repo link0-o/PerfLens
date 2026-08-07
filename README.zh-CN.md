@@ -352,7 +352,7 @@ Skill 本身不是授权。
 `perflens-admin spool-status --json`。`paranoid3_helper` 的真实 spool 是仅特权服务可列举的
 `/var/lib/perflens-helper`，因此该模式应由管理员运行 `sudo perflens-admin spool-status`。
 
-`cap_perfmon` 模式下旧证据不会自动轮转。管理员可以先用
+两种 Collector 权限模式下旧证据都不会自动轮转。管理员可以先用
 `perflens-admin archive-spool --dry-run` 生成精确
 计划，再创建带版本化 manifest 和逐文件 SHA-256 的只读 ZIP；源文件此时仍全部保留。
 使用 `verify-spool-archive` 可以完全只读地验证归档；加 `--verify-sources` 还会核对仍
@@ -360,8 +360,8 @@ Skill 本身不是授权。
 审查后，才能输入 `I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE` 清理完全匹配的
 原文件。完整命令见
 [《产品部署指南》](docs/deployment.zh-CN.md)。Agent 不应自动执行该清理流程。
-v0.2.0 的归档和清理入口尚不支持 Rust Helper 私有 spool，会明确返回
-`UNSUPPORTED_FORMAT`，不会误操作普通 spool；高级模式证据必须先保留。
+归档器根据已部署策略选择普通 Broker spool 或 Rust Helper 私有 spool，并在 manifest
+中绑定权限模式与真实路径；高级模式需要管理员通过 `sudo` 执行，不能放宽私有目录权限。
 
 首次部署和后续升级都会完成只读健康协议往返，并通过内核凭据复核服务 PID/UID；仅
 存在 Socket 文件不会被当作成功，因此旧文件、错误身份或未监听服务会在自动采集前

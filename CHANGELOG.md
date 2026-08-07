@@ -4,6 +4,24 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- The archive/verify/prune lifecycle now supports the root-managed Rust Helper spool. It resolves
+  the active spool from the immutable privilege mode, separately verifies the Helper directory,
+  artifact, and replay-marker ownership domains, records the mode in the versioned manifest, and
+  retains the existing descriptor-pinned, no-follow, inode/SHA-256, explicit-authorization flow.
+
+### Changed
+
+- Tag publication is now blocked on the complete Python 3.12/3.13 quality matrix and a strict
+  audit of locked runtime dependencies inside the Release workflow itself; the independent CI
+  workflow is no longer the only place enforcing those checks.
+
+### Fixed
+
+- `perflens-admin undeploy` now builds its systemd command list from the units that actually exist,
+  so a verified Helper-only or Broker-only partial deployment can be removed safely.
+
 ## [0.2.0] - 2026-08-07
 
 ### Added

@@ -5,18 +5,18 @@
 本文记录已经复现、具有明确边界和临时处理方法的问题，包括已经修复的问题。
 不要通过降低部署器安全检查来规避问题；升级前仍可按对应版本的临时方法处理。
 
-## KL-2026-08-07：Rust Helper 私有 spool 暂不支持归档和清理
+## KL-2026-08-07：Rust Helper 私有 spool 曾不支持归档和清理（已修复）
 
-- 影响版本：`v0.2.0` 的 `paranoid3_helper` 模式；
-- 不影响：采集、后续分析、`sudo perflens-admin spool-status`，以及 `cap_perfmon` 模式的
-  完整归档/验证/清理流程；
-- 当前行为：`archive-spool`、`verify-spool-archive` 和 `prune-archived-spool` 明确返回
-  `UNSUPPORTED_FORMAT`，不会误读或删除普通 `/var/lib/perflens` 中的文件；
-- 原因：Helper spool 由 root 管理，并使用与 Python Broker spool 不同的目录和属主边界，
-  不能安全复用原有清理器的身份假设。
+- 影响范围：`v0.2.0` 最初实现中的 `paranoid3_helper` 模式；
+- 修复状态：当前开发分支已修复，将随下一版本发布；
+- 原行为：`archive-spool`、`verify-spool-archive` 和 `prune-archived-spool` 明确返回
+  `UNSUPPORTED_FORMAT`，避免误读或删除普通 `/var/lib/perflens` 中的文件；
+- 修复内容：归档生命周期现在根据已审查的权限模式选择真实 spool，分别验证 Helper
+  目录/墓碑的 `root:perflens-internal` 身份和产物的 `root:perflens` 身份，并在 manifest
+  中绑定权限模式与 spool 路径。
 
-在专用的 root-owned 归档流程完成前，请保留 `/var/lib/perflens-helper`。不要手工删除
-未知证据或修改目录权限来绕过限制。这不阻塞 v0.2.0 的核心短时采集和分析闭环。
+使用最初 v0.2.0 实现的现有部署应先升级，再清理 Helper spool。不要手工删除未知证据
+或修改目录权限来绕过检查。
 
 ## KI-2026-08-06：DEB 原地升级后入口可能继续加载旧版本字节码
 

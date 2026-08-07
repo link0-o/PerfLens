@@ -7,6 +7,7 @@ import sys
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -41,6 +42,9 @@ def _spool_inputs(
         service_path=tmp_path / "system/etc/systemd/perflens-collector.service",
         state_directory=tmp_path / "system/var/lib/perflens",
         socket_path=tmp_path / "system/run/perflens/collector.sock",
+        helper_service_path=tmp_path / "system/etc/systemd/perflens-privileged-helper.service",
+        helper_state_directory=tmp_path / "system/var/lib/perflens-helper",
+        helper_socket_path=tmp_path / "system/run/perflens-helper/helper.sock",
     )
     layout.state_directory.mkdir(parents=True)
     layout.state_directory.chmod(0o750)
@@ -475,7 +479,7 @@ def test_archive_rejects_missing_admin_and_unsafe_runtime_parameters(tmp_path: P
     assert unsafe_parent.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 
-def test_archive_lifecycle_rejects_private_helper_spool_until_supported(
+def test_archive_lifecycle_supports_private_helper_spool_with_explicit_admin_boundaries(
     tmp_path: Path,
 ) -> None:
     config, layout, archive_directory, now = _spool_inputs(tmp_path)
@@ -488,18 +492,114 @@ def test_archive_lifecycle_rejects_private_helper_spool_until_supported(
         encoding="utf-8",
     )
     config.chmod(0o600)
+    layout.helper_state_directory.mkdir(parents=True)
+    layout.helper_state_directory.chmod(0o750)
+    source = layout.helper_state_directory / "plan-00000000000000000001.perf.data"
+    source.write_bytes(b"helper evidence")
+    source.chmod(0o640)
+    old_timestamp = now - timedelta(days=10)
+    timestamp_ns = int(old_timestamp.timestamp() * 1_000_000_000)
+    os.utime(source, ns=(timestamp_ns, timestamp_ns))
+    replay = layout.helper_state_directory / replay_marker_name("plan-00000000000000000002")
+    replay.touch(mode=0o600)
     archive = archive_directory / "helper.zip"
 
-    with pytest.raises(PerfLensError, match="Rust Helper private spool") as create:
-        _archive(archive, config, layout, now, dry_run=True)
-    with pytest.raises(PerfLensError, match="Rust Helper private spool") as verify:
-        _verify(archive, config, layout)
-    with pytest.raises(PerfLensError, match="Rust Helper private spool") as prune:
-        _prune(archive, config, layout, dry_run=True)
+    planned = _archive(
+        archive,
+        config,
+        layout,
+        now,
+        dry_run=True,
+        older_than_days=0,
+        keep_latest=0,
+    )
+    assert planned.manifest.privilege_mode == "paranoid3_helper"
+    assert planned.manifest.spool_root == str(layout.helper_state_directory)
+    assert [entry.name for entry in planned.manifest.entries] == [source.name]
 
-    assert create.value.code is ErrorCode.UNSUPPORTED_FORMAT
-    assert verify.value.code is ErrorCode.UNSUPPORTED_FORMAT
-    assert prune.value.code is ErrorCode.UNSUPPORTED_FORMAT
+    created = _archive(
+        archive,
+        config,
+        layout,
+        now,
+        older_than_days=0,
+        keep_latest=0,
+    )
+    assert created.status == "archived"
+    checked = _verify(archive, config, layout, verify_sources=True)
+    assert checked.spool_root == str(layout.helper_state_directory)
+    assert checked.present_source_artifact_count == 1
+
+    broker_config = tmp_path / "broker.toml"
+    broker_config.write_text(
+        config.read_text(encoding="utf-8")
+        .replace('privilege_mode = "paranoid3_helper"\n', "")
+        .replace("max_spool_bytes = 5368709120", "max_spool_bytes = 10737418240")
+        .replace("max_spool_artifacts = 500", "max_spool_artifacts = 1000")
+        .replace("min_free_bytes = 2147483648", "min_free_bytes = 0"),
+        encoding="utf-8",
+    )
+    broker_config.chmod(0o600)
+    with pytest.raises(PerfLensError) as wrong_mode:
+        _verify(archive, broker_config, layout)
+    assert wrong_mode.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    prune_plan = _prune(archive, config, layout, dry_run=True)
+    assert prune_plan.planned_artifact_names == (source.name,)
+    pruned = _prune(
+        archive,
+        config,
+        layout,
+        authorization=SPOOL_PRUNE_AUTHORIZATION,
+    )
+    assert pruned.status == "pruned"
+    assert not source.exists()
+    assert replay.exists()
+    assert archive.exists()
+
+
+def test_private_helper_spool_uses_distinct_production_identity_domains(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, layout, _archive_directory, _now = _spool_inputs(tmp_path)
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        .replace("[collector]\n", '[collector]\nprivilege_mode = "paranoid3_helper"\n')
+        .replace("max_spool_bytes = 10737418240", "max_spool_bytes = 5368709120")
+        .replace("max_spool_artifacts = 1000", "max_spool_artifacts = 500")
+        .replace("min_free_bytes = 0", "min_free_bytes = 2147483648"),
+        encoding="utf-8",
+    )
+    source = admin_spool.load_collector_config(config, stage="test")
+    policy = admin_spool.parse_collector_deployment_policy(
+        source.raw_text,
+        expected_spool=layout.state_directory,
+        require_root_owned_tools=False,
+        stage="test",
+    )
+
+    def fake_user(_name: str) -> SimpleNamespace:
+        return SimpleNamespace(pw_gid=2200)
+
+    def fake_group(_name: str) -> SimpleNamespace:
+        return SimpleNamespace(gr_gid=2300)
+
+    monkeypatch.setattr(admin_spool.pwd, "getpwnam", fake_user)
+    monkeypatch.setattr(admin_spool.grp, "getgrnam", fake_group)
+
+    effective, identity = admin_spool._managed_spool_context(  # pyright: ignore[reportPrivateUsage]
+        policy,
+        layout,
+        service_uid=None,
+        service_gid=None,
+        stage="test",
+    )
+
+    assert effective.spool_root == layout.helper_state_directory
+    assert (identity.directory_uid, identity.directory_gid) == (0, 2300)
+    assert (identity.artifact_uid, identity.artifact_gid) == (0, 2200)
+    assert (identity.replay_uid, identity.replay_gid) == (0, 2300)
 
 
 def test_prune_rejects_changed_source_without_removing_anything(tmp_path: Path) -> None:

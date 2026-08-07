@@ -250,3 +250,30 @@ def test_release_debian_assets_are_gated_by_full_rust_helper_checks() -> None:
     assert "cargo install cargo-deny --locked --version 0.20.2" in combined
     assert "cargo audit --deny warnings" in commands
     assert "cargo deny check" in commands
+
+
+def test_release_publication_is_gated_by_python_matrix_and_dependency_audit() -> None:
+    release = _workflows()["release.yml"]
+    jobs = _jobs(release, label="release.yml")
+    quality = _mapping(jobs["python-quality"], label="release.yml.python-quality")
+    strategy = _mapping(quality.get("strategy"), label="release.yml.python-quality.strategy")
+    matrix = _mapping(strategy.get("matrix"), label="release.yml.python-quality.matrix")
+    assert matrix.get("python") == ["3.12", "3.13"]
+
+    commands = tuple(
+        cast(str, step["run"])
+        for step in _steps(quality, label="release.yml.python-quality")
+        if isinstance(step.get("run"), str)
+    )
+    combined = "\n".join(commands)
+    assert "ruff check ." in combined
+    assert "pyright" in combined
+    assert "pytest" in combined and "--cov-fail-under=85" in combined
+    assert "uv export --locked --no-dev --no-emit-project" in combined
+    assert "pip-audit" in combined and "--strict" in combined
+
+    builder = _mapping(jobs["build-release-assets"], label="release.yml.build-release-assets")
+    assert set(_sequence(builder.get("needs"), label="release.yml.build-release-assets.needs")) == {
+        "python-quality",
+        "debian-package",
+    }

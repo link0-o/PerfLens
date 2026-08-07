@@ -1128,6 +1128,44 @@ def test_admin_undeploy_removes_only_service_and_preserves_data(tmp_path: Path) 
     assert absent.planned_commands == ()
 
 
+def test_admin_undeploy_handles_a_helper_only_partial_state(tmp_path: Path) -> None:
+    _config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    layout.helper_service_path.parent.mkdir(parents=True)
+    layout.helper_service_path.write_text(
+        "# Managed by PerfLens.\n[Unit]\nDescription=managed helper\n",
+        encoding="utf-8",
+    )
+    layout.helper_service_path.chmod(0o644)
+    commands: list[tuple[str, ...]] = []
+
+    dry_run = undeploy_collector(
+        dry_run=True,
+        layout=layout,
+        require_root=False,
+        command_executor=commands.append,
+    )
+    assert dry_run.status == "dry_run"
+    assert dry_run.planned_commands == (
+        (
+            "/usr/bin/systemctl",
+            "disable",
+            "--now",
+            "perflens-privileged-helper.service",
+        ),
+        ("/usr/bin/systemctl", "daemon-reload"),
+    )
+    assert commands == []
+
+    removed = undeploy_collector(
+        layout=layout,
+        require_root=False,
+        command_executor=commands.append,
+    )
+    assert removed.status == "removed"
+    assert not layout.helper_service_path.exists()
+    assert commands == list(dry_run.planned_commands)
+
+
 def test_admin_undeploy_rejects_unmanaged_and_symlink_units(tmp_path: Path) -> None:
     _config, _perf, _collector, layout = _deployment_inputs(tmp_path)
     layout.service_path.parent.mkdir(parents=True)

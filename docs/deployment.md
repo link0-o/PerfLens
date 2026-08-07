@@ -147,10 +147,14 @@ archive. This command never prunes evidence. If reclamation is intended, next
 run `prune-archived-spool --dry-run`. Only after reviewing every planned name,
 pass `--authorization I_EXPLICITLY_AUTHORIZE_ARCHIVED_SPOOL_PRUNE`.
 
-The archive/verify/prune lifecycle in v0.2.0 applies only to the
-Broker-managed `cap_perfmon` spool. It explicitly returns `UNSUPPORTED_FORMAT`
-for the Rust Helper private spool; preserve those artifacts until a dedicated
-root-owned archival flow is available.
+The same commands support both privilege modes and derive the active spool from
+the reviewed deployed policy. In `cap_perfmon` mode they require the Broker
+directory, artifacts, and replay tombstones to match the dedicated `perflens`
+identity. In `paranoid3_helper` mode they instead open only
+`/var/lib/perflens-helper`, require the directory and tombstones to match
+`root:perflens-internal`, and require published evidence to match
+`root:perflens`. The manifest records the privilege mode and actual spool path,
+so an archive from one mode cannot be verified or pruned as the other mode.
 
 Pruning requires a root-managed archive and parent, verifies the ZIP, manifest,
 archived bytes, and each source device/inode/size/mtime/owner/mode/SHA-256 before

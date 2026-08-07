@@ -202,11 +202,13 @@ perflens-admin spool-status --json
 
 ## 归档并安全清理旧证据
 
-以下归档/验证/清理流程在 v0.2.0 只支持 `cap_perfmon` 的 Broker spool。
-`paranoid3_helper` 使用 root 管理的私有 spool，相关入口会明确返回
-`UNSUPPORTED_FORMAT`，不会错误操作普通目录；在专用归档流程完成前必须保留其中证据。
+同一组归档/验证/清理命令现在支持两种权限模式，并根据已部署策略选择真实 spool。
+`cap_perfmon` 模式要求目录、产物和计划墓碑符合专用 `perflens` 身份；
+`paranoid3_helper` 模式只打开 `/var/lib/perflens-helper`，分别要求目录和计划墓碑属于
+`root:perflens-internal`、发布产物属于 `root:perflens`。版本化 manifest 同时记录权限
+模式和真实 spool 路径，因此一个模式生成的归档不能被当成另一个模式的归档验证或清理。
 
-PerfLens 不按时间自动删除性能证据。需要释放 Broker spool 空间时，管理员先在独立磁盘或
+PerfLens 不按时间自动删除性能证据。需要释放当前 Collector spool 空间时，管理员先在独立磁盘或
 备份位置准备一个 root 管理、不可组写的目录；下面路径只是示例：
 
 ```bash

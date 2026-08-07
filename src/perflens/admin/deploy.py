@@ -778,9 +778,10 @@ def undeploy_collector(
     service = effective_layout.service_path
     helper_service = effective_layout.helper_service_path
     helper_present = helper_service.exists() or helper_service.is_symlink()
-    commands: list[tuple[str, ...]] = [
-        ("/usr/bin/systemctl", "disable", "--now", "perflens-collector.service")
-    ]
+    service_present = service.exists() or service.is_symlink()
+    commands: list[tuple[str, ...]] = []
+    if service_present:
+        commands.append(("/usr/bin/systemctl", "disable", "--now", "perflens-collector.service"))
     if helper_present:
         commands.append(
             (
@@ -802,7 +803,6 @@ def undeploy_collector(
     )
     if not service.exists() and not service.is_symlink() and not helper_present:
         return _undeployment_result("already_absent", effective_layout, (), warnings, next_steps)
-    service_present = service.exists() or service.is_symlink()
     if service_present:
         _verify_managed_service(service, require_root_owner=require_root)
     if helper_present:
@@ -820,9 +820,8 @@ def undeploy_collector(
             suggested_actions=("Run sudo perflens-admin undeploy.",),
         )
     executor = command_executor or _run_admin_undeploy_command
-    executor(planned_commands[0])
-    if helper_present:
-        executor(planned_commands[1])
+    for planned in planned_commands[:-1]:
+        executor(planned)
     if service_present:
         _unlink_verified_managed_service(service, require_root_owner=require_root)
     if helper_present:

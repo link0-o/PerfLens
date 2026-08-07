@@ -292,7 +292,9 @@ Evidence is never age-deleted automatically. Administrators can use the
 archive-then-prune workflow to create a bounded stored ZIP with a versioned
 manifest and per-file SHA-256, preserve all sources, verify both copies with a
 dry run, and only then explicitly authorize removal of exact matching source
-inodes. The archive remains intact and Agents must not schedule pruning.
+inodes. It selects the Broker or private Rust Helper spool from the deployed
+privilege mode and binds that mode and path into the manifest. The archive
+remains intact and Agents must not schedule pruning.
 
 Administrators can tune the bilingual policy without memorizing a manual
 restart sequence: copy it to a separate mode-`0600` candidate, run

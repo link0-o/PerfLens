@@ -664,6 +664,7 @@ class CollectorSpoolArchiveManifest(ContractModel):
     config_path: str
     spool_root: str
     allowed_uid: int = Field(gt=0)
+    privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon"
     policy_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     older_than_days: int = Field(ge=0, le=36_500)
     keep_latest: int = Field(ge=0, le=10_000)

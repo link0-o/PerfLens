@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import grp
 import hashlib
 import os
 import pwd
 import stat
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -53,23 +54,14 @@ class _SpoolSnapshot:
     metadata: os.stat_result
 
 
-def _require_broker_managed_spool(
-    policy: CollectorDeploymentPolicy,
-    *,
-    stage: str,
-) -> None:
-    if policy.privilege_mode == "paranoid3_helper":
-        raise PerfLensError(
-            ErrorCode.UNSUPPORTED_FORMAT,
-            stage,
-            "Archive and prune do not yet support the Rust Helper private spool",
-            recoverable=True,
-            details={"privilege_mode": policy.privilege_mode},
-            suggested_actions=(
-                "Use perflens-admin spool-status for read-only capacity inspection.",
-                "Preserve /var/lib/perflens-helper and do not delete evidence manually.",
-            ),
-        )
+@dataclass(frozen=True, slots=True)
+class _SpoolIdentity:
+    directory_uid: int
+    directory_gid: int
+    artifact_uid: int
+    artifact_gid: int
+    replay_uid: int
+    replay_gid: int
 
 
 def archive_collector_spool(
@@ -105,12 +97,26 @@ def archive_collector_spool(
         require_root_owned_tools=require_root_owned_tools,
         stage=stage,
     )
-    _require_broker_managed_spool(policy, stage=stage)
+    policy, identity = _managed_spool_context(
+        policy,
+        effective_layout,
+        service_uid=service_uid,
+        service_gid=service_gid,
+        stage=stage,
+    )
     if os.geteuid() not in {0, policy.allowed_uids[0]}:
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
             stage,
             "Only root or the policy-authorized user may archive Collector evidence",
+        )
+    if policy.privilege_mode == "paranoid3_helper" and require_root and os.geteuid() != 0:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Rust Helper spool archival requires an explicit administrator invocation",
+            recoverable=True,
+            suggested_actions=("Run sudo perflens-admin archive-spool after reviewing dry-run.",),
         )
     if require_root and not dry_run and os.geteuid() != 0:
         raise PerfLensError(
@@ -119,11 +125,6 @@ def archive_collector_spool(
             "Collector spool archival must be started explicitly by an administrator",
             recoverable=True,
         )
-    expected_service_uid, expected_service_gid = _collector_service_identity(
-        service_uid,
-        service_gid,
-        stage=stage,
-    )
     safe_output = _new_archive_path(
         output_path,
         policy.spool_root,
@@ -141,15 +142,13 @@ def archive_collector_spool(
 
     spool_descriptor = _open_spool(
         policy,
-        expected_service_uid=expected_service_uid,
-        expected_service_gid=expected_service_gid,
+        identity=identity,
         stage=stage,
     )
     try:
         snapshots = _scan_managed_spool(
             spool_descriptor,
-            expected_service_uid=expected_service_uid,
-            expected_service_gid=expected_service_gid,
+            identity=identity,
             stage=stage,
         )
         selected, eligible_count = _select_snapshots(
@@ -164,8 +163,7 @@ def archive_collector_spool(
                 _capture_entry(
                     spool_descriptor,
                     snapshot,
-                    expected_service_uid=expected_service_uid,
-                    expected_service_gid=expected_service_gid,
+                    identity=identity,
                     archive=None,
                     stage=stage,
                 )
@@ -215,8 +213,7 @@ def archive_collector_spool(
             source_path=source.path,
             policy=policy,
             policy_raw=policy_raw,
-            expected_service_uid=expected_service_uid,
-            expected_service_gid=expected_service_gid,
+            identity=identity,
             created_at=effective_now,
             older_than_days=older_than_days,
             keep_latest=keep_latest,
@@ -254,7 +251,13 @@ def verify_collector_spool_archive(
         require_root_owned_tools=require_root,
         stage=stage,
     )
-    _require_broker_managed_spool(policy, stage=stage)
+    policy, identity = _managed_spool_context(
+        policy,
+        effective_layout,
+        service_uid=service_uid,
+        service_gid=service_gid,
+        stage=stage,
+    )
     resolved_archive, archive_sha256, manifest = _verify_archive(
         archive_path,
         policy=policy,
@@ -264,15 +267,9 @@ def verify_collector_spool_archive(
     present_count: int | None = None
     absent_count: int | None = None
     if verify_sources:
-        expected_service_uid, expected_service_gid = _collector_service_identity(
-            service_uid,
-            service_gid,
-            stage=stage,
-        )
         spool_descriptor = _open_spool(
             policy,
-            expected_service_uid=expected_service_uid,
-            expected_service_gid=expected_service_gid,
+            identity=identity,
             stage=stage,
         )
         try:
@@ -283,8 +280,7 @@ def verify_collector_spool_archive(
                     _verify_source_entry(
                         spool_descriptor,
                         entry,
-                        expected_service_uid=expected_service_uid,
-                        expected_service_gid=expected_service_gid,
+                        identity=identity,
                         stage=stage,
                     )
                     present_count += 1
@@ -324,10 +320,11 @@ def prune_archived_collector_spool(
         require_root_owned_tools=require_root,
         stage=stage,
     )
-    _require_broker_managed_spool(policy, stage=stage)
-    expected_service_uid, expected_service_gid = _collector_service_identity(
-        service_uid,
-        service_gid,
+    policy, identity = _managed_spool_context(
+        policy,
+        effective_layout,
+        service_uid=service_uid,
+        service_gid=service_gid,
         stage=stage,
     )
     resolved_archive, archive_sha256, manifest = _verify_archive(
@@ -338,8 +335,7 @@ def prune_archived_collector_spool(
     )
     spool_descriptor = _open_spool(
         policy,
-        expected_service_uid=expected_service_uid,
-        expected_service_gid=expected_service_gid,
+        identity=identity,
         stage=stage,
     )
     try:
@@ -350,8 +346,7 @@ def prune_archived_collector_spool(
                 _verify_source_entry(
                     spool_descriptor,
                     entry,
-                    expected_service_uid=expected_service_uid,
-                    expected_service_gid=expected_service_gid,
+                    identity=identity,
                     stage=stage,
                 )
                 present.append(entry)
@@ -405,8 +400,7 @@ def prune_archived_collector_spool(
             _verify_source_entry(
                 spool_descriptor,
                 entry,
-                expected_service_uid=expected_service_uid,
-                expected_service_gid=expected_service_gid,
+                identity=identity,
                 stage=stage,
             )
             try:
@@ -531,6 +525,45 @@ def _collector_service_identity(
         ) from exc
 
 
+def _managed_spool_context(
+    policy: CollectorDeploymentPolicy,
+    layout: CollectorSystemLayout,
+    *,
+    service_uid: object | None,
+    service_gid: object | None,
+    stage: str,
+) -> tuple[CollectorDeploymentPolicy, _SpoolIdentity]:
+    """Resolve the active spool and independently bounded ownership domains."""
+    if service_uid is not None or service_gid is not None:
+        uid, gid = _collector_service_identity(service_uid, service_gid, stage=stage)
+        identity = _SpoolIdentity(uid, gid, uid, gid, uid, gid)
+    elif policy.privilege_mode == "paranoid3_helper":
+        try:
+            artifact_group = pwd.getpwnam("perflens").pw_gid
+            internal_group = grp.getgrnam("perflens-internal").gr_gid
+        except KeyError as exc:
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_FAILED,
+                stage,
+                "Dedicated PerfLens service groups do not exist",
+                suggested_actions=("Deploy the Collector before managing its spool.",),
+            ) from exc
+        identity = _SpoolIdentity(
+            directory_uid=0,
+            directory_gid=internal_group,
+            artifact_uid=0,
+            artifact_gid=artifact_group,
+            replay_uid=0,
+            replay_gid=internal_group,
+        )
+    else:
+        uid, gid = _collector_service_identity(None, None, stage=stage)
+        identity = _SpoolIdentity(uid, gid, uid, gid, uid, gid)
+    if policy.privilege_mode == "paranoid3_helper":
+        policy = replace(policy, spool_root=layout.helper_state_directory)
+    return policy, identity
+
+
 def _new_archive_path(
     path: Path,
     spool_root: Path,
@@ -587,8 +620,7 @@ def _new_archive_path(
 def _open_spool(
     policy: CollectorDeploymentPolicy,
     *,
-    expected_service_uid: int,
-    expected_service_gid: int,
+    identity: _SpoolIdentity,
     stage: str,
 ) -> int:
     descriptor = -1
@@ -609,8 +641,8 @@ def _open_spool(
         ) from exc
     if (
         not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != expected_service_uid
-        or metadata.st_gid != expected_service_gid
+        or metadata.st_uid != identity.directory_uid
+        or metadata.st_gid != identity.directory_gid
         or metadata.st_mode & 0o022
         or (metadata.st_dev, metadata.st_ino) != (path_metadata.st_dev, path_metadata.st_ino)
     ):
@@ -626,8 +658,7 @@ def _open_spool(
 def _scan_managed_spool(
     descriptor: int,
     *,
-    expected_service_uid: int,
-    expected_service_gid: int,
+    identity: _SpoolIdentity,
     stage: str,
 ) -> tuple[_SpoolSnapshot, ...]:
     snapshots: list[_SpoolSnapshot] = []
@@ -638,8 +669,8 @@ def _scan_managed_spool(
                 if replay_marker(entry.name):
                     if not safe_replay_marker_metadata(
                         metadata,
-                        expected_uid=expected_service_uid,
-                        expected_gid=expected_service_gid,
+                        expected_uid=identity.replay_uid,
+                        expected_gid=identity.replay_gid,
                     ):
                         raise PerfLensError(
                             ErrorCode.PATH_SAFETY_VIOLATION,
@@ -658,8 +689,8 @@ def _scan_managed_spool(
                 _validate_source_metadata(
                     entry.name,
                     metadata,
-                    expected_service_uid=expected_service_uid,
-                    expected_service_gid=expected_service_gid,
+                    expected_artifact_uid=identity.artifact_uid,
+                    expected_artifact_gid=identity.artifact_gid,
                     stage=stage,
                 )
                 snapshots.append(_SpoolSnapshot(entry.name, metadata))
@@ -718,8 +749,7 @@ def _capture_entry(
     spool_descriptor: int,
     snapshot: _SpoolSnapshot,
     *,
-    expected_service_uid: int,
-    expected_service_gid: int,
+    identity: _SpoolIdentity,
     archive: zipfile.ZipFile | None,
     stage: str,
 ) -> CollectorSpoolArchiveEntry:
@@ -737,8 +767,8 @@ def _capture_entry(
         _validate_source_metadata(
             snapshot.name,
             before,
-            expected_service_uid=expected_service_uid,
-            expected_service_gid=expected_service_gid,
+            expected_artifact_uid=identity.artifact_uid,
+            expected_artifact_gid=identity.artifact_gid,
             stage=stage,
         )
         with os.fdopen(descriptor, "rb", closefd=True) as source:
@@ -802,14 +832,14 @@ def _validate_source_metadata(
     name: str,
     metadata: os.stat_result,
     *,
-    expected_service_uid: int,
-    expected_service_gid: int,
+    expected_artifact_uid: int,
+    expected_artifact_gid: int,
     stage: str,
 ) -> None:
     if (
         not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != expected_service_uid
-        or metadata.st_gid != expected_service_gid
+        or metadata.st_uid != expected_artifact_uid
+        or metadata.st_gid != expected_artifact_gid
         or metadata.st_mode & 0o022
         or metadata.st_size < 0
         or metadata.st_size > _MAX_ARCHIVE_TOTAL_BYTES
@@ -870,6 +900,7 @@ def _archive_manifest(
         config_path=str(source_path),
         spool_root=str(policy.spool_root),
         allowed_uid=policy.allowed_uids[0],
+        privilege_mode=policy.privilege_mode,
         policy_sha256=policy_sha256,
         older_than_days=older_than_days,
         keep_latest=keep_latest,
@@ -891,8 +922,7 @@ def _write_archive(
     source_path: Path,
     policy: CollectorDeploymentPolicy,
     policy_raw: bytes,
-    expected_service_uid: int,
-    expected_service_gid: int,
+    identity: _SpoolIdentity,
     created_at: datetime,
     older_than_days: int,
     keep_latest: int,
@@ -922,8 +952,7 @@ def _write_archive(
                     _capture_entry(
                         spool_descriptor,
                         snapshot,
-                        expected_service_uid=expected_service_uid,
-                        expected_service_gid=expected_service_gid,
+                        identity=identity,
                         archive=archive,
                         stage=stage,
                     )
@@ -1245,6 +1274,7 @@ def _validate_manifest_consistency(
     if (
         manifest.spool_root != str(policy.spool_root)
         or manifest.allowed_uid != policy.allowed_uids[0]
+        or manifest.privilege_mode != policy.privilege_mode
         or created_at.tzinfo is None
         or manifest.archive_id
         != _archive_id(manifest.policy_sha256, manifest.spool_root, manifest.entries)
@@ -1283,8 +1313,7 @@ def _verify_source_entry(
     spool_descriptor: int,
     entry: CollectorSpoolArchiveEntry,
     *,
-    expected_service_uid: int,
-    expected_service_gid: int,
+    identity: _SpoolIdentity,
     stage: str,
 ) -> None:
     try:
@@ -1313,8 +1342,7 @@ def _verify_source_entry(
     captured = _capture_entry(
         spool_descriptor,
         snapshot,
-        expected_service_uid=expected_service_uid,
-        expected_service_gid=expected_service_gid,
+        identity=identity,
         archive=None,
         stage=stage,
     )

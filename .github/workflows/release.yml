@@ -13,6 +13,37 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  python-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+      - run: uv python install ${{ matrix.python }}
+      - run: uv sync --all-groups --python ${{ matrix.python }} --frozen
+      - run: uv run --python ${{ matrix.python }} ruff check .
+      - run: uv run --python ${{ matrix.python }} pyright
+      - run: >-
+          uv run --python ${{ matrix.python }} pytest
+          --cov=perflens --cov-fail-under=85
+      - name: Audit locked Python runtime dependencies
+        if: matrix.python == '3.13'
+        run: |
+          mkdir -p build
+          uv export --locked --no-dev --no-emit-project \
+            --format requirements.txt --output-file build/runtime-requirements.txt
+          uv run --python 3.13 pip-audit \
+            --requirement build/runtime-requirements.txt \
+            --no-deps --disable-pip --strict
+
   rust-helper:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -107,7 +138,7 @@ jobs:
           retention-days: 7
 
   build-release-assets:
-    needs: debian-package
+    needs: [python-quality, debian-package]
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -119,9 +150,6 @@ jobs:
           enable-cache: true
       - run: uv python install 3.13
       - run: uv sync --all-groups --python 3.13 --frozen
-      - run: uv run ruff check .
-      - run: uv run pyright
-      - run: uv run pytest --cov=perflens --cov-fail-under=85
       - name: Build deterministic Python packages
         run: >-
           SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
