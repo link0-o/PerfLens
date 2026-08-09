@@ -137,4 +137,5 @@ def test_accept_collector_rejects_success_without_a_measured_metric(
 
     assert captured.value.code is ErrorCode.PROFILE_PARSE_FAILED
     assert captured.value.details["metric_statuses"] == ["not_supported"]
+    assert "virtual CPU performance counters" in captured.value.suggested_actions[1]
     assert probe.poll() is not None

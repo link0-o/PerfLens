@@ -118,6 +118,9 @@ def accept_collector(
                 },
                 suggested_actions=(
                     "Inspect perf event support and the Collector journal, then retry.",
+                    "虚拟机请在虚拟化平台启用虚拟 CPU 性能计数器 / "
+                    "On a virtual machine, enable virtual CPU performance counters in the "
+                    "hypervisor.",
                 ),
             )
 

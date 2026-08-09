@@ -5,18 +5,55 @@
 This document records reproduced issues and their bounded workarounds, including
 resolved issues. Do not weaken deployment safety checks to work around them.
 
+## KI-2026-08-07: withdrawn v0.2.0 Helper unit failed during systemd USER setup (resolved)
+
+- Affected scope: the withdrawn initial native v0.2.0 `perflens-collector` DEB when Debian 13
+  selected `paranoid3_helper`; the default `cap_perfmon` mode was not affected.
+- Symptom: deployment health validation failed and the journal reported
+  `Failed to drop keep capabilities flag` followed by `Failed at step USER`. The Broker could then
+  fail its NAMESPACE step because the Helper runtime directory did not exist.
+- Cause: the Helper unit set `keep-caps-locked` before systemd finished USER setup, while systemd
+  still needed to clear `PR_SET_KEEPCAPS`; the kernel correctly denied the locked transition.
+- Fix: the replacement `v0.2.0` artifacts remove the conflicting secure-bit lock.
+  `CapabilityBoundingSet`, `AmbientCapabilities`, and `NoNewPrivileges` still restrict the Helper
+  to `CAP_PERFMON` and `CAP_SYS_ADMIN`; no Agent, MCP, Python Broker, or Helper capability boundary
+  is widened.
+
+The failed deployment rolls back its new policy, units, and sockets. Do not edit the installed
+package or weaken the unit manually; install the replacement `v0.2.0` artifacts and deploy the
+reviewed policy again.
+
+## KI-2026-08-07: bounded Helper collection treated expected SIGINT as failure (resolved)
+
+- Affected scope: the withdrawn initial `v0.2.0` `paranoid3_helper` implementation.
+- Symptom: deployment and the authenticated health handshake succeeded, but
+  `perflens accept-collector --authorize-host-acceptance` returned `EXTERNAL_TOOL_FAILED` with
+  `Privileged perf returned a non-zero result`.
+- Cause: after disabling the events at the requested duration boundary, the Helper sent SIGINT so
+  an attached `perf` process would flush and close its artifact. Linux reports that expected exit
+  as signal 2/status 130, which the Helper incorrectly treated as an external failure.
+- Fix: the replacement `v0.2.0` accepts SIGINT only when this Helper successfully sent it in the
+  bounded shutdown path. An early SIGINT, any other signal, an ordinary non-zero exit, a control
+  failure, or an empty/unsafe artifact still fails closed.
+
+This fix does not make unavailable performance counters measurable. If acceptance proceeds to
+`PROFILE_PARSE_FAILED` and every metric is `not_supported` or `not_counted`, check the host PMU. In
+particular, a virtual machine may require virtual CPU performance counters to be enabled by its
+hypervisor.
+
 ## KL-2026-08-07: Rust Helper private-spool archival was not supported (resolved)
 
-- Affected scope: the initial `v0.2.0` implementation of `paranoid3_helper`.
-- Fix status: resolved on the development branch for the next release.
+- Affected scope: the withdrawn initial `v0.2.0` implementation of `paranoid3_helper`.
+- Fix status: resolved in the replacement `v0.2.0` artifacts.
 - Previous behavior: archive, verification, and prune commands explicitly returned
   `UNSUPPORTED_FORMAT` instead of inspecting the wrong spool.
 - Fix: the lifecycle now selects the active spool from the reviewed privilege mode and separately
   verifies Helper directory/tombstone ownership (`root:perflens-internal`) and artifact ownership
   (`root:perflens`). The manifest binds the archive to its privilege mode and spool path.
 
-Existing initial-v0.2.0 installations should upgrade before attempting Helper spool cleanup. Do
-not manually delete unknown evidence or loosen directory permissions.
+Installations using the withdrawn artifacts should install the replacement v0.2.0 packages before
+attempting Helper spool cleanup. Do not manually delete unknown evidence or loosen directory
+permissions.
 
 ## KI-2026-08-06: native DEB upgrade can retain stale Python bytecode
 

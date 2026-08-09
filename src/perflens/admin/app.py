@@ -415,7 +415,7 @@ def _render_spool_status_chinese(artifact: CollectorSpoolStatusArtifact) -> None
         "exhausted",
     }:
         advice_labels[artifact.status] = (
-            "停止新的采集并保留 Helper 私有证据。v0.2.0 尚不支持对该目录归档或清理。"
+            "停止新的采集; 由管理员使用 archive-spool 先归档和验证; 再明确清理 Helper 证据。"
         )
     typer.echo("PerfLens Collector 存储检查 (只读)")
     typer.echo(f"状态: {status_labels[artifact.status]}")

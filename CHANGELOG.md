@@ -4,24 +4,6 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
-### Added
-
-- The archive/verify/prune lifecycle now supports the root-managed Rust Helper spool. It resolves
-  the active spool from the immutable privilege mode, separately verifies the Helper directory,
-  artifact, and replay-marker ownership domains, records the mode in the versioned manifest, and
-  retains the existing descriptor-pinned, no-follow, inode/SHA-256, explicit-authorization flow.
-
-### Changed
-
-- Tag publication is now blocked on the complete Python 3.12/3.13 quality matrix and a strict
-  audit of locked runtime dependencies inside the Release workflow itself; the independent CI
-  workflow is no longer the only place enforcing those checks.
-
-### Fixed
-
-- `perflens-admin undeploy` now builds its systemd command list from the units that actually exist,
-  so a verified Helper-only or Broker-only partial deployment can be removed safely.
-
 ## [0.2.0] - 2026-08-07
 
 ### Added
@@ -35,6 +17,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   `--acknowledge-cap-sys-admin-risk` during administrator deployment.
 - Cross-language Pydantic/Serde protocol schemas, golden fixtures, denial tests, real Unix-socket
   tests, fixed-argv execution tests, Rust supply-chain checks, and Chinese/English security guides.
+- The archive/verify/prune lifecycle supports the root-managed Rust Helper spool. It resolves the
+  active spool from the immutable privilege mode, separately verifies the Helper directory,
+  artifact, and replay-marker ownership domains, records the mode in the versioned manifest, and
+  retains the descriptor-pinned, no-follow, inode/SHA-256, explicit-authorization flow.
 
 ### Changed
 
@@ -53,14 +39,29 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   `cargo audit`, `cargo deny`, and target-native Debian package smoke tests.
 - Advanced upgrades now verify, hash, update, restart, and roll back the Broker and privileged
   Helper systemd units together. The versioned upgrade artifact reports both unit identities.
+- Tag publication is blocked on the complete Python 3.12/3.13 quality matrix and a strict audit of
+  locked runtime dependencies inside the Release workflow itself.
+
+### Fixed
+
+- `perflens-admin undeploy` builds its systemd command list from the units that actually exist, so
+  a verified Helper-only or Broker-only partial deployment can be removed safely.
+- The `paranoid3_helper` unit does not lock `PR_SET_KEEPCAPS` before systemd completes its USER
+  setup. The withdrawn initial artifacts could otherwise fail before executing the Rust Helper on
+  Debian 13 with `Failed to drop keep capabilities flag`; the exact capability bounding and
+  ambient sets remain limited to `CAP_PERFMON` and `CAP_SYS_ADMIN`.
+- A successful bounded PID collection may end `perf` with SIGINT after the Helper disables its
+  events. The Helper now accepts that exact, self-initiated signal as normal completion while still
+  rejecting early signals, unrelated signals, non-zero exit codes, and failed control messages.
+- The external-tool symbol-resolution integration test has its own 30-second runner budget while
+  preserving the Resolver's 5-second response timeout, preventing shared-runner startup delays
+  from cascading into a misleading coverage-gate failure.
 
 ### Security
 
 - `paranoid3_helper` does not accept shell commands, argv, environments, working directories,
   arbitrary output paths, cross-UID targets, or system-wide collection. Package installation and
   project onboarding still never invoke sudo, change sysctl, or enable a service automatically.
-- The v0.2.0 archive/verify/prune workflow is intentionally limited to the `cap_perfmon` Broker
-  spool and safely rejects the Rust Helper private spool until a dedicated lifecycle is available.
 - Failed first deployments stop newly attempted Broker/Helper services in reverse order before
   removing their managed units. PID attachment now uses perf's disabled-event control barrier and
   revalidates owner/start time only after perf has bound the target, closing the numeric-PID reuse

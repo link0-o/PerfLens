@@ -5,18 +5,49 @@
 本文记录已经复现、具有明确边界和临时处理方法的问题，包括已经修复的问题。
 不要通过降低部署器安全检查来规避问题；升级前仍可按对应版本的临时方法处理。
 
+## KI-2026-08-07：已撤回的 v0.2.0 Helper unit 无法通过 systemd USER 阶段（已修复）
+
+- 影响范围：已撤回的首批 `v0.2.0` 原生 `perflens-collector` DEB，在 Debian 13 上选择
+  `paranoid3_helper`；默认 `cap_perfmon` 模式不受影响；
+- 现象：部署健康检查失败，journal 显示 `Failed to drop keep capabilities flag` 和
+  `Failed at step USER`；Broker 随后可能因为 Helper 运行目录不存在而在 NAMESPACE 阶段失败；
+- 根因：Helper unit 过早设置 `keep-caps-locked`，但 systemd 在 USER 设置阶段仍需清除
+  `PR_SET_KEEPCAPS`，锁定状态使该安全转换被内核拒绝；
+- 修复：重新发布的 `v0.2.0` 产物移除冲突的 secure-bit 锁。Helper 仍由
+  `CapabilityBoundingSet`、`AmbientCapabilities` 和 `NoNewPrivileges` 严格限制为
+  `CAP_PERFMON` 与 `CAP_SYS_ADMIN`，没有扩大 Agent、MCP、Python Broker 或 Rust Helper
+  的 capability 集合。
+
+部署器失败后会撤回本轮新配置、两个 unit 和 Socket，不会留下半部署状态。不要手工修改
+已安装包或放宽 systemd 边界；请安装重新发布的 `v0.2.0` 产物，再用原配置重新部署。
+
+## KI-2026-08-07：Helper 将正常的限时 SIGINT 结束误判为失败（已修复）
+
+- 影响范围：已撤回的首批 `v0.2.0` `paranoid3_helper` 实现；
+- 现象：部署和认证健康握手均成功，但执行
+  `perflens accept-collector --authorize-host-acceptance` 返回 `EXTERNAL_TOOL_FAILED`，技术信息为
+  `Privileged perf returned a non-zero result`；
+- 根因：到达请求时长后，Helper 会先禁用事件，再向附加 PID 的 `perf` 发送 SIGINT，让它刷新并
+  关闭产物；Linux 会把这次正常结束表示为 signal 2/状态 130，旧逻辑却按外部失败处理；
+- 修复：重新发布的 `v0.2.0` 只在 Helper 自己成功进入限时关闭路径并发送 SIGINT 时接受该状态。
+  提前收到 SIGINT、其他信号、普通非零退出、控制消息失败以及空或不安全产物仍会安全拒绝。
+
+这项修复不会让主机原本不存在的性能计数器变得可用。如果验收继续运行后返回
+`PROFILE_PARSE_FAILED`，且所有指标都是 `not_supported` 或 `not_counted`，应检查主机 PMU；虚拟机
+通常还需要在虚拟化平台中启用“虚拟化 CPU 性能计数器”。
+
 ## KL-2026-08-07：Rust Helper 私有 spool 曾不支持归档和清理（已修复）
 
-- 影响范围：`v0.2.0` 最初实现中的 `paranoid3_helper` 模式；
-- 修复状态：当前开发分支已修复，将随下一版本发布；
+- 影响范围：已撤回的 `v0.2.0` 最初实现中的 `paranoid3_helper` 模式；
+- 修复状态：重新发布的 `v0.2.0` 产物已修复；
 - 原行为：`archive-spool`、`verify-spool-archive` 和 `prune-archived-spool` 明确返回
   `UNSUPPORTED_FORMAT`，避免误读或删除普通 `/var/lib/perflens` 中的文件；
 - 修复内容：归档生命周期现在根据已审查的权限模式选择真实 spool，分别验证 Helper
   目录/墓碑的 `root:perflens-internal` 身份和产物的 `root:perflens` 身份，并在 manifest
   中绑定权限模式与 spool 路径。
 
-使用最初 v0.2.0 实现的现有部署应先升级，再清理 Helper spool。不要手工删除未知证据
-或修改目录权限来绕过检查。
+使用已撤回产物的现有部署应先换装重新发布的 v0.2.0 包，再清理 Helper spool。不要手工
+删除未知证据或修改目录权限来绕过检查。
 
 ## KI-2026-08-06：DEB 原地升级后入口可能继续加载旧版本字节码
 

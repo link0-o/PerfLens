@@ -265,6 +265,9 @@ def test_admin_deploy_paranoid3_helper_requires_risk_acknowledgement_and_two_uni
     assert "CapabilityBoundingSet=" in broker_unit
     assert "CAP_SYS_ADMIN" not in broker_unit
     assert "CapabilityBoundingSet=CAP_PERFMON CAP_SYS_ADMIN" in helper_unit
+    assert "AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN" in helper_unit
+    assert "NoNewPrivileges=yes" in helper_unit
+    assert "SecureBits=" not in helper_unit
     assert f"--broker-uid {os.geteuid()}" in helper_unit
     assert f"--allowed-uid {os.geteuid()}" in helper_unit
     assert f"--artifact-gid {os.getegid()}" in helper_unit
@@ -1195,6 +1198,9 @@ def test_admin_undeploy_cli_emits_versioned_result(
         service_path=tmp_path / "systemd/perflens-collector.service",
         state_directory=tmp_path / "var/lib/perflens",
         socket_path=tmp_path / "run/perflens/collector.sock",
+        helper_service_path=tmp_path / "systemd/perflens-privileged-helper.service",
+        helper_state_directory=tmp_path / "var/lib/perflens-helper",
+        helper_socket_path=tmp_path / "run/perflens-helper/helper.sock",
     )
     artifact = undeploy_collector(layout=layout, require_root=False)
 
@@ -1525,8 +1531,8 @@ def test_admin_spool_status_explains_private_helper_capacity_limit(
     summary = CliRunner().invoke(app, ["spool-status", "--config", str(config)])
 
     assert summary.exit_code == 0, summary.output
-    assert "停止新的采集并保留 Helper 私有证据" in summary.output
-    assert "尚不支持对该目录归档或清理" in summary.output
+    assert "停止新的采集" in summary.output
+    assert "archive-spool 先归档和验证" in summary.output
 
 
 def test_admin_helpers_reject_commands_and_report_system_failures(

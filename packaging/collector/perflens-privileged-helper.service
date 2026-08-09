@@ -19,7 +19,9 @@ UMask=0027
 NoNewPrivileges=yes
 CapabilityBoundingSet=CAP_PERFMON CAP_SYS_ADMIN
 AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN
-SecureBits=keep-caps-locked noroot-locked
+# CapabilityBoundingSet is the hard ceiling. Do not lock PR_SET_KEEPCAPS:
+# systemd clears that flag during its USER setup and Debian 13 rejects the
+# transition when the secure bit is already locked.
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes

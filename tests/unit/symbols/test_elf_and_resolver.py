@@ -70,6 +70,7 @@ def test_inspects_pie_shared_library_build_id_and_debug_info(
     assert artifact.build_id == executable_metadata.build_id
 
 
+@pytest.mark.timeout(30)
 def test_long_lived_resolver_matches_source_golden_and_reuses_process(
     fixture_root: Path, tmp_path: Path
 ) -> None:

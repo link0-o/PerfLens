@@ -6,9 +6,9 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -570,6 +570,7 @@ where
     let started = Instant::now();
     let duration = Duration::from_millis(plan.duration_milliseconds);
     let mut status = None;
+    let mut sent_bounded_sigint = false;
     while started.elapsed() < duration {
         let completed = match child.try_wait() {
             Ok(value) => value,
@@ -598,7 +599,8 @@ where
             terminate_perf(&mut child, Signal::SIGKILL);
             return Err(external_error());
         }
-        let _ignored = killpg(Pid::from_raw(child.id().cast_signed()), Signal::SIGINT);
+        sent_bounded_sigint =
+            killpg(Pid::from_raw(child.id().cast_signed()), Signal::SIGINT).is_ok();
         let shutdown_deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let completed = match child.try_wait() {
@@ -624,7 +626,7 @@ where
         }
     }
     let status = status.ok_or_else(external_error)?;
-    if !status.success() {
+    if !perf_status_succeeded(status, sent_bounded_sigint) {
         return Err(external_error());
     }
     let metadata = temporary.metadata().map_err(|_error| spool_error())?;
@@ -664,6 +666,10 @@ where
         started_at_unix_milliseconds,
         finished_at_unix_milliseconds: unix_milliseconds()?,
     })
+}
+
+fn perf_status_succeeded(status: ExitStatus, sent_bounded_sigint: bool) -> bool {
+    status.success() || (sent_bounded_sigint && status.signal() == Some(Signal::SIGINT as i32))
 }
 
 fn send_perf_control(
@@ -750,14 +756,19 @@ const fn resource_error(message: &'static str) -> ExecutionError {
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, SystemTime};
 
+    use nix::sys::signal::Signal;
+
     use super::{
         ExecutionPlan, MAX_DURATION_MILLISECONDS, REPLAY_RETENTION, authorize_spool_capacity,
-        consume_plan, denied, execute_perf, prune_replay_markers, recover_stale_temporary_files,
-        trusted_root_executable, validate_plan, validate_spool_entries,
+        consume_plan, denied, execute_perf, perf_status_succeeded, prune_replay_markers,
+        recover_stale_temporary_files, trusted_root_executable, validate_plan,
+        validate_spool_entries,
     };
     use crate::{CallGraph, CollectionMode, HelperTarget};
 
@@ -826,6 +837,18 @@ finish
     #[test]
     fn immutable_policy_accepts_bounded_owner_only_record() {
         assert!(validate_plan(&record_plan(), 1000).is_ok());
+    }
+
+    #[test]
+    fn bounded_sigint_is_success_only_when_the_helper_sent_it() {
+        let success = ExitStatus::from_raw(0);
+        let interrupted = ExitStatus::from_raw(Signal::SIGINT as i32);
+        let failed = ExitStatus::from_raw(2 << 8);
+
+        assert!(perf_status_succeeded(success, false));
+        assert!(perf_status_succeeded(interrupted, true));
+        assert!(!perf_status_succeeded(interrupted, false));
+        assert!(!perf_status_succeeded(failed, true));
     }
 
     #[test]

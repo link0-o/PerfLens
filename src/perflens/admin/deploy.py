@@ -1252,8 +1252,8 @@ def _spool_status_result(
     }[status]
     if policy.privilege_mode == "paranoid3_helper" and status in {"warning", "exhausted"}:
         next_steps = (
-            "Preserve the Rust Helper private spool and stop new collection if capacity is low.",
-            "The v0.2.0 archive/prune workflow does not support this private spool.",
+            "Stop new collection while Rust Helper private-spool capacity is low.",
+            "Use the administrator archive, verify, and explicit prune workflow before cleanup.",
         )
     return CollectorSpoolStatusArtifact(
         perflens_version=__version__,

@@ -97,6 +97,9 @@ def main() -> None:
         service = (root / "usr/share/perflens/collector/perflens-collector.service").read_text(
             encoding="utf-8"
         )
+        helper_service = (
+            root / "usr/share/perflens/collector/perflens-privileged-helper.service"
+        ).read_text(encoding="utf-8")
         assert "policy_version = 1" in policy
         assert 'privilege_mode = "cap_perfmon"' in policy
         assert "策略格式版本" in policy
@@ -105,6 +108,10 @@ def main() -> None:
         assert "perflens-admin spool-status checks quotas read-only" in policy
         assert "exactly one UID is supported" in policy
         assert service.startswith("# Managed by PerfLens.")
+        assert "CapabilityBoundingSet=CAP_PERFMON CAP_SYS_ADMIN" in helper_service
+        assert "AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN" in helper_service
+        assert "NoNewPrivileges=yes" in helper_service
+        assert "SecureBits=" not in helper_service
         _assert_shared_libraries(root)
 
         environment = dict(os.environ)
