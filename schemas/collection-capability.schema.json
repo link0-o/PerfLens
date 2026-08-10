@@ -66,6 +66,28 @@
       "title": "Effective Uid",
       "type": "integer"
     },
+    "hardware_pmu_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Hardware Pmu Reason"
+    },
+    "hardware_pmu_status": {
+      "default": "unknown",
+      "enum": [
+        "available",
+        "unavailable",
+        "unknown"
+      ],
+      "title": "Hardware Pmu Status",
+      "type": "string"
+    },
     "kernel_release": {
       "title": "Kernel Release",
       "type": "string"
@@ -161,6 +183,26 @@
       "const": "1.0",
       "default": "1.0",
       "title": "Schema Version",
+      "type": "string"
+    },
+    "software_counting_status": {
+      "default": "unknown",
+      "enum": [
+        "available",
+        "unavailable",
+        "unknown"
+      ],
+      "title": "Software Counting Status",
+      "type": "string"
+    },
+    "software_sampling_status": {
+      "default": "unknown",
+      "enum": [
+        "available",
+        "unavailable",
+        "unknown"
+      ],
+      "title": "Software Sampling Status",
       "type": "string"
     },
     "tracefs_accessible": {

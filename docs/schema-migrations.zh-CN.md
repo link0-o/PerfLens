@@ -24,3 +24,11 @@ Skill 内容指纹。旧产物缺少指纹时按“没有记录 Skill 所有权�
 Collector TOML 策略使用独立的整数 `policy_version`。当前生成的策略写入版本 `1`；为了
 兼容旧策略，缺失该字段时按版本 1 读取，而不支持的版本会在部署或 Collector 启动前
 被拒绝。未来的策略变更必须在部署边界和 Collector 边界同时增加兼容测试及拒绝测试。
+
+Collection/Plan/Capability/Collector Acceptance 公共产物仍为 Schema `1.0`，新增的事件
+来源、软件降级和 PMU 验收字段都有兼容默认值。旧 Collection 缺少来源信息时读取为
+`actual_event_source=unknown`，不能反向猜测成硬件证据。
+
+Python Broker 与 Rust Helper 的私有协议从 `1.0` 升级到 `1.1`，因为请求需要携带固定的
+事件来源与降级策略，响应需要返回实际来源和证据事件。该协议不用于用户产物，也不做
+跨版本协商；升级包必须同时升级并重启 Broker 与 Helper，版本错配会安全拒绝。

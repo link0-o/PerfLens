@@ -3,10 +3,48 @@
     "HelperCollectionResult": {
       "additionalProperties": false,
       "properties": {
+        "actual_event_source": {
+          "enum": [
+            "hardware",
+            "software"
+          ],
+          "title": "Actual Event Source",
+          "type": "string"
+        },
         "artifact_name": {
           "pattern": "^plan-[a-f0-9]{20}\\.(stat\\.csv|perf\\.data)$",
           "title": "Artifact Name",
           "type": "string"
+        },
+        "events": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Events",
+          "type": "array"
+        },
+        "fallback_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "hardware_probe_skipped_for_short_collection",
+                "hardware_probe_failed",
+                "hardware_probe_produced_no_usable_counts"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Reason"
+        },
+        "fallback_used": {
+          "title": "Fallback Used",
+          "type": "boolean"
         },
         "finished_at_unix_milliseconds": {
           "exclusiveMinimum": 0,
@@ -50,6 +88,22 @@
           "title": "Plan Id",
           "type": "string"
         },
+        "record_event": {
+          "anyOf": [
+            {
+              "enum": [
+                "cycles",
+                "cpu-clock"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Record Event"
+        },
         "started_at_unix_milliseconds": {
           "exclusiveMinimum": 0,
           "title": "Started At Unix Milliseconds",
@@ -70,6 +124,8 @@
         "output_bytes",
         "output_sha256",
         "output_format",
+        "actual_event_source",
+        "fallback_used",
         "started_at_unix_milliseconds",
         "finished_at_unix_milliseconds"
       ],
@@ -208,8 +264,8 @@
       "title": "Result"
     },
     "schema_version": {
-      "const": "1.0",
-      "default": "1.0",
+      "const": "1.1",
+      "default": "1.1",
       "title": "Schema Version",
       "type": "string"
     }

@@ -439,6 +439,10 @@ class CollectionCapabilityArtifact(ContractModel):
     perf_file_capabilities: tuple[str, ...] = ()
     tracefs_accessible: bool
     modes: tuple[CollectionModeCapability, ...]
+    hardware_pmu_status: Literal["available", "unavailable", "unknown"] = "unknown"
+    hardware_pmu_reason: str | None = None
+    software_counting_status: Literal["available", "unavailable", "unknown"] = "unknown"
+    software_sampling_status: Literal["available", "unavailable", "unknown"] = "unknown"
     warnings: tuple[str, ...] = ()
     recommendations: tuple[str, ...] = ()
 
@@ -456,6 +460,11 @@ class CollectionPlanArtifact(ContractModel):
     frequency_hz: int | None = Field(default=None, ge=1, le=10_000)
     call_graph: Literal["fp", "dwarf", "lbr"] | None = None
     events: tuple[str, ...] = ()
+    requested_event_source: Literal["auto", "hardware_required", "software_only"] = "auto"
+    fallback_allowed: bool = False
+    fallback_events: tuple[str, ...] = ()
+    record_event: Literal["cycles", "cpu-clock"] | None = None
+    fallback_record_event: Literal["cpu-clock"] | None = None
     max_output_bytes: int = Field(gt=0)
     expires_at: str
     policy_status: Literal["allowed", "denied"]
@@ -489,6 +498,11 @@ class CollectionArtifact(ContractModel):
     frequency_hz: int | None = Field(default=None, ge=1)
     call_graph: Literal["fp", "dwarf", "lbr"] | None = None
     events: tuple[str, ...] = ()
+    requested_event_source: Literal["auto", "hardware_required", "software_only"] = "auto"
+    actual_event_source: Literal["hardware", "software", "unknown"] = "unknown"
+    fallback_used: bool = False
+    fallback_reason: str | None = None
+    evidence_limitations: tuple[str, ...] = ()
     metrics: tuple[PerfStatMetric, ...] = ()
     authorization: Literal["explicit"] = "explicit"
     diagnostics: tuple[str, ...] = ()
@@ -532,6 +546,12 @@ class CollectorAcceptanceArtifact(ContractModel):
     output_sha256: str
     output_bytes: int = Field(gt=0)
     metric_count: int = Field(ge=0)
+    hardware_pmu_status: Literal["available", "unavailable", "unknown"] = "unknown"
+    hardware_pmu_reason: str | None = None
+    software_counting_status: Literal["available", "unavailable", "unknown"] = "unknown"
+    software_sampling_status: Literal["available", "unavailable", "unknown"] = "unknown"
+    hardware_collection_id: str | None = None
+    software_sampling_collection_id: str | None = None
     started_at: str
     finished_at: str
     warnings: tuple[str, ...] = ()

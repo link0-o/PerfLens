@@ -20,7 +20,11 @@ from typing import Any, Literal, cast
 
 from perflens import __version__
 from perflens.artifacts.filesystem import write_text_atomic
-from perflens.collection.collector import DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_STAT_EVENTS
+from perflens.collection.collector import (
+    DEFAULT_MAX_OUTPUT_BYTES,
+    DEFAULT_STAT_EVENTS,
+    SOFTWARE_STAT_EVENTS,
+)
 from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.collector_broker.policy import (
     COLLECTOR_POLICY_VERSION,
@@ -959,6 +963,7 @@ def parse_collector_deployment_policy(
         "min_free_bytes",
         "max_plan_ttl_seconds",
         "allowed_stat_events",
+        "allow_software_fallback",
         "socket_mode",
         "artifact_mode",
     }
@@ -989,6 +994,7 @@ def parse_collector_deployment_policy(
         min_free_bytes = _strict_integer(values.get("min_free_bytes", DEFAULT_MIN_FREE_BYTES))
         plan_ttl = _strict_integer(values.get("max_plan_ttl_seconds", DEFAULT_MAX_PLAN_TTL_SECONDS))
         events = tuple(_strict_string(value) for value in values.get("allowed_stat_events", ()))
+        allow_software_fallback = values.get("allow_software_fallback", False)
         socket_mode_raw = values.get("socket_mode", "0660")
         artifact_mode_raw = values.get("artifact_mode", "0640")
         socket_mode = _strict_mode(socket_mode_raw)
@@ -1027,6 +1033,12 @@ def parse_collector_deployment_policy(
         or not 0 <= min_free_bytes <= 1 << 50
         or not 1 <= plan_ttl <= 3600
         or (events and (len(events) > 64 or any(not event or "\0" in event for event in events)))
+        or type(allow_software_fallback) is not bool
+        or (
+            allow_software_fallback
+            and events
+            and not set(SOFTWARE_STAT_EVENTS).issubset(events)
+        )
         or socket_mode < 0
         or socket_mode > 0o660
         or socket_mode & 0o007

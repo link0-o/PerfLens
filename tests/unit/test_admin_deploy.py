@@ -63,7 +63,8 @@ def _deployment_inputs(tmp_path: Path) -> tuple[Path, Path, Path, CollectorSyste
         "max_spool_bytes = 10737418240\n"
         "max_spool_artifacts = 1000\n"
         "min_free_bytes = 1073741824\n"
-        "max_plan_ttl_seconds = 300\n",
+        "max_plan_ttl_seconds = 300\n"
+        "allow_software_fallback = true\n",
         encoding="utf-8",
     )
     config.chmod(0o600)
@@ -1694,6 +1695,7 @@ def test_admin_deploy_rejects_unsafe_policy_and_symlink(tmp_path: Path) -> None:
         "max_spool_artifacts = 0\n",
         "min_free_bytes = -1\n",
         "min_free_bytes = false\n",
+        "allow_software_fallback = 1\n",
     ],
 )
 def test_admin_deploy_rejects_invalid_bounded_fields(
@@ -1712,6 +1714,8 @@ def test_admin_deploy_rejects_invalid_bounded_fields(
         text = text.replace("max_spool_artifacts = 1000\n", replacement)
     elif replacement.startswith("min_free_bytes"):
         text = text.replace("min_free_bytes = 1073741824\n", replacement)
+    elif replacement.startswith("allow_software_fallback"):
+        text = text.replace("allow_software_fallback = true\n", replacement)
     else:
         text += replacement
     config.write_text(text, encoding="utf-8")

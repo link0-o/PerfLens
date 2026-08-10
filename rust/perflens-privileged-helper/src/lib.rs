@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::execution::{ExecutionPlan, execute_production_plan, prepare_production_environment};
 
-pub const HELPER_SCHEMA_VERSION: &str = "1.0";
+pub const HELPER_SCHEMA_VERSION: &str = "1.1";
 pub const MAX_HELPER_MESSAGE_BYTES: usize = 64 << 10;
 pub const MAX_HELPER_PLAN_TTL_MILLISECONDS: u64 = 120_000;
 pub const MAX_HELPER_DURATION_MILLISECONDS: u64 = 86_400_000;
@@ -51,6 +51,28 @@ pub enum CallGraph {
     Lbr,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestedEventSource {
+    Auto,
+    HardwareRequired,
+    SoftwareOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActualEventSource {
+    Hardware,
+    Software,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecordEvent {
+    Cycles,
+    CpuClock,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HelperRequest {
@@ -69,6 +91,11 @@ pub enum HelperRequest {
         frequency_hz: Option<u32>,
         call_graph: Option<CallGraph>,
         events: Vec<String>,
+        requested_event_source: RequestedEventSource,
+        fallback_allowed: bool,
+        fallback_events: Vec<String>,
+        record_event: Option<RecordEvent>,
+        fallback_record_event: Option<RecordEvent>,
         max_output_bytes: u64,
         expires_at_unix_milliseconds: u64,
     },
@@ -92,6 +119,13 @@ pub enum HelperResult {
         output_bytes: u64,
         output_sha256: String,
         output_format: &'static str,
+        actual_event_source: ActualEventSource,
+        fallback_used: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fallback_reason: Option<&'static str>,
+        events: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        record_event: Option<RecordEvent>,
         started_at_unix_milliseconds: u64,
         finished_at_unix_milliseconds: u64,
     },
@@ -269,7 +303,16 @@ pub fn handle_connection(
     }
 
     let frame = read_bounded_frame(connection)?;
-    let response = match parse_request_frame(&frame, now_unix_milliseconds) {
+    let response = response_for_frame(&frame, policy, now_unix_milliseconds);
+    write_response(connection, &response)
+}
+
+fn response_for_frame(
+    frame: &[u8],
+    policy: &HelperServerPolicy,
+    now_unix_milliseconds: u64,
+) -> HelperResponse {
+    match parse_request_frame(frame, now_unix_milliseconds) {
         Ok(HelperRequest::Health { request_id, .. }) => HelperResponse {
             schema_version: HELPER_SCHEMA_VERSION,
             request_id,
@@ -306,11 +349,16 @@ pub fn handle_connection(
             frequency_hz,
             call_graph,
             events,
+            requested_event_source,
+            fallback_allowed,
+            fallback_events,
+            record_event,
+            fallback_record_event,
             max_output_bytes,
             ..
         }) => {
             let target_pid = target.pid;
-            match execute_production_plan(
+            let outcome = execute_production_plan(
                 &ExecutionPlan {
                     plan_id: plan_id.clone(),
                     caller_uid,
@@ -320,33 +368,18 @@ pub fn handle_connection(
                     frequency_hz,
                     call_graph,
                     events,
+                    requested_event_source,
+                    fallback_allowed,
+                    fallback_events,
+                    record_event,
+                    fallback_record_event,
                     max_output_bytes,
                 },
                 policy.allowed_uid,
                 policy.artifact_gid,
                 &policy.perf_path,
-            ) {
-                Ok(result) => HelperResponse {
-                    schema_version: HELPER_SCHEMA_VERSION,
-                    request_id,
-                    ok: true,
-                    result: Some(HelperResult::Collection {
-                        plan_id,
-                        mode,
-                        target_pid,
-                        artifact_name: result.artifact_name,
-                        output_bytes: result.output_bytes,
-                        output_sha256: result.output_sha256,
-                        output_format: result.output_format,
-                        started_at_unix_milliseconds: result.started_at_unix_milliseconds,
-                        finished_at_unix_milliseconds: result.finished_at_unix_milliseconds,
-                    }),
-                    error: None,
-                },
-                Err(error) => {
-                    rejected_response(&request_id, error.code, error.stage, error.message)
-                }
-            }
+            );
+            collection_response(request_id, plan_id, mode, target_pid, outcome)
         }
         Err(error) => rejected_response(
             "unknown",
@@ -354,8 +387,41 @@ pub fn handle_connection(
             "privileged_helper_protocol",
             error.message,
         ),
-    };
-    write_response(connection, &response)
+    }
+}
+
+fn collection_response(
+    request_id: String,
+    plan_id: String,
+    mode: CollectionMode,
+    target_pid: u32,
+    outcome: Result<execution::ExecutionResult, execution::ExecutionError>,
+) -> HelperResponse {
+    match outcome {
+        Ok(result) => HelperResponse {
+            schema_version: HELPER_SCHEMA_VERSION,
+            request_id,
+            ok: true,
+            result: Some(HelperResult::Collection {
+                plan_id,
+                mode,
+                target_pid,
+                artifact_name: result.artifact_name,
+                output_bytes: result.output_bytes,
+                output_sha256: result.output_sha256,
+                output_format: result.output_format,
+                actual_event_source: result.actual_event_source,
+                fallback_used: result.fallback_used,
+                fallback_reason: result.fallback_reason,
+                events: result.events,
+                record_event: result.record_event,
+                started_at_unix_milliseconds: result.started_at_unix_milliseconds,
+                finished_at_unix_milliseconds: result.finished_at_unix_milliseconds,
+            }),
+            error: None,
+        },
+        Err(error) => rejected_response(&request_id, error.code, error.stage, error.message),
+    }
 }
 
 fn read_bounded_frame(connection: &mut UnixStream) -> io::Result<Vec<u8>> {
@@ -471,6 +537,11 @@ fn validate_request(
             frequency_hz,
             call_graph,
             events,
+            requested_event_source,
+            fallback_allowed,
+            fallback_events,
+            record_event,
+            fallback_record_event,
             max_output_bytes,
             expires_at_unix_milliseconds,
         } => {
@@ -487,7 +558,17 @@ fn validate_request(
             {
                 return Err(schema_error());
             }
-            validate_mode_fields(*mode, *frequency_hz, *call_graph, events)?;
+            validate_mode_fields(ModeFields {
+                mode: *mode,
+                frequency_hz: *frequency_hz,
+                call_graph: *call_graph,
+                events,
+                requested_event_source: *requested_event_source,
+                fallback_allowed: *fallback_allowed,
+                fallback_events,
+                record_event: *record_event,
+                fallback_record_event: *fallback_record_event,
+            })?;
             let remaining = expires_at_unix_milliseconds
                 .checked_sub(now_unix_milliseconds)
                 .ok_or_else(expired_error)?;
@@ -507,29 +588,99 @@ fn validate_common(schema_version: &str, request_id: &str) -> Result<(), Protoco
     Ok(())
 }
 
-fn validate_mode_fields(
+#[derive(Clone, Copy)]
+struct ModeFields<'a> {
     mode: CollectionMode,
     frequency_hz: Option<u32>,
     call_graph: Option<CallGraph>,
-    events: &[String],
-) -> Result<(), ProtocolError> {
+    events: &'a [String],
+    requested_event_source: RequestedEventSource,
+    fallback_allowed: bool,
+    fallback_events: &'a [String],
+    record_event: Option<RecordEvent>,
+    fallback_record_event: Option<RecordEvent>,
+}
+
+fn validate_mode_fields(fields: ModeFields<'_>) -> Result<(), ProtocolError> {
+    let ModeFields {
+        mode,
+        frequency_hz,
+        call_graph,
+        events,
+        requested_event_source,
+        fallback_allowed,
+        fallback_events,
+        record_event,
+        fallback_record_event,
+    } = fields;
     if events.len() > MAX_HELPER_EVENTS
+        || fallback_events.len() > MAX_HELPER_EVENTS
         || events
             .iter()
+            .chain(fallback_events)
             .any(|event| event.is_empty() || event.len() > 128 || event.contains('\0'))
         || events.iter().collect::<HashSet<_>>().len() != events.len()
+        || fallback_events.iter().collect::<HashSet<_>>().len() != fallback_events.len()
+        || (fallback_allowed && requested_event_source != RequestedEventSource::Auto)
     {
         return Err(schema_error());
     }
     match mode {
         CollectionMode::Stat
-            if !events.is_empty() && frequency_hz.is_none() && call_graph.is_none() => {}
+            if !events.is_empty()
+                && frequency_hz.is_none()
+                && call_graph.is_none()
+                && record_event.is_none()
+                && fallback_record_event.is_none()
+                && ((!fallback_allowed && fallback_events.is_empty())
+                    || (fallback_allowed
+                        && fallback_events
+                            == [
+                                "task-clock",
+                                "context-switches",
+                                "cpu-migrations",
+                                "page-faults",
+                            ])) => {}
         CollectionMode::Record
             if events.is_empty()
+                && fallback_events.is_empty()
                 && frequency_hz
                     .is_some_and(|value| (1..=MAX_HELPER_FREQUENCY_HZ).contains(&value))
-                && call_graph.is_some() => {}
+                && call_graph.is_some()
+                && record_event.is_some()
+                && ((!fallback_allowed && fallback_record_event.is_none())
+                    || (fallback_allowed
+                        && fallback_record_event == Some(RecordEvent::CpuClock))) => {}
         CollectionMode::Record | CollectionMode::Stat => return Err(schema_error()),
+    }
+    let hardware_events = [
+        "cycles",
+        "instructions",
+        "cache-references",
+        "cache-misses",
+        "branches",
+        "branch-misses",
+    ];
+    let invalid_source = match (requested_event_source, mode) {
+        (RequestedEventSource::SoftwareOnly, CollectionMode::Stat) => {
+            events
+                != [
+                    "task-clock",
+                    "context-switches",
+                    "cpu-migrations",
+                    "page-faults",
+                ]
+        }
+        (RequestedEventSource::SoftwareOnly, CollectionMode::Record) => {
+            record_event != Some(RecordEvent::CpuClock)
+        }
+        (_, CollectionMode::Stat) => events
+            .iter()
+            .any(|event| !hardware_events.contains(&event.as_str())),
+        (_, CollectionMode::Record) => record_event != Some(RecordEvent::Cycles),
+    };
+    if invalid_source {
+        return Err(schema_error());
     }
     Ok(())
 }
@@ -613,6 +764,10 @@ mod tests {
             )
             .as_slice(),
             include_bytes!(
+                "../../../tests/fixtures/privileged_helper/invalid/arbitrary-fallback-event.jsonl"
+            )
+            .as_slice(),
+            include_bytes!(
                 "../../../tests/fixtures/privileged_helper/invalid/arbitrary-output-path.jsonl"
             )
             .as_slice(),
@@ -646,7 +801,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_or_multiple_frame_terminators() {
-        let frame = br#"{"schema_version":"1.0","operation":"health","request_id":"request-0123456789abcdef"}"#;
+        let frame = br#"{"schema_version":"1.1","operation":"health","request_id":"request-0123456789abcdef"}"#;
         let error = parse_request_frame(frame, NOW_MILLISECONDS).expect_err("newline is required");
         assert_eq!(error.kind(), ProtocolErrorKind::Frame);
 
@@ -678,7 +833,7 @@ mod tests {
             .expect("server join")
             .expect("server response");
         assert!(response.ends_with('\n'));
-        assert!(response.contains("\"schema_version\":\"1.0\""));
+        assert!(response.contains("\"schema_version\":\"1.1\""));
         assert!(response.contains("\"privilege_mode\":\"paranoid3_helper\""));
         assert!(!response.contains("profile"));
     }

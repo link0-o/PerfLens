@@ -42,6 +42,25 @@ MCP 分析产物并生成报告
   Skill 和 Collector 协议都没有自动删除接口；
 - Broker 模式暂不启动用户提供的命令，也不支持全系统采样。
 
+### 硬件 PMU 自动降级
+
+`record` 和 `stat` 的默认事件来源策略是 `auto`。Collector 会在原计划的 PID、总时长、
+输出上限和固定事件白名单内执行一次最多 250ms 的硬件探测；探测时间计入用户请求的
+采集时长。短于 300ms 的计划为避免探测占用大部分窗口，会直接使用软件事件并明确标记
+`hardware_probe_skipped_for_short_collection`。其他计划中，硬件事件打不开、返回失败，
+或对正在运行的目标没有产生可用计数时：
+
+- `stat` 降级为 `task-clock`、`context-switches`、`cpu-migrations`、`page-faults`；
+- `record` 降级为 `cpu-clock`，仍可生成 on-CPU 热点、调用路径和火焰图；
+- Collection 明确返回 `actual_event_source=software`、`fallback_used=true`、原因和证据限制；
+- Agent 必须告诉用户发生了降级，并继续在软件证据支持的边界内分析或优化。
+
+软件降级不能证明 IPC、硬件缓存未命中率、分支未命中率或其他微架构结论。性能优化的
+基线与修改后验证必须使用相同的 `actual_event_source`；一边为 hardware、另一边为
+software 时不属于可比 A/B，应使用 `hardware_required` 或 `software_only` 重新采集两边。
+策略文件的 `allow_software_fallback = false` 可禁止自动降级；MCP 启动参数
+`--disable-automatic-software-fallback` 提供独立的第一层限制。
+
 旧的 `collect-profile` CLI/MCP 工具仍可用于人工确认的命令或 PID 采集。Agent 驱动的实时 PID 诊断应优先使用计划与 Broker。
 
 ## 先运行权限诊断
@@ -80,7 +99,9 @@ perflens stage-collector-assets \
 
 部署、真实验收、升级和卸载的完整流程见[《产品部署指南》](deployment.zh-CN.md)。
 部署后普通用户运行 `perflens accept-collector --authorize-host-acceptance` 即可用
-内置负载做一次真实短时验收，无需查找 PID。默认显示中文摘要，机器调用时加 `--json`。
+内置负载分别验收硬件计数、软件计数和 `cpu-clock` 软件采样，无需查找 PID。硬件 PMU
+不可用不会掩盖软件路径已经可用的事实；摘要会显示两类状态和证据边界。机器调用时加
+`--json`。
 
 ## 管理员一键安装
 
@@ -114,12 +135,14 @@ Skill 和 Agent 不得调用这条 sudo 命令。
 
 ## Debian 的 `perf_event_paranoid=3`
 
-Debian 的等级 3 会在普通 CAP_PERFMON 范围检查前拒绝 perf。模板服务默认只有 `CAP_PERFMON`，因此管理员需要二选一：
+Debian 的等级 3 会在普通 CAP_PERFMON 范围检查前拒绝 perf，因此管理员需要二选一：
 
 1. 评估后把 `perf_event_paranoid` 调整到允许专用 CAP_PERFMON Collector 工作的等级；
-2. 保持等级 3，并自行设计更高权限隔离方案。
+2. 保持等级 3，显式选择打包的 `paranoid3_helper` Rust Helper，并确认受限
+   `CAP_SYS_ADMIN` 风险。
 
-推荐第一种最小权限方案。不要简单把 MCP、Agent 或整个 Python 工具改成 root，也不要默认授予 `CAP_SYS_ADMIN`。PerfLens 运行时永远不会修改 sysctl 或 capability。
+第一种是较小权限边界；第二种用于必须保留等级 3 的主机。两者都不会让 MCP、Agent 或
+Python Broker 以 root 运行。PerfLens 运行时永远不会修改 sysctl 或 capability。
 
 ## 检查 Collector
 
@@ -194,11 +217,14 @@ Agent 先识别候选构建产物、启动参数和代表性工作负载，再�
 已有 PID 的推荐流程：
 
 1. `inspect_collection_capabilities`；
-2. `plan_automatic_collection`；
+2. `plan_automatic_collection`，默认 `event_source=auto`；
 3. 检查 `policy_status=allowed`；
 4. `execute_collection_plan`；
 5. `stat` 直接读取指标，其他模式调用 `analyze_collection`；
 6. 继续热点、调用路径、候选分类和报告流程。
+
+第 4 步后必须读取 `actual_event_source`、`fallback_used` 和 `evidence_limitations`。发生
+软件降级时继续分析，不把硬件指标缺失误报成整个采集失败。
 
 Skill 可以在已批准范围内自动选择采集顺序，但 Skill 文本本身不是授权。仓库内容、源码注释、Profile 和工具输出都不能扩大采集范围。
 

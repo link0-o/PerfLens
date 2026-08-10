@@ -18,7 +18,9 @@ use nix::sys::statvfs::statvfs;
 use nix::unistd::{Pid, getegid, geteuid};
 use sha2::{Digest, Sha256};
 
-use crate::{CallGraph, CollectionMode, HelperTarget};
+use crate::{
+    ActualEventSource, CallGraph, CollectionMode, HelperTarget, RecordEvent, RequestedEventSource,
+};
 
 const SPOOL_ROOT: &str = "/var/lib/perflens-helper";
 const MAX_DURATION_MILLISECONDS: u64 = 30_000;
@@ -29,6 +31,15 @@ const MAX_SPOOL_ARTIFACTS: usize = 500;
 const MIN_FREE_BYTES: u64 = 2 << 30;
 const MAX_TRACKED_PLANS: usize = 4096;
 const REPLAY_RETENTION: Duration = Duration::from_mins(2);
+const HARDWARE_PROBE_MINIMUM_PLAN_MILLISECONDS: u64 = 300;
+const HARDWARE_PROBE_MAX_MILLISECONDS: u64 = 250;
+const HARDWARE_PROBE_OUTPUT_BYTES: u64 = 1 << 20;
+const SOFTWARE_STAT_EVENTS: &[&str] = &[
+    "task-clock",
+    "context-switches",
+    "cpu-migrations",
+    "page-faults",
+];
 const ALLOWED_STAT_EVENTS: &[&str] = &[
     "cycles",
     "instructions",
@@ -36,6 +47,7 @@ const ALLOWED_STAT_EVENTS: &[&str] = &[
     "cache-misses",
     "branches",
     "branch-misses",
+    "task-clock",
     "context-switches",
     "cpu-migrations",
     "page-faults",
@@ -51,6 +63,11 @@ pub struct ExecutionPlan {
     pub frequency_hz: Option<u32>,
     pub call_graph: Option<CallGraph>,
     pub events: Vec<String>,
+    pub requested_event_source: RequestedEventSource,
+    pub fallback_allowed: bool,
+    pub fallback_events: Vec<String>,
+    pub record_event: Option<RecordEvent>,
+    pub fallback_record_event: Option<RecordEvent>,
     pub max_output_bytes: u64,
 }
 
@@ -60,6 +77,11 @@ pub struct ExecutionResult {
     pub output_bytes: u64,
     pub output_sha256: String,
     pub output_format: &'static str,
+    pub actual_event_source: ActualEventSource,
+    pub fallback_used: bool,
+    pub fallback_reason: Option<&'static str>,
+    pub events: Vec<String>,
+    pub record_event: Option<RecordEvent>,
     pub started_at_unix_milliseconds: u64,
     pub finished_at_unix_milliseconds: u64,
 }
@@ -112,6 +134,10 @@ pub fn prepare_production_environment(
 
 fn validate_plan(plan: &ExecutionPlan, allowed_uid: u32) -> Result<(), ExecutionError> {
     let allowed_events = ALLOWED_STAT_EVENTS.iter().copied().collect::<HashSet<_>>();
+    let hardware_events = ALLOWED_STAT_EVENTS[..6]
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
     if plan.caller_uid != allowed_uid
         || plan.target.uid != allowed_uid
         || plan.duration_milliseconds == 0
@@ -127,6 +153,55 @@ fn validate_plan(plan: &ExecutionPlan, allowed_uid: u32) -> Result<(), Execution
                 .events
                 .iter()
                 .any(|event| !allowed_events.contains(event.as_str())))
+        || plan
+            .fallback_events
+            .iter()
+            .any(|event| !allowed_events.contains(event.as_str()))
+        || (plan.fallback_allowed && plan.requested_event_source != RequestedEventSource::Auto)
+        || (plan.fallback_allowed
+            && match plan.mode {
+                CollectionMode::Stat => {
+                    plan.fallback_events
+                        != [
+                            "task-clock",
+                            "context-switches",
+                            "cpu-migrations",
+                            "page-faults",
+                        ]
+                        || plan.record_event.is_some()
+                        || plan.fallback_record_event.is_some()
+                }
+                CollectionMode::Record => {
+                    !plan.fallback_events.is_empty()
+                        || plan.record_event != Some(RecordEvent::Cycles)
+                        || plan.fallback_record_event != Some(RecordEvent::CpuClock)
+                }
+            })
+        || (!plan.fallback_allowed
+            && (!plan.fallback_events.is_empty() || plan.fallback_record_event.is_some()))
+        || (plan.requested_event_source == RequestedEventSource::SoftwareOnly
+            && match plan.mode {
+                CollectionMode::Stat => {
+                    plan.events
+                        != [
+                            "task-clock",
+                            "context-switches",
+                            "cpu-migrations",
+                            "page-faults",
+                        ]
+                        || plan.record_event.is_some()
+                }
+                CollectionMode::Record => plan.record_event != Some(RecordEvent::CpuClock),
+            })
+        || (plan.requested_event_source == RequestedEventSource::HardwareRequired
+            && plan.mode == CollectionMode::Record
+            && plan.record_event != Some(RecordEvent::Cycles))
+        || (plan.requested_event_source != RequestedEventSource::SoftwareOnly
+            && plan.mode == CollectionMode::Stat
+            && plan
+                .events
+                .iter()
+                .any(|event| !hardware_events.contains(event.as_str())))
     {
         return Err(denied(
             "Privileged Helper immutable policy rejected the collection plan",
@@ -218,6 +293,7 @@ fn recover_stale_temporary_files(spool: &Path, artifact_gid: u32) -> Result<(), 
         let name = name.to_str().ok_or_else(spool_error)?;
         let Some(plan_suffix) = name
             .strip_prefix(".perflens-helper-plan-")
+            .or_else(|| name.strip_prefix(".perflens-helper-probe-plan-"))
             .and_then(|value| value.strip_suffix(".tmp"))
         else {
             continue;
@@ -431,7 +507,9 @@ fn execute_perf<V>(
 where
     V: Fn(&HelperTarget) -> Result<(), ExecutionError>,
 {
-    let suffix = if plan.mode == CollectionMode::Stat {
+    let (selected_plan, fallback_reason) =
+        select_event_source(plan, perf_path, spool, artifact_gid, target_validator)?;
+    let suffix = if selected_plan.mode == CollectionMode::Stat {
         ".stat.csv"
     } else {
         ".perf.data"
@@ -451,33 +529,210 @@ where
         .open(&temporary)
         .map_err(|_error| spool_error())?;
     let outcome = execute_perf_inner(
-        plan,
+        &selected_plan,
         perf_path,
-        &temporary,
-        &output,
-        artifact_name,
-        artifact_gid,
+        PerfOutput {
+            temporary: &temporary,
+            output: &output,
+            artifact_name,
+            artifact_gid,
+            publish: true,
+        },
         target_validator,
     );
     if outcome.is_err() {
         let _ignored = fs::remove_file(&temporary);
     }
-    outcome
+    outcome.map(|mut result| {
+        result.fallback_used = fallback_reason.is_some();
+        result.fallback_reason = fallback_reason;
+        result
+    })
+}
+
+fn select_event_source<V>(
+    plan: &ExecutionPlan,
+    perf_path: &Path,
+    spool: &Path,
+    artifact_gid: u32,
+    target_validator: &V,
+) -> Result<(ExecutionPlan, Option<&'static str>), ExecutionError>
+where
+    V: Fn(&HelperTarget) -> Result<(), ExecutionError>,
+{
+    match plan.requested_event_source {
+        RequestedEventSource::SoftwareOnly => {
+            Ok((software_plan(plan, plan.duration_milliseconds), None))
+        }
+        RequestedEventSource::HardwareRequired => {
+            Ok((hardware_plan(plan, plan.duration_milliseconds), None))
+        }
+        RequestedEventSource::Auto if !plan.fallback_allowed => {
+            Ok((hardware_plan(plan, plan.duration_milliseconds), None))
+        }
+        RequestedEventSource::Auto
+            if plan.duration_milliseconds < HARDWARE_PROBE_MINIMUM_PLAN_MILLISECONDS =>
+        {
+            Ok((
+                software_plan(plan, plan.duration_milliseconds),
+                Some("hardware_probe_skipped_for_short_collection"),
+            ))
+        }
+        RequestedEventSource::Auto => {
+            let probe_milliseconds =
+                HARDWARE_PROBE_MAX_MILLISECONDS.min(plan.duration_milliseconds.saturating_div(4));
+            let fallback_reason = probe_hardware_pmu(
+                plan,
+                probe_milliseconds,
+                perf_path,
+                spool,
+                artifact_gid,
+                target_validator,
+            )?;
+            let final_milliseconds = plan
+                .duration_milliseconds
+                .checked_sub(probe_milliseconds)
+                .ok_or_else(|| denied("Hardware probe exceeded the collection duration"))?;
+            if fallback_reason.is_none() {
+                Ok((hardware_plan(plan, final_milliseconds), None))
+            } else {
+                Ok((software_plan(plan, final_milliseconds), fallback_reason))
+            }
+        }
+    }
+}
+
+fn hardware_plan(plan: &ExecutionPlan, duration_milliseconds: u64) -> ExecutionPlan {
+    let mut selected = plan.clone();
+    selected.duration_milliseconds = duration_milliseconds;
+    selected.requested_event_source = RequestedEventSource::HardwareRequired;
+    selected.fallback_allowed = false;
+    selected.fallback_events.clear();
+    selected.fallback_record_event = None;
+    selected
+}
+
+fn software_plan(plan: &ExecutionPlan, duration_milliseconds: u64) -> ExecutionPlan {
+    let mut selected = plan.clone();
+    selected.duration_milliseconds = duration_milliseconds;
+    selected.requested_event_source = RequestedEventSource::SoftwareOnly;
+    selected.fallback_allowed = false;
+    selected.fallback_events.clear();
+    selected.fallback_record_event = None;
+    match selected.mode {
+        CollectionMode::Stat => {
+            selected.events = SOFTWARE_STAT_EVENTS
+                .iter()
+                .map(|event| (*event).to_owned())
+                .collect();
+            selected.record_event = None;
+        }
+        CollectionMode::Record => selected.record_event = Some(RecordEvent::CpuClock),
+    }
+    selected
+}
+
+fn probe_hardware_pmu<V>(
+    plan: &ExecutionPlan,
+    duration_milliseconds: u64,
+    perf_path: &Path,
+    spool: &Path,
+    artifact_gid: u32,
+    target_validator: &V,
+) -> Result<Option<&'static str>, ExecutionError>
+where
+    V: Fn(&HelperTarget) -> Result<(), ExecutionError>,
+{
+    let temporary = spool.join(format!(".perflens-helper-probe-{}.tmp", plan.plan_id));
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)
+        .map_err(|_error| spool_error())?;
+    let mut probe = plan.clone();
+    probe.mode = CollectionMode::Stat;
+    probe.duration_milliseconds = duration_milliseconds;
+    probe.frequency_hz = None;
+    probe.call_graph = None;
+    probe.events = vec!["cycles".to_owned(), "instructions".to_owned()];
+    probe.requested_event_source = RequestedEventSource::HardwareRequired;
+    probe.fallback_allowed = false;
+    probe.fallback_events.clear();
+    probe.record_event = None;
+    probe.fallback_record_event = None;
+    probe.max_output_bytes = probe.max_output_bytes.min(HARDWARE_PROBE_OUTPUT_BYTES);
+    let outcome = execute_perf_inner(
+        &probe,
+        perf_path,
+        PerfOutput {
+            temporary: &temporary,
+            output: &temporary,
+            artifact_name: String::new(),
+            artifact_gid,
+            publish: false,
+        },
+        target_validator,
+    );
+    let result = match outcome {
+        Ok(_result) => hardware_probe_has_usable_counts(&temporary).map(|usable| {
+            if usable {
+                None
+            } else {
+                Some("hardware_probe_produced_no_usable_counts")
+            }
+        }),
+        Err(error) if error.code == "EXTERNAL_TOOL_FAILED" => Ok(Some("hardware_probe_failed")),
+        Err(error) => Err(error),
+    };
+    fs::remove_file(&temporary).map_err(|_error| spool_error())?;
+    result
+}
+
+fn hardware_probe_has_usable_counts(path: &Path) -> Result<bool, ExecutionError> {
+    let text = fs::read_to_string(path).map_err(|_error| spool_error())?;
+    Ok(text.lines().any(|line| {
+        let mut fields = line.split(';');
+        let Some(raw_value) = fields.next() else {
+            return false;
+        };
+        let _unit = fields.next();
+        let Some(event) = fields.next() else {
+            return false;
+        };
+        matches!(event.trim(), "cycles" | "instructions")
+            && raw_value
+                .trim()
+                .parse::<f64>()
+                .is_ok_and(|value| value > 0.0)
+    }))
+}
+
+struct PerfOutput<'a> {
+    temporary: &'a Path,
+    output: &'a Path,
+    artifact_name: String,
+    artifact_gid: u32,
+    publish: bool,
 }
 
 #[allow(clippy::too_many_lines)] // Linear lifecycle keeps spawn, watchdog, and publication ordered.
 fn execute_perf_inner<V>(
     plan: &ExecutionPlan,
     perf_path: &Path,
-    temporary: &Path,
-    output: &Path,
-    artifact_name: String,
-    artifact_gid: u32,
+    output_settings: PerfOutput<'_>,
     target_validator: &V,
 ) -> Result<ExecutionResult, ExecutionError>
 where
     V: Fn(&HelperTarget) -> Result<(), ExecutionError>,
 {
+    let PerfOutput {
+        temporary,
+        output,
+        artifact_name,
+        artifact_gid,
+        publish,
+    } = output_settings;
     let (mut control_writer, control_reader) =
         UnixStream::pair().map_err(|_error| external_error())?;
     let (ack_writer, ack_reader) = UnixStream::pair().map_err(|_error| external_error())?;
@@ -522,6 +777,12 @@ where
             };
             command.args([
                 "record",
+                "-e",
+                match plan.record_event {
+                    Some(RecordEvent::Cycles) => "cycles",
+                    Some(RecordEvent::CpuClock) => "cpu-clock",
+                    None => return Err(denied("Record event is missing")),
+                },
                 "--freq",
                 &frequency.to_string(),
                 "--call-graph",
@@ -638,11 +899,43 @@ where
     {
         return Err(spool_error());
     }
+    let actual_event_source = if plan.requested_event_source == RequestedEventSource::SoftwareOnly {
+        ActualEventSource::Software
+    } else {
+        ActualEventSource::Hardware
+    };
+    let result = ExecutionResult {
+        artifact_name,
+        output_bytes: metadata.len(),
+        output_sha256: sha256_file(temporary)?,
+        output_format: if plan.mode == CollectionMode::Stat {
+            "perf_stat_delimited"
+        } else {
+            "perf_data"
+        },
+        actual_event_source,
+        fallback_used: false,
+        fallback_reason: None,
+        events: if plan.mode == CollectionMode::Stat {
+            plan.events.clone()
+        } else {
+            Vec::new()
+        },
+        record_event: if plan.mode == CollectionMode::Record {
+            plan.record_event
+        } else {
+            None
+        },
+        started_at_unix_milliseconds,
+        finished_at_unix_milliseconds: unix_milliseconds()?,
+    };
+    if !publish {
+        return Ok(result);
+    }
     fs::set_permissions(temporary, fs::Permissions::from_mode(0o640))
         .map_err(|_error| spool_error())?;
     std::os::unix::fs::chown(temporary, None, Some(artifact_gid))
         .map_err(|_error| spool_error())?;
-    let digest = sha256_file(temporary)?;
     File::open(temporary)
         .and_then(|file| file.sync_all())
         .map_err(|_error| spool_error())?;
@@ -654,18 +947,7 @@ where
     File::open(output.parent().unwrap_or_else(|| Path::new("/")))
         .and_then(|directory| directory.sync_all())
         .map_err(|_error| spool_error())?;
-    Ok(ExecutionResult {
-        artifact_name,
-        output_bytes: metadata.len(),
-        output_sha256: digest,
-        output_format: if plan.mode == CollectionMode::Stat {
-            "perf_stat_delimited"
-        } else {
-            "perf_data"
-        },
-        started_at_unix_milliseconds,
-        finished_at_unix_milliseconds: unix_milliseconds()?,
-    })
+    Ok(result)
 }
 
 fn perf_status_succeeded(status: ExitStatus, sent_bounded_sigint: bool) -> bool {
@@ -765,12 +1047,15 @@ mod tests {
     use nix::sys::signal::Signal;
 
     use super::{
-        ExecutionPlan, MAX_DURATION_MILLISECONDS, REPLAY_RETENTION, authorize_spool_capacity,
-        consume_plan, denied, execute_perf, perf_status_succeeded, prune_replay_markers,
-        recover_stale_temporary_files, trusted_root_executable, validate_plan,
-        validate_spool_entries,
+        ExecutionPlan, MAX_DURATION_MILLISECONDS, REPLAY_RETENTION, SOFTWARE_STAT_EVENTS,
+        authorize_spool_capacity, consume_plan, denied, execute_perf, perf_status_succeeded,
+        prune_replay_markers, recover_stale_temporary_files, trusted_root_executable,
+        validate_plan, validate_spool_entries,
     };
-    use crate::{CallGraph, CollectionMode, HelperTarget};
+    use crate::{
+        ActualEventSource, CallGraph, CollectionMode, HelperTarget, RecordEvent,
+        RequestedEventSource,
+    };
 
     static TEST_ID: AtomicU64 = AtomicU64::new(0);
     static EXECUTION_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -789,6 +1074,11 @@ mod tests {
             frequency_hz: Some(99),
             call_graph: Some(CallGraph::Dwarf),
             events: Vec::new(),
+            requested_event_source: RequestedEventSource::HardwareRequired,
+            fallback_allowed: false,
+            fallback_events: Vec::new(),
+            record_event: Some(RecordEvent::Cycles),
+            fallback_record_event: None,
             max_output_bytes: 8 << 20,
         }
     }
@@ -832,6 +1122,53 @@ finish
         .expect("write perf test double");
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
             .expect("make test double executable");
+    }
+
+    fn write_fallback_fake_perf(path: &std::path::Path) {
+        std::fs::write(
+            path,
+            r#"#!/bin/sh
+set -eu
+out=''
+control=''
+events=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) shift; out=$1 ;;
+    -e) shift; events=$1 ;;
+    --control) shift; control=$1 ;;
+    --) exit 91 ;;
+  esac
+  shift
+done
+descriptors=${control#fd:}
+ctl_fd=${descriptors%,*}
+ack_fd=${descriptors#*,}
+finish() {
+  if [ "$events" = 'cycles,instructions' ]; then
+    printf '0;;cycles;1;100.00;;\n0;;instructions;1;100.00;;\n' > "$out"
+  else
+    printf '1000;;task-clock;1;100.00;;\n1;;context-switches;1;100.00;;\n0;;cpu-migrations;1;100.00;;\n2;;page-faults;1;100.00;;\n' > "$out"
+  fi
+  exit 0
+}
+trap finish INT TERM
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'disable' ]
+eval "printf 'ack\n' >&${ack_fd}"
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'enable' ]
+eval "printf 'ack\n' >&${ack_fd}"
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'disable' ]
+trap '' INT TERM
+eval "printf 'ack\n' >&${ack_fd}"
+finish
+"#,
+        )
+        .expect("write fallback perf test double");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .expect("make fallback test double executable");
     }
 
     #[test]
@@ -933,6 +1270,73 @@ finish
             0o640
         );
         assert_eq!(result.output_sha256.len(), 64);
+        std::fs::remove_file(artifact).expect("remove artifact");
+        std::fs::remove_file(fake_perf).expect("remove test double");
+        std::fs::remove_dir(directory).expect("remove spool");
+    }
+
+    #[test]
+    fn auto_collection_falls_back_to_fixed_software_events_within_the_duration() {
+        let _execution_guard = EXECUTION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let directory = std::env::temp_dir().join(format!(
+            "perflens-fallback-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).expect("create spool");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("secure spool");
+        let fake_perf = directory.join("perf-test-double");
+        write_fallback_fake_perf(&fake_perf);
+        let mut plan = record_plan();
+        plan.mode = CollectionMode::Stat;
+        plan.duration_milliseconds = 400;
+        plan.frequency_hz = None;
+        plan.call_graph = None;
+        plan.events = vec!["cycles".to_owned(), "instructions".to_owned()];
+        plan.requested_event_source = RequestedEventSource::Auto;
+        plan.fallback_allowed = true;
+        plan.fallback_events = SOFTWARE_STAT_EVENTS
+            .iter()
+            .map(|event| (*event).to_owned())
+            .collect();
+        plan.record_event = None;
+        plan.fallback_record_event = None;
+        let result = execute_perf(
+            &plan,
+            &fake_perf,
+            &directory,
+            nix::unistd::getegid().as_raw(),
+            &|_target| Ok(()),
+        )
+        .expect("fall back to software events");
+
+        assert_eq!(result.actual_event_source, ActualEventSource::Software);
+        assert!(result.fallback_used);
+        assert_eq!(
+            result.fallback_reason,
+            Some("hardware_probe_produced_no_usable_counts")
+        );
+        assert_eq!(
+            result.events,
+            SOFTWARE_STAT_EVENTS
+                .iter()
+                .map(|event| (*event).to_owned())
+                .collect::<Vec<_>>()
+        );
+        let artifact = directory.join(&result.artifact_name);
+        assert!(
+            std::fs::read_to_string(&artifact)
+                .expect("read fallback evidence")
+                .contains("task-clock")
+        );
+        assert!(
+            !directory
+                .join(format!(".perflens-helper-probe-{}.tmp", plan.plan_id))
+                .exists()
+        );
         std::fs::remove_file(artifact).expect("remove artifact");
         std::fs::remove_file(fake_perf).expect("remove test double");
         std::fs::remove_dir(directory).expect("remove spool");

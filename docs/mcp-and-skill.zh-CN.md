@@ -223,6 +223,13 @@ Agent 通常按以下顺序工作：
 
 已有 Profile 时不需要主动采集。面对策略已经批准的实时 PID，Skill 的默认流程改为 `inspect_collection_capabilities` → `plan_automatic_collection` → `execute_collection_plan` → `analyze_collection`；`stat` 指标直接保存在采集产物中。完整部署见[《自动采集与 Collector Broker》](automatic-collection.zh-CN.md)。
 
+`plan_automatic_collection` 和 `collect_project_workload` 默认使用 `event_source=auto`。
+硬件 PMU 没有可用计数时会改用固定软件事件继续工作，并在工具摘要中返回实际事件
+来源、降级原因和证据限制。Agent 可以继续分析/优化 CPU 时间、调度活动、缺页和
+on-CPU 热点，但不得用软件结果推断 IPC、硬件缓存或分支未命中。优化前后的
+`actual_event_source` 必须一致，否则应固定为 `software_only` 或
+`hardware_required` 后重跑。
+
 需要运行当前项目时，流程是 `collect_project_workload` → `analyze_collection` →
 热点/调用路径/源码定位 → 修改候选 → 相同工作负载的基线/候选对比。用户无需提供 PID，
 但必须确认精确程序和参数。

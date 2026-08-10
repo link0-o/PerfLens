@@ -117,8 +117,12 @@ finding a PID:
 perflens accept-collector --authorize-host-acceptance
 ```
 
-The default output is a concise Chinese pass summary with the evidence path,
-hash, metric count, and conclusion boundary. Use `--json` for complete
+The default output is a concise Chinese pass summary with hardware-PMU,
+software-counting, and `cpu-clock` sampling status plus the evidence path,
+hash, metric count, and conclusion boundary. If hardware PMU evidence is not
+useful, automatic collection stays within the same PID, duration, and output
+bounds and continues with fixed software events. The result explicitly rules
+out IPC, hardware cache-miss, and branch-miss claims. Use `--json` for complete
 machine-readable output or `--output ./collector-acceptance.json` to preserve a
 new versioned evidence file.
 

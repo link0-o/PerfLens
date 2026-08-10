@@ -291,6 +291,7 @@ def main() -> None:
         assert f"allowed_uids = [{os.geteuid()}]" in policy_text
         assert "policy_version = 1" in policy_text
         assert "max_spool_bytes = 5368709120" in policy_text
+        assert "allow_software_fallback = true" in policy_text
         assert "exactly one UID is supported" in policy_text
         assert "允许连接 Collector 的唯一普通用户 UID" in policy_text
         assert "The only ordinary-user UID allowed to call this Collector" in policy_text

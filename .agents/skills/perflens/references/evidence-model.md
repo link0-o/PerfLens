@@ -10,6 +10,11 @@ Use the lowest level fully supported by the available data.
 
 Allowed conclusion states are `observed`, `candidate`, `likely`, `confirmed`, `rejected`, and `unknown`. Generic classification rules always produce `candidate`. A direct tool measurement can be `observed`. Use `confirmed` only when the claim itself has direct, discriminating evidence; use `Verified Improvement` only for L4.
 
+Event-source provenance is part of the evidence level. Software-event fallback can support CPU-time,
+scheduler-activity, page-fault, and sampled on-CPU hotspot observations. It cannot support IPC,
+hardware cache-miss, branch-miss, or other microarchitectural conclusions. A comparison whose two
+sides have different `actual_event_source` values is not matched A/B evidence.
+
 For every hypothesis record:
 
 1. Supporting evidence with artifact and hotspot IDs.

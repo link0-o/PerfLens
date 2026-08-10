@@ -77,6 +77,16 @@
   },
   "additionalProperties": false,
   "properties": {
+    "actual_event_source": {
+      "default": "unknown",
+      "enum": [
+        "hardware",
+        "software",
+        "unknown"
+      ],
+      "title": "Actual Event Source",
+      "type": "string"
+    },
     "authorization": {
       "const": "explicit",
       "default": "explicit",
@@ -129,6 +139,31 @@
       },
       "title": "Events",
       "type": "array"
+    },
+    "evidence_limitations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Limitations",
+      "type": "array"
+    },
+    "fallback_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Fallback Reason"
+    },
+    "fallback_used": {
+      "default": false,
+      "title": "Fallback Used",
+      "type": "boolean"
     },
     "finished_at": {
       "title": "Finished At",
@@ -202,6 +237,16 @@
     },
     "perf_executable": {
       "title": "Perf Executable",
+      "type": "string"
+    },
+    "requested_event_source": {
+      "default": "auto",
+      "enum": [
+        "auto",
+        "hardware_required",
+        "software_only"
+      ],
+      "title": "Requested Event Source",
       "type": "string"
     },
     "schema_version": {

@@ -5,6 +5,24 @@
 本文记录已经复现、具有明确边界和临时处理方法的问题，包括已经修复的问题。
 不要通过降低部署器安全检查来规避问题；升级前仍可按对应版本的临时方法处理。
 
+## KL-2026-08-09：部分 VMware/混合架构主机的硬件 PMU 返回零计数（已提供自动降级）
+
+- 现象：软件事件 `task-clock` 等可以计数，但 `cycles`、`instructions` 在持续 CPU 负载下
+  仍返回 0，或 `perf` 报 `not supported`、`not counted`、`ENOMEM`；
+- 边界：这通常是虚拟 PMU 暴露、宿主机 Hyper-V/VBS、VMware 与 Intel 混合 P/E 核 PMU
+  兼容问题，不是来宾 CPU 算力不足，也不能由 root 权限修复；
+- 当前处理：`record`/`stat` 默认采用 `event_source=auto`。Collector 用最多 250ms 的
+  同 PID 固定探测判断硬件计数是否有用；失败后，`stat` 使用固定软件事件，`record`
+  使用 `cpu-clock`，并在结果和中文摘要中明确提示降级；
+- 仍可完成：CPU 时间、上下文切换、迁移、缺页、on-CPU 热点、调用路径、源码定位、
+  火焰图以及同事件来源的前后对比；
+- 不能宣称：IPC、硬件缓存未命中率、分支未命中率和其他微架构结论。
+
+需要硬件证据的实验应选择 `hardware_required` 并让失败保持可见；已知 PMU 不可用且需要
+稳定 A/B 时选择 `software_only`。不要把一份 hardware 基线与一份 software 候选结果
+直接比较。仍可在完全关机后调整 VMware vPMC/宿主虚拟化设置，但 PerfLens 的软件降级
+不再要求用户先解决该平台问题才能继续常规性能优化。
+
 ## KI-2026-08-07：已撤回的 v0.2.0 Helper unit 无法通过 systemd USER 阶段（已修复）
 
 - 影响范围：已撤回的首批 `v0.2.0` 原生 `perflens-collector` DEB，在 Debian 13 上选择

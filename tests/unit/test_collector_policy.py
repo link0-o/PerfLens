@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from perflens.collection.collector import HARDWARE_STAT_EVENTS
 from perflens.collector_broker.policy import (
     CollectorBrokerPolicy,
     load_broker_policy,
@@ -51,6 +52,7 @@ def test_policy_must_be_immutable_to_non_root_service_owner(tmp_path: Path) -> N
     assert policy.max_spool_artifacts == 500
     assert policy.min_free_bytes == 2 << 30
     assert policy.max_plan_ttl_seconds == 120
+    assert policy.allow_software_fallback is False
 
 
 def test_policy_rejects_unknown_fields(tmp_path: Path) -> None:
@@ -120,6 +122,7 @@ def test_policy_loader_rejects_invalid_field_types(tmp_path: Path) -> None:
         "max_plan_ttl_seconds = true",
         "socket_mode = true",
         "artifact_mode = false",
+        "allow_software_fallback = 1",
     ],
 )
 def test_policy_loader_rejects_boolean_numeric_fields(tmp_path: Path, field: str) -> None:
@@ -172,6 +175,11 @@ def test_broker_policy_limit_validation(tmp_path: Path) -> None:
         replace(base, max_plan_ttl_seconds=0),
         replace(base, max_plan_ttl_seconds=3601),
         replace(base, allowed_stat_events=()),
+        replace(
+            base,
+            allowed_stat_events=HARDWARE_STAT_EVENTS,
+            allow_software_fallback=True,
+        ),
         replace(base, socket_mode=0o666),
         replace(base, socket_mode=True),
         replace(base, socket_mode=0o400),

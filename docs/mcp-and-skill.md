@@ -186,6 +186,12 @@ For policy-approved live PIDs, use `inspect_collection_capabilities`,
 `plan_automatic_collection`, `execute_collection_plan`, and `analyze_collection`.
 See [automatic collection](automatic-collection.md).
 
+Planning and project-workload tools default to `event_source=auto`. Always
+surface the returned actual source, fallback reason, and limitations. Continue
+with software CPU-time/scheduling/page-fault or `cpu-clock` hotspot evidence,
+but do not infer IPC, hardware cache, branch, or other microarchitectural facts.
+Matched A/B runs require the same actual source.
+
 For a confirmed current-project workload, use `collect_project_workload`, then
 analyze its Collection artifact and perform matched baseline/candidate runs.
 The user need not discover a PID, but natural-language intent alone is not

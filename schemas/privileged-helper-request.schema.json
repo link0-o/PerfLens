@@ -46,6 +46,32 @@
           "title": "Expires At Unix Milliseconds",
           "type": "integer"
         },
+        "fallback_allowed": {
+          "title": "Fallback Allowed",
+          "type": "boolean"
+        },
+        "fallback_events": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Fallback Events",
+          "type": "array"
+        },
+        "fallback_record_event": {
+          "anyOf": [
+            {
+              "const": "cpu-clock",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Record Event"
+        },
         "frequency_hz": {
           "anyOf": [
             {
@@ -85,14 +111,39 @@
           "title": "Plan Id",
           "type": "string"
         },
+        "record_event": {
+          "anyOf": [
+            {
+              "enum": [
+                "cycles",
+                "cpu-clock"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Record Event"
+        },
         "request_id": {
           "pattern": "^request-[a-f0-9]{16,64}$",
           "title": "Request Id",
           "type": "string"
         },
+        "requested_event_source": {
+          "enum": [
+            "auto",
+            "hardware_required",
+            "software_only"
+          ],
+          "title": "Requested Event Source",
+          "type": "string"
+        },
         "schema_version": {
-          "const": "1.0",
-          "default": "1.0",
+          "const": "1.1",
+          "default": "1.1",
           "title": "Schema Version",
           "type": "string"
         },
@@ -107,6 +158,8 @@
         "target",
         "mode",
         "duration_milliseconds",
+        "requested_event_source",
+        "fallback_allowed",
         "max_output_bytes",
         "expires_at_unix_milliseconds"
       ],
@@ -128,8 +181,8 @@
           "type": "string"
         },
         "schema_version": {
-          "const": "1.0",
-          "default": "1.0",
+          "const": "1.1",
+          "default": "1.1",
           "title": "Schema Version",
           "type": "string"
         }

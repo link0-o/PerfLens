@@ -43,6 +43,11 @@ Start with `stat` when counters can distinguish the next hypothesis. Use `record
 stacks are required. Keep the initial duration at or below 10 seconds unless the user explicitly
 requests a different value within policy.
 
+Leave `event_source=auto` for the initial run. If hardware PMU probing fails, continue with the
+fixed software `stat` events or `cpu-clock` sampling and state the reduced evidence boundary. For
+before/after validation, pin both runs to the baseline's `actual_event_source`; never compare a
+hardware baseline to a software candidate as equivalent evidence.
+
 Read `collection_id` from the returned project-run artifact. For `stat`, use the collection's typed
 metrics. For `record`, call `analyze_collection`, inspect metadata and unresolved symbols, then use
 hotspots and call paths. Escalate modes only to obtain named missing evidence.

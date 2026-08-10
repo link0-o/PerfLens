@@ -78,6 +78,18 @@ When the user identifies a live PID and the MCP server has an administrator-appr
 5. For `stat`, interpret the typed metrics already stored in the collection artifact. For perf-data modes, call `analyze_collection`, then continue the default evidence workflow.
 6. Escalate to a stronger mode only when the prior result names missing evidence that the stronger mode can supply.
 
+For `record` and `stat`, keep `event_source=auto` unless the user or experiment explicitly
+requires hardware-only or software-only evidence. If `fallback_used=true`, tell the user that
+hardware PMU evidence was unavailable and continue with the returned software evidence:
+
+- software `stat` supports CPU time, context-switch, migration, and page-fault observations;
+- software `cpu-clock` sampling supports on-CPU hotspots, call paths, source attribution, and
+  FlameGraph generation;
+- do not infer IPC, hardware cache-miss behavior, branch-miss behavior, or microarchitectural
+  bottlenecks from a software fallback;
+- baseline and candidate must have the same `actual_event_source`; otherwise the A/B result is not
+  comparable and must be rerun with an explicit common source.
+
 The Skill may select and sequence collection automatically inside an already granted scope. The Skill itself is not authorization. Never add collection server flags, launch the privileged broker, invoke sudo, change sysctl/capabilities, broaden allowed roots, or select another user's PID on the user's behalf.
 
 The legacy `collect_profile` tool remains for manually confirmed command/PID collection and requires its exact per-call tokens. Prefer the plan/Broker workflow for Agent-driven PID collection.
@@ -87,6 +99,8 @@ The legacy `collect_profile` tool remains for manually confirmed command/PID col
 - A hotspot is an observation, not a root cause.
 - Self weight identifies where samples land; Inclusive weight identifies stacks containing the function. Recursion is counted separately.
 - Confirm the sampled event. Cycles, instructions, faults, and sample counts support different statements.
+- Always inspect `actual_event_source`, `fallback_used`, and `evidence_limitations`; never hide an
+  automatic software fallback from the user.
 - Lock waiting and I/O waiting cannot be established from an on-CPU profile alone.
 - Do not recommend replacing an allocator without allocation counts, sizes, lifetimes, and caller evidence.
 - Do not recommend disabling synchronization, validation, durability, bounds checks, or error handling by default.

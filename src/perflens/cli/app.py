@@ -28,6 +28,7 @@ from perflens.collection.collector import (
     ACTIVE_COLLECTION_AUTHORIZATION,
     DEFAULT_MAX_OUTPUT_BYTES,
     DEFAULT_STAT_EVENTS,
+    HARDWARE_STAT_EVENTS,
     PID_ATTACH_AUTHORIZATION,
     CollectionRequest,
     CollectionTarget,
@@ -834,6 +835,13 @@ def verify_collector_command(
         str,
         typer.Option("--pid-authorization", help="PID 附加的完整显式授权短语。"),
     ] = "",
+    event_source: Annotated[
+        Literal["auto", "hardware_required", "software_only"],
+        typer.Option(
+            "--event-source",
+            help="事件来源策略: auto 自动降级; hardware_required 必须硬件; software_only 仅软件。",
+        ),
+    ] = "auto",
 ) -> None:
     """通过已安装 Collector 执行一次有界真实 perf stat 验收。"""
     try:
@@ -862,7 +870,8 @@ def verify_collector_command(
                 mode="stat",
                 pid=pid,
                 duration_seconds=duration_seconds,
-                events=DEFAULT_STAT_EVENTS,
+                events=HARDWARE_STAT_EVENTS,
+                event_source=event_source,
                 max_output_bytes=8 << 20,
             ),
             policy=AutomaticCollectionPolicy(
@@ -1675,6 +1684,8 @@ def _render_doctor_chinese(artifact: CollectionCapabilityArtifact) -> None:
         "perf 文件 capability: "
         + (_terminal_text(", ".join(artifact.perf_file_capabilities)) or "无")
     )
+    typer.echo("硬件 PMU: 未主动探测 (只读检查不会运行 perf)")
+    typer.echo("软件计数/采样: 未主动探测 (请运行 accept-collector 真实验收)")
     typer.echo(f"综合结论: {overall}")
     typer.echo("采集模式:")
     for mode in artifact.modes:
@@ -1966,6 +1977,11 @@ def _render_collector_acceptance_chinese(
     typer.echo(f"Collector Socket: {artifact.socket_path}")
     typer.echo(f"请求采集时长: {artifact.requested_duration_seconds:g} 秒")
     typer.echo(f"采集指标数量: {artifact.metric_count}")
+    typer.echo(f"硬件 PMU: {_availability_chinese(artifact.hardware_pmu_status)}")
+    if artifact.hardware_pmu_reason:
+        typer.echo(f"硬件 PMU 说明: {_terminal_text(artifact.hardware_pmu_reason)}")
+    typer.echo(f"软件计数事件: {_availability_chinese(artifact.software_counting_status)}")
+    typer.echo(f"软件 cpu-clock 采样: {_availability_chinese(artifact.software_sampling_status)}")
     typer.echo(f"证据文件: {artifact.output_path}")
     typer.echo(f"证据大小: {_human_bytes(artifact.output_bytes)}")
     typer.echo(f"证据 SHA-256: {artifact.output_sha256}")
@@ -1976,7 +1992,10 @@ def _render_collector_acceptance_chinese(
         for warning in artifact.warnings:
             typer.echo(f"- {warning}")
     typer.echo("结论:")
-    typer.echo("- 当前用户、Collector 策略和内核权限已完成一次真实短时采集。")
+    typer.echo("- 当前用户、Collector 策略和内核权限已完成软件计数与采样的真实短时采集。")
+    if artifact.hardware_pmu_status == "unavailable":
+        typer.echo("- 硬件 PMU 不可用时会自动降级; 仍可定位 CPU 热点和调度开销候选。")
+        typer.echo("- 降级证据不能用于 IPC、硬件缓存未命中率或分支未命中率结论。")
     typer.echo("- 此结果只证明本机当前配置。任意项目或采集模式仍需分别验证。")
     typer.echo("下一步:")
     typer.echo("- 需要留档时重新运行并使用 --output <新文件.json>。")
@@ -1992,6 +2011,11 @@ def _render_collector_verification_chinese(artifact: CollectionArtifact) -> None
     typer.echo(f"采集 ID: {_terminal_text(artifact.collection_id)}")
     typer.echo(f"目标 PID: {artifact.target_pid}")
     typer.echo(f"采集模式: {artifact.mode}")
+    typer.echo(f"请求事件来源: {artifact.requested_event_source}")
+    typer.echo(f"实际事件来源: {artifact.actual_event_source}")
+    typer.echo(f"已自动降级: {'是' if artifact.fallback_used else '否'}")
+    if artifact.fallback_reason:
+        typer.echo(f"降级原因: {_terminal_text(artifact.fallback_reason)}")
     typer.echo(f"实际采集时长: {artifact.duration_seconds:g} 秒")
     typer.echo(f"指标: 实测 {measured} / 共 {len(artifact.metrics)}")
     typer.echo(f"证据文件: {_terminal_text(artifact.output_path)}")
@@ -2003,6 +2027,10 @@ def _render_collector_verification_chinese(artifact: CollectionArtifact) -> None
         typer.echo("警告:")
         for warning in artifact.warnings:
             typer.echo(f"- {_terminal_text(warning)}")
+    if artifact.evidence_limitations:
+        typer.echo("证据限制:")
+        for limitation in artifact.evidence_limitations:
+            typer.echo(f"- {_terminal_text(limitation)}")
     if artifact.diagnostics:
         typer.echo("有界诊断:")
         for diagnostic in artifact.diagnostics:
@@ -2024,6 +2052,14 @@ def _human_bytes(value: int) -> str:
             break
         amount /= 1024
     return f"{amount:.0f} {unit}" if amount.is_integer() else f"{amount:.1f} {unit}"
+
+
+def _availability_chinese(status: str) -> str:
+    return {
+        "available": "可用",
+        "unavailable": "不可用",
+        "unknown": "未验证",
+    }.get(status, status)
 
 
 def _fail(error: PerfLensError) -> NoReturn:

@@ -300,6 +300,42 @@ def _verify_collection_artifact(
     socket_identity: _SocketIdentity,
     server_uid: int,
 ) -> None:
+    if plan.mode not in {"record", "stat"}:
+        expected_source = "unknown"
+    else:
+        expected_source = (
+            "software"
+            if plan.requested_event_source == "software_only" or artifact.fallback_used
+            else "hardware"
+        )
+    expected_events = plan.fallback_events if artifact.fallback_used else plan.events
+    software_limitations = {
+        "instructions-per-cycle unavailable",
+        "hardware cache-miss evidence unavailable",
+        "hardware branch-miss evidence unavailable",
+    }
+    if (
+        artifact.requested_event_source != plan.requested_event_source
+        or artifact.actual_event_source != expected_source
+        or (artifact.fallback_used and not plan.fallback_allowed)
+        or artifact.fallback_used != (artifact.fallback_reason is not None)
+        or (
+            artifact.fallback_reason is not None
+            and artifact.fallback_reason
+            not in {
+                "hardware_probe_skipped_for_short_collection",
+                "hardware_probe_failed",
+                "hardware_probe_produced_no_usable_counts",
+            }
+        )
+        or (plan.mode == "stat" and artifact.events != expected_events)
+        or (plan.mode != "stat" and artifact.events)
+        or (
+            artifact.actual_event_source == "software"
+            and not software_limitations.issubset(artifact.evidence_limitations)
+        )
+    ):
+        raise _unsafe_collection_artifact()
     expected_name = (
         f"{plan.plan_id}.stat.csv" if plan.mode == "stat" else (f"{plan.plan_id}.perf.data")
     )

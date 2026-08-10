@@ -20,16 +20,27 @@ from perflens.security.paths import validate_new_output_file
 
 ACTIVE_COLLECTION_AUTHORIZATION = "I_EXPLICITLY_AUTHORIZE_TARGET_PROFILING"
 PID_ATTACH_AUTHORIZATION = "I_EXPLICITLY_AUTHORIZE_PID_ATTACH"
-DEFAULT_STAT_EVENTS = (
+HARDWARE_STAT_EVENTS = (
     "cycles",
     "instructions",
     "cache-references",
     "cache-misses",
     "branches",
     "branch-misses",
+)
+SOFTWARE_STAT_EVENTS = (
+    "task-clock",
     "context-switches",
     "cpu-migrations",
     "page-faults",
+)
+DEFAULT_STAT_EVENTS = (*HARDWARE_STAT_EVENTS, *SOFTWARE_STAT_EVENTS)
+DEFAULT_RECORD_EVENT = "cycles"
+SOFTWARE_RECORD_EVENT = "cpu-clock"
+FALLBACK_REASONS = (
+    "hardware_probe_skipped_for_short_collection",
+    "hardware_probe_failed",
+    "hardware_probe_produced_no_usable_counts",
 )
 DEFAULT_MAX_OUTPUT_BYTES = 256 << 20
 CollectionMode = Literal["record", "stat", "sched", "lock", "off_cpu"]
@@ -55,6 +66,12 @@ class CollectionRequest:
     frequency_hz: int = 99
     call_graph: CallGraphMode = "dwarf"
     events: tuple[str, ...] = DEFAULT_STAT_EVENTS
+    record_event: Literal["cycles", "cpu-clock"] = DEFAULT_RECORD_EVENT
+    requested_event_source: Literal["auto", "hardware_required", "software_only"] = (
+        "hardware_required"
+    )
+    fallback_used: bool = False
+    fallback_reason: str | None = None
     timeout_seconds: float = 300.0
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
 
@@ -105,6 +122,12 @@ def collect_profile(request: CollectionRequest) -> CollectionArtifact:
     collection_id = f"collection-{hashlib.sha256(identity.encode()).hexdigest()[:16]}"
     diagnostics = tuple(line[:512] for line in result.stderr.splitlines()[:32] if line.strip())
     warnings = [*metric_warnings]
+    actual_event_source = _actual_event_source(request)
+    evidence_limitations = _evidence_limitations(actual_event_source)
+    if request.fallback_used:
+        warnings.append(
+            "Hardware PMU evidence was unavailable; PerfLens continued with software events."
+        )
     if request.mode == "off_cpu":
         warnings.append(
             "off_cpu records sched:sched_switch tracepoint stacks; interpreting blocked time "
@@ -129,6 +152,11 @@ def collect_profile(request: CollectionRequest) -> CollectionArtifact:
         frequency_hz=request.frequency_hz if request.mode in {"record", "off_cpu"} else None,
         call_graph=request.call_graph if request.mode in {"record", "off_cpu"} else None,
         events=request.events if request.mode == "stat" else (),
+        requested_event_source=request.requested_event_source,
+        actual_event_source=actual_event_source,
+        fallback_used=request.fallback_used,
+        fallback_reason=request.fallback_reason,
+        evidence_limitations=evidence_limitations,
         metrics=metrics,
         diagnostics=diagnostics,
         diagnostics_truncated=result.stderr_truncated or result.stderr_bytes > (1 << 20),
@@ -169,6 +197,26 @@ def _validate_request(request: CollectionRequest) -> None:
             "collection",
             "max_output_bytes must be positive",
         )
+    if request.requested_event_source not in {"auto", "hardware_required", "software_only"}:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "collection",
+            "requested_event_source is unsupported",
+        )
+    if request.fallback_used and request.requested_event_source != "auto":
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "collection",
+            "Only auto collection may report a software fallback",
+        )
+    if request.fallback_used != (request.fallback_reason is not None) or (
+        request.fallback_reason is not None and request.fallback_reason not in FALLBACK_REASONS
+    ):
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "collection",
+            "Software fallback requires one fixed fallback reason",
+        )
     if request.mode == "stat":
         if not request.events or len(request.events) > 64:
             raise PerfLensError(
@@ -184,6 +232,59 @@ def _validate_request(request: CollectionRequest) -> None:
                     "perf stat event contains unsupported characters",
                     details={"event": event[:128]},
                 )
+        selected_events = set(request.events)
+        if request.requested_event_source == "software_only" and not selected_events.issubset(
+            SOFTWARE_STAT_EVENTS
+        ):
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "collection",
+                "Software-only stat collection accepts only fixed software events",
+            )
+        if (
+            request.requested_event_source == "hardware_required"
+            and not selected_events.intersection(HARDWARE_STAT_EVENTS)
+        ):
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "collection",
+                "Hardware-required stat collection requires a hardware event",
+            )
+        if request.fallback_used and not selected_events.issubset(SOFTWARE_STAT_EVENTS):
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "collection",
+                "Software fallback stat collection requires fixed software events",
+            )
+    if request.record_event not in {DEFAULT_RECORD_EVENT, SOFTWARE_RECORD_EVENT}:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "collection",
+            "perf record event is unsupported",
+        )
+    if request.mode == "record" and (
+        (
+            request.requested_event_source == "software_only"
+            and request.record_event != SOFTWARE_RECORD_EVENT
+        )
+        or (
+            request.requested_event_source == "hardware_required"
+            and request.record_event != DEFAULT_RECORD_EVENT
+        )
+    ):
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "collection",
+            "perf record event does not match the requested event source",
+        )
+    if request.mode == "record" and request.fallback_used and (
+        request.record_event != SOFTWARE_RECORD_EVENT
+    ):
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "collection",
+            "Software fallback record collection requires cpu-clock",
+        )
 
 
 def _resolve_target(
@@ -251,6 +352,8 @@ def _build_perf_argv(
         prefix = (
             str(perf_path),
             "record",
+            "-e",
+            request.record_event,
             "--freq",
             str(request.frequency_hz),
             "--call-graph",
@@ -301,6 +404,28 @@ def _read_metrics(
     if mode != "stat":
         return (), ()
     return PerfStatMetricAdapter().parse(output_path)
+
+
+def _actual_event_source(request: CollectionRequest) -> Literal["hardware", "software", "unknown"]:
+    if request.mode == "record":
+        return "software" if request.record_event == SOFTWARE_RECORD_EVENT else "hardware"
+    if request.mode == "stat":
+        selected = set(request.events)
+        if selected and selected.issubset(SOFTWARE_STAT_EVENTS):
+            return "software"
+        if selected.intersection(HARDWARE_STAT_EVENTS):
+            return "hardware"
+    return "unknown"
+
+
+def _evidence_limitations(event_source: str) -> tuple[str, ...]:
+    if event_source != "software":
+        return ()
+    return (
+        "instructions-per-cycle unavailable",
+        "hardware cache-miss evidence unavailable",
+        "hardware branch-miss evidence unavailable",
+    )
 
 
 def _resolve_executable(path: Path, label: str) -> Path:

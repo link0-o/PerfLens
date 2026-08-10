@@ -25,6 +25,18 @@ Before starting perf, the Broker reserves against independent spool byte and
 artifact-count quotas and a filesystem free-space floor. Exhaustion denies the
 new collection without deleting or overwriting existing evidence.
 
+For `record` and `stat`, the default `event_source=auto` performs a fixed
+hardware `cycles`/`instructions` probe of at most 250ms against the same bound
+PID. Probe time counts toward the requested duration. Plans shorter than 300ms
+go directly to software events with reason `hardware_probe_skipped_for_short_collection`, so the
+probe cannot consume most of the window. If the hardware PMU cannot produce useful counts,
+`stat` falls back to fixed software events and
+`record` falls back to `cpu-clock`. The Collection reports the actual source,
+fallback reason, and limitations. Software evidence can support CPU-time,
+scheduler-activity, page-fault, and on-CPU hotspot analysis, but not IPC,
+hardware cache-miss, branch-miss, or microarchitectural conclusions. Matched
+A/B validation requires the same actual source on both sides.
+
 Evidence retention is a separate human-administrator archive-then-prune flow.
 Archives have a dedicated read-only verifier; the MCP, Skill, and Collector
 protocol expose no automatic deletion operation.
@@ -53,7 +65,11 @@ then run that trusted system-package entry point once with `sudo` and without
 `--dry-run`. Wheel deployments use `/opt/perflens/bin/perflens-admin`. The fixed deployer uses packaged templates and never
 executes project-provided commands or changes sysctl.
 
-On Debian, `perf_event_paranoid=3` blocks perf before the normal CAP_PERFMON path. An administrator must either review and lower that policy for the dedicated collector or design a more privileged isolation boundary. Do not run the MCP server or Agent as root.
+On Debian, `perf_event_paranoid=3` blocks perf before the normal CAP_PERFMON
+path. An administrator may either review and lower that policy for the
+dedicated Collector or explicitly deploy the packaged `paranoid3_helper` Rust
+boundary and acknowledge its bounded `CAP_SYS_ADMIN` risk. Do not run the MCP
+server, Agent, or Python Broker as root.
 
 For automatic MCP collection, enable all explicit server gates, configure `--collector-socket`, include the collector spool as an `--allowed-root`, and bound modes/duration/frequency. See the [Chinese guide](automatic-collection.zh-CN.md) for the complete configuration and safety model.
 
@@ -65,6 +81,10 @@ The automatic workflow is:
 4. `execute_collection_plan` once before it expires;
 5. read typed stat metrics or call `analyze_collection` for perf-data output;
 6. continue the normal evidence workflow.
+
+After execution, always inspect `actual_event_source`, `fallback_used`, and
+`evidence_limitations`. A software fallback is a reduced evidence source, not
+an automatic reason to abandon performance analysis.
 
 The Skill may automate these steps inside an already granted scope. Skill text is never authorization.
 

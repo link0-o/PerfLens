@@ -183,14 +183,16 @@ users/groups, sysctl, or capabilities. Candidate comments are preserved
 verbatim. Identity, spool, or privilege-topology migration requires a reviewed
 stopped-service administrator procedure.
 
-`accept-collector` starts a fixed, self-owned CPU probe and performs a real,
-policy-bounded perf-stat collection of at most five seconds. It always cleans up
+`accept-collector` starts a fixed, self-owned CPU probe and separately verifies
+hardware counting, fixed software counting, and `cpu-clock` sampling through
+policy-bounded collections of at most five seconds each. It always cleans up
 the probe, so users do not need to find a PID. It prints a concise Chinese pass
 summary by default; `--json` emits the complete versioned acceptance artifact and
 `--output` safely preserves it as a new file. It still requires
-`--authorize-host-acceptance` because it is not a read-only health check. The
-command refuses a false pass when perf returns only unsupported or uncounted
-events: at least one finite `measured` metric is required. The advanced
+`--authorize-host-acceptance` because it is not a read-only health check. A host
+with an unavailable hardware PMU passes only when software counting produces a
+positive measured value and software sampling succeeds; the result then states
+the reduced evidence boundary. The advanced
 `verify-collector` command remains available for an explicitly authorized
 existing PID. It is Chinese-first on success; automation must add `--json` for
 the complete Collection Artifact, while `--output <new-file.json>` preserves it
@@ -211,6 +213,14 @@ back together. Policy and spool data are preserved. A restart or health failure
 restores every unit changed by that attempt before reloading the services. Run
 ordinary-user `perflens accept-collector
 --authorize-host-acceptance` again after every upgrade.
+
+For backward compatibility, a retained policy without `allow_software_fallback` is read as
+`false`; package upgrade never silently expands its event policy. To opt in, review a candidate
+policy that keeps all four fixed software events (including `task-clock`) in
+`allowed_stat_events`, add `allow_software_fallback = true`, and apply it through the documented
+`perflens-admin update-policy --dry-run` and update workflow. Until then, the Collector narrows an
+MCP `auto` plan to hardware-only execution and discloses that policy boundary on successful
+artifacts.
 
 After deployment and verification, the Skill can confirm and launch one exact
 in-project executable as the ordinary user. PerfLens obtains that new PID and

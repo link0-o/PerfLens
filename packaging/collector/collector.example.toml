@@ -86,10 +86,17 @@ allowed_stat_events = [
   "cache-misses",
   "branches",
   "branch-misses",
+  "task-clock",
   "context-switches",
   "cpu-migrations",
   "page-faults",
 ]
+
+# 硬件 PMU 不可用时，是否允许在原 PID、时长和输出边界内降级到软件事件。
+# Whether a plan may fall back to software events within the same PID, duration, and output bounds.
+# 开启后仍会在产物、CLI 和 MCP 中明确标记降级，不会伪装成完整硬件证据。
+# When enabled, artifacts, CLI, and MCP still disclose the fallback and its evidence limits.
+allow_software_fallback = true
 
 # Unix Socket 权限：所有者和 perflens 组可读写，其他用户无权限。通常不要修改。
 # Unix-socket mode: owner and perflens group may read/write; no access for others. Usually unchanged.

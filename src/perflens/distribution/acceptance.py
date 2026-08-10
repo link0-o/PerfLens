@@ -10,7 +10,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from perflens import __version__
-from perflens.collection.collector import DEFAULT_STAT_EVENTS
+from perflens.collection.collector import HARDWARE_STAT_EVENTS, SOFTWARE_STAT_EVENTS
 from perflens.collection.planning import (
     AutomaticCollectionPolicy,
     CollectionPlanRequest,
@@ -18,8 +18,11 @@ from perflens.collection.planning import (
 )
 from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.contracts.artifacts import (
+    CollectionArtifact,
     CollectionCapabilityArtifact,
+    CollectionPlanArtifact,
     CollectorAcceptanceArtifact,
+    PerfStatMetric,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 
@@ -63,66 +66,85 @@ def accept_collector(
     process: subprocess.Popen[bytes] | None = None
     try:
         process = _start_probe()
+        policy = AutomaticCollectionPolicy(
+            enabled=True,
+            allowed_modes=("record", "stat"),
+            max_duration_seconds=_MAX_DURATION_SECONDS,
+            max_output_bytes=8 << 20,
+            plan_ttl_seconds=60,
+        )
+        client = _collector_client(socket_path, duration_seconds)
+        hardware_collection = None
+        hardware_reason = None
+        hardware_plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode="stat",
+                pid=process.pid,
+                duration_seconds=duration_seconds,
+                events=HARDWARE_STAT_EVENTS[:2],
+                event_source="hardware_required",
+                max_output_bytes=8 << 20,
+            ),
+            policy=policy,
+            capabilities=capabilities,
+        )
+        _require_allowed_plan(hardware_plan)
+        try:
+            hardware_collection = client.collect(hardware_plan)
+        except PerfLensError as exc:
+            if exc.code not in {ErrorCode.EXTERNAL_TOOL_FAILED, ErrorCode.PROFILE_PARSE_FAILED}:
+                raise
+            hardware_reason = "hardware_collection_failed"
+        hardware_metrics = (
+            _positive_measured_metrics(hardware_collection, HARDWARE_STAT_EVENTS)
+            if hardware_collection is not None
+            else ()
+        )
+        if hardware_collection is not None and not hardware_metrics:
+            hardware_reason = "hardware_collection_produced_no_usable_counts"
+
         plan = create_collection_plan(
             CollectionPlanRequest(
                 mode="stat",
                 pid=process.pid,
                 duration_seconds=duration_seconds,
-                events=DEFAULT_STAT_EVENTS,
+                event_source="software_only",
                 max_output_bytes=8 << 20,
             ),
-            policy=AutomaticCollectionPolicy(
-                enabled=True,
-                allowed_modes=("stat",),
-                max_duration_seconds=_MAX_DURATION_SECONDS,
-                max_output_bytes=8 << 20,
-                plan_ttl_seconds=60,
-            ),
+            policy=policy,
             capabilities=capabilities,
         )
-        if plan.policy_status != "allowed":
-            raise PerfLensError(
-                ErrorCode.PATH_SAFETY_VIOLATION,
-                "collector_acceptance",
-                "Collector acceptance plan was denied",
-                recoverable=True,
-                details={"warnings": list(plan.warnings)},
-            )
-        try:
-            collection = CollectorBrokerClient(
-                socket_path,
-                timeout_seconds=duration_seconds + 15,
-            ).collect(plan)
-        except ValueError as exc:
-            raise PerfLensError(
-                ErrorCode.INVALID_INPUT,
-                "collector_acceptance",
-                "Collector socket must be an existing absolute Unix socket",
-                recoverable=True,
-                details={"socket": str(socket_path)},
-            ) from exc
-        measured_metrics = tuple(
-            metric
-            for metric in collection.metrics
-            if metric.status == "measured" and metric.value is not None
-        )
+        _require_allowed_plan(plan)
+        collection = client.collect(plan)
+        measured_metrics = _positive_measured_metrics(collection, SOFTWARE_STAT_EVENTS)
         if not measured_metrics:
             raise PerfLensError(
                 ErrorCode.PROFILE_PARSE_FAILED,
                 "collector_acceptance",
-                "Collector acceptance produced no measured perf stat metrics",
+                "Collector acceptance produced no measured software perf stat metrics",
                 recoverable=True,
                 details={
                     "collection_id": collection.collection_id,
                     "metric_statuses": [metric.status for metric in collection.metrics],
                 },
                 suggested_actions=(
-                    "Inspect perf event support and the Collector journal, then retry.",
-                    "虚拟机请在虚拟化平台启用虚拟 CPU 性能计数器 / "
-                    "On a virtual machine, enable virtual CPU performance counters in the "
-                    "hypervisor.",
+                    "Inspect software perf event support and the Collector journal, then retry.",
                 ),
             )
+
+        sampling_plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode="record",
+                pid=process.pid,
+                duration_seconds=duration_seconds,
+                event_source="software_only",
+                max_output_bytes=8 << 20,
+            ),
+            policy=policy,
+            capabilities=capabilities,
+        )
+        _require_allowed_plan(sampling_plan)
+        sampling_collection = client.collect(sampling_plan)
 
         identity = "\0".join(
             (
@@ -132,6 +154,18 @@ def accept_collector(
                 str(socket_path),
             )
         )
+        hardware_available = hardware_reason is None
+        hardware_collection_id = (
+            hardware_collection.collection_id
+            if hardware_available and hardware_collection is not None
+            else None
+        )
+        warnings = [*plan.warnings, *collection.warnings, *sampling_collection.warnings]
+        if not hardware_available:
+            warnings.append(
+                "硬件 PMU 当前不可用; PerfLens 已验证软件计数与 cpu-clock 采样, 性能优化仍可继续, "
+                "但不能据此判断 IPC、硬件缓存未命中或分支未命中。"
+            )
         return CollectorAcceptanceArtifact(
             perflens_version=__version__,
             acceptance_id=f"acceptance-{hashlib.sha256(identity.encode()).hexdigest()[:20]}",
@@ -145,9 +179,15 @@ def accept_collector(
             output_sha256=collection.output_sha256,
             output_bytes=collection.output_bytes,
             metric_count=len(collection.metrics),
+            hardware_pmu_status="available" if hardware_available else "unavailable",
+            hardware_pmu_reason=hardware_reason,
+            software_counting_status="available",
+            software_sampling_status="available",
+            hardware_collection_id=hardware_collection_id,
+            software_sampling_collection_id=sampling_collection.collection_id,
             started_at=collection.started_at,
             finished_at=collection.finished_at,
-            warnings=tuple((*plan.warnings, *collection.warnings)),
+            warnings=tuple(warnings),
         )
     finally:
         if process is not None:
@@ -172,6 +212,47 @@ def _start_probe() -> subprocess.Popen[bytes]:
             "Unable to start the built-in acceptance probe",
             recoverable=True,
         ) from exc
+
+
+def _collector_client(socket_path: Path, duration_seconds: float) -> CollectorBrokerClient:
+    try:
+        return CollectorBrokerClient(
+            socket_path,
+            timeout_seconds=duration_seconds + 15,
+        )
+    except ValueError as exc:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "collector_acceptance",
+            "Collector socket must be an existing absolute Unix socket",
+            recoverable=True,
+            details={"socket": str(socket_path)},
+        ) from exc
+
+
+def _require_allowed_plan(plan: CollectionPlanArtifact) -> None:
+    if plan.policy_status != "allowed":
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "collector_acceptance",
+            "Collector acceptance plan was denied",
+            recoverable=True,
+            details={"warnings": list(plan.warnings)},
+        )
+
+
+def _positive_measured_metrics(
+    collection: CollectionArtifact,
+    allowed_events: tuple[str, ...],
+) -> tuple[PerfStatMetric, ...]:
+    return tuple(
+        metric
+        for metric in collection.metrics
+        if metric.event in allowed_events
+        and metric.status == "measured"
+        and metric.value is not None
+        and metric.value > 0
+    )
 
 
 def _stop_probe(process: subprocess.Popen[bytes]) -> None:

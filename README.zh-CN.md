@@ -100,7 +100,10 @@ perflens status --project /绝对路径/你的项目
 perflens accept-collector --authorize-host-acceptance
 ```
 
-默认输出简洁中文结果，包括证据路径、哈希、指标数量和结论边界。自动化程序使用
+默认输出简洁中文结果，包括硬件 PMU、软件计数、`cpu-clock` 采样状态、证据路径、
+哈希、指标数量和结论边界。硬件 PMU 不可用时，自动采集会在原 PID、总时长和输出
+边界内降级为固定软件事件并继续分析；结果会明确提示不能据此判断 IPC、硬件缓存或
+分支未命中。自动化程序使用
 `--json` 获取完整机器可读结果；需要留档时使用
 `--output ./collector-acceptance.json` 写入一个新的版本化证据文件。
 
@@ -334,7 +337,10 @@ perflens collect-profile \
 
 支持 `record`、`stat`、`sched`、`lock` 和 `off_cpu` 模式。附加到已有 PID 还需要独立开关、有限时长以及授权短语 `I_EXPLICITLY_AUTHORIZE_PID_ATTACH`。
 
-PerfLens 永远不会自行执行 sudo、修改内核策略或降低主机安全限制。若系统的 `perf_event_paranoid`、容器策略或能力设置不允许采样，应由系统管理员提供经过批准的采样环境或 Profile 文件。
+PerfLens 永远不会自行执行 sudo、修改内核策略或降低主机安全限制。若系统的
+`perf_event_paranoid`、容器策略或能力设置不允许任何采样，应由系统管理员提供经过
+批准的 Collector 或 Profile 文件；只有硬件 PMU 不可用而软件事件可用时，默认
+`auto` 策略会继续常规性能优化并标明证据限制。
 
 ## 权限和安全边界
 

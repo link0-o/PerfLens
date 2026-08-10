@@ -323,16 +323,18 @@ perflens accept-collector --authorize-host-acceptance
 ```
 
 PerfLens 会以当前普通用户启动一个固定、隔离、最长约 30 秒的内置 CPU 测试负载，
-通过 Collector 对它执行默认 1 秒、最多 5 秒的真实 `perf stat`，完成后无论成功失败
-都会终止测试进程。Collector 仍然只接收绑定 PID、UID 和启动时间的短期单次计划，
-不会收到任意命令、环境变量或输出路径。
+通过 Collector 分别验证硬件计数、固定软件计数和 `cpu-clock` 软件采样；每次默认 1 秒、
+最多 5 秒，完成后无论成功失败都会终止测试进程。Collector 仍然只接收绑定 PID、UID
+和启动时间的短期单次计划，不会收到任意命令、环境变量或输出路径。
 
-成功时默认输出中文验收摘要，直接显示证据路径、SHA-256、指标数量，并明确说明它只
-证明本机当前配置。指标产物写入策略限定的 `/var/lib/perflens`。自动化程序加 `--json`
+成功时默认输出中文验收摘要，直接显示硬件 PMU、软件计数和软件采样状态，以及证据
+路径、SHA-256、指标数量，并明确说明它只证明本机当前配置。硬件 PMU 不可用但两个
+软件路径可用时，验收仍会通过并显示降级边界；软件证据不能用于 IPC、硬件缓存或分支
+未命中结论。指标产物写入策略限定的 `/var/lib/perflens`。自动化程序加 `--json`
 获取带 `schema_version` 和 `status: passed` 的完整结果；需要留档时使用
 `--output ./perflens-collector-acceptance.json`，且输出必须是新文件。失败时会返回稳定
-错误，例如 Socket 权限、策略拒绝或内核禁止 perf。若所有事件都显示不支持或未计数，
-验收也会失败；至少需要一个有限数值的 `measured` 指标才会显示“通过”。
+错误，例如 Socket 权限、策略拒绝或内核禁止所有 perf 软件事件。软件计数至少需要一个
+大于零的 `measured` 指标，且 `cpu-clock` 采样必须成功，才会显示“通过”。
 
 这是主动采集，不是只读健康检查，所以必须显式传入授权开关。高级用户若要验证自己
 已有且明确授权的进程，仍可使用 `perflens verify-collector --help`，该命令要求 PID
@@ -402,6 +404,13 @@ systemd unit；高级模式会把 Broker 与 Rust Helper 两个 unit 作为同�
 策略，不修改 sysctl/capability，也不删除配置或 `/var/lib/perflens` 证据。若更新 unit
 后重启或健康协议握手失败，会逆序恢复本轮更改的全部旧 unit 并重新加载；此时应按错误提示检查
 `systemctl status` 和日志。升级成功后，再以普通用户运行一次：
+
+旧策略中没有 `allow_software_fallback` 时按 `false` 兼容读取，升级不会静默扩大采集事件。
+要启用本版本的自动软件降级，管理员应复制并审查现有策略，在
+`allowed_stat_events` 中保留全部四个固定软件事件（包括 `task-clock`），显式加入
+`allow_software_fallback = true`，然后按上文的 `perflens-admin update-policy --dry-run`
+与正式更新流程应用。未启用时，MCP 的 `auto` 计划会被 Collector 收窄为硬件采集，并在
+成功产物中提示该策略边界。
 
 ```bash
 perflens accept-collector --authorize-host-acceptance

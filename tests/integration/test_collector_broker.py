@@ -22,6 +22,7 @@ from perflens.cli.app import app
 from perflens.collection.collector import (
     ACTIVE_COLLECTION_AUTHORIZATION,
     PID_ATTACH_AUTHORIZATION,
+    SOFTWARE_STAT_EVENTS,
 )
 from perflens.collection.planning import (
     AutomaticCollectionPolicy,
@@ -55,9 +56,48 @@ def _fake_perf(tmp_path: Path) -> Path:
         "output = pathlib.Path(args[args.index('-o') + 1])\n"
         "time.sleep(0.35)\n"
         "if 'stat' in args:\n"
-        "    output.write_text('100;;cycles;10;100.0\\n200;;instructions;10;100.0\\n')\n"
+        "    selected = args[args.index('-e') + 1]\n"
+        "    if 'task-clock' in selected:\n"
+        "        output.write_text('100;;task-clock;10;100.0\\n2;;context-switches;10;100.0\\n')\n"
+        "    else:\n"
+        "        output.write_text('100;;cycles;10;100.0\\n200;;instructions;10;100.0\\n')\n"
         "else:\n"
         "    output.write_bytes(b'PERFILE2-broker')\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o555)
+    return executable
+
+
+def _fake_perf_with_unusable_hardware_pmu(tmp_path: Path) -> Path:
+    executable = tmp_path / "perf-fallback"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        "events = args[args.index('-e') + 1]\n"
+        "if events == 'cycles,instructions':\n"
+        "    output.write_text('0;;cycles;10;100.0\\n0;;instructions;10;100.0\\n')\n"
+        "else:\n"
+        "    output.write_text('100;;task-clock;10;100.0\\n2;;context-switches;10;100.0\\n')\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o555)
+    return executable
+
+
+def _fake_perf_with_failed_hardware_probe(tmp_path: Path) -> Path:
+    executable = tmp_path / "perf-failed-probe"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        "events = args[args.index('-e') + 1]\n"
+        "if events == 'cycles,instructions':\n"
+        "    raise SystemExit(1)\n"
+        "output.write_text('100;;task-clock;10;100.0\\n2;;context-switches;10;100.0\\n')\n",
         encoding="utf-8",
     )
     executable.chmod(0o555)
@@ -477,11 +517,126 @@ def test_broker_collects_verified_pid_to_fixed_spool(tmp_path: Path) -> None:
         assert not worker.is_alive()
         assert not replay_worker.is_alive()
         assert artifact.target_pid == target.pid
+        assert artifact.actual_event_source == "hardware"
+        assert artifact.fallback_used is False
+        assert any("disabled by Collector policy" in warning for warning in artifact.warnings)
         assert artifact.output_path.startswith(str(spool))
         assert Path(artifact.output_path).read_bytes() == b"PERFILE2-broker"
         assert Path(artifact.output_path).stat().st_mode & 0o777 == 0o640
         assert _collection_artifacts(spool) == (Path(artifact.output_path),)
         assert (spool / replay_marker_name(plan.plan_id)).is_file()
+    finally:
+        target.terminate()
+        target.wait(timeout=5)
+
+
+def test_cap_perfmon_broker_auto_falls_back_when_hardware_probe_has_no_counts(
+    tmp_path: Path,
+) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    target = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        start_new_session=True,
+    )
+    try:
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode="stat",
+                pid=target.pid,
+                duration_seconds=0.4,
+                max_output_bytes=1024,
+            ),
+            policy=AutomaticCollectionPolicy(enabled=True),
+            capabilities=_capabilities(),
+        )
+        policy = CollectorBrokerPolicy(
+            spool_root=spool,
+            perf_path=_fake_perf_with_unusable_hardware_pmu(tmp_path),
+            allowed_uids=(os.geteuid(),),
+            allow_software_fallback=True,
+            max_duration_seconds=1,
+            max_output_bytes=1024,
+        )
+        with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+            worker = threading.Thread(target=server.serve_once, daemon=True)
+            worker.start()
+            artifact = CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(plan)
+            worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        assert artifact.actual_event_source == "software"
+        assert artifact.fallback_used is True
+        assert artifact.fallback_reason == "hardware_probe_produced_no_usable_counts"
+        assert artifact.events == SOFTWARE_STAT_EVENTS
+        assert any("instructions-per-cycle" in item for item in artifact.evidence_limitations)
+        assert {metric.event for metric in artifact.metrics}.issuperset(
+            {"task-clock", "context-switches"}
+        )
+        assert not tuple(runtime.glob(".perflens-pmu-probe-*"))
+        assert len(_collection_artifacts(spool)) == 1
+    finally:
+        target.terminate()
+        target.wait(timeout=5)
+
+
+@pytest.mark.parametrize(
+    ("perf_factory", "expected_source", "expected_reason"),
+    [
+        (_fake_perf, "hardware", None),
+        (_fake_perf_with_failed_hardware_probe, "software", "hardware_probe_failed"),
+    ],
+)
+def test_cap_perfmon_broker_auto_selects_verified_event_source(
+    tmp_path: Path,
+    perf_factory: Any,
+    expected_source: str,
+    expected_reason: str | None,
+) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    target = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        start_new_session=True,
+    )
+    try:
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode="stat",
+                pid=target.pid,
+                duration_seconds=0.4,
+                max_output_bytes=1024,
+            ),
+            policy=AutomaticCollectionPolicy(enabled=True),
+            capabilities=_capabilities(),
+        )
+        policy = CollectorBrokerPolicy(
+            spool_root=spool,
+            perf_path=perf_factory(tmp_path),
+            allowed_uids=(os.geteuid(),),
+            allow_software_fallback=True,
+            max_duration_seconds=1,
+            max_output_bytes=1024,
+        )
+        with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+            worker = threading.Thread(target=server.serve_once, daemon=True)
+            worker.start()
+            artifact = CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(plan)
+            worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        assert artifact.actual_event_source == expected_source
+        assert artifact.fallback_used is (expected_reason is not None)
+        assert artifact.fallback_reason == expected_reason
+        assert not tuple(runtime.glob(".perflens-pmu-probe-*"))
     finally:
         target.terminate()
         target.wait(timeout=5)
@@ -520,6 +675,9 @@ def test_broker_delegates_paranoid3_collection_to_typed_helper(tmp_path: Path) -
                 output_bytes=len(payload),
                 output_sha256=hashlib.sha256(payload).hexdigest(),
                 output_format="perf_stat_delimited",
+                actual_event_source="hardware",
+                fallback_used=False,
+                events=plan.events,
                 started_at_unix_milliseconds=1_000,
                 finished_at_unix_milliseconds=1_100,
             )
@@ -745,7 +903,7 @@ def test_cli_verifies_real_broker_path_with_bounded_stat_probe(
         spool_root=spool,
         perf_path=fake_perf,
         allowed_uids=(os.geteuid(),),
-        allowed_modes=("stat",),
+        allowed_modes=("record", "stat"),
         max_duration_seconds=5,
         max_output_bytes=8 << 20,
     )
@@ -819,12 +977,12 @@ def test_cli_accepts_collector_without_user_supplied_pid(
         spool_root=spool,
         perf_path=fake_perf,
         allowed_uids=(os.geteuid(),),
-        allowed_modes=("stat",),
+        allowed_modes=("record", "stat"),
         max_duration_seconds=5,
         max_output_bytes=8 << 20,
     )
     with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
-        worker = threading.Thread(target=server.serve_once, daemon=True)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
         arguments = [
             "accept-collector",
@@ -842,7 +1000,7 @@ def test_cli_accepts_collector_without_user_supplied_pid(
         elif output_mode == "file":
             arguments.extend(("--output", str(acceptance_output)))
         result = CliRunner().invoke(app, arguments)
-        worker.join(timeout=5)
+    worker.join(timeout=5)
 
     assert result.exit_code == 0, result.output
     if output_mode in {"json", "file"}:
@@ -865,7 +1023,8 @@ def test_cli_accepts_collector_without_user_supplied_pid(
         assert "状态: 通过" in result.output
         assert "当前用户、Collector 策略和内核权限" in result.output
         assert "需要机器可读输出时使用 --json" in result.output
-        assert len(tuple(spool.glob("plan-*.stat.csv"))) == 1
+        assert len(tuple(spool.glob("plan-*.stat.csv"))) == 2
+        assert len(tuple(spool.glob("plan-*.perf.data"))) == 1
     assert not worker.is_alive()
 
 

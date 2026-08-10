@@ -22,6 +22,7 @@ from perflens.collection.capabilities import inspect_collection_capabilities
 from perflens.collection.collector import (
     DEFAULT_MAX_OUTPUT_BYTES,
     DEFAULT_STAT_EVENTS,
+    HARDWARE_STAT_EVENTS,
     CollectionRequest,
     CollectionTarget,
 )
@@ -160,7 +161,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         duration_seconds: float = 10.0,
         frequency_hz: int = 99,
         call_graph: Literal["fp", "dwarf", "lbr"] = "dwarf",
-        events: tuple[str, ...] = DEFAULT_STAT_EVENTS,
+        events: tuple[str, ...] = HARDWARE_STAT_EVENTS,
+        event_source: Literal["auto", "hardware_required", "software_only"] = "auto",
         max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
     ) -> CollectionPlanArtifact:
         plan = create_collection_plan(
@@ -171,6 +173,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 frequency_hz=frequency_hz,
                 call_graph=call_graph,
                 events=events,
+                event_source=event_source,
                 max_output_bytes=max_output_bytes,
             ),
             policy=config.automatic_collection_policy,
@@ -233,6 +236,12 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "target_pid": artifact.target_pid,
                 "output_bytes": artifact.output_bytes,
                 "metric_count": len(artifact.metrics),
+                "requested_event_source": artifact.requested_event_source,
+                "actual_event_source": artifact.actual_event_source,
+                "fallback_used": artifact.fallback_used,
+                "fallback_reason": artifact.fallback_reason,
+                "evidence_limitations": "; ".join(artifact.evidence_limitations),
+                "warnings": "; ".join(artifact.warnings),
             },
         )
 
@@ -255,7 +264,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         duration_seconds: float = 10.0,
         frequency_hz: int = 99,
         call_graph: Literal["fp", "dwarf", "lbr"] = "dwarf",
-        events: tuple[str, ...] = DEFAULT_STAT_EVENTS,
+        events: tuple[str, ...] = HARDWARE_STAT_EVENTS,
+        event_source: Literal["auto", "hardware_required", "software_only"] = "auto",
         max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
     ) -> ArtifactReference:
         _require_project_execution(config)
@@ -276,6 +286,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 frequency_hz=frequency_hz,
                 call_graph=call_graph,
                 events=events,
+                event_source=event_source,
                 max_output_bytes=max_output_bytes,
             ),
             policy=config.automatic_collection_policy,
@@ -294,6 +305,11 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "target_pid": project_run.target_pid,
                 "workload_status": project_run.workload_status,
                 "workload_exit_code": project_run.workload_exit_code,
+                "actual_event_source": collection.actual_event_source,
+                "fallback_used": collection.fallback_used,
+                "fallback_reason": collection.fallback_reason,
+                "evidence_limitations": "; ".join(collection.evidence_limitations),
+                "warnings": "; ".join(collection.warnings),
             },
         )
 
@@ -849,6 +865,11 @@ def main() -> None:
     parser.add_argument("--automatic-max-frequency-hz", type=int, default=99)
     parser.add_argument("--automatic-max-output-bytes", type=int, default=DEFAULT_MAX_OUTPUT_BYTES)
     parser.add_argument("--automatic-plan-ttl-seconds", type=int, default=120)
+    parser.add_argument(
+        "--disable-automatic-software-fallback",
+        action="store_true",
+        help="Require hardware PMU evidence instead of continuing with software events.",
+    )
     parser.add_argument("--perf-path", type=Path)
     parser.add_argument("--max-artifact-bytes", type=int, default=128 << 20)
     arguments = parser.parse_args()
@@ -870,6 +891,7 @@ def main() -> None:
                 max_frequency_hz=arguments.automatic_max_frequency_hz,
                 max_output_bytes=arguments.automatic_max_output_bytes,
                 plan_ttl_seconds=arguments.automatic_plan_ttl_seconds,
+                allow_software_fallback=not arguments.disable_automatic_software_fallback,
             ),
             perf_path=arguments.perf_path,
             max_artifact_bytes=arguments.max_artifact_bytes,

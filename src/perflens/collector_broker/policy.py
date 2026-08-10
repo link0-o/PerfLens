@@ -12,6 +12,7 @@ from typing import Any, Literal, cast
 from perflens.collection.collector import (
     DEFAULT_MAX_OUTPUT_BYTES,
     DEFAULT_STAT_EVENTS,
+    SOFTWARE_STAT_EVENTS,
     CollectionMode,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -45,6 +46,7 @@ class CollectorBrokerPolicy:
     min_free_bytes: int = DEFAULT_MIN_FREE_BYTES
     max_plan_ttl_seconds: int = DEFAULT_MAX_PLAN_TTL_SECONDS
     allowed_stat_events: tuple[str, ...] = DEFAULT_STAT_EVENTS
+    allow_software_fallback: bool = False
     socket_mode: int = 0o660
     artifact_mode: int = 0o640
 
@@ -148,6 +150,12 @@ def validate_broker_policy(policy: CollectorBrokerPolicy) -> CollectorBrokerPoli
         )
     ):
         raise ValueError("Collector policy requires between 1 and 64 stat events")
+    if not _is_boolean(policy.allow_software_fallback):
+        raise ValueError("Collector software fallback policy must be boolean")
+    if policy.allow_software_fallback and not set(SOFTWARE_STAT_EVENTS).issubset(
+        policy.allowed_stat_events
+    ):
+        raise ValueError("Collector software fallback requires the fixed software event allowlist")
     if (
         not _is_integer(policy.socket_mode)
         or policy.socket_mode < 0
@@ -177,6 +185,7 @@ def validate_broker_policy(policy: CollectorBrokerPolicy) -> CollectorBrokerPoli
         min_free_bytes=policy.min_free_bytes,
         max_plan_ttl_seconds=policy.max_plan_ttl_seconds,
         allowed_stat_events=tuple(dict.fromkeys(policy.allowed_stat_events)),
+        allow_software_fallback=policy.allow_software_fallback,
         socket_mode=policy.socket_mode,
         artifact_mode=policy.artifact_mode,
     )
@@ -199,6 +208,7 @@ def _parse_policy(section: dict[str, Any]) -> CollectorBrokerPolicy:
         "min_free_bytes",
         "max_plan_ttl_seconds",
         "allowed_stat_events",
+        "allow_software_fallback",
         "socket_mode",
         "artifact_mode",
     }
@@ -248,6 +258,11 @@ def _parse_policy(section: dict[str, Any]) -> CollectorBrokerPolicy:
                 section, "max_plan_ttl_seconds", DEFAULT_MAX_PLAN_TTL_SECONDS
             ),
             allowed_stat_events=tuple(_string_value(event) for event in raw_events),
+            allow_software_fallback=_boolean_field(
+                section,
+                "allow_software_fallback",
+                False,
+            ),
             socket_mode=socket_mode,
             artifact_mode=artifact_mode,
         )
@@ -282,6 +297,13 @@ def _number_field(section: dict[str, Any], name: str, default: float) -> float:
     if not _is_number(value):
         raise TypeError("Collector policy number field must be numeric, not a boolean")
     return float(value)
+
+
+def _boolean_field(section: dict[str, Any], name: str, default: bool) -> bool:
+    value = section.get(name, default)
+    if not _is_boolean(value):
+        raise TypeError("Collector policy boolean field must be boolean")
+    return cast(bool, value)
 
 
 def _mode_value(value: object) -> int:

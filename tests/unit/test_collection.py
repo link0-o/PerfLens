@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import stat
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -49,6 +50,58 @@ def test_collect_record_command_requires_explicit_authorization(tmp_path: Path) 
         collect_profile(request)
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
     assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "collection_request",
+    [
+        CollectionRequest(
+            mode="record",
+            target=CollectionTarget(executable=Path(sys.executable)),
+            output_path=Path("/tmp/fallback-missing-reason.data"),
+            authorization=ACTIVE_COLLECTION_AUTHORIZATION,
+            requested_event_source="auto",
+            record_event="cpu-clock",
+            fallback_used=True,
+        ),
+        CollectionRequest(
+            mode="record",
+            target=CollectionTarget(executable=Path(sys.executable)),
+            output_path=Path("/tmp/fallback-forged-reason.data"),
+            authorization=ACTIVE_COLLECTION_AUTHORIZATION,
+            requested_event_source="auto",
+            record_event="cpu-clock",
+            fallback_used=True,
+            fallback_reason="forged",
+        ),
+        CollectionRequest(
+            mode="record",
+            target=CollectionTarget(executable=Path(sys.executable)),
+            output_path=Path("/tmp/fallback-hardware-record.data"),
+            authorization=ACTIVE_COLLECTION_AUTHORIZATION,
+            requested_event_source="auto",
+            fallback_used=True,
+            fallback_reason="hardware_probe_failed",
+        ),
+        CollectionRequest(
+            mode="stat",
+            target=CollectionTarget(executable=Path(sys.executable)),
+            output_path=Path("/tmp/fallback-hardware-stat.csv"),
+            authorization=ACTIVE_COLLECTION_AUTHORIZATION,
+            requested_event_source="auto",
+            events=("cycles",),
+            fallback_used=True,
+            fallback_reason="hardware_probe_failed",
+        ),
+    ],
+)
+def test_collection_rejects_inconsistent_software_fallback(
+    collection_request: CollectionRequest,
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(PerfLensError) as captured:
+        collect_profile(replace(collection_request, perf_path=_fake_perf(tmp_path)))
+    assert captured.value.code is ErrorCode.INVALID_INPUT
 
 
 def test_collect_record_command_publishes_new_bounded_artifact(tmp_path: Path) -> None:

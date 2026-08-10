@@ -18,6 +18,7 @@ from typing import cast
 import pytest
 from pydantic import ValidationError
 
+from perflens.collection.collector import SOFTWARE_STAT_EVENTS
 from perflens.collector_broker.client import (
     CollectorBrokerClient,
     _read_response_frame,
@@ -79,6 +80,8 @@ def _plan() -> CollectionPlanArtifact:
         duration_seconds=1,
         frequency_hz=99,
         call_graph="dwarf",
+        requested_event_source="hardware_required",
+        record_event="cycles",
         max_output_bytes=1024,
         expires_at=(datetime.now(tz=UTC) + timedelta(minutes=1)).isoformat(),
         policy_status="allowed",
@@ -133,8 +136,33 @@ def test_broker_authorization_denies_every_out_of_policy_dimension(tmp_path: Pat
 
     broker._authorize(
         os.geteuid(),
-        base.model_copy(update={"mode": "stat", "events": ("cycles",)}),
+        base.model_copy(
+            update={
+                "mode": "stat",
+                "events": ("cycles",),
+                "frequency_hz": None,
+                "call_graph": None,
+                "record_event": None,
+            }
+        ),
     )
+    software_event_policy = replace(
+        policy,
+        allowed_stat_events=("cycles", "instructions", *SOFTWARE_STAT_EVENTS),
+    )
+    with pytest.raises(PerfLensError, match="event-source"):
+        _broker_with_policy(software_event_policy)._authorize(
+            os.geteuid(),
+            base.model_copy(
+                update={
+                    "mode": "stat",
+                    "events": ("task-clock",),
+                    "frequency_hz": None,
+                    "call_graph": None,
+                    "record_event": None,
+                }
+            ),
+        )
     other_target_policy = replace(policy, allow_other_target_uids=True)
     _broker_with_policy(other_target_policy)._authorize(
         os.geteuid(),
@@ -156,6 +184,26 @@ def test_broker_health_allows_root_admin_without_relaxing_user_policy(
     with pytest.raises(PerfLensError) as denied:
         broker._health(os.geteuid() + 1)
     assert denied.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_legacy_collector_policy_narrows_auto_plan_to_hardware_only(tmp_path: Path) -> None:
+    policy = _policy(tmp_path)
+    broker = _broker_with_policy(policy)
+    plan = _plan().model_copy(
+        update={
+            "requested_event_source": "auto",
+            "fallback_allowed": True,
+            "fallback_record_event": "cpu-clock",
+        }
+    )
+
+    broker._authorize(os.geteuid(), plan)
+    narrowed = broker._narrow_fallback_to_collector_policy(plan)
+
+    assert narrowed.requested_event_source == "auto"
+    assert narrowed.fallback_allowed is False
+    assert narrowed.fallback_events == ()
+    assert narrowed.fallback_record_event is None
 
 
 def test_broker_denies_exhausted_or_unsafe_spool(
@@ -442,6 +490,8 @@ def test_client_rejects_collection_result_that_does_not_match_plan(
         duration_seconds=1,
         frequency_hz=plan.frequency_hz,
         call_graph=plan.call_graph,
+        requested_event_source="hardware_required",
+        actual_event_source="hardware",
     )
 
     def wrong_exchange(
@@ -494,9 +544,87 @@ def test_client_verifies_collection_file_identity_permissions_and_digest(tmp_pat
         duration_seconds=1,
         frequency_hz=plan.frequency_hz,
         call_graph=plan.call_graph,
+        requested_event_source=plan.requested_event_source,
+        actual_event_source="hardware",
     )
 
     _verify_collection_artifact(artifact, plan, socket_identity, os.geteuid())
+
+    auto_plan = plan.model_copy(
+        update={
+            "requested_event_source": "auto",
+            "fallback_allowed": True,
+            "fallback_record_event": "cpu-clock",
+        }
+    )
+    software_artifact = artifact.model_copy(
+        update={
+            "requested_event_source": "auto",
+            "actual_event_source": "software",
+            "fallback_used": True,
+            "fallback_reason": "hardware_probe_failed",
+            "evidence_limitations": (
+                "instructions-per-cycle unavailable",
+                "hardware cache-miss evidence unavailable",
+                "hardware branch-miss evidence unavailable",
+            ),
+        }
+    )
+    _verify_collection_artifact(software_artifact, auto_plan, socket_identity, os.geteuid())
+    with pytest.raises(PerfLensError, match="artifact policy"):
+        _verify_collection_artifact(
+            software_artifact.model_copy(update={"fallback_reason": "forged"}),
+            auto_plan,
+            socket_identity,
+            os.geteuid(),
+        )
+
+    sched_plan = plan.model_copy(
+        update={
+            "mode": "sched",
+            "frequency_hz": None,
+            "call_graph": None,
+            "record_event": None,
+        }
+    )
+    sched_artifact = artifact.model_copy(
+        update={
+            "mode": "sched",
+            "frequency_hz": None,
+            "call_graph": None,
+            "actual_event_source": "unknown",
+        }
+    )
+    _verify_collection_artifact(sched_artifact, sched_plan, socket_identity, os.geteuid())
+
+    with pytest.raises(PerfLensError, match="artifact policy") as forged_source:
+        _verify_collection_artifact(
+            artifact.model_copy(update={"actual_event_source": "software"}),
+            plan,
+            socket_identity,
+            os.geteuid(),
+        )
+    assert forged_source.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    with pytest.raises(PerfLensError, match="artifact policy") as forged_fallback:
+        _verify_collection_artifact(
+            artifact.model_copy(
+                update={
+                    "fallback_used": True,
+                    "fallback_reason": "forged",
+                    "actual_event_source": "software",
+                    "evidence_limitations": (
+                        "instructions-per-cycle unavailable",
+                        "hardware cache-miss evidence unavailable",
+                        "hardware branch-miss evidence unavailable",
+                    ),
+                }
+            ),
+            plan,
+            socket_identity,
+            os.geteuid(),
+        )
+    assert forged_fallback.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
     with pytest.raises(PerfLensError, match="integrity metadata") as wrong_digest:
         _verify_collection_artifact(

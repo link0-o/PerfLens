@@ -26,7 +26,11 @@ from pydantic import ValidationError
 from perflens import __version__
 from perflens.collection.collector import (
     ACTIVE_COLLECTION_AUTHORIZATION,
+    DEFAULT_RECORD_EVENT,
+    HARDWARE_STAT_EVENTS,
     PID_ATTACH_AUTHORIZATION,
+    SOFTWARE_RECORD_EVENT,
+    SOFTWARE_STAT_EVENTS,
     CollectionRequest,
     CollectionTarget,
     collect_profile,
@@ -71,6 +75,9 @@ _LOGGER.propagate = False
 _HELPER_SOCKET = Path("/run/perflens-helper/helper.sock")
 _HELPER_SPOOL_ROOT = Path("/var/lib/perflens-helper")
 _ROOT_UID = 0
+_HARDWARE_PROBE_MINIMUM_PLAN_SECONDS = 0.3
+_HARDWARE_PROBE_MAX_SECONDS = 0.25
+_HARDWARE_PROBE_EVENTS = HARDWARE_STAT_EVENTS[:2]
 
 
 class CollectorBrokerServer:
@@ -225,10 +232,55 @@ class CollectorBrokerServer:
         plan = request.plan
         self._authorize(peer_uid, plan)
         assert_plan_current(plan)
+        effective_plan = self._narrow_fallback_to_collector_policy(plan)
         if self._policy.privilege_mode == "paranoid3_helper":
-            return self._collect_with_helper(peer_uid, plan)
-        self._authorize_spool_capacity(plan)
-        self._consume_plan(plan)
+            artifact = self._collect_with_helper(peer_uid, effective_plan)
+        else:
+            self._authorize_spool_capacity(effective_plan)
+            self._consume_plan(effective_plan)
+            artifact = self._collect_with_cap_perfmon(effective_plan)
+        if plan.fallback_allowed and not effective_plan.fallback_allowed:
+            return artifact.model_copy(
+                update={
+                    "warnings": (
+                        *artifact.warnings,
+                        "Software fallback is disabled by Collector policy; this execution "
+                        "required hardware evidence.",
+                    )
+                }
+            )
+        return artifact
+
+    def _narrow_fallback_to_collector_policy(
+        self,
+        plan: CollectionPlanArtifact,
+    ) -> CollectionPlanArtifact:
+        if not plan.fallback_allowed or self._policy.allow_software_fallback:
+            return plan
+        return plan.model_copy(
+            update={
+                "fallback_allowed": False,
+                "fallback_events": (),
+                "fallback_record_event": None,
+            }
+        )
+
+    def _collect_with_cap_perfmon(self, plan: CollectionPlanArtifact) -> CollectionArtifact:
+        events = plan.events or self._policy.allowed_stat_events
+        record_event = plan.record_event or DEFAULT_RECORD_EVENT
+        duration_seconds = plan.duration_seconds
+        fallback_used = False
+        fallback_reason = None
+        if plan.requested_event_source == "software_only":
+            events = plan.events or SOFTWARE_STAT_EVENTS
+            record_event = plan.record_event or SOFTWARE_RECORD_EVENT
+        elif plan.fallback_allowed:
+            use_hardware, fallback_reason, probe_seconds = self._probe_hardware_pmu(plan)
+            duration_seconds -= probe_seconds
+            if not use_hardware:
+                fallback_used = True
+                events = plan.fallback_events
+                record_event = plan.fallback_record_event or SOFTWARE_RECORD_EVENT
         suffix = ".stat.csv" if plan.mode == "stat" else ".perf.data"
         output_path = self._policy.spool_root / f"{plan.plan_id}{suffix}"
         artifact = collect_profile(
@@ -236,7 +288,7 @@ class CollectorBrokerServer:
                 mode=plan.mode,
                 target=CollectionTarget(
                     pid=plan.target_pid,
-                    duration_seconds=plan.duration_seconds,
+                    duration_seconds=duration_seconds,
                 ),
                 output_path=output_path,
                 authorization=ACTIVE_COLLECTION_AUTHORIZATION,
@@ -244,8 +296,12 @@ class CollectorBrokerServer:
                 perf_path=self._policy.perf_path,
                 frequency_hz=plan.frequency_hz or 99,
                 call_graph=plan.call_graph or "dwarf",
-                events=plan.events or self._policy.allowed_stat_events,
-                timeout_seconds=min(plan.duration_seconds + 10, 86_400),
+                events=events,
+                record_event=record_event,
+                requested_event_source=plan.requested_event_source,
+                fallback_used=fallback_used,
+                fallback_reason=fallback_reason,
+                timeout_seconds=min(duration_seconds + 10, 86_400),
                 max_output_bytes=plan.max_output_bytes,
             )
         )
@@ -260,6 +316,53 @@ class CollectorBrokerServer:
                 details={"path": artifact.output_path},
             ) from exc
         return artifact
+
+    def _probe_hardware_pmu(
+        self,
+        plan: CollectionPlanArtifact,
+    ) -> tuple[bool, str | None, float]:
+        if plan.duration_seconds < _HARDWARE_PROBE_MINIMUM_PLAN_SECONDS:
+            return False, "hardware_probe_skipped_for_short_collection", 0.0
+        probe_seconds = min(_HARDWARE_PROBE_MAX_SECONDS, plan.duration_seconds / 4)
+        probe_path = self._socket_path.parent / f".perflens-pmu-probe-{plan.plan_id}.stat.csv"
+        probe_path.unlink(missing_ok=True)
+        try:
+            try:
+                artifact = collect_profile(
+                    CollectionRequest(
+                        mode="stat",
+                        target=CollectionTarget(
+                            pid=plan.target_pid,
+                            duration_seconds=probe_seconds,
+                        ),
+                        output_path=probe_path,
+                        authorization=ACTIVE_COLLECTION_AUTHORIZATION,
+                        pid_authorization=PID_ATTACH_AUTHORIZATION,
+                        perf_path=self._policy.perf_path,
+                        events=_HARDWARE_PROBE_EVENTS,
+                        requested_event_source="hardware_required",
+                        timeout_seconds=min(probe_seconds + 10, 86_400),
+                        max_output_bytes=min(plan.max_output_bytes, 1 << 20),
+                    )
+                )
+            except PerfLensError as exc:
+                if exc.code not in {ErrorCode.EXTERNAL_TOOL_FAILED, ErrorCode.PROFILE_PARSE_FAILED}:
+                    raise
+                return False, "hardware_probe_failed", probe_seconds
+            usable = any(
+                metric.status == "measured"
+                and metric.value is not None
+                and metric.value > 0
+                and metric.event in _HARDWARE_PROBE_EVENTS
+                for metric in artifact.metrics
+            )
+            return (
+                (True, None, probe_seconds)
+                if usable
+                else (False, "hardware_probe_produced_no_usable_counts", probe_seconds)
+            )
+        finally:
+            probe_path.unlink(missing_ok=True)
 
     def _collect_with_helper(
         self,
@@ -304,9 +407,32 @@ class CollectorBrokerServer:
             duration_seconds=max(0.0, (finished - started).total_seconds()),
             frequency_hz=plan.frequency_hz if plan.mode == "record" else None,
             call_graph=plan.call_graph if plan.mode == "record" else None,
-            events=plan.events if plan.mode == "stat" else (),
+            events=result.events if plan.mode == "stat" else (),
+            requested_event_source=plan.requested_event_source,
+            actual_event_source=result.actual_event_source,
+            fallback_used=result.fallback_used,
+            fallback_reason=result.fallback_reason,
+            evidence_limitations=(
+                (
+                    "instructions-per-cycle unavailable",
+                    "hardware cache-miss evidence unavailable",
+                    "hardware branch-miss evidence unavailable",
+                )
+                if result.actual_event_source == "software"
+                else ()
+            ),
             metrics=metrics,
-            warnings=warnings,
+            warnings=(
+                *warnings,
+                *(
+                    (
+                        "Hardware PMU evidence was unavailable; PerfLens continued with software "
+                        "events.",
+                    )
+                    if result.fallback_used
+                    else ()
+                ),
+            ),
         )
 
     def _verify_helper_artifact(
@@ -449,6 +575,54 @@ class CollectorBrokerServer:
                 "perf stat event is not allowed by collector policy",
                 recoverable=True,
             )
+        if self._policy.allow_software_fallback and plan.mode == "stat" and any(
+            event not in self._policy.allowed_stat_events for event in plan.fallback_events
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "authorization",
+                "perf stat fallback event is not allowed by collector policy",
+                recoverable=True,
+            )
+        if plan.fallback_allowed and plan.requested_event_source != "auto":
+            raise _unsafe_event_source_plan()
+        if plan.mode == "stat":
+            if plan.record_event is not None or plan.fallback_record_event is not None:
+                raise _unsafe_event_source_plan()
+            if plan.requested_event_source == "software_only" and tuple(plan.events) != tuple(
+                SOFTWARE_STAT_EVENTS
+            ):
+                raise _unsafe_event_source_plan()
+            if plan.requested_event_source != "software_only" and (
+                not plan.events or any(event not in HARDWARE_STAT_EVENTS for event in plan.events)
+            ):
+                raise _unsafe_event_source_plan()
+            if plan.fallback_allowed and tuple(plan.fallback_events) != tuple(
+                SOFTWARE_STAT_EVENTS
+            ):
+                raise _unsafe_event_source_plan()
+            if not plan.fallback_allowed and plan.fallback_events:
+                raise _unsafe_event_source_plan()
+        elif plan.mode == "record":
+            if plan.events or plan.fallback_events:
+                raise _unsafe_event_source_plan()
+            expected_record_event = (
+                SOFTWARE_RECORD_EVENT
+                if plan.requested_event_source == "software_only"
+                else DEFAULT_RECORD_EVENT
+            )
+            if plan.record_event != expected_record_event:
+                raise _unsafe_event_source_plan()
+            if plan.fallback_allowed != (plan.fallback_record_event == SOFTWARE_RECORD_EVENT):
+                raise _unsafe_event_source_plan()
+        elif (
+            plan.requested_event_source != "hardware_required"
+            or plan.fallback_allowed
+            or plan.fallback_events
+            or plan.record_event is not None
+            or plan.fallback_record_event is not None
+        ):
+            raise _unsafe_event_source_plan()
 
     def _authorize_spool_capacity(self, plan: CollectionPlanArtifact) -> None:
         artifact_count = 0
@@ -672,6 +846,15 @@ def _unsafe_helper_artifact() -> PerfLensError:
         ErrorCode.PATH_SAFETY_VIOLATION,
         "privileged_helper",
         "Privileged Helper artifact identity, permissions, or digest are unsafe",
+        recoverable=True,
+    )
+
+
+def _unsafe_event_source_plan() -> PerfLensError:
+    return PerfLensError(
+        ErrorCode.PATH_SAFETY_VIOLATION,
+        "authorization",
+        "Collection event-source or fallback fields violate the fixed broker policy",
         recoverable=True,
     )
 

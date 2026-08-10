@@ -120,6 +120,11 @@ class HelperClient:
             frequency_hz=plan.frequency_hz,
             call_graph=plan.call_graph,
             events=plan.events,
+            requested_event_source=plan.requested_event_source,
+            fallback_allowed=plan.fallback_allowed,
+            fallback_events=plan.fallback_events,
+            record_event=plan.record_event,
+            fallback_record_event=plan.fallback_record_event,
             max_output_bytes=plan.max_output_bytes,
             expires_at_unix_milliseconds=expires_milliseconds,
         )
@@ -144,13 +149,28 @@ class HelperClient:
             f"{plan.plan_id}.stat.csv" if plan.mode == "stat" else f"{plan.plan_id}.perf.data"
         )
         expected_format = "perf_stat_delimited" if plan.mode == "stat" else "perf_data"
-        if not isinstance(result, HelperCollectionResult) or (
+        if not isinstance(result, HelperCollectionResult):
+            raise _unsafe_helper_identity()
+        expected_events = plan.fallback_events if result.fallback_used else plan.events
+        expected_record_event = (
+            plan.fallback_record_event if result.fallback_used else plan.record_event
+        )
+        expected_source = (
+            "software"
+            if plan.requested_event_source == "software_only" or result.fallback_used
+            else "hardware"
+        )
+        if (
             result.plan_id != plan.plan_id
             or result.mode != plan.mode
             or result.target_pid != plan.target_pid
             or result.artifact_name != expected_name
             or result.output_format != expected_format
             or result.finished_at_unix_milliseconds < result.started_at_unix_milliseconds
+            or (result.fallback_used and not plan.fallback_allowed)
+            or result.actual_event_source != expected_source
+            or result.events != expected_events
+            or result.record_event != expected_record_event
         ):
             raise _unsafe_helper_identity()
         return result

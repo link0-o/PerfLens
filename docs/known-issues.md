@@ -5,6 +5,26 @@
 This document records reproduced issues and their bounded workarounds, including
 resolved issues. Do not weaken deployment safety checks to work around them.
 
+## KL-2026-08-09: zero hardware-PMU counts on some VMware/hybrid hosts (automatic fallback available)
+
+Some VMware guests on Intel hybrid hosts expose PMU devices but still return
+zero `cycles`/`instructions`, `not supported`, `not counted`, or `ENOMEM` while
+software events work. This is commonly a virtual-PMU/host-hypervisor
+compatibility boundary, not insufficient guest CPU capacity, and root alone
+does not repair it.
+
+`record` and `stat` now default to `event_source=auto`. A fixed, same-PID probe
+of at most 250ms selects hardware evidence when useful, otherwise stat uses
+fixed software events and record uses `cpu-clock`. Results expose the actual
+source, fallback reason, and limitations. Software fallback still supports CPU
+time, scheduling activity, page faults, on-CPU hotspots, call paths, source
+attribution, FlameGraphs, and same-source A/B validation. It does not support
+IPC, hardware cache-miss, branch-miss, or other microarchitectural claims.
+
+Use `hardware_required` when those counters are mandatory, or `software_only`
+to pin comparable A/B runs on a host with a known-broken PMU. Never compare a
+hardware baseline directly with a software candidate as equivalent evidence.
+
 ## KI-2026-08-07: withdrawn v0.2.0 Helper unit failed during systemd USER setup (resolved)
 
 - Affected scope: the withdrawn initial native v0.2.0 `perflens-collector` DEB when Debian 13

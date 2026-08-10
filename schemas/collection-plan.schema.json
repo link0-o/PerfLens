@@ -41,6 +41,32 @@
       "title": "Expires At",
       "type": "string"
     },
+    "fallback_allowed": {
+      "default": false,
+      "title": "Fallback Allowed",
+      "type": "boolean"
+    },
+    "fallback_events": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Fallback Events",
+      "type": "array"
+    },
+    "fallback_record_event": {
+      "anyOf": [
+        {
+          "const": "cpu-clock",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Fallback Record Event"
+    },
     "frequency_hz": {
       "anyOf": [
         {
@@ -82,6 +108,32 @@
         "denied"
       ],
       "title": "Policy Status",
+      "type": "string"
+    },
+    "record_event": {
+      "anyOf": [
+        {
+          "enum": [
+            "cycles",
+            "cpu-clock"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Record Event"
+    },
+    "requested_event_source": {
+      "default": "auto",
+      "enum": [
+        "auto",
+        "hardware_required",
+        "software_only"
+      ],
+      "title": "Requested Event Source",
       "type": "string"
     },
     "required_privilege": {

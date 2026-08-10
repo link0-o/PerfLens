@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import pytest
 
 from perflens.collection import planning
+from perflens.collection.collector import SOFTWARE_STAT_EVENTS
 from perflens.collection.planning import (
     AutomaticCollectionPolicy,
     CollectionPlanRequest,
@@ -54,6 +55,10 @@ def test_plan_binds_pid_identity_and_policy_limits() -> None:
     assert plan.target_start_time_ticks > 0
     assert plan.backend == "privileged_broker"
     assert plan.required_privilege == "cap_sys_admin_or_policy_change"
+    assert plan.requested_event_source == "auto"
+    assert plan.fallback_allowed is True
+    assert plan.record_event == "cycles"
+    assert plan.fallback_record_event == "cpu-clock"
     assert any("broker" in warning for warning in plan.warnings)
     assert_plan_current(plan, now=datetime(2026, 8, 2, 0, 1, tzinfo=UTC))
 
@@ -66,9 +71,42 @@ def test_plan_is_denied_outside_categorical_policy() -> None:
     )
     assert plan.policy_status == "denied"
     assert len(plan.warnings) >= 2
+    assert plan.requested_event_source == "hardware_required"
+    assert plan.fallback_allowed is False
+    assert plan.record_event is None
     with pytest.raises(PerfLensError) as captured:
         assert_plan_current(plan)
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_software_only_stat_plan_uses_fixed_software_events() -> None:
+    plan = create_collection_plan(
+        CollectionPlanRequest(
+            mode="stat",
+            pid=os.getppid(),
+            event_source="software_only",
+        ),
+        policy=AutomaticCollectionPolicy(enabled=True),
+        capabilities=_capabilities(),
+    )
+
+    assert plan.events == SOFTWARE_STAT_EVENTS
+    assert plan.fallback_allowed is False
+    assert plan.record_event is None
+
+
+def test_auto_plan_can_be_hardware_only_when_policy_disables_fallback() -> None:
+    plan = create_collection_plan(
+        CollectionPlanRequest(mode="stat", pid=os.getppid()),
+        policy=AutomaticCollectionPolicy(enabled=True, allow_software_fallback=False),
+        capabilities=_capabilities(),
+    )
+
+    assert plan.policy_status == "allowed"
+    assert plan.requested_event_source == "auto"
+    assert plan.fallback_allowed is False
+    assert plan.fallback_events == ()
+    assert any("fallback is disabled" in warning for warning in plan.warnings)
 
 
 def test_expired_plan_is_rejected() -> None:
@@ -134,6 +172,7 @@ def test_invalid_automatic_policy_limits_are_rejected(policy: AutomaticCollectio
         CollectionPlanRequest(mode="record", pid=1, max_output_bytes=0),
         CollectionPlanRequest(mode="stat", pid=1, events=()),
         CollectionPlanRequest(mode="stat", pid=1, events=("cycles,bad",)),
+        CollectionPlanRequest(mode="stat", pid=1, events=("task-clock",)),
     ],
 )
 def test_invalid_plan_requests_are_rejected(plan_request: CollectionPlanRequest) -> None:

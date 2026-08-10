@@ -8,10 +8,14 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 from perflens.collection.collector import (
     DEFAULT_MAX_OUTPUT_BYTES,
-    DEFAULT_STAT_EVENTS,
+    DEFAULT_RECORD_EVENT,
+    HARDWARE_STAT_EVENTS,
+    SOFTWARE_RECORD_EVENT,
+    SOFTWARE_STAT_EVENTS,
     CallGraphMode,
     CollectionMode,
 )
@@ -30,6 +34,7 @@ class AutomaticCollectionPolicy:
     max_frequency_hz: int = 99
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
     plan_ttl_seconds: int = 120
+    allow_software_fallback: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +44,8 @@ class CollectionPlanRequest:
     duration_seconds: float = 10.0
     frequency_hz: int = 99
     call_graph: CallGraphMode = "dwarf"
-    events: tuple[str, ...] = DEFAULT_STAT_EVENTS
+    events: tuple[str, ...] = HARDWARE_STAT_EVENTS
+    event_source: Literal["auto", "hardware_required", "software_only"] = "auto"
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
 
 
@@ -73,6 +79,8 @@ def create_collection_plan(
         warnings.append("The requested output size exceeds the MCP policy limit.")
     if not policy.enabled:
         warnings.append("Automatic collection is disabled by MCP server policy.")
+    if request.event_source == "auto" and not policy.allow_software_fallback:
+        warnings.append("Software fallback is disabled by MCP server policy.")
 
     mode_capability = next(item for item in capabilities.modes if item.mode == request.mode)
     if mode_capability.status == "blocked":
@@ -82,7 +90,29 @@ def create_collection_plan(
         )
     created = now or datetime.now(tz=UTC)
     expires_at = created + timedelta(seconds=policy.plan_ttl_seconds)
-    events = request.events if request.mode == "stat" else ()
+    event_source = (
+        request.event_source if request.mode in {"record", "stat"} else "hardware_required"
+    )
+    fallback_allowed = event_source == "auto" and policy.allow_software_fallback
+    if request.mode == "stat":
+        events = SOFTWARE_STAT_EVENTS if event_source == "software_only" else request.events
+        fallback_events = SOFTWARE_STAT_EVENTS if fallback_allowed else ()
+        record_event = None
+        fallback_record_event = None
+    elif request.mode == "record":
+        events = ()
+        fallback_events = ()
+        record_event = (
+            SOFTWARE_RECORD_EVENT
+            if event_source == "software_only"
+            else DEFAULT_RECORD_EVENT
+        )
+        fallback_record_event = SOFTWARE_RECORD_EVENT if fallback_allowed else None
+    else:
+        events = ()
+        fallback_events = ()
+        record_event = None
+        fallback_record_event = None
     frequency = request.frequency_hz if request.mode in {"record", "off_cpu"} else None
     call_graph = request.call_graph if request.mode in {"record", "off_cpu"} else None
     identity = "\0".join(
@@ -95,6 +125,11 @@ def create_collection_plan(
             str(frequency),
             str(call_graph),
             ",".join(events),
+            event_source,
+            str(fallback_allowed),
+            ",".join(fallback_events),
+            str(record_event),
+            str(fallback_record_event),
             str(request.max_output_bytes),
             created.isoformat(),
         )
@@ -111,6 +146,11 @@ def create_collection_plan(
         frequency_hz=frequency,
         call_graph=call_graph,
         events=events,
+        requested_event_source=event_source,
+        fallback_allowed=fallback_allowed,
+        fallback_events=fallback_events,
+        record_event=record_event,
+        fallback_record_event=fallback_record_event,
         max_output_bytes=request.max_output_bytes,
         expires_at=expires_at.isoformat(),
         policy_status="allowed" if allowed else "denied",
@@ -207,6 +247,7 @@ def _validate_policy(policy: AutomaticCollectionPolicy) -> None:
         or policy.max_output_bytes < 1
         or policy.plan_ttl_seconds < 1
         or policy.plan_ttl_seconds > 3600
+        or type(policy.allow_software_fallback) is not bool
     ):
         raise ValueError("Automatic collection policy limits are invalid")
 
@@ -230,6 +271,12 @@ def _validate_request(request: CollectionPlanRequest) -> None:
             "collection_plan",
             "Collection output limit must be positive",
         )
+    if request.event_source not in {"auto", "hardware_required", "software_only"}:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "collection_plan",
+            "Collection event source preference is unsupported",
+        )
     if request.mode == "stat":
         if not request.events or len(request.events) > 64:
             raise PerfLensError(
@@ -245,4 +292,12 @@ def _validate_request(request: CollectionPlanRequest) -> None:
                 ErrorCode.INVALID_INPUT,
                 "collection_plan",
                 "perf stat event contains unsupported characters",
+            )
+        if request.event_source != "software_only" and any(
+            event not in HARDWARE_STAT_EVENTS for event in request.events
+        ):
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "collection_plan",
+                "Automatic hardware stat plans accept only fixed hardware events",
             )

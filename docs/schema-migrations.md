@@ -30,3 +30,15 @@ policies currently write version `1`; a missing field is read as legacy version
 1 for compatibility, while unsupported versions are rejected before deployment
 or Collector startup. Future policy changes must add compatibility and denial
 tests in both boundaries.
+
+Public Collection, Plan, Capability, and Collector Acceptance artifacts remain
+schema `1.0`; the new event-source, software-fallback, and PMU-acceptance fields
+have compatible defaults. An older Collection without provenance reads as
+`actual_event_source=unknown` and must not be inferred to contain hardware
+evidence.
+
+The private Python-Broker/Rust-Helper protocol moves from `1.0` to `1.1` because
+requests now bind fixed event-source/fallback policy and responses return the
+actual source and evidence events. It is not a user artifact and has no
+cross-version negotiation: packages upgrade and restart Broker and Helper
+together, and a mismatch fails closed.

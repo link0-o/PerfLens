@@ -16,11 +16,12 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from perflens import __version__
 from perflens.collection.collector import (
     DEFAULT_MAX_OUTPUT_BYTES,
-    DEFAULT_STAT_EVENTS,
+    HARDWARE_STAT_EVENTS,
     CallGraphMode,
     CollectionMode,
 )
@@ -55,7 +56,8 @@ class ProjectWorkloadRequest:
     duration_seconds: float = 10.0
     frequency_hz: int = 99
     call_graph: CallGraphMode = "dwarf"
-    events: tuple[str, ...] = DEFAULT_STAT_EVENTS
+    events: tuple[str, ...] = HARDWARE_STAT_EVENTS
+    event_source: Literal["auto", "hardware_required", "software_only"] = "auto"
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
 
 
@@ -99,6 +101,7 @@ def collect_project_workload(
                 frequency_hz=request.frequency_hz,
                 call_graph=request.call_graph,
                 events=request.events,
+                event_source=request.event_source,
                 max_output_bytes=request.max_output_bytes,
             ),
             policy=policy,

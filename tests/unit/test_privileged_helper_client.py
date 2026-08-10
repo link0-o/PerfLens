@@ -105,6 +105,7 @@ def _collection_plan(*, mode: Literal["stat", "sched"] = "stat") -> CollectionPl
         backend="privileged_broker",
         duration_seconds=1.0,
         events=("cycles",) if mode == "stat" else (),
+        requested_event_source="hardware_required",
         max_output_bytes=1024,
         expires_at=(datetime.now(tz=UTC) + timedelta(seconds=30)).isoformat(),
         policy_status="allowed",
@@ -139,6 +140,9 @@ def test_helper_client_submits_typed_collection_and_binds_result(tmp_path: Path)
                     output_bytes=30,
                     output_sha256="a" * 64,
                     output_format="perf_stat_delimited",
+                    actual_event_source="hardware",
+                    fallback_used=False,
+                    events=("cycles",),
                     started_at_unix_milliseconds=1,
                     finished_at_unix_milliseconds=2,
                 ),
@@ -229,6 +233,60 @@ def test_helper_client_rejects_collection_result_not_bound_to_plan(tmp_path: Pat
                     output_bytes=30,
                     output_sha256="a" * 64,
                     output_format="perf_stat_delimited",
+                    actual_event_source="hardware",
+                    fallback_used=False,
+                    events=("cycles",),
+                    started_at_unix_milliseconds=1,
+                    finished_at_unix_milliseconds=2,
+                ),
+            )
+            connection.sendall(response.model_dump_json().encode() + b"\n")
+
+    server = threading.Thread(target=serve)
+    server.start()
+    try:
+        with pytest.raises(PerfLensError, match="identity is unsafe"):
+            HelperClient(socket_path, expected_helper_uid=os.geteuid()).collect(
+                plan,
+                caller_uid=os.geteuid(),
+            )
+    finally:
+        server.join(timeout=2)
+        listener.close()
+
+
+def test_helper_client_rejects_result_with_forged_event_source(tmp_path: Path) -> None:
+    socket_path = tmp_path / "helper.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    socket_path.chmod(0o600)
+    listener.listen(1)
+    plan = _collection_plan()
+
+    def serve() -> None:
+        connection, _address = listener.accept()
+        with connection:
+            payload = json.loads(_read_frame(connection))
+            response = HelperResponse(
+                request_id=payload["request_id"],
+                ok=True,
+                result=HelperCollectionResult(
+                    kind="collection",
+                    plan_id=plan.plan_id,
+                    mode="stat",
+                    target_pid=plan.target_pid,
+                    artifact_name=f"{plan.plan_id}.stat.csv",
+                    output_bytes=30,
+                    output_sha256="a" * 64,
+                    output_format="perf_stat_delimited",
+                    actual_event_source="software",
+                    fallback_used=False,
+                    events=(
+                        "task-clock",
+                        "context-switches",
+                        "cpu-migrations",
+                        "page-faults",
+                    ),
                     started_at_unix_milliseconds=1,
                     finished_at_unix_milliseconds=2,
                 ),
