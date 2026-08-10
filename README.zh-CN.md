@@ -75,7 +75,8 @@ Debian 13 用户也可以直接安装原生 `.deb`，不需要自己创建 Pytho
 可选 Collector 包的选择、安装和安全卸载见[《Debian 安装包》](docs/debian-packages.zh-CN.md)。
 `v0.2.0` 还提供显式 `paranoid3_helper` 模式：在保持
 `perf_event_paranoid=3` 时，由无 capability Python Broker 把 typed PID 计划交给受限
-root Rust Helper；该模式不会自动启用，必须由管理员确认 `CAP_SYS_ADMIN` 风险。
+root Rust Helper；该模式不会自动启用，必须由管理员确认受限 root、`CAP_SYS_ADMIN` 与
+`CAP_SYS_PTRACE` 风险。
 
 随时可以运行只读状态检查，不需要记住多条排错命令：
 

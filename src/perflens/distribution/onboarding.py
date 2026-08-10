@@ -905,11 +905,12 @@ def _chinese_guide(
     )
     deploy_arguments = ["sudo", str(admin_command), "deploy", "--config", str(policy_path)]
     if collector_privilege_mode == "paranoid3_helper":
-        deploy_arguments.append("--acknowledge-cap-sys-admin-risk")
+        deploy_arguments.append("--acknowledge-privileged-helper-risk")
     deploy_command = shlex.join(deploy_arguments)
     privilege_note = (
         "当前选择 `paranoid3_helper`：保持 `perf_event_paranoid=3`，Python Broker 无权限，"
-        "仅 Rust Helper 以 root 身份和 CAP_PERFMON/CAP_SYS_ADMIN 边界执行固定 PID 采集。"
+        "仅 Rust Helper 以 root 身份和 CAP_PERFMON/CAP_SYS_ADMIN/CAP_SYS_PTRACE 边界执行"
+        "固定 PID 采集。"
         "该模式风险更高，正式部署必须带确认参数。"
         if collector_privilege_mode == "paranoid3_helper"
         else "当前选择默认 `cap_perfmon`：Collector 不以 root 运行；Debian "

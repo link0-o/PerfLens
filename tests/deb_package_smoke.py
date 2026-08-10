@@ -108,8 +108,8 @@ def main() -> None:
         assert "perflens-admin spool-status checks quotas read-only" in policy
         assert "exactly one UID is supported" in policy
         assert service.startswith("# Managed by PerfLens.")
-        assert "CapabilityBoundingSet=CAP_PERFMON CAP_SYS_ADMIN" in helper_service
-        assert "AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN" in helper_service
+        assert "CapabilityBoundingSet=CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_PTRACE" in helper_service
+        assert "AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_PTRACE" in helper_service
         assert "NoNewPrivileges=yes" in helper_service
         assert "SecureBits=" not in helper_service
         _assert_shared_libraries(root)

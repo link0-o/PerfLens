@@ -13,7 +13,8 @@ PerfLens 应拆成普通用户分析端和系统 Collector 两部分部署：
                        │ Unix Socket
 系统服务：专用 perflens 用户 + perflens-collector
           ├─ 默认：CAP_PERFMON
-          └─ 可选：无 capability Broker → root Rust Helper（CAP_PERFMON/CAP_SYS_ADMIN）
+          └─ 可选：无 capability Broker → root Rust Helper
+                    （CAP_PERFMON/CAP_SYS_ADMIN/CAP_SYS_PTRACE）
 ```
 
 管理员只负责首次安装、策略和主机权限。日常 Agent、MCP 和分析命令不使用 sudo，也不持有 perf capability。
@@ -149,12 +150,13 @@ Socket；systemd 管理的正常停止不会因为遗留 Socket 被误判为仍�
 # 默认：非 root Collector；paranoid=3 通常需管理员按威胁模型调整为 2
 perflens init --prepare-collector --collector-privilege-mode cap_perfmon
 
-# 高级：保持 paranoid=3，只有 Rust Helper 进入 root/CAP_SYS_ADMIN 边界
+# 高级：保持 paranoid=3，只有 Rust Helper 进入受限 root capability 边界
 perflens init --prepare-collector --collector-privilege-mode paranoid3_helper
 ```
 
 第二种模式的生成指南会自动在正式部署命令后加入
-`--acknowledge-cap-sys-admin-risk`。安装包和 `init` 都不会自动改 sysctl、启用服务或代替
+`--acknowledge-privileged-helper-risk`（旧参数名
+`--acknowledge-cap-sys-admin-risk` 仍兼容）。安装包和 `init` 都不会自动改 sysctl、启用服务或代替
 管理员确认风险。Helper 只接受同一授权 UID 的短期 `record/stat` PID 计划，只执行配置中
 经过 root 所有权和不可写权限复核的 perf 绝对路径，并固定写入
 `/var/lib/perflens-helper`；它不启动 `sleep` 或其他工作负载，也不接受命令、环境、输出
@@ -301,6 +303,11 @@ unit、历史产物、用户/组、sysctl 或 capability。候选文件中的中
 应审查后执行停机卸载和重新部署，不能借
 `update-policy` 绕过隔离边界。
 
+Helper unit 的 capability 上限固定为 `CAP_PERFMON`、`CAP_SYS_ADMIN` 和
+`CAP_SYS_PTRACE`。其中 `CAP_SYS_PTRACE` 用于 `perf record` 读取已授权目标的进程映射并
+生成可符号化采样；它不允许任意 PID，因为 Broker 与 Helper 仍独立核对目标 UID、PID
+启动时间、计划时效与单次消费状态。该能力不会授予 Python Broker、MCP、Skill 或 Agent。
+
 ## 内核权限
 
 先运行：
@@ -390,7 +397,8 @@ sudo perflens-admin upgrade --dry-run
 
 结果中的 `previous_service_sha256` 与 `candidate_service_sha256` 用于确认 Broker unit 是否
 变化；高级模式还会返回 `previous_helper_service_sha256`、
-`candidate_helper_service_sha256` 和 `helper_service_update_required`。更新任一 unit 都会把
+`candidate_helper_service_sha256`、`helper_service_update_required` 和
+`helper_capability_expansion`。更新任一 unit 都会把
 状态标为 `upgraded`；两个 `update_required` 都为 `false` 仍是正常情况，因为服务仍需重启
 来加载新程序。确认后只需：
 
@@ -398,10 +406,19 @@ sudo perflens-admin upgrade --dry-run
 sudo perflens-admin upgrade
 ```
 
+如果 `helper_capability_expansion` 非空，上一条正式升级命令会在写文件前拒绝。审查新增
+能力后应明确执行：
+
+```bash
+sudo perflens-admin upgrade --acknowledge-privileged-helper-risk
+```
+
 `upgrade` 只读取固定的已部署策略，只更新带 PerfLens 托管标记且所有者、权限可信的
 systemd unit；高级模式会把 Broker 与 Rust Helper 两个 unit 作为同一次升级处理，再执行
 固定的 `daemon-reload` 和 `restart`。它不会接受项目目录中的替代
-策略，不修改 sysctl/capability，也不删除配置或 `/var/lib/perflens` 证据。若更新 unit
+策略，不修改 sysctl 或文件 capability，也不删除配置或 `/var/lib/perflens` 证据。只有
+经过上述显式确认，才会把已经检查出的 Helper unit capability 扩展作为托管 unit 更新。
+若更新 unit
 后重启或健康协议握手失败，会逆序恢复本轮更改的全部旧 unit 并重新加载；此时应按错误提示检查
 `systemctl status` 和日志。升级成功后，再以普通用户运行一次：
 

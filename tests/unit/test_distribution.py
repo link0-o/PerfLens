@@ -212,8 +212,8 @@ def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
     assert "ExecStart=/opt/perflens/bin/perflens-collector " in service
     assert "--perf-path /usr/lib/linux-tools/perf" in helper_service
     assert "ReadOnlyPaths=/usr/lib/linux-tools/perf /proc" in helper_service
-    assert "CapabilityBoundingSet=CAP_PERFMON CAP_SYS_ADMIN" in helper_service
-    assert "AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN" in helper_service
+    assert "CapabilityBoundingSet=CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_PTRACE" in helper_service
+    assert "AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_PTRACE" in helper_service
     assert "NoNewPrivileges=yes" in helper_service
     assert "SecureBits=" not in helper_service
     assert "@PERFLENS_PERF_" not in helper_service

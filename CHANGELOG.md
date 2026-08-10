@@ -11,6 +11,11 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
+- The opt-in `paranoid3_helper` unit now includes `CAP_SYS_PTRACE` in its strict capability
+  ceiling so `perf record` can synthesize mappings for the already-authorized PID. Fresh deploys
+  require `--acknowledge-privileged-helper-risk`; upgrades detect and report capability expansion
+  during `--dry-run`, then refuse to modify the unit without the same explicit acknowledgement.
+  The default Collector, Python Broker, MCP server, Skill, and Agent remain unprivileged.
 - The privileged Helper now parses Linux perf's actual NUL-terminated control ACK framing within
   a strict 16-byte bound. Its disabled-event startup barrier uses the non-mutating `ping` command,
   so PID identity is still revalidated after perf binds the target and before events are enabled.
@@ -32,7 +37,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   spool quotas, output bounds, permissions, and SHA-256.
 - Explicit `cap_perfmon` and `paranoid3_helper` onboarding modes. The advanced mode generates a
   capability-free Python Broker unit plus a root Rust Helper unit and requires
-  `--acknowledge-cap-sys-admin-risk` during administrator deployment.
+  `--acknowledge-privileged-helper-risk` during administrator deployment. The legacy
+  `--acknowledge-cap-sys-admin-risk` spelling remains accepted.
 - Cross-language Pydantic/Serde protocol schemas, golden fixtures, denial tests, real Unix-socket
   tests, fixed-argv execution tests, Rust supply-chain checks, and Chinese/English security guides.
 - The archive/verify/prune lifecycle supports the root-managed Rust Helper spool. It resolves the
@@ -67,7 +73,7 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - The `paranoid3_helper` unit does not lock `PR_SET_KEEPCAPS` before systemd completes its USER
   setup. The withdrawn initial artifacts could otherwise fail before executing the Rust Helper on
   Debian 13 with `Failed to drop keep capabilities flag`; the exact capability bounding and
-  ambient sets remain limited to `CAP_PERFMON` and `CAP_SYS_ADMIN`.
+  ambient sets remain limited to `CAP_PERFMON`, `CAP_SYS_ADMIN`, and `CAP_SYS_PTRACE`.
 - A successful bounded PID collection may end `perf` with SIGINT after the Helper disables its
   events. The Helper now accepts that exact, self-initiated signal as normal completion while still
   rejecting early signals, unrelated signals, non-zero exit codes, and failed control messages.

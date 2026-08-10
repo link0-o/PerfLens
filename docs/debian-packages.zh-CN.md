@@ -48,7 +48,8 @@ perflens init --prepare-collector \
   --collector-privilege-mode paranoid3_helper
 ```
 
-生成的中文指南会给出带 `--acknowledge-cap-sys-admin-risk` 的精确管理员命令。该选择
+生成的中文指南会给出带 `--acknowledge-privileged-helper-risk` 的精确管理员命令；旧的
+`--acknowledge-cap-sys-admin-risk` 名称仍兼容。该选择
 不会让 Python Broker、MCP、Skill 或 Agent 变成 root，也不会自动修改 sysctl；只有
 固定 Rust Helper unit 获得收窄后的 capability bounding set。
 
@@ -63,6 +64,10 @@ sudo perflens-admin deploy \
 
 命令默认输出中文部署摘要，并明确区分“预检通过但尚未修改系统”和“部署完成且健康握手
 通过”。自动化程序需要完整版本化部署结果时加 `--json`。
+
+如果软件包升级会扩大 Helper capability 边界，应先运行
+`sudo perflens-admin upgrade --dry-run` 检查 `helper_capability_expansion`。正式升级在没有
+`--acknowledge-privileged-helper-risk` 时会在写 unit 和重启服务前拒绝。
 
 重新登录后运行：
 

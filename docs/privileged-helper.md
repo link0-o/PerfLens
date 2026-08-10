@@ -22,6 +22,13 @@ Broker has no capability and a separate Rust Helper receives only the capabiliti
 systemd unit. Package installation never activates this mode, and both a policy selection and an
 administrator risk acknowledgement are required.
 
+The reviewed unit bounds the Helper to `CAP_PERFMON`, `CAP_SYS_ADMIN`, and
+`CAP_SYS_PTRACE`. `CAP_SYS_PTRACE` is required by `perf record` to inspect the
+already-authorized target's mappings and synthesize usable sampling metadata; a
+stat-only probe does not prove record is usable. This capability does not bypass
+the typed owner-PID plan: both processes still verify peer identity, target UID,
+PID start time, expiry, replay state, mode, events, and resource limits.
+
 At level 3 onboarding offers three outcomes: keep the safer default and have an administrator
 review host policy, retain level 3 and deploy the Helper, or analyze existing profiles only.
 PerfLens detects and explains sysctl but never changes it.
@@ -70,6 +77,12 @@ events disabled. An inherited control-FD `disable/ack` barrier proves that bindi
 Helper then revalidates owner and start time before sending `enable`. The resulting kernel event
 descriptors remain bound to the task perf actually opened. The Helper launches only perf and uses
 the control channel plus signals for duration enforcement, never a sleep process or workload.
+
+Fresh deployment requires `--acknowledge-privileged-helper-risk`. During an
+upgrade, `--dry-run` reports any newly added capability in
+`helper_capability_expansion`; the real upgrade refuses to modify the managed unit
+without the same explicit acknowledgement. The legacy
+`--acknowledge-cap-sys-admin-risk` spelling remains accepted.
 
 A plan is durably consumed before perf starts. Failure, timeout, and Broker/Helper restart do not
 make it reusable. Timeout or overflow terminates the controlled process and returns a bounded error;

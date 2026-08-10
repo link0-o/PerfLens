@@ -47,7 +47,9 @@ deliberately managed custom layout.
 Debian defaults to the non-root `cap_perfmon` mode. To keep
 `perf_event_paranoid=3`, explicitly generate the advanced Rust Helper layout with
 `perflens init --prepare-collector --collector-privilege-mode paranoid3_helper`.
-The generated guide includes the required `--acknowledge-cap-sys-admin-risk` administrator flag.
+The generated guide includes the required `--acknowledge-privileged-helper-risk`
+administrator flag. The old `--acknowledge-cap-sys-admin-risk` spelling remains
+accepted for command-line compatibility.
 
 Package installation never enables a service, writes `/etc/perflens`, changes
 sysctl/capabilities, or grants user access. After reviewing the generated policy,
@@ -58,6 +60,11 @@ the complete versioned artifact.
 After the user's new login session, `perflens status --project <project>` checks
 runtime readiness and `perflens-admin spool-status` reports Collector storage
 headroom. Both are read-only; add `--json` to the latter for a versioned artifact.
+
+When a package upgrade changes the reviewed Helper capability boundary, first run
+`sudo perflens-admin upgrade --dry-run`. The artifact lists
+`helper_capability_expansion`; the real upgrade refuses to write or restart until
+the administrator repeats it with `--acknowledge-privileged-helper-risk`.
 
 To tune an existing policy, copy it to a mode-`0600` candidate and run
 `perflens-admin update-policy --config ./collector.next.toml --dry-run`, then

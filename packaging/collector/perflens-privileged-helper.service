@@ -17,8 +17,10 @@ StateDirectory=perflens-helper
 StateDirectoryMode=0751
 UMask=0027
 NoNewPrivileges=yes
-CapabilityBoundingSet=CAP_PERFMON CAP_SYS_ADMIN
-AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN
+# CAP_SYS_PTRACE is required only for perf record to synthesize mappings for the
+# already-authorized PID. The Helper protocol still denies arbitrary targets.
+CapabilityBoundingSet=CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_PTRACE
+AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_PTRACE
 # CapabilityBoundingSet is the hard ceiling. Do not lock PR_SET_KEEPCAPS:
 # systemd clears that flag during its USER setup and Debian 13 rejects the
 # transition when the secure bit is already locked.

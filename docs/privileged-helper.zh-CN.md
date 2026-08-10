@@ -22,6 +22,12 @@ Debian 上通常意味着 `perf_event_paranoid <= 2`。
 Rust Helper 通过经过审查的 systemd 单元获得 Debian 等级 3 所需能力。安装软件包不会
 自动启用该模式，配置字段和部署确认参数必须同时存在。
 
+经过审查的 unit 把 Helper 上限固定为 `CAP_PERFMON`、`CAP_SYS_ADMIN` 和
+`CAP_SYS_PTRACE`。`CAP_SYS_PTRACE` 是 `perf record` 读取已授权目标进程映射、生成可用采样
+元数据所需；只通过 stat 计数不能证明 record 可用。它不会绕过类型化 owner-PID 计划，
+Broker 与 Helper 仍会分别检查 peer、目标 UID、PID 启动时间、过期、重放、模式、事件和
+资源上限。
+
 安装引导检测到等级 3 时提供三个结果：保持安全默认并由管理员另行审查内核策略、保持
 等级 3 并部署高权限 Helper、或仅分析已有 Profile。PerfLens 只检测和解释 sysctl，不
 修改它。
@@ -67,6 +73,10 @@ Helper 只执行管理员策略中固定、root 所有且不可由非 root 写�
 所有者和启动时间，只有一致时才发送 `enable`。此后内核事件 FD 已绑定到 perf 实际打开
 的任务。Helper 只启动 perf 本身，由控制通道和信号限定采集时长，不再通过 perf 启动
 `sleep` 或任何其他程序。
+
+首次部署必须带 `--acknowledge-privileged-helper-risk`。升级时，`--dry-run` 会把新增能力
+写入 `helper_capability_expansion`；正式升级没有同一显式确认时，会在修改托管 unit 前
+拒绝。旧参数名 `--acknowledge-cap-sys-admin-risk` 仍兼容。
 
 计划在启动 perf 前持久化为单次已消费状态。失败、超时、Helper/Broker 重启都不能让同一
 计划再次执行。Helper 进程或 perf 子进程超时、超限时必须终止整个受控子进程并返回有界

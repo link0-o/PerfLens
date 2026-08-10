@@ -209,7 +209,10 @@ perflens-admin upgrade --dry-run` and `sudo perflens-admin upgrade`. The command
 reads only the fixed deployed policy, compares SHA-256 hashes of the current and
 packaged units, and replaces only verified PerfLens-managed units. In
 `paranoid3_helper` mode the Broker and Rust Helper units are upgraded and rolled
-back together. Policy and spool data are preserved. A restart or health failure
+back together. If the candidate adds a Helper capability, the dry-run reports it
+in `helper_capability_expansion`; the real update fails before writing until an
+administrator adds `--acknowledge-privileged-helper-risk`. Policy and spool data
+are preserved. A restart or health failure
 restores every unit changed by that attempt before reloading the services. Run
 ordinary-user `perflens accept-collector
 --authorize-host-acceptance` again after every upgrade.

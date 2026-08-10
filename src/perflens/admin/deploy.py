@@ -56,6 +56,7 @@ _MAX_CONFIG_BYTES = 256 << 10
 _MAX_SERVICE_BYTES = 256 << 10
 _SUPPORTED_MODES = {"record", "stat", "sched", "lock", "off_cpu"}
 _MANAGED_SERVICE_MARKER = "# Managed by PerfLens."
+_HELPER_CAPABILITY_DIRECTIVES = ("CapabilityBoundingSet", "AmbientCapabilities")
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +112,7 @@ def deploy_collector(
     command_executor: CommandExecutor | None = None,
     socket_waiter: SocketWaiter | None = None,
     service_identity: tuple[int, int] | None = None,
-    acknowledge_cap_sys_admin_risk: bool = False,
+    acknowledge_privileged_helper_risk: bool = False,
 ) -> CollectorDeploymentArtifact:
     """Deploy fixed Collector assets from one strictly validated data-only policy."""
     effective_layout = layout or CollectorSystemLayout()
@@ -132,8 +133,8 @@ def deploy_collector(
     ]
     if policy.privilege_mode == "paranoid3_helper":
         warnings.append(
-            "The Rust Helper runs in a root service with only CAP_PERFMON/CAP_SYS_ADMIN in its "
-            "capability bounding set; this is a larger host-security boundary."
+            "The Rust Helper runs in a root service bounded to CAP_PERFMON, CAP_SYS_ADMIN, and "
+            "CAP_SYS_PTRACE; this is a larger host-security boundary."
         )
     next_steps = (
         "Start a new login session for every newly authorized user.",
@@ -152,14 +153,15 @@ def deploy_collector(
             tuple(warnings),
             next_steps,
         )
-    if policy.privilege_mode == "paranoid3_helper" and not acknowledge_cap_sys_admin_risk:
+    if policy.privilege_mode == "paranoid3_helper" and not acknowledge_privileged_helper_risk:
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
             "collector_deploy",
-            "paranoid3_helper deployment requires explicit CAP_SYS_ADMIN risk acknowledgement",
+            "paranoid3_helper deployment requires explicit privileged Helper risk acknowledgement",
             recoverable=True,
             suggested_actions=(
-                "Review the dry-run and security guide, then add --acknowledge-cap-sys-admin-risk.",
+                "Review the dry-run and security guide, then add "
+                "--acknowledge-privileged-helper-risk.",
             ),
         )
     if require_root and os.geteuid() != 0:
@@ -291,6 +293,7 @@ def upgrade_collector(
     command_executor: CommandExecutor | None = None,
     socket_waiter: SocketWaiter | None = None,
     service_identity: tuple[int, int] | None = None,
+    acknowledge_privileged_helper_risk: bool = False,
 ) -> CollectorUpgradeArtifact:
     """Upgrade only a verified managed unit while preserving policy and evidence."""
     stage = "collector_upgrade"
@@ -360,15 +363,15 @@ def upgrade_collector(
         commands.append(("/usr/bin/systemctl", "restart", "perflens-privileged-helper.service"))
     commands.append(("/usr/bin/systemctl", "restart", "perflens-collector.service"))
     planned_commands = tuple(commands)
-    warnings = (
+    warnings = [
         "Administrator policy and collected artifacts are preserved.",
         "Package installation must complete before this command is run.",
         "Host perf/kernel policy is not changed.",
-    )
-    next_steps = (
+    ]
+    next_steps = [
         "Run perflens accept-collector --authorize-host-acceptance as an ordinary user.",
         "Run perflens-admin spool-status to check retained evidence capacity.",
-    )
+    ]
 
     with tempfile.TemporaryDirectory(prefix="perflens-admin-upgrade-") as temporary:
         staged = install_collector_assets(
@@ -411,6 +414,21 @@ def upgrade_collector(
             and helper_candidate is not None
             and previous_helper.raw != helper_candidate
         )
+        helper_capability_expansion = (
+            _helper_capability_expansion(previous_helper.raw, helper_candidate, stage=stage)
+            if previous_helper is not None and helper_candidate is not None
+            else ()
+        )
+        if helper_capability_expansion:
+            expanded = ", ".join(helper_capability_expansion)
+            warnings.append(
+                "The managed privileged Helper capability boundary will expand by: " + expanded
+            )
+            next_steps.insert(
+                0,
+                "Review the capability change, then rerun upgrade with "
+                "--acknowledge-privileged-helper-risk.",
+            )
         if dry_run:
             return _upgrade_result(
                 "dry_run",
@@ -425,9 +443,22 @@ def upgrade_collector(
                 helper_candidate=helper_candidate,
                 helper_update_required=helper_update_required,
                 helper_service_updated=False,
+                helper_capability_expansion=helper_capability_expansion,
                 commands=planned_commands,
-                warnings=warnings,
-                next_steps=next_steps,
+                warnings=tuple(warnings),
+                next_steps=tuple(next_steps),
+            )
+        if helper_capability_expansion and not acknowledge_privileged_helper_risk:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "Collector upgrade would expand the privileged Helper capability boundary",
+                recoverable=True,
+                details={"added_capabilities": helper_capability_expansion},
+                suggested_actions=(
+                    "Review perflens-admin upgrade --dry-run, then rerun with "
+                    "--acknowledge-privileged-helper-risk.",
+                ),
             )
         if require_root and os.geteuid() != 0:
             raise PerfLensError(
@@ -541,9 +572,10 @@ def upgrade_collector(
         helper_candidate=helper_candidate,
         helper_update_required=helper_update_required,
         helper_service_updated=helper_service_updated,
+        helper_capability_expansion=helper_capability_expansion,
         commands=planned_commands,
-        warnings=warnings,
-        next_steps=next_steps,
+        warnings=tuple(warnings),
+        next_steps=tuple(next_steps),
     )
 
 
@@ -1883,6 +1915,7 @@ def _upgrade_result(
     helper_candidate: bytes | None,
     helper_update_required: bool,
     helper_service_updated: bool,
+    helper_capability_expansion: tuple[str, ...],
     commands: tuple[tuple[str, ...], ...],
     warnings: tuple[str, ...],
     next_steps: tuple[str, ...],
@@ -1908,10 +1941,62 @@ def _upgrade_result(
         ),
         helper_service_update_required=helper_update_required,
         helper_service_updated=helper_service_updated,
+        helper_capability_expansion=helper_capability_expansion,
         planned_commands=commands,
         warnings=warnings,
         next_steps=next_steps,
     )
+
+
+def _helper_capability_expansion(
+    previous: bytes,
+    candidate: bytes,
+    *,
+    stage: str,
+) -> tuple[str, ...]:
+    previous_sets = _helper_capability_sets(previous, stage=stage)
+    candidate_sets = _helper_capability_sets(candidate, stage=stage)
+    added: set[str] = set()
+    for directive in _HELPER_CAPABILITY_DIRECTIVES:
+        added.update(candidate_sets[directive] - previous_sets[directive])
+    return tuple(sorted(added))
+
+
+def _helper_capability_sets(raw: bytes, *, stage: str) -> dict[str, frozenset[str]]:
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Managed privileged Helper service is not valid UTF-8",
+        ) from exc
+    values: dict[str, frozenset[str]] = {}
+    for directive in _HELPER_CAPABILITY_DIRECTIVES:
+        prefix = directive + "="
+        matching = [line for line in text.splitlines() if line.startswith(prefix)]
+        if len(matching) != 1:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "Managed privileged Helper service has an ambiguous capability boundary",
+                details={"directive": directive},
+            )
+        capabilities = matching[0][len(prefix) :].split()
+        if not capabilities or any(
+            not capability.startswith("CAP_")
+            or capability != capability.upper()
+            or not capability.replace("_", "").isalnum()
+            for capability in capabilities
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "Managed privileged Helper service has an invalid capability boundary",
+                details={"directive": directive},
+            )
+        values[directive] = frozenset(capabilities)
+    return values
 
 
 def _undeployment_result(

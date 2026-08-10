@@ -443,7 +443,8 @@ def test_setup_can_select_paranoid3_helper_and_generates_exact_acknowledged_comm
     assert '"/var/lib/perflens-helper"' in claude_template
     assert '"/var/lib/perflens"' not in codex_config
     guide_text = guide.read_text(encoding="utf-8")
-    assert "--acknowledge-cap-sys-admin-risk" in guide_text
+    assert "--acknowledge-privileged-helper-risk" in guide_text
+    assert "CAP_SYS_PTRACE" in guide_text
     assert "保持 `perf_event_paranoid=3`" in guide_text
 
     updated = run_project_setup(

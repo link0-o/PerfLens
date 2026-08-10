@@ -144,7 +144,8 @@ Debian 的等级 3 会在普通 CAP_PERFMON 范围检查前拒绝 perf，因此�
 
 1. 评估后把 `perf_event_paranoid` 调整到允许专用 CAP_PERFMON Collector 工作的等级；
 2. 保持等级 3，显式选择打包的 `paranoid3_helper` Rust Helper，并确认受限
-   `CAP_SYS_ADMIN` 风险。
+   root、`CAP_SYS_ADMIN` 与 `CAP_SYS_PTRACE` 风险。`CAP_SYS_PTRACE` 只用于 Helper 让
+   `perf record` 为已授权 PID 合成进程映射，不会授予 Python Broker。
 
 第一种是较小权限边界；第二种用于必须保留等级 3 的主机。两者都不会让 MCP、Agent 或
 Python Broker 以 root 运行。PerfLens 运行时永远不会修改 sysctl 或 capability。

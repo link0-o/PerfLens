@@ -22,10 +22,12 @@ an ordinary user, then explicitly deploy it as an administrator:
 
 To retain perf_event_paranoid=3, generate assets with
 --collector-privilege-mode paranoid3_helper and use the exact risk-acknowledged
-deployment command printed by the generated guide.
+deployment command printed by the generated guide. The bounded Helper unit uses
+CAP_PERFMON, CAP_SYS_ADMIN, and CAP_SYS_PTRACE; the Broker remains unprivileged.
 
 若必须保持 perf_event_paranoid=3，生成资产时加入
 --collector-privilege-mode paranoid3_helper，并使用中文指南输出的带风险确认参数命令。
+受限 Helper unit 使用 CAP_PERFMON、CAP_SYS_ADMIN 与 CAP_SYS_PTRACE；Broker 仍无 capability。
 
 Before removing perflens-collector, stop and remove only the managed unit while
 preserving policy and collected artifacts:

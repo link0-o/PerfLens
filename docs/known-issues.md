@@ -25,6 +25,38 @@ Use `hardware_required` when those counters are mandatory, or `software_only`
 to pin comparable A/B runs on a host with a known-broken PMU. Never compare a
 hardware baseline directly with a software candidate as equivalent evidence.
 
+## KI-2026-08-10: Helper stat succeeded but record could not synthesize target mappings (resolved)
+
+- Affected scope: the withdrawn native `v0.2.0` `paranoid3_helper` packages whose Helper unit
+  bounded root to `CAP_PERFMON` and `CAP_SYS_ADMIN`. The default `cap_perfmon` mode and
+  unprivileged components were not changed.
+- Symptom: explicit `verify-collector --event-source software_only` stat collection succeeded,
+  but `accept-collector` failed during its software `record` step with
+  `EXTERNAL_TOOL_FAILED`. Running the equivalent `perf record` in a transient unit failed with the
+  two-capability set but captured samples after adding `CAP_SYS_PTRACE`.
+- Cause: `CAP_PERFMON` authorizes performance-event access, while this attached `perf record`
+  workflow also needs ptrace-equivalent access to inspect the already-authorized target's mappings
+  and synthesize usable sampling metadata. A successful stat-only probe did not exercise that path.
+- Fix: the replacement same-version Helper unit has an exact ceiling of `CAP_PERFMON`,
+  `CAP_SYS_ADMIN`, and `CAP_SYS_PTRACE`. The typed PID protocol, target UID/start-time checks,
+  expiry, replay protection, event/duration/output bounds, and fixed spool remain unchanged.
+  No capability is added to the Agent, Skill, MCP server, or Python Broker.
+- Upgrade safety: `perflens-admin upgrade --dry-run` reports `CAP_SYS_PTRACE` in
+  `helper_capability_expansion`. The real upgrade fails before writing or restarting until the
+  administrator supplies `--acknowledge-privileged-helper-risk`.
+
+Install the replacement packages, then run:
+
+```bash
+sudo perflens-admin upgrade --dry-run
+sudo perflens-admin upgrade --acknowledge-privileged-helper-risk
+perflens accept-collector --authorize-host-acceptance
+```
+
+The legacy `--acknowledge-cap-sys-admin-risk` option remains accepted, but new guides use the
+capability-neutral name because the acknowledged boundary now includes both `CAP_SYS_ADMIN` and
+`CAP_SYS_PTRACE`.
+
 ## KI-2026-08-10: Helper rejected Linux perf's NUL-terminated control ACK (resolved)
 
 - Affected scope: the withdrawn native `v0.2.0` `paranoid3_helper` packages. The default
@@ -58,10 +90,10 @@ privilege to the Agent, MCP server, or Python Broker.
   fail its NAMESPACE step because the Helper runtime directory did not exist.
 - Cause: the Helper unit set `keep-caps-locked` before systemd finished USER setup, while systemd
   still needed to clear `PR_SET_KEEPCAPS`; the kernel correctly denied the locked transition.
-- Fix: the replacement `v0.2.0` artifacts remove the conflicting secure-bit lock.
-  `CapabilityBoundingSet`, `AmbientCapabilities`, and `NoNewPrivileges` still restrict the Helper
-  to `CAP_PERFMON` and `CAP_SYS_ADMIN`; no Agent, MCP, Python Broker, or Helper capability boundary
-  is widened.
+- Fix: the replacement `v0.2.0` artifacts remove the conflicting secure-bit lock. This USER-stage
+  fix itself did not widen capabilities; the final replacement unit's separately documented record
+  fix uses the explicit three-capability boundary above. No Agent, MCP, or Python Broker capability
+  boundary is widened.
 
 The failed deployment rolls back its new policy, units, and sockets. Do not edit the installed
 package or weaken the unit manually; install the replacement `v0.2.0` artifacts and deploy the

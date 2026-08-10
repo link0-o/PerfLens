@@ -32,6 +32,14 @@
       "title": "Config Preserved",
       "type": "boolean"
     },
+    "helper_capability_expansion": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Helper Capability Expansion",
+      "type": "array"
+    },
     "helper_service_path": {
       "anyOf": [
         {

@@ -75,7 +75,10 @@ executes project-provided commands or changes sysctl.
 On Debian, `perf_event_paranoid=3` blocks perf before the normal CAP_PERFMON
 path. An administrator may either review and lower that policy for the
 dedicated Collector or explicitly deploy the packaged `paranoid3_helper` Rust
-boundary and acknowledge its bounded `CAP_SYS_ADMIN` risk. Do not run the MCP
+boundary and acknowledge its bounded root, `CAP_SYS_ADMIN`, and `CAP_SYS_PTRACE`
+risk. `CAP_SYS_PTRACE` is needed only inside that opt-in Helper so `perf record`
+can synthesize the authorized target's mappings; it is not granted to the Broker.
+Do not run the MCP
 server, Agent, or Python Broker as root.
 
 For automatic MCP collection, enable all explicit server gates, configure `--collector-socket`, include the collector spool as an `--allowed-root`, and bound modes/duration/frequency. See the [Chinese guide](automatic-collection.zh-CN.md) for the complete configuration and safety model.

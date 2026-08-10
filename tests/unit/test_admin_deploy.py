@@ -103,6 +103,17 @@ def test_admin_cli_help_is_chinese_first_and_keeps_stable_commands() -> None:
     assert "单次最多归档的产物数量" in archive_help.output
     assert "只计算哈希并显示计划" in archive_help.output
 
+    deploy_help = runner.invoke(app, ["deploy", "--help"])
+    assert deploy_help.exit_code == 0, deploy_help.output
+    assert "--acknowledge-privileged-helper-risk" in deploy_help.output
+    assert "--acknowledge-cap-sys-admin-risk" in deploy_help.output
+    assert "CAP_SYS_PTRACE" in deploy_help.output
+
+    upgrade_help = runner.invoke(app, ["upgrade", "--help"])
+    assert upgrade_help.exit_code == 0, upgrade_help.output
+    assert "--acknowledge-privileged-helper-risk" in upgrade_help.output
+    assert "--acknowledge-cap-sys-admin-risk" in upgrade_help.output
+
 
 def test_admin_deploy_dry_run_is_read_only_and_cli_reports_chinese_or_json(
     tmp_path: Path,
@@ -128,9 +139,9 @@ def test_admin_deploy_dry_run_is_read_only_and_cli_reports_chinese_or_json(
         *,
         dry_run: bool = False,
         collector_command: Path | None = None,
-        acknowledge_cap_sys_admin_risk: bool = False,
+        acknowledge_privileged_helper_risk: bool = False,
     ) -> CollectorDeploymentArtifact:
-        del dry_run, collector_command, acknowledge_cap_sys_admin_risk
+        del dry_run, collector_command, acknowledge_privileged_helper_risk
         return result
 
     monkeypatch.setattr("perflens.admin.app.deploy_collector", fake_deploy)
@@ -258,15 +269,15 @@ def test_admin_deploy_paranoid3_helper_requires_risk_acknowledgement_and_two_uni
         command_executor=commands.append,
         socket_waiter=lambda _path: None,
         service_identity=(os.geteuid(), os.getegid()),
-        acknowledge_cap_sys_admin_risk=True,
+        acknowledge_privileged_helper_risk=True,
     )
     assert deployed.status == "deployed"
     broker_unit = layout.service_path.read_text(encoding="utf-8")
     helper_unit = layout.helper_service_path.read_text(encoding="utf-8")
     assert "CapabilityBoundingSet=" in broker_unit
     assert "CAP_SYS_ADMIN" not in broker_unit
-    assert "CapabilityBoundingSet=CAP_PERFMON CAP_SYS_ADMIN" in helper_unit
-    assert "AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN" in helper_unit
+    assert "CapabilityBoundingSet=CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_PTRACE" in helper_unit
+    assert "AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_PTRACE" in helper_unit
     assert "NoNewPrivileges=yes" in helper_unit
     assert "SecureBits=" not in helper_unit
     assert f"--broker-uid {os.geteuid()}" in helper_unit
@@ -293,9 +304,9 @@ def test_admin_deploy_cli_reports_completed_health_and_acceptance_step(
         *,
         dry_run: bool = False,
         collector_command: Path | None = None,
-        acknowledge_cap_sys_admin_risk: bool = False,
+        acknowledge_privileged_helper_risk: bool = False,
     ) -> CollectorDeploymentArtifact:
-        del dry_run, collector_command, acknowledge_cap_sys_admin_risk
+        del dry_run, collector_command, acknowledge_privileged_helper_risk
         return deployed
 
     monkeypatch.setattr("perflens.admin.app.deploy_collector", fake_deploy)
@@ -470,7 +481,7 @@ def test_admin_deploy_failure_stops_new_helper_and_broker_before_removing_units(
             command_executor=execute,
             socket_waiter=fail_health,
             service_identity=(os.geteuid(), os.getegid()),
-            acknowledge_cap_sys_admin_risk=True,
+            acknowledge_privileged_helper_risk=True,
         )
 
     rollback = [command for command in commands if "disable" in command]
@@ -629,8 +640,9 @@ def test_admin_upgrade_replaces_only_managed_unit_and_cli_is_versioned(
         *,
         dry_run: bool = False,
         collector_command: Path | None = None,
+        acknowledge_privileged_helper_risk: bool = False,
     ) -> CollectorUpgradeArtifact:
-        del dry_run, collector_command
+        del dry_run, collector_command, acknowledge_privileged_helper_risk
         return upgraded
 
     monkeypatch.setattr("perflens.admin.app.upgrade_collector", fake_upgrade)
@@ -688,7 +700,7 @@ def test_admin_upgrade_updates_broker_and_helper_units_together(tmp_path: Path) 
         command_executor=lambda _command: None,
         socket_waiter=lambda _path: None,
         service_identity=identity,
-        acknowledge_cap_sys_admin_risk=True,
+        acknowledge_privileged_helper_risk=True,
     )
     old_broker = layout.service_path.read_text(encoding="utf-8") + "# old broker\n"
     old_helper = layout.helper_service_path.read_text(encoding="utf-8") + "# old helper\n"
@@ -726,6 +738,139 @@ def test_admin_upgrade_updates_broker_and_helper_units_together(tmp_path: Path) 
     assert f"--perf-path {_perf}" in helper_text
 
 
+def test_admin_upgrade_requires_ack_before_expanding_helper_capabilities(tmp_path: Path) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_paranoid3(config)
+    identity = (os.geteuid(), os.getegid())
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        acknowledge_privileged_helper_risk=True,
+    )
+    old_helper = layout.helper_service_path.read_text(encoding="utf-8").replace(
+        " CAP_SYS_PTRACE",
+        "",
+    )
+    layout.helper_service_path.write_text(old_helper, encoding="utf-8")
+
+    dry_run = upgrade_collector(
+        layout.config_path,
+        dry_run=True,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        service_identity=identity,
+    )
+
+    assert dry_run.helper_service_update_required is True
+    assert dry_run.helper_capability_expansion == ("CAP_SYS_PTRACE",)
+    assert any("CAP_SYS_PTRACE" in warning for warning in dry_run.warnings)
+    assert any("--acknowledge-privileged-helper-risk" in step for step in dry_run.next_steps)
+
+    commands: list[tuple[str, ...]] = []
+    with pytest.raises(PerfLensError, match="expand the privileged Helper capability boundary"):
+        upgrade_collector(
+            layout.config_path,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+            command_executor=commands.append,
+            socket_waiter=lambda _path: None,
+            service_identity=identity,
+        )
+    assert commands == []
+    assert layout.helper_service_path.read_text(encoding="utf-8") == old_helper
+
+    upgraded = upgrade_collector(
+        layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=commands.append,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        acknowledge_privileged_helper_risk=True,
+    )
+    assert upgraded.status == "upgraded"
+    assert upgraded.helper_service_updated is True
+    assert upgraded.helper_capability_expansion == ("CAP_SYS_PTRACE",)
+    assert " CAP_SYS_PTRACE" in layout.helper_service_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "unsafe_edit",
+    [
+        "\nAmbientCapabilities=CAP_PERFMON\n",
+        "\nCapabilityBoundingSet=CAP_PERFMON cap_sys_admin\n",
+    ],
+)
+def test_admin_upgrade_rejects_ambiguous_helper_capability_boundary(
+    tmp_path: Path,
+    unsafe_edit: str,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_paranoid3(config)
+    identity = (os.geteuid(), os.getegid())
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        acknowledge_privileged_helper_risk=True,
+    )
+    with layout.helper_service_path.open("a", encoding="utf-8") as helper:
+        helper.write(unsafe_edit)
+
+    with pytest.raises(PerfLensError, match="ambiguous capability boundary"):
+        upgrade_collector(
+            layout.config_path,
+            dry_run=True,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+            service_identity=identity,
+        )
+
+
+def test_admin_upgrade_rejects_invalid_helper_capability_name(tmp_path: Path) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_paranoid3(config)
+    identity = (os.geteuid(), os.getegid())
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        acknowledge_privileged_helper_risk=True,
+    )
+    helper_text = layout.helper_service_path.read_text(encoding="utf-8").replace(
+        "CAP_SYS_PTRACE",
+        "cap_sys_ptrace",
+    )
+    layout.helper_service_path.write_text(helper_text, encoding="utf-8")
+
+    with pytest.raises(PerfLensError, match="invalid capability boundary"):
+        upgrade_collector(
+            layout.config_path,
+            dry_run=True,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+            service_identity=identity,
+        )
+
+
 def test_admin_upgrade_rolls_back_broker_and_helper_when_activation_fails(
     tmp_path: Path,
 ) -> None:
@@ -740,10 +885,12 @@ def test_admin_upgrade_rolls_back_broker_and_helper_when_activation_fails(
         command_executor=lambda _command: None,
         socket_waiter=lambda _path: None,
         service_identity=identity,
-        acknowledge_cap_sys_admin_risk=True,
+        acknowledge_privileged_helper_risk=True,
     )
     old_broker = layout.service_path.read_text(encoding="utf-8") + "# retained broker\n"
-    old_helper = layout.helper_service_path.read_text(encoding="utf-8") + "# retained helper\n"
+    old_helper = (
+        layout.helper_service_path.read_text(encoding="utf-8") + "# retained helper\n"
+    ).replace(" CAP_SYS_PTRACE", "")
     layout.service_path.write_text(old_broker, encoding="utf-8")
     layout.helper_service_path.write_text(old_helper, encoding="utf-8")
     commands: list[tuple[str, ...]] = []
@@ -769,6 +916,7 @@ def test_admin_upgrade_rolls_back_broker_and_helper_when_activation_fails(
             command_executor=fail_first_broker_restart,
             socket_waiter=lambda _path: None,
             service_identity=identity,
+            acknowledge_privileged_helper_risk=True,
         )
 
     assert layout.service_path.read_text(encoding="utf-8") == old_broker

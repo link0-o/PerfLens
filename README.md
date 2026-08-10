@@ -86,7 +86,8 @@ Debian 13 users can instead install the native, offline `.deb` packages. See
 [Debian packages](docs/debian-packages.md) for the split main/Collector flow.
 Version 0.2.0 also adds explicit `paranoid3_helper`: an unprivileged Python Broker passes typed PID
 plans to a bounded root Rust Helper while `perf_event_paranoid=3` remains unchanged. It is never
-enabled automatically and requires administrator acknowledgement of the `CAP_SYS_ADMIN` risk.
+enabled automatically and requires administrator acknowledgement of the bounded root,
+`CAP_SYS_ADMIN`, and `CAP_SYS_PTRACE` risk.
 
 Run a read-only readiness summary at any time:
 

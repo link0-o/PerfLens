@@ -23,6 +23,33 @@
 直接比较。仍可在完全关机后调整 VMware vPMC/宿主虚拟化设置，但 PerfLens 的软件降级
 不再要求用户先解决该平台问题才能继续常规性能优化。
 
+## KI-2026-08-10：Helper 的 stat 成功但 record 无法合成目标映射（已修复）
+
+- 影响范围：已撤回的 `v0.2.0` `paranoid3_helper` 原生包，其中 root Helper unit 只包含
+  `CAP_PERFMON` 与 `CAP_SYS_ADMIN`；默认 `cap_perfmon` 和普通组件不受影响；
+- 现象：明确使用 `--event-source software_only` 的 `verify-collector` stat 已成功，但
+  `accept-collector` 进行软件 record 时仍返回 `EXTERNAL_TOOL_FAILED`。等价的临时
+  `perf record` 在两项 capability 下失败，加入 `CAP_SYS_PTRACE` 后能实际写出采样；
+- 根因：`CAP_PERFMON` 负责 performance event 访问，但这条附加 PID 的 `perf record`
+  路径还需要 ptrace 等价访问，才能读取已经授权目标的进程映射并合成可用采样元数据；
+  stat 成功没有覆盖该路径；
+- 修复：重新发布的同版本 Helper unit 上限精确为 `CAP_PERFMON`、`CAP_SYS_ADMIN` 和
+  `CAP_SYS_PTRACE`。类型化 PID 协议、目标 UID/启动时间、过期、单次消费、事件/时长/输出
+  上限和固定 spool 均不改变；Agent、Skill、MCP 与 Python Broker 不增加 capability；
+- 升级安全：`perflens-admin upgrade --dry-run` 会在 `helper_capability_expansion` 中显示
+  `CAP_SYS_PTRACE`。正式升级在没有 `--acknowledge-privileged-helper-risk` 时，会在写 unit
+  和重启服务前拒绝。
+
+安装替换包后执行：
+
+```bash
+sudo perflens-admin upgrade --dry-run
+sudo perflens-admin upgrade --acknowledge-privileged-helper-risk
+perflens accept-collector --authorize-host-acceptance
+```
+
+旧参数 `--acknowledge-cap-sys-admin-risk` 仍兼容，但新指南使用覆盖完整边界的通用名称。
+
 ## KI-2026-08-10：Helper 将 Linux perf 的 NUL 结尾 ACK 误判为失败（已修复）
 
 - 影响范围：已撤回的 `v0.2.0` `paranoid3_helper` 原生包；默认 `cap_perfmon` 模式
@@ -51,10 +78,9 @@
   `Failed at step USER`；Broker 随后可能因为 Helper 运行目录不存在而在 NAMESPACE 阶段失败；
 - 根因：Helper unit 过早设置 `keep-caps-locked`，但 systemd 在 USER 设置阶段仍需清除
   `PR_SET_KEEPCAPS`，锁定状态使该安全转换被内核拒绝；
-- 修复：重新发布的 `v0.2.0` 产物移除冲突的 secure-bit 锁。Helper 仍由
-  `CapabilityBoundingSet`、`AmbientCapabilities` 和 `NoNewPrivileges` 严格限制为
-  `CAP_PERFMON` 与 `CAP_SYS_ADMIN`，没有扩大 Agent、MCP、Python Broker 或 Rust Helper
-  的 capability 集合。
+- 修复：重新发布的 `v0.2.0` 产物移除冲突的 secure-bit 锁；这项 USER 阶段修复本身没有
+  扩权。最终替换 unit 为解决 record 问题使用上文单独说明并要求管理员确认的三项
+  capability 边界；Agent、MCP 与 Python Broker 仍不增加 capability。
 
 部署器失败后会撤回本轮新配置、两个 unit 和 Socket，不会留下半部署状态。不要手工修改
 已安装包或放宽 systemd 边界；请安装重新发布的 `v0.2.0` 产物，再用原配置重新部署。

@@ -87,11 +87,15 @@ def deploy_command(
         bool,
         typer.Option("--json", help="输出完整的版本化 JSON 结果。"),
     ] = False,
-    acknowledge_cap_sys_admin_risk: Annotated[
+    acknowledge_privileged_helper_risk: Annotated[
         bool,
         typer.Option(
+            "--acknowledge-privileged-helper-risk",
             "--acknowledge-cap-sys-admin-risk",
-            help="确认 paranoid=3 Rust Helper 的 CAP_SYS_ADMIN/root 服务风险。",
+            help=(
+                "确认 paranoid=3 Rust Helper 的 root、CAP_SYS_ADMIN 与 "
+                "CAP_SYS_PTRACE 风险。旧参数名仍兼容。"
+            ),
         ),
     ] = False,
 ) -> None:
@@ -101,7 +105,7 @@ def deploy_command(
             config,
             dry_run=dry_run,
             collector_command=collector_command,
-            acknowledge_cap_sys_admin_risk=acknowledge_cap_sys_admin_risk,
+            acknowledge_privileged_helper_risk=acknowledge_privileged_helper_risk,
         )
     except PerfLensError as exc:
         _fail(exc)
@@ -140,12 +144,24 @@ def upgrade_command(
             help="可信的新 Collector 路径; 默认与 perflens-admin 位于同一目录。",
         ),
     ] = None,
+    acknowledge_privileged_helper_risk: Annotated[
+        bool,
+        typer.Option(
+            "--acknowledge-privileged-helper-risk",
+            "--acknowledge-cap-sys-admin-risk",
+            help=(
+                "确认升级将扩大 paranoid=3 Rust Helper 的 root capability 边界。"
+                "旧参数名仍兼容。"
+            ),
+        ),
+    ] = False,
 ) -> None:
     """安全升级并重启 Collector, 同时保留策略和采集产物。"""
     try:
         result = upgrade_collector(
             dry_run=dry_run,
             collector_command=collector_command,
+            acknowledge_privileged_helper_risk=acknowledge_privileged_helper_risk,
         )
     except PerfLensError as exc:
         _fail(exc)
@@ -372,7 +388,7 @@ def _render_deployment_chinese(artifact: CollectorDeploymentArtifact) -> None:
             artifact.collector_command,
         ]
         if artifact.privilege_mode == "paranoid3_helper":
-            deploy_arguments.append("--acknowledge-cap-sys-admin-risk")
+            deploy_arguments.append("--acknowledge-privileged-helper-risk")
         deploy_command = shlex.join(deploy_arguments)
         typer.echo("- 确认以上路径、UID 和命令符合预期后; 再执行正式部署:")
         typer.echo(f"  {deploy_command}")

@@ -601,6 +601,7 @@ class CollectorUpgradeArtifact(ContractModel):
     candidate_helper_service_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     helper_service_update_required: bool = False
     helper_service_updated: bool = False
+    helper_capability_expansion: tuple[str, ...] = ()
     planned_commands: tuple[tuple[str, ...], ...]
     config_preserved: bool = True
     state_preserved: bool = True
