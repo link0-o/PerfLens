@@ -218,8 +218,77 @@ def test_accept_collector_passes_with_software_evidence_when_hardware_pmu_is_unu
     assert artifact.status == "passed"
     assert artifact.hardware_pmu_status == "unavailable"
     assert artifact.hardware_pmu_reason == "hardware_collection_produced_no_usable_counts"
+    assert artifact.hardware_collection_id == "collection-hardware-unusable"
     assert artifact.software_counting_status == "available"
     assert artifact.software_sampling_status == "available"
     assert artifact.software_sampling_collection_id == "collection-software-record"
     assert any("性能优化仍可继续" in warning for warning in artifact.warnings)
+    assert probe.poll() is not None
+
+
+def test_accept_collector_links_no_hardware_artifact_when_hardware_execution_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    probe = subprocess.Popen(
+        [sys.executable, "-I", "-c", "import time; time.sleep(30)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    monkeypatch.setattr(acceptance, "_start_probe", lambda: probe)
+
+    class FailedHardwareAcceptanceClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def collect(self, plan: CollectionPlanArtifact) -> CollectionArtifact:
+            if plan.requested_event_source == "hardware_required":
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "external_tool",
+                    "Hardware collection failed",
+                )
+            record = plan.mode == "record"
+            event = "cpu-clock" if record else "task-clock"
+            return CollectionArtifact(
+                collection_id=(
+                    "collection-software-record" if record else "collection-software-stat"
+                ),
+                mode=plan.mode,
+                target_type="pid",
+                target_argument_count=0,
+                target_pid=probe.pid,
+                output_path=str(tmp_path / ("software.perf.data" if record else "software.csv")),
+                output_sha256=("c" if record else "b") * 64,
+                output_bytes=64,
+                output_format="perf_data" if record else "perf_stat_delimited",
+                perf_executable="/usr/bin/perf",
+                started_at="2026-08-04T00:00:00+00:00",
+                finished_at="2026-08-04T00:00:01+00:00",
+                duration_seconds=1,
+                events=() if record else (event,),
+                requested_event_source="software_only",
+                actual_event_source="software",
+                metrics=(
+                    ()
+                    if record
+                    else (PerfStatMetric(event=event, value=1000, unit="", status="measured"),)
+                ),
+            )
+
+    monkeypatch.setattr(acceptance, "CollectorBrokerClient", FailedHardwareAcceptanceClient)
+    artifact = acceptance.accept_collector(
+        tmp_path / "collector.sock",
+        duration_seconds=0.1,
+        authorized=True,
+        capabilities=_capabilities(),
+    )
+
+    assert artifact.hardware_pmu_status == "unavailable"
+    assert artifact.hardware_pmu_reason == "hardware_collection_failed"
+    assert artifact.hardware_collection_id is None
+    assert artifact.software_counting_status == "available"
+    assert artifact.software_sampling_status == "available"
     assert probe.poll() is not None

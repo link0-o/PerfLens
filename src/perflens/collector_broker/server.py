@@ -16,10 +16,12 @@ import stat
 import struct
 import sys
 import threading
+import time
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import FrameType
+from typing import Literal
 
 from pydantic import ValidationError
 
@@ -78,6 +80,7 @@ _ROOT_UID = 0
 _HARDWARE_PROBE_MINIMUM_PLAN_SECONDS = 0.3
 _HARDWARE_PROBE_MAX_SECONDS = 0.25
 _HARDWARE_PROBE_EVENTS = HARDWARE_STAT_EVENTS[:2]
+_POST_PROBE_FALLBACK_MINIMUM_SECONDS = 0.05
 
 
 class CollectorBrokerServer:
@@ -267,7 +270,7 @@ class CollectorBrokerServer:
 
     def _collect_with_cap_perfmon(self, plan: CollectionPlanArtifact) -> CollectionArtifact:
         events = plan.events or self._policy.allowed_stat_events
-        record_event = plan.record_event or DEFAULT_RECORD_EVENT
+        record_event: Literal["cycles", "cpu-clock"] = plan.record_event or DEFAULT_RECORD_EVENT
         duration_seconds = plan.duration_seconds
         fallback_used = False
         fallback_reason = None
@@ -283,28 +286,53 @@ class CollectorBrokerServer:
                 record_event = plan.fallback_record_event or SOFTWARE_RECORD_EVENT
         suffix = ".stat.csv" if plan.mode == "stat" else ".perf.data"
         output_path = self._policy.spool_root / f"{plan.plan_id}{suffix}"
-        artifact = collect_profile(
-            CollectionRequest(
-                mode=plan.mode,
-                target=CollectionTarget(
-                    pid=plan.target_pid,
-                    duration_seconds=duration_seconds,
-                ),
-                output_path=output_path,
-                authorization=ACTIVE_COLLECTION_AUTHORIZATION,
-                pid_authorization=PID_ATTACH_AUTHORIZATION,
-                perf_path=self._policy.perf_path,
-                frequency_hz=plan.frequency_hz or 99,
-                call_graph=plan.call_graph or "dwarf",
-                events=events,
-                record_event=record_event,
-                requested_event_source=plan.requested_event_source,
-                fallback_used=fallback_used,
-                fallback_reason=fallback_reason,
-                timeout_seconds=min(duration_seconds + 10, 86_400),
-                max_output_bytes=plan.max_output_bytes,
+
+        def execute_selected_profile() -> CollectionArtifact:
+            # Probe and failed-attempt time create another PID-reuse/expiry boundary. Recheck the
+            # original owner/start-time binding before every formal hardware or software attempt.
+            assert_plan_current(plan)
+            return collect_profile(
+                CollectionRequest(
+                    mode=plan.mode,
+                    target=CollectionTarget(
+                        pid=plan.target_pid,
+                        duration_seconds=duration_seconds,
+                    ),
+                    output_path=output_path,
+                    authorization=ACTIVE_COLLECTION_AUTHORIZATION,
+                    pid_authorization=PID_ATTACH_AUTHORIZATION,
+                    perf_path=self._policy.perf_path,
+                    frequency_hz=plan.frequency_hz or 99,
+                    call_graph=plan.call_graph or "dwarf",
+                    events=events,
+                    record_event=record_event,
+                    requested_event_source=plan.requested_event_source,
+                    fallback_used=fallback_used,
+                    fallback_reason=fallback_reason,
+                    timeout_seconds=min(duration_seconds + 10, 86_400),
+                    max_output_bytes=plan.max_output_bytes,
+                )
             )
-        )
+
+        hardware_started = time.monotonic()
+        try:
+            artifact = execute_selected_profile()
+        except PerfLensError as exc:
+            remaining_seconds = duration_seconds - (time.monotonic() - hardware_started)
+            if (
+                plan.requested_event_source != "auto"
+                or not plan.fallback_allowed
+                or fallback_used
+                or exc.code not in {ErrorCode.EXTERNAL_TOOL_FAILED, ErrorCode.PROFILE_PARSE_FAILED}
+                or remaining_seconds < _POST_PROBE_FALLBACK_MINIMUM_SECONDS
+            ):
+                raise
+            duration_seconds = remaining_seconds
+            fallback_used = True
+            fallback_reason = "hardware_execution_failed_after_probe"
+            events = plan.fallback_events
+            record_event = plan.fallback_record_event or SOFTWARE_RECORD_EVENT
+            artifact = execute_selected_profile()
         try:
             os.chmod(artifact.output_path, self._policy.artifact_mode)
         except OSError as exc:

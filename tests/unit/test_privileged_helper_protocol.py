@@ -74,9 +74,32 @@ def test_privileged_helper_response_requires_exactly_one_payload() -> None:
         )
 
 
+def test_helper_collection_result_accepts_post_probe_execution_fallback() -> None:
+    result = HelperCollectionResult(
+        kind="collection",
+        plan_id="plan-0123456789abcdefabcd",
+        mode="record",
+        target_pid=1234,
+        artifact_name="plan-0123456789abcdefabcd.perf.data",
+        output_bytes=16,
+        output_sha256="a" * 64,
+        output_format="perf_data",
+        actual_event_source="software",
+        fallback_used=True,
+        fallback_reason="hardware_execution_failed_after_probe",
+        record_event="cpu-clock",
+        started_at_unix_milliseconds=1,
+        finished_at_unix_milliseconds=2,
+    )
+
+    assert result.fallback_reason == "hardware_execution_failed_after_probe"
+
+
 @pytest.mark.parametrize(
     "updates",
     [
+        {"fallback_used": True},
+        {"fallback_reason": "hardware_probe_failed"},
         {
             "actual_event_source": "hardware",
             "fallback_used": True,
@@ -84,6 +107,7 @@ def test_privileged_helper_response_requires_exactly_one_payload() -> None:
         },
         {"actual_event_source": "software", "events": ("cycles",)},
         {"actual_event_source": "hardware", "events": ("task-clock",)},
+        {"mode": "record", "events": (), "record_event": "cpu-clock"},
         {"record_event": "cycles"},
     ],
 )

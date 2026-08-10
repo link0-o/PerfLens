@@ -34,6 +34,7 @@ const REPLAY_RETENTION: Duration = Duration::from_mins(2);
 const HARDWARE_PROBE_MINIMUM_PLAN_MILLISECONDS: u64 = 300;
 const HARDWARE_PROBE_MAX_MILLISECONDS: u64 = 250;
 const HARDWARE_PROBE_OUTPUT_BYTES: u64 = 1 << 20;
+const POST_PROBE_FALLBACK_MINIMUM_MILLISECONDS: u64 = 50;
 const SOFTWARE_STAT_EVENTS: &[&str] = &[
     "task-clock",
     "context-switches",
@@ -522,32 +523,73 @@ where
         Err(_error) => return Err(spool_error()),
     }
     let temporary = spool.join(format!(".perflens-helper-{}.tmp", plan.plan_id));
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&temporary)
-        .map_err(|_error| spool_error())?;
-    let outcome = execute_perf_inner(
+    reserve_temporary_output(&temporary)?;
+    let hardware_started = Instant::now();
+    let mut outcome = execute_perf_inner(
         &selected_plan,
         perf_path,
         PerfOutput {
             temporary: &temporary,
             output: &output,
-            artifact_name,
+            artifact_name: artifact_name.clone(),
             artifact_gid,
             publish: true,
         },
         target_validator,
     );
+    if let Err(error) = &outcome {
+        let elapsed_milliseconds =
+            u64::try_from(hardware_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let remaining_milliseconds = selected_plan
+            .duration_milliseconds
+            .saturating_sub(elapsed_milliseconds);
+        if plan.requested_event_source == RequestedEventSource::Auto
+            && plan.fallback_allowed
+            && fallback_reason.is_none()
+            && error.code == "EXTERNAL_TOOL_FAILED"
+            && remaining_milliseconds >= POST_PROBE_FALLBACK_MINIMUM_MILLISECONDS
+        {
+            fs::remove_file(&temporary).map_err(|_error| spool_error())?;
+            reserve_temporary_output(&temporary)?;
+            let software = software_plan(plan, remaining_milliseconds);
+            outcome = execute_perf_inner(
+                &software,
+                perf_path,
+                PerfOutput {
+                    temporary: &temporary,
+                    output: &output,
+                    artifact_name,
+                    artifact_gid,
+                    publish: true,
+                },
+                target_validator,
+            );
+            if let Ok(result) = &mut outcome {
+                result.fallback_used = true;
+                result.fallback_reason = Some("hardware_execution_failed_after_probe");
+            }
+        }
+    }
     if outcome.is_err() {
         let _ignored = fs::remove_file(&temporary);
     }
     outcome.map(|mut result| {
-        result.fallback_used = fallback_reason.is_some();
-        result.fallback_reason = fallback_reason;
+        if !result.fallback_used {
+            result.fallback_used = fallback_reason.is_some();
+            result.fallback_reason = fallback_reason;
+        }
         result
     })
+}
+
+fn reserve_temporary_output(path: &Path) -> Result<(), ExecutionError> {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map(|_file| ())
+        .map_err(|_error| spool_error())
 }
 
 fn select_event_source<V>(
@@ -1171,6 +1213,57 @@ finish
             .expect("make fallback test double executable");
     }
 
+    fn write_post_probe_failure_fake_perf(path: &std::path::Path) {
+        std::fs::write(
+            path,
+            r#"#!/bin/sh
+set -eu
+mode=$1
+out=''
+control=''
+events=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) shift; out=$1 ;;
+    -e) shift; events=$1 ;;
+    --control) shift; control=$1 ;;
+    --) exit 91 ;;
+  esac
+  shift
+done
+if [ "$mode" = 'record' ] && [ "$events" = 'cycles' ]; then
+  exit 1
+fi
+descriptors=${control#fd:}
+ctl_fd=${descriptors%,*}
+ack_fd=${descriptors#*,}
+finish() {
+  if [ "$mode" = 'stat' ]; then
+    printf '1000;;cycles;1;100.00;;\n2000;;instructions;1;100.00;;\n' > "$out"
+  else
+    printf 'PERFILE2-software-record' > "$out"
+  fi
+  exit 0
+}
+trap finish INT TERM
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'disable' ]
+eval "printf 'ack\n' >&${ack_fd}"
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'enable' ]
+eval "printf 'ack\n' >&${ack_fd}"
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'disable' ]
+trap '' INT TERM
+eval "printf 'ack\n' >&${ack_fd}"
+finish
+"#,
+        )
+        .expect("write post-probe failure perf test double");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .expect("make post-probe failure test double executable");
+    }
+
     #[test]
     fn immutable_policy_accepts_bounded_owner_only_record() {
         assert!(validate_plan(&record_plan(), 1000).is_ok());
@@ -1343,6 +1436,57 @@ finish
     }
 
     #[test]
+    fn auto_record_retries_software_when_hardware_execution_fails_after_probe() {
+        let _execution_guard = EXECUTION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let directory = std::env::temp_dir().join(format!(
+            "perflens-post-probe-fallback-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).expect("create spool");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("secure spool");
+        let fake_perf = directory.join("perf-test-double");
+        write_post_probe_failure_fake_perf(&fake_perf);
+        let mut plan = record_plan();
+        plan.duration_milliseconds = 500;
+        plan.requested_event_source = RequestedEventSource::Auto;
+        plan.fallback_allowed = true;
+        plan.fallback_record_event = Some(RecordEvent::CpuClock);
+        let result = execute_perf(
+            &plan,
+            &fake_perf,
+            &directory,
+            nix::unistd::getegid().as_raw(),
+            &|_target| Ok(()),
+        )
+        .expect("retry with the fixed software record event");
+
+        assert_eq!(result.actual_event_source, ActualEventSource::Software);
+        assert!(result.fallback_used);
+        assert_eq!(
+            result.fallback_reason,
+            Some("hardware_execution_failed_after_probe")
+        );
+        assert_eq!(result.record_event, Some(RecordEvent::CpuClock));
+        let artifact = directory.join(&result.artifact_name);
+        assert_eq!(
+            std::fs::read(&artifact).expect("read software record evidence"),
+            b"PERFILE2-software-record"
+        );
+        assert!(
+            !directory
+                .join(format!(".perflens-helper-{}.tmp", plan.plan_id))
+                .exists()
+        );
+        std::fs::remove_file(artifact).expect("remove artifact");
+        std::fs::remove_file(fake_perf).expect("remove test double");
+        std::fs::remove_dir(directory).expect("remove spool");
+    }
+
+    #[test]
     fn pid_identity_change_after_perf_binding_is_denied_before_enable() {
         let _execution_guard = EXECUTION_TEST_LOCK.lock().expect("lock execution test");
         let directory = std::env::temp_dir().join(format!(
@@ -1372,6 +1516,58 @@ finish
         assert!(
             !directory
                 .join(format!("{}.stat.csv", plan.plan_id))
+                .exists()
+        );
+        assert!(
+            !directory
+                .join(format!(".perflens-helper-{}.tmp", plan.plan_id))
+                .exists()
+        );
+        std::fs::remove_file(fake_perf).expect("remove test double");
+        std::fs::remove_dir(directory).expect("remove spool");
+    }
+
+    #[test]
+    fn auto_collection_does_not_hide_pid_identity_change_with_fallback() {
+        let _execution_guard = EXECUTION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let directory = std::env::temp_dir().join(format!(
+            "perflens-auto-pid-reuse-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).expect("create spool");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("secure spool");
+        let fake_perf = directory.join("perf-test-double");
+        write_fake_perf(&fake_perf);
+        let mut plan = record_plan();
+        plan.duration_milliseconds = 500;
+        plan.requested_event_source = RequestedEventSource::Auto;
+        plan.fallback_allowed = true;
+        plan.fallback_record_event = Some(RecordEvent::CpuClock);
+        let validations = AtomicU64::new(0);
+        let error = execute_perf(
+            &plan,
+            &fake_perf,
+            &directory,
+            nix::unistd::getegid().as_raw(),
+            &|_target| {
+                if validations.fetch_add(1, Ordering::Relaxed) == 0 {
+                    Ok(())
+                } else {
+                    Err(denied("Target PID owner or start time changed"))
+                }
+            },
+        )
+        .expect_err("PID identity failure must not trigger a software retry");
+
+        assert_eq!(error.code, "PATH_SAFETY_VIOLATION");
+        assert_eq!(validations.load(Ordering::Relaxed), 2);
+        assert!(
+            !directory
+                .join(format!("{}.perf.data", plan.plan_id))
                 .exists()
         );
         assert!(

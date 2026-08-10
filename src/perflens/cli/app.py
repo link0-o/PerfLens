@@ -1980,6 +1980,8 @@ def _render_collector_acceptance_chinese(
     typer.echo(f"硬件 PMU: {_availability_chinese(artifact.hardware_pmu_status)}")
     if artifact.hardware_pmu_reason:
         typer.echo(f"硬件 PMU 说明: {_terminal_text(artifact.hardware_pmu_reason)}")
+    if artifact.hardware_collection_id:
+        typer.echo(f"硬件采集尝试 ID: {_terminal_text(artifact.hardware_collection_id)}")
     typer.echo(f"软件计数事件: {_availability_chinese(artifact.software_counting_status)}")
     typer.echo(f"软件 cpu-clock 采样: {_availability_chinese(artifact.software_sampling_status)}")
     typer.echo(f"证据文件: {artifact.output_path}")

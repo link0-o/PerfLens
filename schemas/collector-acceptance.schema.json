@@ -1,0 +1,179 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "acceptance_id": {
+      "pattern": "^acceptance-[a-f0-9]{20}$",
+      "title": "Acceptance Id",
+      "type": "string"
+    },
+    "collection_id": {
+      "title": "Collection Id",
+      "type": "string"
+    },
+    "finished_at": {
+      "title": "Finished At",
+      "type": "string"
+    },
+    "hardware_collection_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Hardware Collection Id"
+    },
+    "hardware_pmu_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Hardware Pmu Reason"
+    },
+    "hardware_pmu_status": {
+      "default": "unknown",
+      "enum": [
+        "available",
+        "unavailable",
+        "unknown"
+      ],
+      "title": "Hardware Pmu Status",
+      "type": "string"
+    },
+    "metric_count": {
+      "minimum": 0,
+      "title": "Metric Count",
+      "type": "integer"
+    },
+    "output_bytes": {
+      "exclusiveMinimum": 0,
+      "title": "Output Bytes",
+      "type": "integer"
+    },
+    "output_path": {
+      "title": "Output Path",
+      "type": "string"
+    },
+    "output_sha256": {
+      "title": "Output Sha256",
+      "type": "string"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "probe_kind": {
+      "const": "built_in_cpu",
+      "default": "built_in_cpu",
+      "title": "Probe Kind",
+      "type": "string"
+    },
+    "requested_duration_seconds": {
+      "exclusiveMinimum": 0,
+      "maximum": 5,
+      "title": "Requested Duration Seconds",
+      "type": "number"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "socket_path": {
+      "title": "Socket Path",
+      "type": "string"
+    },
+    "software_counting_status": {
+      "default": "unknown",
+      "enum": [
+        "available",
+        "unavailable",
+        "unknown"
+      ],
+      "title": "Software Counting Status",
+      "type": "string"
+    },
+    "software_sampling_collection_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Software Sampling Collection Id"
+    },
+    "software_sampling_status": {
+      "default": "unknown",
+      "enum": [
+        "available",
+        "unavailable",
+        "unknown"
+      ],
+      "title": "Software Sampling Status",
+      "type": "string"
+    },
+    "started_at": {
+      "title": "Started At",
+      "type": "string"
+    },
+    "status": {
+      "const": "passed",
+      "default": "passed",
+      "title": "Status",
+      "type": "string"
+    },
+    "target_pid": {
+      "exclusiveMinimum": 0,
+      "title": "Target Pid",
+      "type": "integer"
+    },
+    "target_start_time_ticks": {
+      "exclusiveMinimum": 0,
+      "title": "Target Start Time Ticks",
+      "type": "integer"
+    },
+    "target_uid": {
+      "minimum": 0,
+      "title": "Target Uid",
+      "type": "integer"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "acceptance_id",
+    "socket_path",
+    "target_pid",
+    "target_uid",
+    "target_start_time_ticks",
+    "requested_duration_seconds",
+    "collection_id",
+    "output_path",
+    "output_sha256",
+    "output_bytes",
+    "metric_count",
+    "started_at",
+    "finished_at"
+  ],
+  "title": "CollectorAcceptanceArtifact",
+  "type": "object"
+}

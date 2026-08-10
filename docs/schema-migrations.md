@@ -37,6 +37,13 @@ have compatible defaults. An older Collection without provenance reads as
 `actual_event_source=unknown` and must not be inferred to contain hardware
 evidence.
 
+Collector Acceptance `hardware_collection_id` identifies every safely
+published hardware attempt, including a retained zero-count artifact. Consumers
+must use `hardware_pmu_status` and `hardware_pmu_reason` to decide whether that
+attempt was usable; a non-null ID is evidence linkage, not a statement that the
+PMU worked. The public contract is checked in as
+`schemas/collector-acceptance.schema.json`.
+
 The private Python-Broker/Rust-Helper protocol moves from `1.0` to `1.1` because
 requests now bind fixed event-source/fallback policy and responses return the
 actual source and evidence events. It is not a user artifact and has no

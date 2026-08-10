@@ -201,7 +201,10 @@ def _validate_sbom(path: Path, parser: argparse.ArgumentParser) -> None:
         raw: object = json.loads(payload)
     except json.JSONDecodeError as exc:
         parser.error(f"SBOM is not valid JSON: {exc}")
-    if not isinstance(raw, dict) or raw.get("bomFormat") != "CycloneDX":
+    if not isinstance(raw, dict):
+        parser.error("SBOM must be a CycloneDX JSON object")
+    sbom = cast(dict[str, object], raw)
+    if sbom.get("bomFormat") != "CycloneDX":
         parser.error("SBOM must be a CycloneDX JSON object")
 
 

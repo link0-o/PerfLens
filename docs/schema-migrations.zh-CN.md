@@ -29,6 +29,11 @@ Collection/Plan/Capability/Collector Acceptance 公共产物仍为 Schema `1.0`�
 来源、软件降级和 PMU 验收字段都有兼容默认值。旧 Collection 缺少来源信息时读取为
 `actual_event_source=unknown`，不能反向猜测成硬件证据。
 
+Collector Acceptance 的 `hardware_collection_id` 会关联每一次已经安全发布的硬件尝试，
+包括计数为零但被保留用于诊断的产物。消费者必须根据 `hardware_pmu_status` 和
+`hardware_pmu_reason` 判断该次证据是否可用；ID 非空只表示可追溯关联，不表示 PMU 已经
+正常工作。对应公共契约已签入 `schemas/collector-acceptance.schema.json`。
+
 Python Broker 与 Rust Helper 的私有协议从 `1.0` 升级到 `1.1`，因为请求需要携带固定的
 事件来源与降级策略，响应需要返回实际来源和证据事件。该协议不用于用户产物，也不做
 跨版本协商；升级包必须同时升级并重启 Broker 与 Helper，版本错配会安全拒绝。

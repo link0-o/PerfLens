@@ -4,6 +4,21 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- A checked-in JSON Schema for the public Collector acceptance artifact, covered by the same
+  deterministic schema-generation check as the other public contracts.
+
+### Fixed
+
+- Automatic `record`/`stat` collection now performs one bounded fixed-software retry when the
+  hardware probe succeeds but the subsequent hardware execution fails. Probe and failed-attempt
+  time remain inside the original requested window; authorization, PID identity, timeout, spool,
+  and resource-limit failures still fail closed without fallback.
+- Collector acceptance artifacts now retain `hardware_collection_id` whenever a hardware attempt
+  was safely published, including zero-count PMU evidence, so an unavailable-PMU conclusion still
+  links to the exact retained diagnostic artifact.
+
 ## [0.2.0] - 2026-08-07
 
 ### Added

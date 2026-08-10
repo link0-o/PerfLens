@@ -156,9 +156,7 @@ def accept_collector(
         )
         hardware_available = hardware_reason is None
         hardware_collection_id = (
-            hardware_collection.collection_id
-            if hardware_available and hardware_collection is not None
-            else None
+            hardware_collection.collection_id if hardware_collection is not None else None
         )
         warnings = [*plan.warnings, *collection.warnings, *sampling_collection.warnings]
         if not hardware_available:

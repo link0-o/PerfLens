@@ -37,6 +37,13 @@ scheduler-activity, page-fault, and on-CPU hotspot analysis, but not IPC,
 hardware cache-miss, branch-miss, or microarchitectural conclusions. Matched
 A/B validation requires the same actual source on both sides.
 
+If the probe succeeds but the formal hardware collection subsequently fails,
+`auto` may make one software retry only when at least 50ms remains in the
+original collection window. The retry never extends the user-authorized
+duration and still uses the fixed software event allowlist and output path.
+Authorization, PID-identity, timeout, output-limit, spool-safety, and quota
+errors are not fallback signals and remain visible failures.
+
 Evidence retention is a separate human-administrator archive-then-prune flow.
 Archives have a dedicated read-only verifier; the MCP, Skill, and Collector
 protocol expose no automatic deletion operation.

@@ -104,6 +104,85 @@ def _fake_perf_with_failed_hardware_probe(tmp_path: Path) -> Path:
     return executable
 
 
+def _fake_perf_with_failed_hardware_record_after_probe(tmp_path: Path) -> Path:
+    executable = tmp_path / "perf-failed-hardware-record"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        "event = args[args.index('-e') + 1]\n"
+        "if args[0] == 'stat':\n"
+        "    output.write_text('100;;cycles;10;100.0\\n200;;instructions;10;100.0\\n')\n"
+        "elif event == 'cycles':\n"
+        "    raise SystemExit(1)\n"
+        "else:\n"
+        "    output.write_bytes(b'PERFILE2-software-record')\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o555)
+    return executable
+
+
+def _fake_perf_exceeding_output_after_hardware_probe(tmp_path: Path) -> Path:
+    executable = tmp_path / "perf-oversized-hardware-record"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        "event = args[args.index('-e') + 1]\n"
+        "if args[0] == 'stat':\n"
+        "    output.write_text('100;;cycles;10;100.0\\n200;;instructions;10;100.0\\n')\n"
+        "elif event == 'cycles':\n"
+        "    output.write_bytes(b'x' * 2048)\n"
+        "else:\n"
+        "    output.write_bytes(b'PERFILE2-software-record')\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o555)
+    return executable
+
+
+def _fake_perf_exhausting_window_after_hardware_probe(tmp_path: Path) -> Path:
+    executable = tmp_path / "perf-slow-failed-hardware-record"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys, time\n"
+        "args = sys.argv[1:]\n"
+        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        "event = args[args.index('-e') + 1]\n"
+        "if args[0] == 'stat':\n"
+        "    output.write_text('100;;cycles;10;100.0\\n200;;instructions;10;100.0\\n')\n"
+        "elif event == 'cycles':\n"
+        "    time.sleep(0.28)\n"
+        "    raise SystemExit(1)\n"
+        "else:\n"
+        "    output.write_bytes(b'PERFILE2-unexpected-software-retry')\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o555)
+    return executable
+
+
+def _fake_perf_exceeding_hardware_probe_limit(tmp_path: Path) -> Path:
+    executable = tmp_path / "perf-oversized-hardware-probe"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        "events = args[args.index('-e') + 1]\n"
+        "if events == 'cycles,instructions':\n"
+        "    output.write_bytes(b'x' * 2048)\n"
+        "else:\n"
+        "    output.write_text('100;;task-clock;10;100.0\\n')\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o555)
+    return executable
+
+
 def _collection_artifacts(spool: Path) -> tuple[Path, ...]:
     return tuple(path for path in spool.iterdir() if collection_artifact_name(path.name))
 
@@ -584,6 +663,54 @@ def test_cap_perfmon_broker_auto_falls_back_when_hardware_probe_has_no_counts(
         target.wait(timeout=5)
 
 
+def test_cap_perfmon_broker_short_auto_collection_skips_hardware_probe(
+    tmp_path: Path,
+) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    target = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        start_new_session=True,
+    )
+    try:
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode="stat",
+                pid=target.pid,
+                duration_seconds=0.1,
+                max_output_bytes=1024,
+            ),
+            policy=AutomaticCollectionPolicy(enabled=True),
+            capabilities=_capabilities(),
+        )
+        policy = CollectorBrokerPolicy(
+            spool_root=spool,
+            perf_path=_fake_perf(tmp_path),
+            allowed_uids=(os.geteuid(),),
+            allow_software_fallback=True,
+            max_duration_seconds=1,
+            max_output_bytes=1024,
+        )
+        with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+            worker = threading.Thread(target=server.serve_once, daemon=True)
+            worker.start()
+            artifact = CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(plan)
+            worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        assert artifact.actual_event_source == "software"
+        assert artifact.fallback_reason == "hardware_probe_skipped_for_short_collection"
+        assert artifact.events == SOFTWARE_STAT_EVENTS
+        assert not tuple(runtime.glob(".perflens-pmu-probe-*"))
+    finally:
+        target.terminate()
+        target.wait(timeout=5)
+
+
 @pytest.mark.parametrize(
     ("perf_factory", "expected_source", "expected_reason"),
     [
@@ -637,6 +764,320 @@ def test_cap_perfmon_broker_auto_selects_verified_event_source(
         assert artifact.fallback_used is (expected_reason is not None)
         assert artifact.fallback_reason == expected_reason
         assert not tuple(runtime.glob(".perflens-pmu-probe-*"))
+    finally:
+        target.terminate()
+        target.wait(timeout=5)
+
+
+def test_cap_perfmon_broker_retries_software_record_when_hardware_execution_fails(
+    tmp_path: Path,
+) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    target = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        start_new_session=True,
+    )
+    try:
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode="record",
+                pid=target.pid,
+                duration_seconds=0.5,
+                max_output_bytes=1024,
+            ),
+            policy=AutomaticCollectionPolicy(enabled=True),
+            capabilities=_capabilities(),
+        )
+        policy = CollectorBrokerPolicy(
+            spool_root=spool,
+            perf_path=_fake_perf_with_failed_hardware_record_after_probe(tmp_path),
+            allowed_uids=(os.geteuid(),),
+            allow_software_fallback=True,
+            max_duration_seconds=1,
+            max_output_bytes=1024,
+        )
+        with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+            worker = threading.Thread(target=server.serve_once, daemon=True)
+            worker.start()
+            artifact = CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(plan)
+            worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        assert artifact.actual_event_source == "software"
+        assert artifact.fallback_used is True
+        assert artifact.fallback_reason == "hardware_execution_failed_after_probe"
+        assert artifact.output_path.endswith(".perf.data")
+        assert Path(artifact.output_path).read_bytes() == b"PERFILE2-software-record"
+        assert len(_collection_artifacts(spool)) == 1
+        assert not tuple(runtime.glob(".perflens-pmu-probe-*"))
+    finally:
+        target.terminate()
+        target.wait(timeout=5)
+
+
+def test_cap_perfmon_broker_revalidates_pid_identity_before_software_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    target = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        start_new_session=True,
+    )
+    try:
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode="record",
+                pid=target.pid,
+                duration_seconds=0.5,
+                max_output_bytes=1024,
+            ),
+            policy=AutomaticCollectionPolicy(enabled=True),
+            capabilities=_capabilities(),
+        )
+        policy = CollectorBrokerPolicy(
+            spool_root=spool,
+            perf_path=_fake_perf_with_failed_hardware_record_after_probe(tmp_path),
+            allowed_uids=(os.geteuid(),),
+            allow_software_fallback=True,
+            max_duration_seconds=1,
+            max_output_bytes=1024,
+        )
+        from perflens.collector_broker import server as broker_server
+
+        real_assert_plan_current = broker_server.assert_plan_current
+        validations = 0
+
+        def revalidate(changing_plan: CollectionPlanArtifact) -> None:
+            nonlocal validations
+            validations += 1
+            if validations == 3:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "authorization",
+                    "Target PID identity changed before fallback",
+                )
+            real_assert_plan_current(changing_plan)
+
+        monkeypatch.setattr(broker_server, "assert_plan_current", revalidate)
+        with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+            worker = threading.Thread(target=server.serve_once, daemon=True)
+            worker.start()
+            with pytest.raises(PerfLensError) as failure:
+                CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(plan)
+            worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        assert validations == 3
+        assert failure.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+        assert not _collection_artifacts(spool)
+    finally:
+        target.terminate()
+        target.wait(timeout=5)
+
+
+def test_cap_perfmon_broker_does_not_hide_hardware_output_limit_with_fallback(
+    tmp_path: Path,
+) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    target = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        start_new_session=True,
+    )
+    try:
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode="record",
+                pid=target.pid,
+                duration_seconds=0.5,
+                max_output_bytes=1024,
+            ),
+            policy=AutomaticCollectionPolicy(enabled=True),
+            capabilities=_capabilities(),
+        )
+        policy = CollectorBrokerPolicy(
+            spool_root=spool,
+            perf_path=_fake_perf_exceeding_output_after_hardware_probe(tmp_path),
+            allowed_uids=(os.geteuid(),),
+            allow_software_fallback=True,
+            max_duration_seconds=1,
+            max_output_bytes=1024,
+        )
+        with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+            worker = threading.Thread(target=server.serve_once, daemon=True)
+            worker.start()
+            with pytest.raises(PerfLensError) as failure:
+                CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(plan)
+            worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        assert failure.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+        assert not _collection_artifacts(spool)
+        assert not tuple(runtime.glob(".perflens-pmu-probe-*"))
+    finally:
+        target.terminate()
+        target.wait(timeout=5)
+
+
+def test_cap_perfmon_broker_does_not_extend_exhausted_window_for_fallback(
+    tmp_path: Path,
+) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    target = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        start_new_session=True,
+    )
+    try:
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode="record",
+                pid=target.pid,
+                duration_seconds=0.4,
+                max_output_bytes=1024,
+            ),
+            policy=AutomaticCollectionPolicy(enabled=True),
+            capabilities=_capabilities(),
+        )
+        policy = CollectorBrokerPolicy(
+            spool_root=spool,
+            perf_path=_fake_perf_exhausting_window_after_hardware_probe(tmp_path),
+            allowed_uids=(os.geteuid(),),
+            allow_software_fallback=True,
+            max_duration_seconds=1,
+            max_output_bytes=1024,
+        )
+        with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+            worker = threading.Thread(target=server.serve_once, daemon=True)
+            worker.start()
+            with pytest.raises(PerfLensError) as failure:
+                CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(plan)
+            worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        assert failure.value.code is ErrorCode.EXTERNAL_TOOL_FAILED
+        assert not _collection_artifacts(spool)
+        assert not tuple(runtime.glob(".perflens-pmu-probe-*"))
+    finally:
+        target.terminate()
+        target.wait(timeout=5)
+
+
+def test_cap_perfmon_broker_does_not_hide_hardware_probe_output_limit(
+    tmp_path: Path,
+) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    target = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        start_new_session=True,
+    )
+    try:
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode="stat",
+                pid=target.pid,
+                duration_seconds=0.4,
+                max_output_bytes=1024,
+            ),
+            policy=AutomaticCollectionPolicy(enabled=True),
+            capabilities=_capabilities(),
+        )
+        policy = CollectorBrokerPolicy(
+            spool_root=spool,
+            perf_path=_fake_perf_exceeding_hardware_probe_limit(tmp_path),
+            allowed_uids=(os.geteuid(),),
+            allow_software_fallback=True,
+            max_duration_seconds=1,
+            max_output_bytes=1024,
+        )
+        with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+            worker = threading.Thread(target=server.serve_once, daemon=True)
+            worker.start()
+            with pytest.raises(PerfLensError) as failure:
+                CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(plan)
+            worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        assert failure.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+        assert not _collection_artifacts(spool)
+        assert not tuple(runtime.glob(".perflens-pmu-probe-*"))
+    finally:
+        target.terminate()
+        target.wait(timeout=5)
+
+
+def test_cap_perfmon_broker_removes_artifact_when_permission_application_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    target = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        start_new_session=True,
+    )
+    try:
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode="stat",
+                pid=target.pid,
+                duration_seconds=0.1,
+                max_output_bytes=1024,
+                event_source="software_only",
+            ),
+            policy=AutomaticCollectionPolicy(enabled=True),
+            capabilities=_capabilities(),
+        )
+        policy = CollectorBrokerPolicy(
+            spool_root=spool,
+            perf_path=_fake_perf(tmp_path),
+            allowed_uids=(os.geteuid(),),
+            allow_software_fallback=True,
+            max_duration_seconds=1,
+            max_output_bytes=1024,
+        )
+        with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+            def fail_chmod(*_args: object, **_kwargs: object) -> None:
+                raise OSError
+
+            monkeypatch.setattr(os, "chmod", fail_chmod)
+            worker = threading.Thread(target=server.serve_once, daemon=True)
+            worker.start()
+            with pytest.raises(PerfLensError) as failure:
+                CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(plan)
+            worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        assert failure.value.code is ErrorCode.OUTPUT_WRITE_FAILED
+        assert not _collection_artifacts(spool)
     finally:
         target.terminate()
         target.wait(timeout=5)

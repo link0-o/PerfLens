@@ -41,6 +41,7 @@ FALLBACK_REASONS = (
     "hardware_probe_skipped_for_short_collection",
     "hardware_probe_failed",
     "hardware_probe_produced_no_usable_counts",
+    "hardware_execution_failed_after_probe",
 )
 DEFAULT_MAX_OUTPUT_BYTES = 256 << 20
 CollectionMode = Literal["record", "stat", "sched", "lock", "off_cpu"]
