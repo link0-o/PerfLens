@@ -11,6 +11,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
+- The privileged Helper now parses Linux perf's actual NUL-terminated control ACK framing within
+  a strict 16-byte bound. Its disabled-event startup barrier uses the non-mutating `ping` command,
+  so PID identity is still revalidated after perf binds the target and before events are enabled.
 - Automatic `record`/`stat` collection now performs one bounded fixed-software retry when the
   hardware probe succeeds but the subsequent hardware execution fails. Probe and failed-attempt
   time remain inside the original requested window; authorization, PID identity, timeout, spool,

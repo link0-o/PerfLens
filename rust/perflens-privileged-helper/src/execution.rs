@@ -35,6 +35,7 @@ const HARDWARE_PROBE_MINIMUM_PLAN_MILLISECONDS: u64 = 300;
 const HARDWARE_PROBE_MAX_MILLISECONDS: u64 = 250;
 const HARDWARE_PROBE_OUTPUT_BYTES: u64 = 1 << 20;
 const POST_PROBE_FALLBACK_MINIMUM_MILLISECONDS: u64 = 50;
+const PERF_CONTROL_ACK_MAX_BYTES: usize = 16;
 const SOFTWARE_STAT_EVENTS: &[&str] = &[
     "task-clock",
     "context-switches",
@@ -847,11 +848,12 @@ where
     let mut child = command.spawn().map_err(|_error| external_error())?;
     drop(control_reader);
     drop(ack_writer);
-    // `-D -1` makes perf open its target events disabled. A successful control ACK proves that
-    // perf completed that binding. Revalidating the original owner/start-time identity after this
-    // barrier ensures a recycled numeric PID is rejected before any event can be enabled; after
-    // the barrier the kernel event descriptors remain bound to the task perf actually opened.
-    if send_perf_control(&mut control_writer, &mut acknowledgements, "disable").is_err() {
+    // `-D -1` makes perf open its target events disabled. `ping` is a non-mutating control command
+    // which perf processes only after completing that binding. Revalidating the original
+    // owner/start-time identity after this barrier ensures a recycled numeric PID is rejected
+    // before any event can be enabled; the kernel event descriptors then remain bound to the task
+    // perf actually opened.
+    if send_perf_control(&mut control_writer, &mut acknowledgements, "ping").is_err() {
         terminate_perf(&mut child, Signal::SIGKILL);
         return Err(external_error());
     }
@@ -1004,11 +1006,45 @@ fn send_perf_control(
     control
         .write_all(format!("{operation}\n").as_bytes())
         .map_err(|_error| external_error())?;
-    let mut acknowledgement = String::new();
-    acknowledgements
-        .read_line(&mut acknowledgement)
-        .map_err(|_error| external_error())?;
-    if acknowledgement != "ack\n" {
+    read_perf_control_ack(acknowledgements)
+}
+
+fn read_perf_control_ack(
+    acknowledgements: &mut BufReader<UnixStream>,
+) -> Result<(), ExecutionError> {
+    let mut acknowledgement = Vec::with_capacity(PERF_CONTROL_ACK_MAX_BYTES);
+    loop {
+        let (consumed, terminated) = {
+            let available = acknowledgements
+                .fill_buf()
+                .map_err(|_error| external_error())?;
+            if available.is_empty() {
+                return Err(external_error());
+            }
+            let consumed = available
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(available.len(), |position| position + 1);
+            if acknowledgement.len().saturating_add(consumed) > PERF_CONTROL_ACK_MAX_BYTES {
+                return Err(external_error());
+            }
+            acknowledgement.extend_from_slice(&available[..consumed]);
+            (consumed, available[consumed - 1] == b'\n')
+        };
+        acknowledgements.consume(consumed);
+        if terminated {
+            break;
+        }
+    }
+
+    // Linux perf currently writes `sizeof("ack\n")`, including its C-string NUL. `read_line`
+    // leaves that NUL buffered, so it prefixes the following ACK. Accept only those leading NULs
+    // and the documented ACK itself; every other byte or oversized response still fails closed.
+    let first_payload_byte = acknowledgement
+        .iter()
+        .position(|byte| *byte != 0)
+        .unwrap_or(acknowledgement.len());
+    if acknowledgement[first_payload_byte..] != *b"ack\n" {
         return Err(external_error());
     }
     Ok(())
@@ -1079,7 +1115,9 @@ const fn resource_error(message: &'static str) -> ExecutionError {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{BufReader, Write};
     use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixStream;
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
     use std::sync::Mutex;
@@ -1091,8 +1129,8 @@ mod tests {
     use super::{
         ExecutionPlan, MAX_DURATION_MILLISECONDS, REPLAY_RETENTION, SOFTWARE_STAT_EVENTS,
         authorize_spool_capacity, consume_plan, denied, execute_perf, perf_status_succeeded,
-        prune_replay_markers, recover_stale_temporary_files, trusted_root_executable,
-        validate_plan, validate_spool_entries,
+        prune_replay_markers, read_perf_control_ack, recover_stale_temporary_files,
+        trusted_root_executable, validate_plan, validate_spool_entries,
     };
     use crate::{
         ActualEventSource, CallGraph, CollectionMode, HelperTarget, RecordEvent,
@@ -1149,15 +1187,15 @@ finish() {
 }
 trap finish INT TERM
 eval "IFS= read -r operation <&${ctl_fd}"
-[ "$operation" = 'disable' ]
-eval "printf 'ack\n' >&${ack_fd}"
+[ "$operation" = 'ping' ]
+eval "printf 'ack\n\0' >&${ack_fd}"
 eval "IFS= read -r operation <&${ctl_fd}"
 [ "$operation" = 'enable' ]
-eval "printf 'ack\n' >&${ack_fd}"
+eval "printf 'ack\n\0' >&${ack_fd}"
 eval "IFS= read -r operation <&${ctl_fd}"
 [ "$operation" = 'disable' ]
 trap '' INT TERM
-eval "printf 'ack\n' >&${ack_fd}"
+eval "printf 'ack\n\0' >&${ack_fd}"
 finish
 "#,
         )
@@ -1196,15 +1234,15 @@ finish() {
 }
 trap finish INT TERM
 eval "IFS= read -r operation <&${ctl_fd}"
-[ "$operation" = 'disable' ]
-eval "printf 'ack\n' >&${ack_fd}"
+[ "$operation" = 'ping' ]
+eval "printf 'ack\n\0' >&${ack_fd}"
 eval "IFS= read -r operation <&${ctl_fd}"
 [ "$operation" = 'enable' ]
-eval "printf 'ack\n' >&${ack_fd}"
+eval "printf 'ack\n\0' >&${ack_fd}"
 eval "IFS= read -r operation <&${ctl_fd}"
 [ "$operation" = 'disable' ]
 trap '' INT TERM
-eval "printf 'ack\n' >&${ack_fd}"
+eval "printf 'ack\n\0' >&${ack_fd}"
 finish
 "#,
         )
@@ -1247,15 +1285,15 @@ finish() {
 }
 trap finish INT TERM
 eval "IFS= read -r operation <&${ctl_fd}"
-[ "$operation" = 'disable' ]
-eval "printf 'ack\n' >&${ack_fd}"
+[ "$operation" = 'ping' ]
+eval "printf 'ack\n\0' >&${ack_fd}"
 eval "IFS= read -r operation <&${ctl_fd}"
 [ "$operation" = 'enable' ]
-eval "printf 'ack\n' >&${ack_fd}"
+eval "printf 'ack\n\0' >&${ack_fd}"
 eval "IFS= read -r operation <&${ctl_fd}"
 [ "$operation" = 'disable' ]
 trap '' INT TERM
-eval "printf 'ack\n' >&${ack_fd}"
+eval "printf 'ack\n\0' >&${ack_fd}"
 finish
 "#,
         )
@@ -1279,6 +1317,18 @@ finish
         assert!(perf_status_succeeded(interrupted, true));
         assert!(!perf_status_succeeded(interrupted, false));
         assert!(!perf_status_succeeded(failed, true));
+    }
+
+    #[test]
+    fn perf_control_ack_accepts_the_linux_nul_framing_across_commands() {
+        let (mut writer, reader) = UnixStream::pair().expect("create ACK socket pair");
+        writer
+            .write_all(b"ack\n\0ack\n\0")
+            .expect("write Linux perf ACK frames");
+        let mut acknowledgements = BufReader::new(reader);
+
+        read_perf_control_ack(&mut acknowledgements).expect("accept first ACK");
+        read_perf_control_ack(&mut acknowledgements).expect("accept NUL-prefixed next ACK");
     }
 
     #[test]

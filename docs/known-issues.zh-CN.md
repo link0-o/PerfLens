@@ -23,6 +23,26 @@
 直接比较。仍可在完全关机后调整 VMware vPMC/宿主虚拟化设置，但 PerfLens 的软件降级
 不再要求用户先解决该平台问题才能继续常规性能优化。
 
+## KI-2026-08-10：Helper 将 Linux perf 的 NUL 结尾 ACK 误判为失败（已修复）
+
+- 影响范围：已撤回的 `v0.2.0` `paranoid3_helper` 原生包；默认 `cap_perfmon` 模式
+  不经过该私有 Helper 协议；
+- 现象：服务健康握手通过，策略也允许固定软件事件，但 `accept-collector` 或明确指定
+  `--event-source software_only` 的 `verify-collector` 仍立即返回 `EXTERNAL_TOOL_FAILED`；
+  Helper spool 只出现已消费计划标记，没有性能产物；
+- 根因：perf 的 control fd 文档把完成响应写作 `ack\n`，Linux 6.12 实现却按 C 字符串
+  大小写出 `ack\n\0`。旧 Helper 第一次按行读取后把 NUL 留在缓冲区，导致下一次响应被
+  读成 `\0ack\n` 并安全拒绝；只写 `ack\n` 的测试替身没有覆盖真实帧；
+- 修复：重新发布的 `v0.2.0` 对 ACK 使用最多 16 字节的严格二进制解析，只允许响应前
+  存在实现产生的 NUL，其他内容和超长响应仍拒绝；启动屏障改用 perf 支持的非变更
+  `ping`，因此仍会在重新校验 PID 所有者和启动时间之后、启用事件之前完成绑定确认；
+- 回归测试：测试替身现在逐次发送真实的 `ack\n\0`，并覆盖连续响应跨帧时遗留 NUL 的
+  情况。
+
+这是 Helper 协议兼容性问题，不是 `perf_event_paranoid=3`、软件事件策略或 VMware PMU
+降级失败。安装重新发布的同版本包并运行 `sudo perflens-admin upgrade` 后，再执行普通用户
+验收；无需降低 sysctl，也不要给 Agent、MCP 或 Python Broker 增加权限。
+
 ## KI-2026-08-07：已撤回的 v0.2.0 Helper unit 无法通过 systemd USER 阶段（已修复）
 
 - 影响范围：已撤回的首批 `v0.2.0` 原生 `perflens-collector` DEB，在 Debian 13 上选择

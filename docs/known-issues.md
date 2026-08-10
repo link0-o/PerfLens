@@ -25,6 +25,30 @@ Use `hardware_required` when those counters are mandatory, or `software_only`
 to pin comparable A/B runs on a host with a known-broken PMU. Never compare a
 hardware baseline directly with a software candidate as equivalent evidence.
 
+## KI-2026-08-10: Helper rejected Linux perf's NUL-terminated control ACK (resolved)
+
+- Affected scope: the withdrawn native `v0.2.0` `paranoid3_helper` packages. The default
+  `cap_perfmon` mode does not use this private Helper protocol.
+- Symptom: service health and policy validation passed, but `accept-collector` or an explicit
+  `verify-collector --event-source software_only` immediately returned `EXTERNAL_TOOL_FAILED`.
+  Only the consumed-plan marker appeared in the Helper spool; no performance artifact was
+  published.
+- Cause: the control-fd documentation calls the completion response `ack\n`, while the Linux 6.12
+  implementation writes the C-string size and therefore emits `ack\n\0`. The old line reader left
+  the NUL buffered after the first ACK, read the next response as `\0ack\n`, and failed closed.
+  Test doubles emitted only `ack\n`, so they did not reproduce the real framing.
+- Fix: the replacement `v0.2.0` uses a strict, 16-byte-bounded binary ACK parser. It permits only
+  implementation-produced leading NUL bytes before the documented ACK and rejects every other or
+  oversized response. The startup barrier now uses perf's non-mutating `ping` command, preserving
+  PID owner/start-time revalidation before events are enabled.
+- Regression coverage: perf test doubles now emit the real `ack\n\0` response for every command,
+  including the NUL carried into the following frame.
+
+This was a Helper protocol compatibility defect, not a `perf_event_paranoid=3`, software-policy,
+or VMware PMU fallback failure. Install the replacement same-version packages, run
+`sudo perflens-admin upgrade`, and repeat ordinary-user acceptance. Do not weaken sysctl or grant
+privilege to the Agent, MCP server, or Python Broker.
+
 ## KI-2026-08-07: withdrawn v0.2.0 Helper unit failed during systemd USER setup (resolved)
 
 - Affected scope: the withdrawn initial native v0.2.0 `perflens-collector` DEB when Debian 13
