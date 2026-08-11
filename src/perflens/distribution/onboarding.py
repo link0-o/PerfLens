@@ -46,6 +46,7 @@ _NATIVE_COLLECTOR_COMMAND = Path("/usr/bin/perflens-collector")
 _WHEEL_COLLECTOR_COMMAND = Path("/opt/perflens/bin/perflens-collector")
 _COLLECTOR_SPOOL_ROOT = Path("/var/lib/perflens")
 _HELPER_SPOOL_ROOT = Path("/var/lib/perflens-helper")
+_DEPLOYED_COLLECTOR_CONFIG = Path("/etc/perflens/collector.toml")
 
 
 def run_project_setup(
@@ -71,11 +72,27 @@ def run_project_setup(
     collector_uid: int | None = None,
     collector_command: Path | None = None,
     perf_path: Path = Path("/usr/bin/perf"),
-    collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon",
+    collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] | None = None,
     update_existing: bool = False,
 ) -> SetupArtifact:
     """Create a bounded onboarding bundle inside one selected project."""
     project = _existing_project(project_root)
+    output, previous_artifact = _setup_output_state(
+        project,
+        output_directory,
+        update_existing=update_existing,
+    )
+    deployed_mode = detect_deployed_collector_privilege_mode()
+    collector_privilege_mode = _select_collector_privilege_mode(
+        requested=collector_privilege_mode,
+        deployed=deployed_mode,
+        previous=(
+            previous_artifact.collector_privilege_mode
+            if previous_artifact is not None
+            else None
+        ),
+        prepare_collector=prepare_collector,
+    )
     selected_collector_command = (
         _collector_command_for_setup(collector_command)
         if prepare_collector
@@ -96,13 +113,6 @@ def run_project_setup(
             ),
         )
     admin_command = selected_collector_command.with_name("perflens-admin")
-    output, previous_artifact = _setup_output_state(
-        project,
-        output_directory,
-        update_existing=update_existing,
-    )
-    if previous_artifact is not None and not prepare_collector:
-        collector_privilege_mode = previous_artifact.collector_privilege_mode
     previous_claude_configuration = _previous_claude_configuration(
         project,
         previous_artifact,
@@ -400,7 +410,6 @@ def run_project_setup(
             )
         if backup is not None:
             shutil.rmtree(backup)
-        return artifact
     except BaseException:
         if applied_claude_config and claude_plan is not None:
             _rollback_config_plan(claude_plan)
@@ -417,6 +426,58 @@ def run_project_setup(
         if installed_claude_skill and claude_skill_path is not None:
             shutil.rmtree(claude_skill_path, ignore_errors=True)
         raise
+    return artifact
+
+
+def detect_deployed_collector_privilege_mode(
+    config_path: Path = _DEPLOYED_COLLECTOR_CONFIG,
+) -> Literal["cap_perfmon", "paranoid3_helper"] | None:
+    """Read one safely installed host policy without changing the host."""
+    if not os.path.lexists(config_path):
+        return None
+    # Local import avoids coupling the distribution package import path back into
+    # administrator deployment while still reusing its strict policy validation.
+    from perflens.admin.deploy import (
+        load_collector_config,
+        parse_collector_deployment_policy,
+    )
+
+    source = load_collector_config(config_path, stage="setup_host_detection")
+    policy = parse_collector_deployment_policy(
+        source.raw_text,
+        expected_spool=_COLLECTOR_SPOOL_ROOT,
+        require_root_owned_tools=True,
+        stage="setup_host_detection",
+    )
+    return policy.privilege_mode
+
+
+def _select_collector_privilege_mode(
+    *,
+    requested: Literal["cap_perfmon", "paranoid3_helper"] | None,
+    deployed: Literal["cap_perfmon", "paranoid3_helper"] | None,
+    previous: Literal["cap_perfmon", "paranoid3_helper"] | None,
+    prepare_collector: bool,
+) -> Literal["cap_perfmon", "paranoid3_helper"]:
+    if requested is not None:
+        if deployed is not None and requested != deployed and not prepare_collector:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "setup",
+                "Requested Collector privilege mode conflicts with the deployed host policy",
+                recoverable=True,
+                details={"requested_mode": requested, "deployed_mode": deployed},
+                suggested_actions=(
+                    "Omit --collector-privilege-mode to use the deployed mode, or have an "
+                    "administrator run perflens-admin switch-mode first.",
+                ),
+            )
+        return requested
+    if deployed is not None:
+        return deployed
+    if previous is not None:
+        return previous
+    return "cap_perfmon"
 
 
 def _existing_project(path: Path) -> Path:

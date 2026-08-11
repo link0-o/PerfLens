@@ -1,0 +1,118 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "allowed_uids": {
+      "default": [],
+      "items": {
+        "type": "integer"
+      },
+      "title": "Allowed Uids",
+      "type": "array"
+    },
+    "collector_command": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Collector Command"
+    },
+    "config_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Config Path"
+    },
+    "next_steps": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "planned_commands": {
+      "default": [],
+      "items": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "title": "Planned Commands",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "selected_mode": {
+      "anyOf": [
+        {
+          "enum": [
+            "cap_perfmon",
+            "paranoid3_helper"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Selected Mode"
+    },
+    "service_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Service Path"
+    },
+    "status": {
+      "enum": [
+        "analysis_only",
+        "blocked",
+        "dry_run",
+        "deployed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "status"
+  ],
+  "title": "CollectorSetupArtifact",
+  "type": "object"
+}

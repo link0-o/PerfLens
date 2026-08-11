@@ -11,6 +11,10 @@
 
 **第一次安装：请先看[《安装与首次使用》](INSTALL.zh-CN.md)。`.whl` 不要解压，应使用 pipx 或 uv 安装。**
 
+安装 DEB 后可用 `sudo perflens-admin setup` 一次选择 Collector 模式；之后如需切换，先用
+`perflens-admin switch-mode <模式> --dry-run`。项目内只需运行 `perflens init`，它会自动
+识别安全的已部署模式。详见[《Collector 权限模式选择与切换》](docs/collector-mode-lifecycle.zh-CN.md)。
+
 PerfLens 是一个面向 Linux 应用和编码 Agent 的、基于证据的性能分析工具包。它把 Profile 解析、热点计算、源码定位和诊断规则做成确定性工具，再由 Skill 约束 Agent 如何解释这些证据。
 
 ## 它是 MCP 还是 Skill？

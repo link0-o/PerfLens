@@ -44,7 +44,9 @@ from perflens.collector_broker.state import (
 )
 from perflens.contracts.artifacts import (
     CollectorDeploymentArtifact,
+    CollectorModeSwitchArtifact,
     CollectorPolicyUpdateArtifact,
+    CollectorSetupArtifact,
     CollectorSpoolStatusArtifact,
     CollectorUndeploymentArtifact,
     CollectorUpgradeArtifact,
@@ -280,6 +282,401 @@ def deploy_collector(
         commands,
         tuple(warnings),
         next_steps,
+    )
+
+
+def setup_collector(
+    mode: Literal["analysis_only", "cap_perfmon", "paranoid3_helper"],
+    *,
+    dry_run: bool = False,
+    layout: CollectorSystemLayout | None = None,
+    collector_command: Path | None = None,
+    perf_path: Path = Path("/usr/bin/perf"),
+    allowed_uid: int | None = None,
+    require_root: bool = True,
+    command_executor: CommandExecutor | None = None,
+    socket_waiter: SocketWaiter | None = None,
+    service_identity: tuple[int, int] | None = None,
+    perf_event_paranoid: int | None = None,
+    acknowledge_privileged_helper_risk: bool = False,
+) -> CollectorSetupArtifact:
+    """Generate the bounded default policy and explicitly deploy one selected mode."""
+    if mode == "analysis_only":
+        return CollectorSetupArtifact(
+            perflens_version=__version__,
+            status="analysis_only",
+            warnings=("No Collector service, capability, sysctl, or system file was changed.",),
+            next_steps=("Run perflens init inside each project that should analyze evidence.",),
+        )
+    effective_layout = layout or CollectorSystemLayout()
+    if effective_layout.config_path.exists() or effective_layout.config_path.is_symlink():
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "collector_setup",
+            "Collector is already deployed; setup is only for first-time deployment",
+            recoverable=True,
+            details={"path": str(effective_layout.config_path)},
+            suggested_actions=(
+                "Use perflens-admin switch-mode <mode> to change privilege mode.",
+                "Use perflens-admin upgrade after installing a newer package.",
+                "Use perflens-admin update-policy for reviewed policy-only changes.",
+            ),
+        )
+    selected_uid = invoking_uid() if allowed_uid is None else allowed_uid
+    if selected_uid <= 0:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "collector_setup",
+            "Collector setup requires one ordinary non-root user UID",
+            recoverable=True,
+            suggested_actions=("Rerun with --allowed-uid <ordinary-user-uid>.",),
+        )
+    command = _collector_command(
+        collector_command,
+        require_root_owner=require_root,
+        stage="collector_setup",
+    )
+    paranoid_value = (
+        _read_perf_event_paranoid(stage="collector_setup")
+        if mode == "cap_perfmon" and perf_event_paranoid is None
+        else perf_event_paranoid
+    )
+    if mode == "cap_perfmon" and paranoid_value is not None and paranoid_value > 2:
+        warnings = (
+            f"cap_perfmon is blocked by perf_event_paranoid={paranoid_value}; PerfLens did not "
+            "change sysctl.",
+        )
+        next_steps = (
+            "Choose paranoid3_helper with explicit risk acknowledgement, choose analysis_only, "
+            "or have an administrator review the kernel policy separately.",
+        )
+        if dry_run:
+            return CollectorSetupArtifact(
+                perflens_version=__version__,
+                status="blocked",
+                selected_mode=mode,
+                config_path=str(effective_layout.config_path),
+                service_path=str(effective_layout.service_path),
+                collector_command=str(command),
+                allowed_uids=(selected_uid,),
+                warnings=warnings,
+                next_steps=next_steps,
+            )
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "collector_setup",
+            "cap_perfmon cannot be deployed while perf_event_paranoid is greater than 2",
+            recoverable=True,
+            details={"perf_event_paranoid": paranoid_value},
+            suggested_actions=next_steps,
+        )
+    with tempfile.TemporaryDirectory(prefix="perflens-admin-setup-") as temporary:
+        staged = install_collector_assets(
+            Path(temporary) / "assets",
+            allowed_uids=(selected_uid,),
+            collector_command=command,
+            perf_path=perf_path,
+            privilege_mode=mode,
+        )
+        deployment = deploy_collector(
+            staged / "collector.toml",
+            dry_run=dry_run,
+            layout=effective_layout,
+            collector_command=command,
+            require_root=require_root,
+            command_executor=command_executor,
+            socket_waiter=socket_waiter,
+            service_identity=service_identity,
+            acknowledge_privileged_helper_risk=acknowledge_privileged_helper_risk,
+        )
+    return CollectorSetupArtifact(
+        perflens_version=__version__,
+        status=deployment.status,
+        selected_mode=deployment.privilege_mode,
+        config_path=deployment.config_path,
+        service_path=deployment.service_path,
+        collector_command=deployment.collector_command,
+        allowed_uids=deployment.allowed_uids,
+        planned_commands=deployment.planned_commands,
+        warnings=deployment.warnings,
+        next_steps=deployment.next_steps,
+    )
+
+
+def switch_collector_mode(
+    target_mode: Literal["cap_perfmon", "paranoid3_helper"],
+    *,
+    config_path: Path = Path("/etc/perflens/collector.toml"),
+    dry_run: bool = False,
+    layout: CollectorSystemLayout | None = None,
+    collector_command: Path | None = None,
+    require_root: bool = True,
+    command_executor: CommandExecutor | None = None,
+    socket_waiter: SocketWaiter | None = None,
+    service_identity: tuple[int, int] | None = None,
+    perf_event_paranoid: int | None = None,
+    acknowledge_privileged_helper_risk: bool = False,
+) -> CollectorModeSwitchArtifact:
+    """Transactionally replace only verified policy and units for another privilege mode."""
+    stage = "collector_mode_switch"
+    effective_layout = layout or CollectorSystemLayout()
+    source = load_collector_config(config_path, stage=stage)
+    try:
+        deployed_config = effective_layout.config_path.resolve(strict=True)
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            stage,
+            "Deployed Collector policy cannot be resolved",
+            suggested_actions=("Run perflens-admin setup before switching modes.",),
+        ) from exc
+    if source.path != deployed_config:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Collector mode switch must use the fixed deployed policy",
+        )
+    current_policy = parse_collector_deployment_policy(
+        source.raw_text,
+        expected_spool=effective_layout.state_directory,
+        require_root_owned_tools=require_root,
+        stage=stage,
+    )
+    current_mode = current_policy.privilege_mode
+    command = _collector_command(
+        collector_command,
+        require_root_owner=require_root,
+        stage=stage,
+    )
+    previous_service = _verify_managed_service(
+        effective_layout.service_path,
+        require_root_owner=require_root,
+        stage=stage,
+    )
+    previous_helper: _ManagedServiceSnapshot | None = None
+    if (
+        effective_layout.helper_service_path.exists()
+        or effective_layout.helper_service_path.is_symlink()
+    ):
+        previous_helper = _verify_managed_service(
+            effective_layout.helper_service_path,
+            require_root_owner=require_root,
+            stage=stage,
+        )
+    if current_mode == "paranoid3_helper" and previous_helper is None:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            stage,
+            "Deployed paranoid3_helper policy is missing its managed Helper unit",
+        )
+
+    candidate_text = _policy_with_privilege_mode(source.raw_text, target_mode, stage=stage)
+    candidate_policy = parse_collector_deployment_policy(
+        candidate_text,
+        expected_spool=effective_layout.state_directory,
+        require_root_owned_tools=require_root,
+        stage=stage,
+    )
+    del candidate_policy
+    warnings = [
+        "Host perf/kernel policy is not changed.",
+        "Both Collector spool directories and all retained evidence are preserved.",
+    ]
+    next_steps = [
+        "Run perflens accept-collector --authorize-host-acceptance as an ordinary user.",
+        "Run perflens init --update inside every previously initialized project.",
+    ]
+    switching_to_cap_perfmon = current_mode != target_mode and target_mode == "cap_perfmon"
+    paranoid_value = perf_event_paranoid
+    if switching_to_cap_perfmon and paranoid_value is None:
+        paranoid_value = _read_perf_event_paranoid(stage=stage)
+    blocked = switching_to_cap_perfmon and paranoid_value is not None and paranoid_value > 2
+    if blocked:
+        warnings.append(
+            f"cap_perfmon is blocked by perf_event_paranoid={paranoid_value}; PerfLens did not "
+            "change sysctl."
+        )
+        next_steps.insert(
+            0,
+            "Have an administrator review the host threat model and adjust the kernel policy "
+            "separately before retrying.",
+        )
+
+    identity = service_identity
+    if target_mode == "paranoid3_helper" and identity is None:
+        try:
+            account = pwd.getpwnam("perflens")
+        except KeyError as exc:
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_FAILED,
+                stage,
+                "Dedicated perflens service account does not exist",
+                suggested_actions=("Deploy a Collector before switching its mode.",),
+            ) from exc
+        identity = (account.pw_uid, account.pw_gid)
+
+    with tempfile.TemporaryDirectory(prefix="perflens-admin-switch-") as temporary:
+        staged = install_collector_assets(
+            Path(temporary) / "assets",
+            allowed_uids=current_policy.allowed_uids,
+            collector_command=command,
+            perf_path=current_policy.perf_path,
+            privilege_mode=target_mode,
+        )
+        service_asset = (
+            "perflens-collector-helper.service"
+            if target_mode == "paranoid3_helper"
+            else "perflens-collector.service"
+        )
+        candidate_service = (staged / service_asset).read_bytes()
+        candidate_helper: bytes | None = None
+        if target_mode == "paranoid3_helper":
+            if identity is None:
+                raise AssertionError("Helper target identity was not resolved")
+            candidate_helper = _render_helper_service(
+                (staged / "perflens-privileged-helper.service").read_text(encoding="utf-8"),
+                identity,
+                stage=stage,
+            ).encode("utf-8")
+        previous_helper_bytes = previous_helper.raw if previous_helper is not None else None
+        if current_mode == target_mode and (
+            previous_service.raw != candidate_service or previous_helper_bytes != candidate_helper
+        ):
+            warnings.append(
+                "The selected mode is already active, but its managed service template differs "
+                "from the installed package."
+            )
+            next_steps.insert(
+                0,
+                "Run sudo perflens-admin upgrade to update managed service templates without "
+                "changing mode or policy.",
+            )
+        commands = _mode_switch_commands(current_mode, target_mode)
+        result = _mode_switch_result(
+            "blocked" if blocked else ("unchanged" if current_mode == target_mode else "dry_run"),
+            source,
+            effective_layout,
+            current_mode,
+            target_mode,
+            candidate_text.encode("utf-8"),
+            previous_service.raw,
+            candidate_service,
+            previous_helper_bytes,
+            candidate_helper,
+            commands,
+            tuple(warnings),
+            tuple(next_steps),
+        )
+        if blocked:
+            if dry_run:
+                return result
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "cap_perfmon cannot be activated while perf_event_paranoid is greater than 2",
+                recoverable=True,
+                details={"perf_event_paranoid": paranoid_value},
+                suggested_actions=tuple(next_steps),
+            )
+        if current_mode == target_mode:
+            return result
+        if dry_run:
+            return result
+        if target_mode == "paranoid3_helper" and not acknowledge_privileged_helper_risk:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "paranoid3_helper switch requires explicit privileged Helper risk acknowledgement",
+                recoverable=True,
+                suggested_actions=(
+                    "Review switch-mode --dry-run, then add --acknowledge-privileged-helper-risk.",
+                ),
+            )
+        if require_root and os.geteuid() != 0:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "Collector mode switch must be started explicitly by an administrator",
+                recoverable=True,
+                suggested_actions=("Run sudo perflens-admin switch-mode <mode>.",),
+            )
+
+        executor = command_executor or _run_admin_mode_switch_command
+        rollback_performed = False
+        try:
+            for command_to_run in _mode_switch_stop_commands(current_mode):
+                executor(command_to_run)
+            _replace_verified_config(
+                effective_layout.config_path,
+                source,
+                candidate_text.encode("utf-8"),
+                stage=stage,
+                mode=stat.S_IMODE(source.metadata.st_mode),
+            )
+            _replace_verified_managed_service(
+                effective_layout.service_path,
+                previous_service,
+                candidate_service,
+                stage=stage,
+            )
+            if candidate_helper is not None:
+                if previous_helper is None:
+                    _install_new_or_identical_text(
+                        candidate_helper.decode("utf-8"),
+                        effective_layout.helper_service_path,
+                        mode=0o644,
+                    )
+                else:
+                    _replace_verified_managed_service(
+                        effective_layout.helper_service_path,
+                        previous_helper,
+                        candidate_helper,
+                        stage=stage,
+                    )
+            elif previous_helper is not None:
+                _unlink_verified_managed_service(
+                    effective_layout.helper_service_path,
+                    require_root_owner=require_root,
+                )
+            for command_to_run in _mode_switch_start_commands(target_mode):
+                executor(command_to_run)
+            if socket_waiter is not None:
+                socket_waiter(effective_layout.socket_path)
+            else:
+                expected_uid = (
+                    identity[0] if identity is not None else pwd.getpwnam("perflens").pw_uid
+                )
+                _wait_for_mode_switch_socket(
+                    effective_layout.socket_path,
+                    expected_service_uid=expected_uid,
+                )
+        except BaseException as exc:
+            try:
+                _rollback_mode_switch(
+                    executor,
+                    effective_layout,
+                    source,
+                    previous_service,
+                    previous_helper,
+                    current_mode=current_mode,
+                    require_root_owner=require_root,
+                    socket_waiter=socket_waiter,
+                )
+                rollback_performed = True
+            except BaseException as rollback_exc:
+                raise PerfLensError(
+                    ErrorCode.OUTPUT_WRITE_FAILED,
+                    stage,
+                    "Collector mode switch failed and the previous mode could not be restored",
+                    recoverable=True,
+                    details={"rollback_error": type(rollback_exc).__name__},
+                    suggested_actions=(
+                        "Inspect both managed units, the policy, systemctl status, and journal.",
+                    ),
+                ) from exc
+            raise
+    return result.model_copy(
+        update={"status": "switched", "rollback_performed": rollback_performed}
     )
 
 
@@ -1066,11 +1463,7 @@ def parse_collector_deployment_policy(
         or not 1 <= plan_ttl <= 3600
         or (events and (len(events) > 64 or any(not event or "\0" in event for event in events)))
         or type(allow_software_fallback) is not bool
-        or (
-            allow_software_fallback
-            and events
-            and not set(SOFTWARE_STAT_EVENTS).issubset(events)
-        )
+        or (allow_software_fallback and events and not set(SOFTWARE_STAT_EVENTS).issubset(events))
         or socket_mode < 0
         or socket_mode > 0o660
         or socket_mode & 0o007
@@ -1456,6 +1849,216 @@ def _planned_commands(
     return tuple(commands)
 
 
+def _mode_switch_stop_commands(
+    current_mode: Literal["cap_perfmon", "paranoid3_helper"],
+) -> tuple[tuple[str, ...], ...]:
+    commands = [
+        ("/usr/bin/systemctl", "disable", "--now", "perflens-collector.service"),
+    ]
+    if current_mode == "paranoid3_helper":
+        commands.append(
+            (
+                "/usr/bin/systemctl",
+                "disable",
+                "--now",
+                "perflens-privileged-helper.service",
+            )
+        )
+    return tuple(commands)
+
+
+def _mode_switch_start_commands(
+    target_mode: Literal["cap_perfmon", "paranoid3_helper"],
+) -> tuple[tuple[str, ...], ...]:
+    commands: list[tuple[str, ...]] = [("/usr/bin/systemctl", "daemon-reload")]
+    if target_mode == "paranoid3_helper":
+        commands.append(
+            (
+                "/usr/bin/systemctl",
+                "enable",
+                "--now",
+                "perflens-privileged-helper.service",
+            )
+        )
+    commands.append(("/usr/bin/systemctl", "enable", "--now", "perflens-collector.service"))
+    return tuple(commands)
+
+
+def _mode_switch_commands(
+    current_mode: Literal["cap_perfmon", "paranoid3_helper"],
+    target_mode: Literal["cap_perfmon", "paranoid3_helper"],
+) -> tuple[tuple[str, ...], ...]:
+    if current_mode == target_mode:
+        return ()
+    return _mode_switch_stop_commands(current_mode) + _mode_switch_start_commands(target_mode)
+
+
+def _policy_with_privilege_mode(
+    text: str,
+    target_mode: Literal["cap_perfmon", "paranoid3_helper"],
+    *,
+    stage: str,
+) -> str:
+    lines = text.splitlines(keepends=True)
+    mode_indexes = [
+        index
+        for index, line in enumerate(lines)
+        if line.partition("=")[0].strip() == "privilege_mode"
+    ]
+    if len(mode_indexes) > 1:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            stage,
+            "Collector policy contains ambiguous privilege_mode fields",
+        )
+    rendered = f'privilege_mode = "{target_mode}"\n'
+    if mode_indexes:
+        lines[mode_indexes[0]] = rendered
+    else:
+        table_indexes = [index for index, line in enumerate(lines) if line.strip() == "[collector]"]
+        if len(table_indexes) != 1:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                stage,
+                "Collector policy contains an ambiguous [collector] table",
+            )
+        lines.insert(table_indexes[0] + 1, rendered)
+    return "".join(lines)
+
+
+def _read_perf_event_paranoid(
+    path: Path = Path("/proc/sys/kernel/perf_event_paranoid"),
+    *,
+    stage: str = "collector_mode_switch",
+) -> int:
+    try:
+        raw = path.read_text(encoding="ascii")
+        value = int(raw.strip())
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise PerfLensError(
+            ErrorCode.EXTERNAL_TOOL_FAILED,
+            stage,
+            "Unable to read the host perf_event_paranoid policy",
+            recoverable=True,
+            details={"path": str(path)},
+        ) from exc
+    if not -1 <= value <= 10:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            stage,
+            "Host perf_event_paranoid value is outside the supported range",
+            details={"value": value},
+        )
+    return value
+
+
+def _mode_switch_result(
+    status: Literal["blocked", "dry_run", "unchanged", "switched"],
+    source: CollectorConfigSource,
+    layout: CollectorSystemLayout,
+    current_mode: Literal["cap_perfmon", "paranoid3_helper"],
+    target_mode: Literal["cap_perfmon", "paranoid3_helper"],
+    candidate_policy: bytes,
+    previous_service: bytes,
+    candidate_service: bytes,
+    previous_helper: bytes | None,
+    candidate_helper: bytes | None,
+    commands: tuple[tuple[str, ...], ...],
+    warnings: tuple[str, ...],
+    next_steps: tuple[str, ...],
+) -> CollectorModeSwitchArtifact:
+    return CollectorModeSwitchArtifact(
+        perflens_version=__version__,
+        status=status,
+        current_mode=current_mode,
+        target_mode=target_mode,
+        config_path=str(layout.config_path),
+        service_path=str(layout.service_path),
+        helper_service_path=str(layout.helper_service_path),
+        previous_policy_sha256=hashlib.sha256(source.raw_text.encode("utf-8")).hexdigest(),
+        candidate_policy_sha256=hashlib.sha256(candidate_policy).hexdigest(),
+        policy_update_required=source.raw_text.encode("utf-8") != candidate_policy,
+        service_update_required=previous_service != candidate_service,
+        helper_service_update_required=previous_helper != candidate_helper,
+        planned_commands=commands,
+        warnings=warnings,
+        next_steps=next_steps,
+    )
+
+
+def _rollback_mode_switch(
+    executor: CommandExecutor,
+    layout: CollectorSystemLayout,
+    previous_config: CollectorConfigSource,
+    previous_service: _ManagedServiceSnapshot,
+    previous_helper: _ManagedServiceSnapshot | None,
+    *,
+    current_mode: Literal["cap_perfmon", "paranoid3_helper"],
+    require_root_owner: bool,
+    socket_waiter: SocketWaiter | None,
+) -> None:
+    target_services = ["perflens-collector.service"]
+    if current_mode == "cap_perfmon":
+        target_services.append("perflens-privileged-helper.service")
+    for service_name in target_services:
+        executor(("/usr/bin/systemctl", "disable", "--now", service_name))
+    current_config = load_collector_config(layout.config_path, stage="collector_mode_switch")
+    _replace_verified_config(
+        layout.config_path,
+        current_config,
+        previous_config.raw_text.encode("utf-8"),
+        stage="collector_mode_switch",
+        mode=stat.S_IMODE(previous_config.metadata.st_mode),
+    )
+    current_service = _verify_managed_service(
+        layout.service_path,
+        require_root_owner=require_root_owner,
+        stage="collector_mode_switch",
+    )
+    _replace_verified_managed_service(
+        layout.service_path,
+        current_service,
+        previous_service.raw,
+        stage="collector_mode_switch",
+        mode=stat.S_IMODE(previous_service.metadata.st_mode),
+    )
+    helper_exists = layout.helper_service_path.exists() or layout.helper_service_path.is_symlink()
+    if previous_helper is None and helper_exists:
+        _unlink_verified_managed_service(
+            layout.helper_service_path,
+            require_root_owner=require_root_owner,
+        )
+    elif previous_helper is not None:
+        if helper_exists:
+            current_helper = _verify_managed_service(
+                layout.helper_service_path,
+                require_root_owner=require_root_owner,
+                stage="collector_mode_switch",
+            )
+            _replace_verified_managed_service(
+                layout.helper_service_path,
+                current_helper,
+                previous_helper.raw,
+                stage="collector_mode_switch",
+                mode=stat.S_IMODE(previous_helper.metadata.st_mode),
+            )
+        else:
+            _install_new_or_identical_text(
+                previous_helper.raw.decode("utf-8"),
+                layout.helper_service_path,
+                mode=stat.S_IMODE(previous_helper.metadata.st_mode),
+            )
+    for command in _mode_switch_start_commands(current_mode):
+        executor(command)
+    if socket_waiter is not None:
+        socket_waiter(layout.socket_path)
+    else:
+        _wait_for_mode_switch_socket(
+            layout.socket_path,
+            expected_service_uid=pwd.getpwnam("perflens").pw_uid,
+        )
+
+
 def _rollback_new_deployment(
     executor: CommandExecutor,
     layout: CollectorSystemLayout,
@@ -1749,6 +2352,7 @@ def _run_admin_command(
         "collector_undeploy",
         "collector_upgrade",
         "collector_policy_update",
+        "collector_mode_switch",
     ] = "collector_deploy",
 ) -> None:
     executable = Path(command[0])
@@ -1801,6 +2405,10 @@ def _run_admin_upgrade_command(command: tuple[str, ...]) -> None:
 
 def _run_admin_policy_update_command(command: tuple[str, ...]) -> None:
     _run_admin_command(command, stage="collector_policy_update")
+
+
+def _run_admin_mode_switch_command(command: tuple[str, ...]) -> None:
+    _run_admin_command(command, stage="collector_mode_switch")
 
 
 def _wait_for_socket(path: Path, *, expected_service_uid: int | None = None) -> None:
@@ -1857,6 +2465,24 @@ def _wait_for_policy_update_socket(
         raise PerfLensError(
             exc.code,
             "collector_policy_update",
+            exc.message,
+            recoverable=exc.recoverable,
+            details=exc.details,
+            suggested_actions=exc.suggested_actions,
+        ) from exc
+
+
+def _wait_for_mode_switch_socket(
+    path: Path,
+    *,
+    expected_service_uid: int | None = None,
+) -> None:
+    try:
+        _wait_for_socket(path, expected_service_uid=expected_service_uid)
+    except PerfLensError as exc:
+        raise PerfLensError(
+            exc.code,
+            "collector_mode_switch",
             exc.message,
             recoverable=exc.recoverable,
             details=exc.details,

@@ -8,6 +8,13 @@ for development acceptance and other Linux distributions.
 
 Deploy PerfLens as two privilege domains: ordinary-user CLI/MCP/Skill processes and a dedicated `perflens-collector` system service with only the host-approved perf capability. The Agent and MCP server must not run as root.
 
+After installing the DEBs, the recommended first host configuration is
+`sudo perflens-admin setup`. It offers `cap_perfmon`, `paranoid3_helper`, and
+analysis-only. Use `perflens-admin switch-mode <mode> --dry-run` before an explicit
+host-level switch, then run `perflens init --update` in initialized projects. See
+the [Collector privilege-mode lifecycle](collector-mode-lifecycle.md). The staged
+asset flow below remains the advanced path for reviewed custom policy.
+
 Ordinary users should complete [Installation and first use](../INSTALL.md) and run `perflens init` in the selected project first. This page focuses on administrator-managed Collector deployment.
 
 Prefer `perflens setup --prepare-collector` to generate assets and exact commands

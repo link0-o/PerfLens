@@ -59,6 +59,26 @@ def main() -> None:
         expected="默认输出中文摘要",
     )
     assert "--json" in deploy_help
+    setup_help = _run(
+        perflens_admin,
+        "setup",
+        "--help",
+        expected="首次选择并部署 Collector",
+    )
+    assert "analysis_only" in setup_help
+    assert "--dry-run" in setup_help
+    switch_help = _run(
+        perflens_admin,
+        "switch-mode",
+        "--help",
+        expected="事务化切换 Collector 模式",
+    )
+    assert "--acknowledge-privileged-helper-risk" in switch_help
+    analysis_only = json.loads(
+        _run(perflens_admin, "setup", "--mode", "analysis_only", "--json")
+    )
+    assert analysis_only["schema_version"] == "1.0"
+    assert analysis_only["status"] == "analysis_only"
     _run(
         perflens_admin,
         "undeploy",

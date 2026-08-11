@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shlex
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated, Literal, NoReturn, cast
 
 import typer
 
@@ -12,6 +12,8 @@ from perflens import __version__
 from perflens.admin.deploy import (
     deploy_collector,
     inspect_collector_spool,
+    setup_collector,
+    switch_collector_mode,
     undeploy_collector,
     update_collector_policy,
     upgrade_collector,
@@ -23,10 +25,12 @@ from perflens.admin.spool import (
 )
 from perflens.contracts.artifacts import (
     CollectorDeploymentArtifact,
+    CollectorModeSwitchArtifact,
+    CollectorSetupArtifact,
     CollectorSpoolArchiveVerificationArtifact,
     CollectorSpoolStatusArtifact,
 )
-from perflens.domain.errors import PerfLensError
+from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.error_presentation import (
     ERROR_EXIT_CODES,
     configure_json_errors,
@@ -113,6 +117,127 @@ def deploy_command(
         typer.echo(result.model_dump_json(indent=2))
         return
     _render_deployment_chinese(result)
+
+
+@app.command("setup")
+def setup_command(
+    mode: Annotated[
+        Literal["analysis_only", "cap_perfmon", "paranoid3_helper"] | None,
+        typer.Option(
+            "--mode",
+            help="非交互选择: analysis_only、cap_perfmon 或 paranoid3_helper。",
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="只生成并验证默认策略及命令计划。"),
+    ] = False,
+    allowed_uid: Annotated[
+        int | None,
+        typer.Option("--allowed-uid", min=1, help="获准采集的普通用户 UID。"),
+    ] = None,
+    collector_command: Annotated[
+        Path | None,
+        typer.Option("--collector-command", dir_okay=False, help="可信 Collector 入口。"),
+    ] = None,
+    perf_path: Annotated[
+        Path,
+        typer.Option("--perf-path", dir_okay=False, help="可信系统 perf 程序。"),
+    ] = Path("/usr/bin/perf"),
+    acknowledge_privileged_helper_risk: Annotated[
+        bool,
+        typer.Option(
+            "--acknowledge-privileged-helper-risk",
+            "--acknowledge-cap-sys-admin-risk",
+            help="确认 paranoid=3 Helper 的 root 与 capability 风险。",
+        ),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="输出完整的版本化 JSON 结果。"),
+    ] = False,
+) -> None:
+    """首次选择并部署 Collector; 也可以明确选择仅分析。"""
+    selected = mode
+    interactive = selected is None
+    if selected is None:
+        typer.echo("请选择 PerfLens Collector 部署方式:")
+        typer.echo("1. cap_perfmon (推荐, 权限更小)")
+        typer.echo("2. paranoid3_helper (保留 paranoid=3, 风险更高)")
+        typer.echo("3. 仅分析已有证据 (不部署 Collector)")
+        choice = typer.prompt("请输入 1、2 或 3", default="1")
+        choices = {"1": "cap_perfmon", "2": "paranoid3_helper", "3": "analysis_only"}
+        if choice not in choices:
+            _fail(PerfLensError(ErrorCode.INVALID_INPUT, "collector_setup", "未知的向导选项"))
+        selected = cast(
+            Literal["analysis_only", "cap_perfmon", "paranoid3_helper"],
+            choices[choice],
+        )
+    if (
+        interactive
+        and selected == "paranoid3_helper"
+        and not dry_run
+        and not acknowledge_privileged_helper_risk
+    ):
+        acknowledged = typer.confirm(
+            "该模式启用受限 root Rust Helper, 并使用 CAP_SYS_ADMIN/CAP_SYS_PTRACE; 确认继续?"
+        )
+        if not acknowledged:
+            raise typer.Abort()
+        acknowledge_privileged_helper_risk = True
+    try:
+        result = setup_collector(
+            selected,
+            dry_run=dry_run,
+            collector_command=collector_command,
+            perf_path=perf_path,
+            allowed_uid=allowed_uid,
+            acknowledge_privileged_helper_risk=acknowledge_privileged_helper_risk,
+        )
+    except PerfLensError as exc:
+        _fail(exc)
+    if json_output:
+        typer.echo(result.model_dump_json(indent=2))
+        return
+    _render_setup_chinese(result)
+
+
+@app.command("switch-mode")
+def switch_mode_command(
+    target_mode: Annotated[
+        Literal["cap_perfmon", "paranoid3_helper"],
+        typer.Argument(help="要切换到的 Collector 权限模式。"),
+    ],
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="只验证切换前置条件并显示事务计划。"),
+    ] = False,
+    acknowledge_privileged_helper_risk: Annotated[
+        bool,
+        typer.Option(
+            "--acknowledge-privileged-helper-risk",
+            "--acknowledge-cap-sys-admin-risk",
+            help="确认切换到 paranoid3_helper 的 root 与 capability 风险。",
+        ),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="输出完整的版本化 JSON 结果。"),
+    ] = False,
+) -> None:
+    """事务化切换 Collector 模式; 失败时恢复旧策略和服务。"""
+    try:
+        result = switch_collector_mode(
+            target_mode,
+            dry_run=dry_run,
+            acknowledge_privileged_helper_risk=acknowledge_privileged_helper_risk,
+        )
+    except PerfLensError as exc:
+        _fail(exc)
+    if json_output:
+        typer.echo(result.model_dump_json(indent=2))
+        return
+    _render_mode_switch_chinese(result)
 
 
 @app.command("undeploy")
@@ -339,6 +464,72 @@ def verify_spool_archive_command(
         typer.echo(result.model_dump_json(indent=2))
         return
     _render_archive_verification_chinese(result)
+
+
+def _render_setup_chinese(artifact: CollectorSetupArtifact) -> None:
+    typer.echo("PerfLens Collector 首次设置")
+    if artifact.status == "analysis_only":
+        typer.echo("状态: 仅分析模式; 没有修改系统或启动 Collector")
+    else:
+        status = {
+            "blocked": "目标模式当前不可用; 尚未修改系统",
+            "dry_run": "预检通过; 尚未修改系统",
+            "deployed": "部署完成",
+        }[artifact.status]
+        typer.echo(f"状态: {status}")
+        typer.echo(f"选择的权限模式: {artifact.selected_mode}")
+        typer.echo(f"系统策略位置: {artifact.config_path}")
+        typer.echo(f"Collector 程序: {artifact.collector_command}")
+        typer.echo("授权普通用户 UID: " + ", ".join(str(uid) for uid in artifact.allowed_uids))
+    if artifact.planned_commands:
+        typer.echo("固定系统命令计划:")
+        for index, command in enumerate(artifact.planned_commands, start=1):
+            typer.echo(f"{index}. {shlex.join(command)}")
+    if artifact.warnings:
+        typer.echo("安全边界与提示:")
+        for warning in artifact.warnings:
+            typer.echo(f"- {warning}")
+    if artifact.next_steps:
+        typer.echo("下一步:")
+        if artifact.status == "dry_run" and artifact.selected_mode is not None:
+            command = ["sudo", "perflens-admin", "setup", "--mode", artifact.selected_mode]
+            if artifact.selected_mode == "paranoid3_helper":
+                command.append("--acknowledge-privileged-helper-risk")
+            typer.echo(f"- 确认计划后正式执行: {shlex.join(command)}")
+        for step in artifact.next_steps:
+            typer.echo(f"- {step}")
+
+
+def _render_mode_switch_chinese(artifact: CollectorModeSwitchArtifact) -> None:
+    labels = {
+        "blocked": "预检发现目标模式不可用; 尚未修改系统",
+        "dry_run": "预检通过; 尚未修改系统",
+        "unchanged": "目标模式已经生效; 无需修改",
+        "switched": "切换完成; Collector 健康检查通过",
+    }
+    typer.echo("PerfLens Collector 模式切换")
+    typer.echo(f"状态: {labels[artifact.status]}")
+    typer.echo(f"当前模式: {artifact.current_mode}")
+    typer.echo(f"目标模式: {artifact.target_mode}")
+    typer.echo(f"系统策略位置: {artifact.config_path}")
+    typer.echo("证据目录: 保留, 不迁移、不删除")
+    if artifact.planned_commands:
+        typer.echo("事务命令计划:")
+        for index, command in enumerate(artifact.planned_commands, start=1):
+            typer.echo(f"{index}. {shlex.join(command)}")
+    if artifact.warnings:
+        typer.echo("安全边界与提示:")
+        for warning in artifact.warnings:
+            typer.echo(f"- {warning}")
+    if artifact.next_steps:
+        typer.echo("下一步:")
+        if artifact.status == "dry_run":
+            command = ["sudo", "perflens-admin", "switch-mode", artifact.target_mode]
+            if artifact.target_mode == "paranoid3_helper":
+                command.append("--acknowledge-privileged-helper-risk")
+            typer.echo(f"- 确认计划后正式执行: {shlex.join(command)}")
+        for step in artifact.next_steps:
+            typer.echo(f"- {step}")
 
 
 def _render_deployment_chinese(artifact: CollectorDeploymentArtifact) -> None:

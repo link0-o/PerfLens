@@ -10,7 +10,12 @@ On Debian 13 `amd64`, the recommended alternative is
 installation does not activate a privileged service. See
 [Debian packages](docs/debian-packages.md).
 
-Collector onboarding defaults to non-root `cap_perfmon`. To keep Debian
+For first host deployment, run `sudo perflens-admin setup` and select
+`cap_perfmon`, `paranoid3_helper`, or analysis-only. Automation should pass
+`--mode` and run `--dry-run` first. See the
+[Collector privilege-mode lifecycle](docs/collector-mode-lifecycle.md).
+
+The advanced project-generated asset flow defaults to non-root `cap_perfmon`. To keep Debian
 `perf_event_paranoid=3`, generate the explicit advanced layout with
 `perflens init --prepare-collector --collector-privilege-mode paranoid3_helper`; the generated
 guide includes the mandatory administrator risk acknowledgement. MCP, Skill, and Agent remain

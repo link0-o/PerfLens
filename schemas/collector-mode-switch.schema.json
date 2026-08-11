@@ -1,0 +1,128 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "candidate_policy_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Candidate Policy Sha256",
+      "type": "string"
+    },
+    "config_path": {
+      "title": "Config Path",
+      "type": "string"
+    },
+    "current_mode": {
+      "enum": [
+        "cap_perfmon",
+        "paranoid3_helper"
+      ],
+      "title": "Current Mode",
+      "type": "string"
+    },
+    "helper_service_path": {
+      "title": "Helper Service Path",
+      "type": "string"
+    },
+    "helper_service_update_required": {
+      "title": "Helper Service Update Required",
+      "type": "boolean"
+    },
+    "next_steps": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "planned_commands": {
+      "default": [],
+      "items": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "title": "Planned Commands",
+      "type": "array"
+    },
+    "policy_update_required": {
+      "title": "Policy Update Required",
+      "type": "boolean"
+    },
+    "previous_policy_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Previous Policy Sha256",
+      "type": "string"
+    },
+    "rollback_performed": {
+      "default": false,
+      "title": "Rollback Performed",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "service_path": {
+      "title": "Service Path",
+      "type": "string"
+    },
+    "service_update_required": {
+      "title": "Service Update Required",
+      "type": "boolean"
+    },
+    "state_preserved": {
+      "default": true,
+      "title": "State Preserved",
+      "type": "boolean"
+    },
+    "status": {
+      "enum": [
+        "blocked",
+        "dry_run",
+        "unchanged",
+        "switched"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "target_mode": {
+      "enum": [
+        "cap_perfmon",
+        "paranoid3_helper"
+      ],
+      "title": "Target Mode",
+      "type": "string"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "status",
+    "current_mode",
+    "target_mode",
+    "config_path",
+    "service_path",
+    "helper_service_path",
+    "previous_policy_sha256",
+    "candidate_policy_sha256",
+    "policy_update_required",
+    "service_update_required",
+    "helper_service_update_required"
+  ],
+  "title": "CollectorModeSwitchArtifact",
+  "type": "object"
+}

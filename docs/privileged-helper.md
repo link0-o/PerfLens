@@ -22,6 +22,11 @@ Broker has no capability and a separate Rust Helper receives only the capabiliti
 systemd unit. Package installation never activates this mode, and both a policy selection and an
 administrator risk acknowledgement are required.
 
+Use `sudo perflens-admin setup` for first selection. Existing deployments use
+`perflens-admin switch-mode paranoid3_helper --dry-run` and explicit risk acknowledgement;
+the transaction health-checks the target and rolls back on failure without deleting either
+spool. See the [Collector privilege-mode lifecycle](collector-mode-lifecycle.md).
+
 The reviewed unit bounds the Helper to `CAP_PERFMON`, `CAP_SYS_ADMIN`, and
 `CAP_SYS_PTRACE`. `CAP_SYS_PTRACE` is required by `perf record` to inspect the
 already-authorized target's mappings and synthesize usable sampling metadata; a

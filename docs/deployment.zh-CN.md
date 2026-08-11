@@ -19,6 +19,18 @@ PerfLens 应拆成普通用户分析端和系统 Collector 两部分部署：
 
 管理员只负责首次安装、策略和主机权限。日常 Agent、MCP 和分析命令不使用 sudo，也不持有 perf capability。
 
+安装 DEB 后，推荐的首次主机配置不再要求记住资产目录和长命令：
+
+```bash
+sudo perflens-admin setup
+```
+
+向导提供 `cap_perfmon`、`paranoid3_helper` 和仅分析三种选择。已部署后切换模式应先运行
+`sudo perflens-admin switch-mode <模式> --dry-run`；切换成功后在已初始化项目运行
+`perflens init --update`。事务回滚、`perf_event_paranoid` 前置检查和证据保留规则见
+[《Collector 权限模式选择与切换》](collector-mode-lifecycle.zh-CN.md)。下文的
+`stage-collector-assets`/`deploy --config` 流程继续作为自定义策略和离线审查的高级入口。
+
 ## 从当前 wheel 部署
 
 以下流程适合开发验收和不使用正式 DEB 的系统。先在源码目录构建：

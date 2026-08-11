@@ -51,7 +51,19 @@ sudo apt install ./perflens_0.2.0-1_amd64.deb
 需要自动采集时再安装完全相同版本的 Collector DEB。安装软件包不会自动启动
 特权服务，完整流程见[《Debian 安装包》](docs/debian-packages.zh-CN.md)。
 
-首次生成 Collector 资产时有两种明确模式。默认 `cap_perfmon` 不以 root 运行，但
+首次部署现在推荐直接运行交互式管理员向导：
+
+```bash
+sudo perflens-admin setup
+```
+
+向导可选择推荐的 `cap_perfmon`、保留 `perf_event_paranoid=3` 的
+`paranoid3_helper`，或仅分析已有证据而不部署服务。自动化环境使用
+`--mode <模式> --dry-run` 先预检。完整的选择、风险和安全切换流程见
+[《Collector 权限模式选择与切换》](docs/collector-mode-lifecycle.zh-CN.md)。
+
+需要先在项目中生成可人工审查的自定义资产时，仍可使用下面的高级流程。首次生成
+Collector 资产有两种明确模式。默认 `cap_perfmon` 不以 root 运行，但
 Debian `perf_event_paranoid=3` 通常需要管理员按主机威胁模型改为 2；如果必须保持 3，
 运行：
 

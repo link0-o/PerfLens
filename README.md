@@ -11,6 +11,11 @@
 
 **First installation: read [Installation and first use](INSTALL.md). Do not extract the wheel; install it with pipx or uv.**
 
+After DEB installation, `sudo perflens-admin setup` selects the host Collector mode.
+`perflens init` then detects that safely deployed mode per project. See the
+[Collector privilege-mode lifecycle](docs/collector-mode-lifecycle.md) for dry-runs,
+switching, rollback, and project resynchronization.
+
 PerfLens is an evidence-driven performance-analysis toolkit for Linux
 applications and coding agents.
 

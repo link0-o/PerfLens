@@ -585,6 +585,41 @@ class CollectorDeploymentArtifact(ContractModel):
     next_steps: tuple[str, ...] = ()
 
 
+class CollectorSetupArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    status: Literal["analysis_only", "blocked", "dry_run", "deployed"]
+    selected_mode: Literal["cap_perfmon", "paranoid3_helper"] | None = None
+    config_path: str | None = None
+    service_path: str | None = None
+    collector_command: str | None = None
+    allowed_uids: tuple[int, ...] = ()
+    planned_commands: tuple[tuple[str, ...], ...] = ()
+    warnings: tuple[str, ...] = ()
+    next_steps: tuple[str, ...] = ()
+
+
+class CollectorModeSwitchArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    status: Literal["blocked", "dry_run", "unchanged", "switched"]
+    current_mode: Literal["cap_perfmon", "paranoid3_helper"]
+    target_mode: Literal["cap_perfmon", "paranoid3_helper"]
+    config_path: str
+    service_path: str
+    helper_service_path: str
+    previous_policy_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    candidate_policy_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    policy_update_required: bool
+    service_update_required: bool
+    helper_service_update_required: bool
+    rollback_performed: bool = False
+    planned_commands: tuple[tuple[str, ...], ...] = ()
+    state_preserved: bool = True
+    warnings: tuple[str, ...] = ()
+    next_steps: tuple[str, ...] = ()
+
+
 class CollectorUpgradeArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     perflens_version: str

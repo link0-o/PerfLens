@@ -44,7 +44,12 @@ its matching Collector package, setup stops before writing files and explains
 which package is missing. `--collector-command` remains available for a
 deliberately managed custom layout.
 
-Debian defaults to the non-root `cap_perfmon` mode. To keep
+After both DEBs are installed, `sudo perflens-admin setup` provides the recommended
+first-host wizard. Package installation itself still does not activate a service.
+See the [Collector privilege-mode lifecycle](collector-mode-lifecycle.md) for safe
+switching and project resynchronization.
+
+The advanced project-generated flow defaults to the non-root `cap_perfmon` mode. To keep
 `perf_event_paranoid=3`, explicitly generate the advanced Rust Helper layout with
 `perflens init --prepare-collector --collector-privilege-mode paranoid3_helper`.
 The generated guide includes the required `--acknowledge-privileged-helper-risk`

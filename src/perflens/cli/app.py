@@ -363,12 +363,15 @@ def init_command(
         ),
     ] = False,
     collector_privilege_mode: Annotated[
-        Literal["cap_perfmon", "paranoid3_helper"],
+        Literal["cap_perfmon", "paranoid3_helper"] | None,
         typer.Option(
             "--collector-privilege-mode",
-            help="Collector 权限模式: 非 root cap_perfmon, 或保留 paranoid=3 的 Rust Helper。",
+            help=(
+                "显式覆盖 Collector 权限模式; 默认安全识别主机已部署模式, "
+                "未部署时使用 cap_perfmon。"
+            ),
         ),
-    ] = "cap_perfmon",
+    ] = None,
     mcp_command: Annotated[
         Path | None,
         typer.Option("--mcp-command", dir_okay=False, help="可信 perflens-mcp 入口路径。"),
@@ -424,6 +427,7 @@ def init_command(
     if claude_selected:
         typer.echo(f"Claude Code Skill: {artifact.claude_skill_path}")
         typer.echo(f"Claude Code MCP: {artifact.claude_project_config_path}")
+    typer.echo(f"Collector 权限模式: {artifact.collector_privilege_mode}")
     typer.echo(f"自动采集: {'已启用 (仍需每次工作负载授权)' if automatic_collection else '未启用'}")
     typer.echo(f"中文下一步: {Path(artifact.output_directory) / '下一步.zh-CN.md'}")
 
@@ -493,12 +497,15 @@ def setup_command(
         ),
     ] = False,
     collector_privilege_mode: Annotated[
-        Literal["cap_perfmon", "paranoid3_helper"],
+        Literal["cap_perfmon", "paranoid3_helper"] | None,
         typer.Option(
             "--collector-privilege-mode",
-            help="Collector 权限模式: 非 root cap_perfmon, 或保留 paranoid=3 的 Rust Helper。",
+            help=(
+                "显式覆盖 Collector 权限模式; 默认安全识别主机已部署模式, "
+                "未部署时使用 cap_perfmon。"
+            ),
         ),
-    ] = "cap_perfmon",
+    ] = None,
     automatic_collection: Annotated[
         bool,
         typer.Option(
@@ -649,6 +656,7 @@ def setup_command(
     if artifact.claude_project_config_path is not None:
         typer.echo(f"Claude Code 配置路径: {artifact.claude_project_config_path}")
     typer.echo(f"采集状态: {collection_label}")
+    typer.echo(f"Collector 权限模式: {artifact.collector_privilege_mode}")
     typer.echo(f"项目自动运行: {'已启用' if artifact.automatic_collection_enabled else '未启用'}")
     typer.echo(f"请继续阅读: {Path(artifact.output_directory) / '下一步.zh-CN.md'}")
     typer.echo(

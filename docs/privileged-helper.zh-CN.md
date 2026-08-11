@@ -22,6 +22,11 @@ Debian 上通常意味着 `perf_event_paranoid <= 2`。
 Rust Helper 通过经过审查的 systemd 单元获得 Debian 等级 3 所需能力。安装软件包不会
 自动启用该模式，配置字段和部署确认参数必须同时存在。
 
+首次安装可用 `sudo perflens-admin setup` 交互选择；已部署主机必须通过
+`perflens-admin switch-mode paranoid3_helper --dry-run` 预检，再用
+`--acknowledge-privileged-helper-risk` 明确确认风险。切换是带健康检查和失败回滚的事务，
+不会删除任一 spool。完整操作见[《Collector 权限模式选择与切换》](collector-mode-lifecycle.zh-CN.md)。
+
 经过审查的 unit 把 Helper 上限固定为 `CAP_PERFMON`、`CAP_SYS_ADMIN` 和
 `CAP_SYS_PTRACE`。`CAP_SYS_PTRACE` 是 `perf record` 读取已授权目标进程映射、生成可用采样
 元数据所需；只通过 stat 计数不能证明 record 可用。它不会绕过类型化 owner-PID 计划，

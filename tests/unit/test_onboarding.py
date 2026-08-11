@@ -14,6 +14,8 @@ from perflens.distribution.onboarding import run_project_setup
 from perflens.distribution.skill import install_project_skill
 from perflens.domain.errors import ErrorCode, PerfLensError
 
+_REAL_HOST_MODE_DETECTOR = onboarding.detect_deployed_collector_privilege_mode
+
 
 def test_setup_creates_guided_bundle_and_installs_skill(tmp_path: Path) -> None:
     project = tmp_path / "project"
@@ -230,6 +232,7 @@ def test_setup_without_update_records_existing_legacy_skill_path(tmp_path: Path)
 
     artifact = run_project_setup(
         project,
+        automatic_collection=True,
         mcp_command=Path(sys.executable),
         perf_path=Path("/bin/true"),
     )
@@ -337,6 +340,7 @@ def test_setup_does_not_claim_modified_preexisting_skill(tmp_path: Path) -> None
 
     artifact = run_project_setup(
         project,
+        automatic_collection=True,
         mcp_command=Path(sys.executable),
         perf_path=Path("/bin/true"),
     )
@@ -401,6 +405,7 @@ def test_setup_update_refuses_extra_files_and_preserves_staged_collector_assets(
     extra.unlink()
     updated = run_project_setup(
         project,
+        automatic_collection=True,
         mcp_command=Path(sys.executable),
         perf_path=Path("/bin/true"),
         update_existing=True,
@@ -459,6 +464,126 @@ def test_setup_can_select_paranoid3_helper_and_generates_exact_acknowledged_comm
     assert updated.collector_privilege_mode == "paranoid3_helper"
     assert '"/var/lib/perflens-helper"' in updated_codex_config
     assert 'privilege_mode = "paranoid3_helper"' in policy.read_text(encoding="utf-8")
+
+
+def test_setup_auto_detects_deployed_helper_and_update_resynchronizes_spool(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setattr(
+        onboarding,
+        "detect_deployed_collector_privilege_mode",
+        lambda: "paranoid3_helper",
+    )
+
+    artifact = run_project_setup(
+        project,
+        automatic_collection=True,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+
+    assert artifact.collector_privilege_mode == "paranoid3_helper"
+    assert '"/var/lib/perflens-helper"' in (project / ".codex/config.toml").read_text(
+        encoding="utf-8"
+    )
+
+    monkeypatch.setattr(
+        onboarding,
+        "detect_deployed_collector_privilege_mode",
+        lambda: "cap_perfmon",
+    )
+    updated = run_project_setup(
+        project,
+        automatic_collection=True,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+        update_existing=True,
+    )
+
+    assert updated.collector_privilege_mode == "cap_perfmon"
+    assert '"/var/lib/perflens"' in (project / ".codex/config.toml").read_text(
+        encoding="utf-8"
+    )
+    assert '"/var/lib/perflens-helper"' not in (project / ".codex/config.toml").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_setup_rejects_explicit_mode_conflicting_with_deployed_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setattr(
+        onboarding,
+        "detect_deployed_collector_privilege_mode",
+        lambda: "paranoid3_helper",
+    )
+
+    with pytest.raises(PerfLensError, match="conflicts with the deployed host policy"):
+        run_project_setup(
+            project,
+            collector_privilege_mode="cap_perfmon",
+            mcp_command=Path(sys.executable),
+            perf_path=Path("/bin/true"),
+        )
+
+
+def test_deployed_mode_detection_reuses_strict_policy_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / "collector.toml"
+    config.write_text("[collector]\n", encoding="utf-8")
+    calls: list[tuple[str, object]] = []
+
+    def fake_load(path: Path, *, stage: str) -> object:
+        calls.append((stage, path))
+        return type("Source", (), {"raw_text": "[collector]\n"})()
+
+    def fake_parse(
+        text: str,
+        *,
+        expected_spool: Path,
+        require_root_owned_tools: bool,
+        stage: str,
+    ) -> object:
+        assert text == "[collector]\n"
+        assert expected_spool == Path("/var/lib/perflens")
+        assert require_root_owned_tools is True
+        calls.append((stage, expected_spool))
+        return type("Policy", (), {"privilege_mode": "paranoid3_helper"})()
+
+    monkeypatch.setattr("perflens.admin.deploy.load_collector_config", fake_load)
+    monkeypatch.setattr("perflens.admin.deploy.parse_collector_deployment_policy", fake_parse)
+
+    detected = _REAL_HOST_MODE_DETECTOR(config)
+
+    assert detected == "paranoid3_helper"
+    assert calls == [
+        ("setup_host_detection", config),
+        ("setup_host_detection", Path("/var/lib/perflens")),
+    ]
+
+
+def test_deployed_mode_detection_does_not_hide_unsafe_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / "collector.toml"
+    config.write_text("unsafe", encoding="utf-8")
+
+    def reject(_path: Path, *, stage: str) -> object:
+        raise PerfLensError(ErrorCode.PATH_SAFETY_VIOLATION, stage, "unsafe host policy")
+
+    monkeypatch.setattr("perflens.admin.deploy.load_collector_config", reject)
+
+    with pytest.raises(PerfLensError, match="unsafe host policy"):
+        _REAL_HOST_MODE_DETECTOR(config)
 
 
 def test_setup_rejects_paranoid3_helper_without_native_collector_package(

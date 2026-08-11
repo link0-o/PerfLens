@@ -40,7 +40,17 @@ perflens setup \
 命令会在写文件前明确提示安装同版本 `perflens-collector` 包。显式
 `--collector-command` 只用于受控的自定义安装布局。
 
-Debian 默认生成 `cap_perfmon` 非 root 模式；主机若保持
+安装两个 DEB 后，普通用户不再需要先记忆项目资产路径。管理员可直接运行：
+
+```bash
+sudo perflens-admin setup
+```
+
+向导选择模式并生成同一套受限默认策略；安装包本身仍不会自动启用服务。后续可使用
+`perflens-admin switch-mode` 安全切换，并在项目运行 `perflens init --update` 同步 MCP。
+详见[《Collector 权限模式选择与切换》](collector-mode-lifecycle.zh-CN.md)。
+
+下面是需要项目内候选配置供审查时的高级流程。Debian 默认生成 `cap_perfmon` 非 root 模式；主机若保持
 `perf_event_paranoid=3`，可以在首次生成资产时明确选择 Rust Helper：
 
 ```bash

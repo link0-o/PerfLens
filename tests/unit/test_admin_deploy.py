@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 import sys
 from collections.abc import Callable
@@ -17,6 +18,8 @@ from perflens.admin.deploy import (
     CollectorSystemLayout,
     deploy_collector,
     inspect_collector_spool,
+    setup_collector,
+    switch_collector_mode,
     undeploy_collector,
     update_collector_policy,
     upgrade_collector,
@@ -24,7 +27,9 @@ from perflens.admin.deploy import (
 from perflens.collector_broker.state import replay_marker_name
 from perflens.contracts.artifacts import (
     CollectorDeploymentArtifact,
+    CollectorModeSwitchArtifact,
     CollectorPolicyUpdateArtifact,
+    CollectorSetupArtifact,
     CollectorSpoolStatusArtifact,
     CollectorUndeploymentArtifact,
     CollectorUpgradeArtifact,
@@ -86,6 +91,17 @@ def _configure_paranoid3(config: Path) -> None:
     )
 
 
+def _configure_switchable_policy(config: Path) -> None:
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        .replace("max_plan_ttl_seconds = 300", "max_plan_ttl_seconds = 120")
+        .replace("max_spool_bytes = 10737418240", "max_spool_bytes = 5368709120")
+        .replace("max_spool_artifacts = 1000", "max_spool_artifacts = 500")
+        .replace("min_free_bytes = 1073741824", "min_free_bytes = 2147483648"),
+        encoding="utf-8",
+    )
+
+
 def test_admin_cli_help_is_chinese_first_and_keeps_stable_commands() -> None:
     runner = CliRunner()
     root_help = runner.invoke(app, ["--help"])
@@ -113,6 +129,516 @@ def test_admin_cli_help_is_chinese_first_and_keeps_stable_commands() -> None:
     assert upgrade_help.exit_code == 0, upgrade_help.output
     assert "--acknowledge-privileged-helper-risk" in upgrade_help.output
     assert "--acknowledge-cap-sys-admin-risk" in upgrade_help.output
+
+    setup_help = runner.invoke(app, ["setup", "--help"])
+    assert setup_help.exit_code == 0, setup_help.output
+    assert "首次选择并部署 Collector" in setup_help.output
+    assert "analysis_only" in setup_help.output
+
+    switch_help = runner.invoke(app, ["switch-mode", "--help"])
+    assert switch_help.exit_code == 0, switch_help.output
+    assert "事务化切换 Collector 模式" in switch_help.output
+    assert "--acknowledge-privileged-helper-risk" in switch_help.output
+
+
+def test_admin_setup_supports_analysis_only_and_generates_selected_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    analysis = setup_collector("analysis_only", require_root=False)
+    assert analysis.status == "analysis_only"
+    assert analysis.selected_mode is None
+
+    _config, perf, collector, layout = _deployment_inputs(tmp_path)
+    captured: list[str] = []
+
+    def fake_deploy(
+        config_path: Path,
+        **_kwargs: object,
+    ) -> CollectorDeploymentArtifact:
+        captured.append(config_path.read_text(encoding="utf-8"))
+        return CollectorDeploymentArtifact(
+            perflens_version="0.2.0",
+            status="dry_run",
+            config_source=str(config_path),
+            config_path=str(layout.config_path),
+            service_path=str(layout.service_path),
+            collector_command=str(collector),
+            allowed_uids=(os.geteuid(),),
+            privilege_mode="paranoid3_helper",
+            planned_commands=(),
+        )
+
+    monkeypatch.setattr(admin_deploy, "deploy_collector", fake_deploy)
+    generated = setup_collector(
+        "paranoid3_helper",
+        dry_run=True,
+        layout=layout,
+        collector_command=collector,
+        perf_path=perf,
+        require_root=False,
+    )
+
+    assert generated.status == "dry_run"
+    assert generated.selected_mode == "paranoid3_helper"
+    assert len(captured) == 1
+    assert 'privilege_mode = "paranoid3_helper"' in captured[0]
+    assert f"allowed_uids = [{os.geteuid()}]" in captured[0]
+
+
+def test_admin_setup_blocks_cap_perfmon_on_paranoid_three_without_mutation(
+    tmp_path: Path,
+) -> None:
+    _config, perf, collector, layout = _deployment_inputs(tmp_path)
+
+    blocked = setup_collector(
+        "cap_perfmon",
+        dry_run=True,
+        layout=layout,
+        collector_command=collector,
+        perf_path=perf,
+        require_root=False,
+        perf_event_paranoid=3,
+    )
+
+    assert blocked.status == "blocked"
+    assert blocked.planned_commands == ()
+    assert not layout.config_directory.exists()
+    with pytest.raises(PerfLensError, match="greater than 2"):
+        setup_collector(
+            "cap_perfmon",
+            layout=layout,
+            collector_command=collector,
+            perf_path=perf,
+            require_root=False,
+            perf_event_paranoid=3,
+        )
+    assert not layout.config_directory.exists()
+
+
+def test_admin_setup_rejects_an_existing_deployment_with_lifecycle_guidance(
+    tmp_path: Path,
+) -> None:
+    config, perf, collector, layout = _deployment_inputs(tmp_path)
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+    policy_before = layout.config_path.read_bytes()
+    service_before = layout.service_path.read_bytes()
+
+    with pytest.raises(PerfLensError, match="already deployed") as captured:
+        setup_collector(
+            "cap_perfmon",
+            dry_run=True,
+            layout=layout,
+            collector_command=collector,
+            perf_path=perf,
+            require_root=False,
+            perf_event_paranoid=2,
+        )
+
+    assert "switch-mode" in " ".join(captured.value.suggested_actions)
+    assert "upgrade" in " ".join(captured.value.suggested_actions)
+    assert layout.config_path.read_bytes() == policy_before
+    assert layout.service_path.read_bytes() == service_before
+
+
+def test_admin_setup_cli_interactive_analysis_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result_artifact = CollectorSetupArtifact(
+        perflens_version="0.2.0",
+        status="analysis_only",
+    )
+
+    def fake_setup(
+        mode: str,
+        **_kwargs: object,
+    ) -> CollectorSetupArtifact:
+        assert mode == "analysis_only"
+        return result_artifact
+
+    monkeypatch.setattr("perflens.admin.app.setup_collector", fake_setup)
+    result = CliRunner().invoke(app, ["setup"], input="3\n")
+
+    assert result.exit_code == 0, result.output
+    assert "仅分析模式" in result.output
+
+
+def test_admin_setup_cli_confirms_helper_and_renders_full_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = CollectorSetupArtifact(
+        perflens_version="0.2.0",
+        status="deployed",
+        selected_mode="paranoid3_helper",
+        config_path="/etc/perflens/collector.toml",
+        service_path="/etc/systemd/system/perflens-collector.service",
+        collector_command="/usr/bin/perflens-collector",
+        allowed_uids=(1000,),
+        planned_commands=(("/usr/bin/systemctl", "daemon-reload"),),
+        warnings=("bounded warning",),
+        next_steps=("run acceptance",),
+    )
+
+    def fake_setup(mode: str, **kwargs: object) -> CollectorSetupArtifact:
+        assert mode == "paranoid3_helper"
+        assert kwargs["acknowledge_privileged_helper_risk"] is True
+        return artifact
+
+    monkeypatch.setattr("perflens.admin.app.setup_collector", fake_setup)
+    result = CliRunner().invoke(app, ["setup"], input="2\ny\n")
+
+    assert result.exit_code == 0, result.output
+    assert "选择的权限模式: paranoid3_helper" in result.output
+    assert "/usr/bin/systemctl daemon-reload" in result.output
+    assert "bounded warning" in result.output
+    assert "run acceptance" in result.output
+
+
+def test_admin_setup_cli_dry_run_renders_exact_helper_command_and_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = CollectorSetupArtifact(
+        perflens_version="0.2.0",
+        status="dry_run",
+        selected_mode="paranoid3_helper",
+        config_path="/etc/perflens/collector.toml",
+        service_path="/etc/systemd/system/perflens-collector.service",
+        collector_command="/usr/bin/perflens-collector",
+        allowed_uids=(1000,),
+        next_steps=("review",),
+    )
+
+    def fake_setup(_mode: str, **_kwargs: object) -> CollectorSetupArtifact:
+        return artifact
+
+    monkeypatch.setattr("perflens.admin.app.setup_collector", fake_setup)
+
+    summary = CliRunner().invoke(
+        app,
+        ["setup", "--mode", "paranoid3_helper", "--dry-run"],
+    )
+    machine = CliRunner().invoke(
+        app,
+        ["setup", "--mode", "paranoid3_helper", "--dry-run", "--json"],
+    )
+
+    assert summary.exit_code == 0, summary.output
+    assert (
+        "sudo perflens-admin setup --mode paranoid3_helper --acknowledge-privileged-helper-risk"
+    ) in summary.output
+    assert machine.exit_code == 0, machine.output
+    assert '"schema_version": "1.0"' in machine.output
+
+
+def test_admin_setup_cli_rejects_unknown_interactive_choice() -> None:
+    result = CliRunner().invoke(app, ["setup"], input="9\n")
+
+    assert result.exit_code != 0
+    assert "未知的向导选项" in result.output
+
+
+def test_admin_switch_mode_cli_renders_dry_run_and_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = CollectorModeSwitchArtifact(
+        perflens_version="0.2.0",
+        status="dry_run",
+        current_mode="cap_perfmon",
+        target_mode="paranoid3_helper",
+        config_path="/etc/perflens/collector.toml",
+        service_path="/etc/systemd/system/perflens-collector.service",
+        helper_service_path="/etc/systemd/system/perflens-privileged-helper.service",
+        previous_policy_sha256="a" * 64,
+        candidate_policy_sha256="b" * 64,
+        policy_update_required=True,
+        service_update_required=True,
+        helper_service_update_required=True,
+        planned_commands=(("/usr/bin/systemctl", "daemon-reload"),),
+        warnings=("spools preserved",),
+        next_steps=("update projects",),
+    )
+
+    def fake_switch(_mode: str, **_kwargs: object) -> CollectorModeSwitchArtifact:
+        return artifact
+
+    monkeypatch.setattr("perflens.admin.app.switch_collector_mode", fake_switch)
+
+    summary = CliRunner().invoke(app, ["switch-mode", "paranoid3_helper", "--dry-run"])
+    machine = CliRunner().invoke(
+        app,
+        ["switch-mode", "paranoid3_helper", "--dry-run", "--json"],
+    )
+
+    assert summary.exit_code == 0, summary.output
+    assert "当前模式: cap_perfmon" in summary.output
+    assert "证据目录: 保留" in summary.output
+    assert "--acknowledge-privileged-helper-risk" in summary.output
+    assert "spools preserved" in summary.output
+    assert machine.exit_code == 0, machine.output
+    assert '"target_mode": "paranoid3_helper"' in machine.output
+
+
+def test_admin_switch_mode_both_directions_and_preserves_evidence(tmp_path: Path) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_switchable_policy(config)
+    identity = (os.geteuid(), os.getegid())
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+    )
+    layout.config_path.chmod(0o600)
+    evidence = layout.state_directory / "retained.data"
+    evidence.write_bytes(b"evidence")
+
+    dry_run = switch_collector_mode(
+        "paranoid3_helper",
+        config_path=layout.config_path,
+        dry_run=True,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        service_identity=identity,
+        perf_event_paranoid=3,
+    )
+    assert dry_run.status == "dry_run"
+    assert dry_run.policy_update_required is True
+    assert not layout.helper_service_path.exists()
+
+    switched = switch_collector_mode(
+        "paranoid3_helper",
+        config_path=layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        perf_event_paranoid=3,
+        acknowledge_privileged_helper_risk=True,
+    )
+    assert switched.status == "switched"
+    assert 'privilege_mode = "paranoid3_helper"' in layout.config_path.read_text(encoding="utf-8")
+    assert layout.helper_service_path.is_file()
+    assert stat.S_IMODE(layout.config_path.stat().st_mode) == 0o600
+    assert evidence.read_bytes() == b"evidence"
+
+    blocked = switch_collector_mode(
+        "cap_perfmon",
+        config_path=layout.config_path,
+        dry_run=True,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        service_identity=identity,
+        perf_event_paranoid=3,
+    )
+    assert blocked.status == "blocked"
+    with pytest.raises(PerfLensError, match="greater than 2"):
+        switch_collector_mode(
+            "cap_perfmon",
+            config_path=layout.config_path,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+            service_identity=identity,
+            perf_event_paranoid=3,
+        )
+
+    restored = switch_collector_mode(
+        "cap_perfmon",
+        config_path=layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        perf_event_paranoid=2,
+    )
+    assert restored.status == "switched"
+    assert 'privilege_mode = "cap_perfmon"' in layout.config_path.read_text(encoding="utf-8")
+    assert not layout.helper_service_path.exists()
+    assert stat.S_IMODE(layout.config_path.stat().st_mode) == 0o600
+    assert evidence.read_bytes() == b"evidence"
+
+
+def test_admin_switch_mode_rolls_back_policy_and_units_after_health_failure(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_switchable_policy(config)
+    identity = (os.geteuid(), os.getegid())
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+    )
+    policy_before = layout.config_path.read_bytes()
+    service_before = layout.service_path.read_bytes()
+    checks = 0
+
+    def fail_first_health(_path: Path) -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 1:
+            raise PerfLensError(ErrorCode.EXTERNAL_TOOL_FAILED, "test", "health failed")
+
+    with pytest.raises(PerfLensError, match="health failed"):
+        switch_collector_mode(
+            "paranoid3_helper",
+            config_path=layout.config_path,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+            command_executor=lambda _command: None,
+            socket_waiter=fail_first_health,
+            service_identity=identity,
+            perf_event_paranoid=3,
+            acknowledge_privileged_helper_risk=True,
+        )
+
+    assert checks == 2
+    assert layout.config_path.read_bytes() == policy_before
+    assert layout.service_path.read_bytes() == service_before
+    assert not layout.helper_service_path.exists()
+
+
+def test_admin_switch_mode_requires_helper_ack_before_any_mutation(tmp_path: Path) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_switchable_policy(config)
+    identity = (os.geteuid(), os.getegid())
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+    )
+    policy_before = layout.config_path.read_bytes()
+    commands: list[tuple[str, ...]] = []
+
+    with pytest.raises(PerfLensError, match="risk acknowledgement"):
+        switch_collector_mode(
+            "paranoid3_helper",
+            config_path=layout.config_path,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+            command_executor=commands.append,
+            socket_waiter=lambda _path: None,
+            service_identity=identity,
+            perf_event_paranoid=3,
+        )
+
+    assert commands == []
+    assert layout.config_path.read_bytes() == policy_before
+    assert not layout.helper_service_path.exists()
+
+
+def test_admin_switch_same_mode_skips_host_policy_and_reports_unit_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+    with layout.service_path.open("a", encoding="utf-8") as stream:
+        stream.write("\n# old packaged template\n")
+
+    def fail_read_host_policy(**_kwargs: object) -> int:
+        raise AssertionError("must not read host policy")
+
+    monkeypatch.setattr(
+        admin_deploy,
+        "_read_perf_event_paranoid",
+        fail_read_host_policy,
+    )
+
+    unchanged = switch_collector_mode(
+        "cap_perfmon",
+        config_path=layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+    )
+
+    assert unchanged.status == "unchanged"
+    assert unchanged.planned_commands == ()
+    assert unchanged.service_update_required is True
+    assert "service template differs" in " ".join(unchanged.warnings)
+    assert "perflens-admin upgrade" in " ".join(unchanged.next_steps)
+
+
+def test_admin_switch_from_helper_to_cap_rolls_back_removed_helper(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_paranoid3(config)
+    identity = (os.geteuid(), os.getegid())
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        acknowledge_privileged_helper_risk=True,
+    )
+    policy_before = layout.config_path.read_bytes()
+    service_before = layout.service_path.read_bytes()
+    helper_before = layout.helper_service_path.read_bytes()
+    checks = 0
+
+    def fail_first_health(_path: Path) -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 1:
+            raise PerfLensError(ErrorCode.EXTERNAL_TOOL_FAILED, "test", "health failed")
+
+    with pytest.raises(PerfLensError, match="health failed"):
+        switch_collector_mode(
+            "cap_perfmon",
+            config_path=layout.config_path,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+            command_executor=lambda _command: None,
+            socket_waiter=fail_first_health,
+            service_identity=identity,
+            perf_event_paranoid=2,
+        )
+
+    assert checks == 2
+    assert layout.config_path.read_bytes() == policy_before
+    assert layout.service_path.read_bytes() == service_before
+    assert layout.helper_service_path.read_bytes() == helper_before
 
 
 def test_admin_deploy_dry_run_is_read_only_and_cli_reports_chinese_or_json(
