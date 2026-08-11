@@ -275,8 +275,7 @@ def upgrade_command(
             "--acknowledge-privileged-helper-risk",
             "--acknowledge-cap-sys-admin-risk",
             help=(
-                "确认升级将扩大 paranoid=3 Rust Helper 的 root capability 边界。"
-                "旧参数名仍兼容。"
+                "确认升级将扩大 paranoid=3 Rust Helper 的 root capability 边界。旧参数名仍兼容。"
             ),
         ),
     ] = False,
@@ -488,7 +487,7 @@ def _render_setup_chinese(artifact: CollectorSetupArtifact) -> None:
     if artifact.warnings:
         typer.echo("安全边界与提示:")
         for warning in artifact.warnings:
-            typer.echo(f"- {warning}")
+            typer.echo(f"- {_chinese_admin_guidance(warning)}")
     if artifact.next_steps:
         typer.echo("下一步:")
         if artifact.status == "dry_run" and artifact.selected_mode is not None:
@@ -497,7 +496,7 @@ def _render_setup_chinese(artifact: CollectorSetupArtifact) -> None:
                 command.append("--acknowledge-privileged-helper-risk")
             typer.echo(f"- 确认计划后正式执行: {shlex.join(command)}")
         for step in artifact.next_steps:
-            typer.echo(f"- {step}")
+            typer.echo(f"- {_chinese_admin_guidance(step)}")
 
 
 def _render_mode_switch_chinese(artifact: CollectorModeSwitchArtifact) -> None:
@@ -505,6 +504,7 @@ def _render_mode_switch_chinese(artifact: CollectorModeSwitchArtifact) -> None:
         "blocked": "预检发现目标模式不可用; 尚未修改系统",
         "dry_run": "预检通过; 尚未修改系统",
         "unchanged": "目标模式已经生效; 无需修改",
+        "repaired": "已修复残留特权组件; cap_perfmon 健康检查通过",
         "switched": "切换完成; Collector 健康检查通过",
     }
     typer.echo("PerfLens Collector 模式切换")
@@ -520,7 +520,7 @@ def _render_mode_switch_chinese(artifact: CollectorModeSwitchArtifact) -> None:
     if artifact.warnings:
         typer.echo("安全边界与提示:")
         for warning in artifact.warnings:
-            typer.echo(f"- {warning}")
+            typer.echo(f"- {_chinese_admin_guidance(warning)}")
     if artifact.next_steps:
         typer.echo("下一步:")
         if artifact.status == "dry_run":
@@ -529,7 +529,69 @@ def _render_mode_switch_chinese(artifact: CollectorModeSwitchArtifact) -> None:
                 command.append("--acknowledge-privileged-helper-risk")
             typer.echo(f"- 确认计划后正式执行: {shlex.join(command)}")
         for step in artifact.next_steps:
-            typer.echo(f"- {step}")
+            typer.echo(f"- {_chinese_admin_guidance(step)}")
+
+
+def _chinese_admin_guidance(message: str) -> str:
+    labels = {
+        "No Collector service, capability, sysctl, or system file was changed.": (
+            "没有修改 Collector 服务、capability、sysctl 或任何系统文件。"
+        ),
+        "Run perflens init inside each project that should analyze evidence.": (
+            "在每个需要分析性能证据的项目中运行 perflens init。"
+        ),
+        "Host perf/kernel policy is not changed; a real collection can still be blocked.": (
+            "PerfLens 未修改主机 perf/内核策略; 真实采集仍可能被内核阻止。"
+        ),
+        "Users added to the perflens group must start a new login session.": (
+            "新加入 perflens 组的用户必须重新登录, 当前会话才会获得组权限。"
+        ),
+        "Start a new login session for every newly authorized user.": (
+            "每个新授权用户都需要退出并重新登录。"
+        ),
+        "Run perflens accept-collector --authorize-host-acceptance as an ordinary user.": (
+            "以普通用户运行 perflens accept-collector --authorize-host-acceptance。"
+        ),
+        "Enable automatic collection in the generated Codex MCP configuration.": (
+            "按生成的 Codex MCP 配置启用自动采集。"
+        ),
+        "Host perf/kernel policy is not changed.": "PerfLens 未修改主机 perf/内核策略。",
+        "Both Collector spool directories and all retained evidence are preserved.": (
+            "两个 Collector 证据目录及其中已有证据都会保留。"
+        ),
+        "Run perflens init --update inside every previously initialized project.": (
+            "在每个已初始化项目中运行 perflens init --update, 使 MCP 配置与主机模式同步。"
+        ),
+        "The previous Collector mode was restored successfully.": (
+            "之前的 Collector 模式已成功恢复。"
+        ),
+        "A stale managed privileged Helper unit was found while cap_perfmon is selected; "
+        "the repair will stop and remove it.": (
+            "当前策略为 cap_perfmon, 但发现残留的托管特权 Helper; 修复会停止并移除它。"
+        ),
+        "The selected mode is already active, but its managed service template differs "
+        "from the installed package.": ("目标模式已经生效, 但托管服务模板与当前安装包不一致。"),
+        "Run sudo perflens-admin upgrade to update managed service templates without "
+        "changing mode or policy.": (
+            "运行 sudo perflens-admin upgrade 更新托管服务模板, 不改变模式或策略。"
+        ),
+        "Have an administrator review the host threat model and adjust the kernel policy "
+        "separately before retrying.": ("请管理员先审查主机威胁模型并单独调整内核策略, 然后重试。"),
+        "Choose paranoid3_helper with explicit risk acknowledgement, choose analysis_only, "
+        "or have an administrator review the kernel policy separately.": (
+            "请选择并明确确认 paranoid3_helper 风险、改用 analysis_only, "
+            "或让管理员单独审查内核策略。"
+        ),
+    }
+    if message.startswith("cap_perfmon is blocked by perf_event_paranoid="):
+        value = message.partition("=")[2].partition(";")[0]
+        return f"perf_event_paranoid={value} 会阻止 cap_perfmon; PerfLens 未修改 sysctl。"
+    if message.startswith("The Rust Helper runs in a root service bounded to "):
+        return (
+            "Rust Helper 以 root 服务运行, 但 capability 被限制为 CAP_PERFMON、"
+            "CAP_SYS_ADMIN 和 CAP_SYS_PTRACE; 这会扩大主机安全边界。"
+        )
+    return labels.get(message, message)
 
 
 def _render_deployment_chinese(artifact: CollectorDeploymentArtifact) -> None:

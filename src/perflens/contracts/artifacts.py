@@ -602,7 +602,7 @@ class CollectorSetupArtifact(ContractModel):
 class CollectorModeSwitchArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     perflens_version: str
-    status: Literal["blocked", "dry_run", "unchanged", "switched"]
+    status: Literal["blocked", "dry_run", "unchanged", "repaired", "switched"]
     current_mode: Literal["cap_perfmon", "paranoid3_helper"]
     target_mode: Literal["cap_perfmon", "paranoid3_helper"]
     config_path: str
@@ -613,7 +613,6 @@ class CollectorModeSwitchArtifact(ContractModel):
     policy_update_required: bool
     service_update_required: bool
     helper_service_update_required: bool
-    rollback_performed: bool = False
     planned_commands: tuple[tuple[str, ...], ...] = ()
     state_preserved: bool = True
     warnings: tuple[str, ...] = ()

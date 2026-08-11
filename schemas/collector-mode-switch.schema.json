@@ -58,11 +58,6 @@
       "title": "Previous Policy Sha256",
       "type": "string"
     },
-    "rollback_performed": {
-      "default": false,
-      "title": "Rollback Performed",
-      "type": "boolean"
-    },
     "schema_version": {
       "const": "1.0",
       "default": "1.0",
@@ -87,6 +82,7 @@
         "blocked",
         "dry_run",
         "unchanged",
+        "repaired",
         "switched"
       ],
       "title": "Status",

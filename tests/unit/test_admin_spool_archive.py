@@ -45,6 +45,7 @@ def _spool_inputs(
         helper_service_path=tmp_path / "system/etc/systemd/perflens-privileged-helper.service",
         helper_state_directory=tmp_path / "system/var/lib/perflens-helper",
         helper_socket_path=tmp_path / "system/run/perflens-helper/helper.sock",
+        admin_lock_path=tmp_path / "perflens-admin.lock",
     )
     layout.state_directory.mkdir(parents=True)
     layout.state_directory.chmod(0o750)

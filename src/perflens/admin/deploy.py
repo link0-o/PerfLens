@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import math
 import os
@@ -12,7 +13,8 @@ import sys
 import tempfile
 import time
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -71,6 +73,7 @@ class CollectorSystemLayout:
     helper_service_path: Path = Path("/etc/systemd/system/perflens-privileged-helper.service")
     helper_state_directory: Path = Path("/var/lib/perflens-helper")
     helper_socket_path: Path = Path("/run/perflens-helper/helper.sock")
+    admin_lock_path: Path = Path("/run/lock/perflens-admin.lock")
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +107,82 @@ CommandExecutor = Callable[[tuple[str, ...]], None]
 SocketWaiter = Callable[[Path], None]
 
 
+@contextmanager
+def _collector_admin_lock(
+    layout: CollectorSystemLayout,
+    *,
+    stage: str,
+    require_root_owner: bool,
+) -> Generator[None, None, None]:
+    """Serialize host lifecycle mutations through one trusted fixed lock file."""
+    lexical = layout.admin_lock_path.expanduser()
+    if not lexical.is_absolute() or lexical.is_symlink():
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Collector administrator lock path is unsafe",
+            details={"path": str(lexical)},
+        )
+    try:
+        parent = lexical.parent.resolve(strict=True)
+        lock_path = parent / lexical.name
+        descriptor = os.open(
+            lock_path,
+            os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+        )
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.OUTPUT_WRITE_FAILED,
+            stage,
+            "Unable to open the fixed Collector administrator lock",
+            recoverable=True,
+            details={"path": str(lexical)},
+            suggested_actions=("Run the mutating administrator command with sudo.",),
+        ) from exc
+    try:
+        metadata = os.fstat(descriptor)
+    except OSError as exc:
+        os.close(descriptor)
+        raise PerfLensError(
+            ErrorCode.EXTERNAL_TOOL_FAILED,
+            stage,
+            "Unable to validate the Collector administrator transaction lock",
+            recoverable=True,
+            details={"path": str(lock_path)},
+        ) from exc
+    expected_owners = {0} if require_root_owner else {os.geteuid()}
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid not in expected_owners
+        or metadata.st_mode & 0o077
+    ):
+        os.close(descriptor)
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Collector administrator lock has unsafe ownership or permissions",
+            details={"path": str(lock_path)},
+        )
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+    except OSError as exc:
+        os.close(descriptor)
+        raise PerfLensError(
+            ErrorCode.EXTERNAL_TOOL_FAILED,
+            stage,
+            "Unable to acquire the Collector administrator transaction lock",
+            recoverable=True,
+            details={"path": str(lock_path)},
+        ) from exc
+    try:
+        yield
+    finally:
+        with suppress(OSError):
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
 def deploy_collector(
     config_path: Path,
     *,
@@ -115,9 +194,36 @@ def deploy_collector(
     socket_waiter: SocketWaiter | None = None,
     service_identity: tuple[int, int] | None = None,
     acknowledge_privileged_helper_risk: bool = False,
+    _admin_lock_held: bool = False,
 ) -> CollectorDeploymentArtifact:
     """Deploy fixed Collector assets from one strictly validated data-only policy."""
     effective_layout = layout or CollectorSystemLayout()
+    if not dry_run and not _admin_lock_held:
+        if require_root and os.geteuid() != 0:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "collector_deploy",
+                "Collector deployment must be started explicitly by an administrator",
+                recoverable=True,
+                suggested_actions=("Run sudo perflens-admin deploy --config <reviewed-config>.",),
+            )
+        with _collector_admin_lock(
+            effective_layout,
+            stage="collector_deploy",
+            require_root_owner=require_root,
+        ):
+            return deploy_collector(
+                config_path,
+                dry_run=dry_run,
+                layout=effective_layout,
+                collector_command=collector_command,
+                require_root=require_root,
+                command_executor=command_executor,
+                socket_waiter=socket_waiter,
+                service_identity=service_identity,
+                acknowledge_privileged_helper_risk=acknowledge_privileged_helper_risk,
+                _admin_lock_held=True,
+            )
     source = load_collector_config(config_path)
     policy = parse_collector_deployment_policy(
         source.raw_text,
@@ -416,11 +522,44 @@ def switch_collector_mode(
     service_identity: tuple[int, int] | None = None,
     perf_event_paranoid: int | None = None,
     acknowledge_privileged_helper_risk: bool = False,
+    _admin_lock_held: bool = False,
 ) -> CollectorModeSwitchArtifact:
     """Transactionally replace only verified policy and units for another privilege mode."""
     stage = "collector_mode_switch"
     effective_layout = layout or CollectorSystemLayout()
-    source = load_collector_config(config_path, stage=stage)
+    if not dry_run and not _admin_lock_held:
+        if require_root and os.geteuid() != 0:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "Collector mode switch must be started explicitly by an administrator",
+                recoverable=True,
+                suggested_actions=("Run sudo perflens-admin switch-mode <mode>.",),
+            )
+        with _collector_admin_lock(
+            effective_layout,
+            stage=stage,
+            require_root_owner=require_root,
+        ):
+            return switch_collector_mode(
+                target_mode,
+                config_path=config_path,
+                dry_run=dry_run,
+                layout=effective_layout,
+                collector_command=collector_command,
+                require_root=require_root,
+                command_executor=command_executor,
+                socket_waiter=socket_waiter,
+                service_identity=service_identity,
+                perf_event_paranoid=perf_event_paranoid,
+                acknowledge_privileged_helper_risk=acknowledge_privileged_helper_risk,
+                _admin_lock_held=True,
+            )
+    source = load_collector_config(
+        config_path,
+        stage=stage,
+        require_root_owner=require_root,
+    )
     try:
         deployed_config = effective_layout.config_path.resolve(strict=True)
     except OSError as exc:
@@ -469,6 +608,10 @@ def switch_collector_mode(
             stage,
             "Deployed paranoid3_helper policy is missing its managed Helper unit",
         )
+    stale_helper_repair = (
+        current_mode == target_mode == "cap_perfmon" and previous_helper is not None
+    )
+    transition_required = current_mode != target_mode or stale_helper_repair
 
     candidate_text = _policy_with_privilege_mode(source.raw_text, target_mode, stage=stage)
     candidate_policy = parse_collector_deployment_policy(
@@ -482,6 +625,11 @@ def switch_collector_mode(
         "Host perf/kernel policy is not changed.",
         "Both Collector spool directories and all retained evidence are preserved.",
     ]
+    if stale_helper_repair:
+        warnings.append(
+            "A stale managed privileged Helper unit was found while cap_perfmon is selected; "
+            "the repair will stop and remove it."
+        )
     next_steps = [
         "Run perflens accept-collector --authorize-host-acceptance as an ordinary user.",
         "Run perflens init --update inside every previously initialized project.",
@@ -539,8 +687,13 @@ def switch_collector_mode(
                 stage=stage,
             ).encode("utf-8")
         previous_helper_bytes = previous_helper.raw if previous_helper is not None else None
-        if current_mode == target_mode and (
-            previous_service.raw != candidate_service or previous_helper_bytes != candidate_helper
+        if (
+            current_mode == target_mode
+            and not stale_helper_repair
+            and (
+                previous_service.raw != candidate_service
+                or previous_helper_bytes != candidate_helper
+            )
         ):
             warnings.append(
                 "The selected mode is already active, but its managed service template differs "
@@ -551,9 +704,13 @@ def switch_collector_mode(
                 "Run sudo perflens-admin upgrade to update managed service templates without "
                 "changing mode or policy.",
             )
-        commands = _mode_switch_commands(current_mode, target_mode)
+        commands = _mode_switch_commands(
+            current_mode,
+            target_mode,
+            helper_present=previous_helper is not None,
+        )
         result = _mode_switch_result(
-            "blocked" if blocked else ("unchanged" if current_mode == target_mode else "dry_run"),
+            "blocked" if blocked else ("dry_run" if transition_required else "unchanged"),
             source,
             effective_layout,
             current_mode,
@@ -578,7 +735,7 @@ def switch_collector_mode(
                 details={"perf_event_paranoid": paranoid_value},
                 suggested_actions=tuple(next_steps),
             )
-        if current_mode == target_mode:
+        if not transition_required:
             return result
         if dry_run:
             return result
@@ -602,9 +759,11 @@ def switch_collector_mode(
             )
 
         executor = command_executor or _run_admin_mode_switch_command
-        rollback_performed = False
         try:
-            for command_to_run in _mode_switch_stop_commands(current_mode):
+            for command_to_run in _mode_switch_stop_commands(
+                current_mode,
+                helper_present=previous_helper is not None,
+            ):
                 executor(command_to_run)
             _replace_verified_config(
                 effective_layout.config_path,
@@ -662,22 +821,46 @@ def switch_collector_mode(
                     require_root_owner=require_root,
                     socket_waiter=socket_waiter,
                 )
-                rollback_performed = True
             except BaseException as rollback_exc:
                 raise PerfLensError(
                     ErrorCode.OUTPUT_WRITE_FAILED,
                     stage,
                     "Collector mode switch failed and the previous mode could not be restored",
                     recoverable=True,
-                    details={"rollback_error": type(rollback_exc).__name__},
+                    details={
+                        "rollback_performed": False,
+                        "rollback_error": type(rollback_exc).__name__,
+                    },
                     suggested_actions=(
                         "Inspect both managed units, the policy, systemctl status, and journal.",
                     ),
                 ) from exc
-            raise
-    return result.model_copy(
-        update={"status": "switched", "rollback_performed": rollback_performed}
-    )
+            if isinstance(exc, PerfLensError):
+                raise PerfLensError(
+                    exc.code,
+                    exc.stage,
+                    exc.message,
+                    recoverable=exc.recoverable,
+                    retryable=exc.retryable,
+                    details={**exc.details, "rollback_performed": True},
+                    suggested_actions=(
+                        *exc.suggested_actions,
+                        "The previous Collector mode was restored successfully.",
+                    ),
+                ) from exc
+            raise PerfLensError(
+                ErrorCode.INTERNAL_ERROR,
+                stage,
+                "Collector mode switch failed after the previous mode was restored",
+                recoverable=True,
+                details={
+                    "rollback_performed": True,
+                    "original_error": type(exc).__name__,
+                },
+                suggested_actions=("Inspect the original failure before retrying.",),
+            ) from exc
+    final_status = "repaired" if stale_helper_repair else "switched"
+    return result.model_copy(update={"status": final_status})
 
 
 def upgrade_collector(
@@ -691,11 +874,42 @@ def upgrade_collector(
     socket_waiter: SocketWaiter | None = None,
     service_identity: tuple[int, int] | None = None,
     acknowledge_privileged_helper_risk: bool = False,
+    _admin_lock_held: bool = False,
 ) -> CollectorUpgradeArtifact:
     """Upgrade only a verified managed unit while preserving policy and evidence."""
     stage = "collector_upgrade"
     effective_layout = layout or CollectorSystemLayout()
-    source = load_collector_config(config_path, stage=stage)
+    if not dry_run and not _admin_lock_held:
+        if require_root and os.geteuid() != 0:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "Collector upgrade must be started explicitly by an administrator",
+                recoverable=True,
+                suggested_actions=("Run sudo perflens-admin upgrade --dry-run first.",),
+            )
+        with _collector_admin_lock(
+            effective_layout,
+            stage=stage,
+            require_root_owner=require_root,
+        ):
+            return upgrade_collector(
+                config_path,
+                dry_run=dry_run,
+                layout=effective_layout,
+                collector_command=collector_command,
+                require_root=require_root,
+                command_executor=command_executor,
+                socket_waiter=socket_waiter,
+                service_identity=service_identity,
+                acknowledge_privileged_helper_risk=acknowledge_privileged_helper_risk,
+                _admin_lock_held=True,
+            )
+    source = load_collector_config(
+        config_path,
+        stage=stage,
+        require_root_owner=require_root,
+    )
     try:
         deployed_config = effective_layout.config_path.resolve(strict=True)
     except OSError as exc:
@@ -738,24 +952,39 @@ def upgrade_collector(
     )
     previous_helper: _ManagedServiceSnapshot | None = None
     identity = service_identity
-    if policy.privilege_mode == "paranoid3_helper":
+    helper_exists = (
+        effective_layout.helper_service_path.exists()
+        or effective_layout.helper_service_path.is_symlink()
+    )
+    if policy.privilege_mode == "paranoid3_helper" or helper_exists:
         previous_helper = _verify_managed_service(
             effective_layout.helper_service_path,
             require_root_owner=require_root,
             stage=stage,
         )
-        if identity is None:
-            try:
-                account = pwd.getpwnam("perflens")
-            except KeyError as exc:
-                raise PerfLensError(
-                    ErrorCode.EXTERNAL_TOOL_FAILED,
-                    stage,
-                    "Dedicated perflens service account does not exist",
-                    suggested_actions=("Deploy the Collector before running upgrade.",),
-                ) from exc
-            identity = (account.pw_uid, account.pw_gid)
-    commands: list[tuple[str, ...]] = [("/usr/bin/systemctl", "daemon-reload")]
+    stale_helper_repair = policy.privilege_mode == "cap_perfmon" and previous_helper is not None
+    if policy.privilege_mode == "paranoid3_helper" and identity is None:
+        try:
+            account = pwd.getpwnam("perflens")
+        except KeyError as exc:
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_FAILED,
+                stage,
+                "Dedicated perflens service account does not exist",
+                suggested_actions=("Deploy the Collector before running upgrade.",),
+            ) from exc
+        identity = (account.pw_uid, account.pw_gid)
+    commands: list[tuple[str, ...]] = []
+    if stale_helper_repair:
+        commands.append(
+            (
+                "/usr/bin/systemctl",
+                "disable",
+                "--now",
+                "perflens-privileged-helper.service",
+            )
+        )
+    commands.append(("/usr/bin/systemctl", "daemon-reload"))
     if policy.privilege_mode == "paranoid3_helper":
         commands.append(("/usr/bin/systemctl", "restart", "perflens-privileged-helper.service"))
     commands.append(("/usr/bin/systemctl", "restart", "perflens-collector.service"))
@@ -765,6 +994,11 @@ def upgrade_collector(
         "Package installation must complete before this command is run.",
         "Host perf/kernel policy is not changed.",
     ]
+    if stale_helper_repair:
+        warnings.append(
+            "A stale managed privileged Helper unit was found while cap_perfmon is selected; "
+            "upgrade will stop and remove it."
+        )
     next_steps = [
         "Run perflens accept-collector --authorize-host-acceptance as an ordinary user.",
         "Run perflens-admin spool-status to check retained evidence capacity.",
@@ -791,7 +1025,7 @@ def upgrade_collector(
                 "Bundled Collector service exceeds its upgrade size limit",
             )
         helper_candidate: bytes | None = None
-        if previous_helper is not None:
+        if policy.privilege_mode == "paranoid3_helper" and previous_helper is not None:
             if identity is None:
                 raise AssertionError("paranoid3_helper upgrade identity was not resolved")
             helper_candidate = _render_helper_service(
@@ -806,7 +1040,7 @@ def upgrade_collector(
                     "Bundled Privileged Helper service exceeds its upgrade size limit",
                 )
         update_required = previous.raw != candidate
-        helper_update_required = (
+        helper_update_required = stale_helper_repair or (
             previous_helper is not None
             and helper_candidate is not None
             and previous_helper.raw != helper_candidate
@@ -880,21 +1114,39 @@ def upgrade_collector(
                 ) from exc
         service_updated = False
         helper_service_updated = False
+        helper_removed = False
+        helper_stopped = False
+        executed_command_prefix = 0
         updated_services: list[tuple[Path, _ManagedServiceSnapshot, bytes]] = []
         try:
-            if helper_update_required:
-                if previous_helper is None or helper_candidate is None:
-                    raise AssertionError("Helper update was requested without a managed unit")
-                _replace_verified_managed_service(
+            if stale_helper_repair:
+                if previous_helper is None:
+                    raise AssertionError("Stale Helper repair lost its managed unit snapshot")
+                executor(planned_commands[0])
+                helper_stopped = True
+                executed_command_prefix = 1
+                _unlink_verified_managed_service(
                     effective_layout.helper_service_path,
-                    previous_helper,
-                    helper_candidate,
-                    stage=stage,
+                    require_root_owner=require_root,
                 )
+                helper_removed = True
                 helper_service_updated = True
-                updated_services.append(
-                    (effective_layout.helper_service_path, previous_helper, helper_candidate)
-                )
+            if helper_update_required:
+                if stale_helper_repair:
+                    pass
+                elif previous_helper is None or helper_candidate is None:
+                    raise AssertionError("Helper update was requested without a managed unit")
+                else:
+                    _replace_verified_managed_service(
+                        effective_layout.helper_service_path,
+                        previous_helper,
+                        helper_candidate,
+                        stage=stage,
+                    )
+                    helper_service_updated = True
+                    updated_services.append(
+                        (effective_layout.helper_service_path, previous_helper, helper_candidate)
+                    )
             if update_required:
                 _replace_verified_managed_service(
                     effective_layout.service_path,
@@ -904,7 +1156,7 @@ def upgrade_collector(
                 )
                 service_updated = True
                 updated_services.append((effective_layout.service_path, previous, candidate))
-            for planned in planned_commands:
+            for planned in planned_commands[executed_command_prefix:]:
                 executor(planned)
             if socket_waiter is not None:
                 socket_waiter(effective_layout.socket_path)
@@ -915,7 +1167,7 @@ def upgrade_collector(
                 )
         except BaseException as exc:
             rollback_errors: list[str] = []
-            if updated_services:
+            if updated_services or helper_stopped:
                 try:
                     for path, prior, installed_candidate in reversed(updated_services):
                         current = _verify_managed_service(
@@ -939,7 +1191,29 @@ def upgrade_collector(
                             stage=stage,
                             mode=stat.S_IMODE(prior.metadata.st_mode),
                         )
-                    for rollback_command in commands:
+                    if helper_removed:
+                        if previous_helper is None:
+                            raise AssertionError("Removed Helper has no rollback snapshot")
+                        _install_new_or_identical_text(
+                            previous_helper.raw.decode("utf-8"),
+                            effective_layout.helper_service_path,
+                            mode=stat.S_IMODE(previous_helper.metadata.st_mode),
+                        )
+                    rollback_commands: list[tuple[str, ...]] = [
+                        ("/usr/bin/systemctl", "daemon-reload")
+                    ]
+                    if policy.privilege_mode == "paranoid3_helper":
+                        rollback_commands.append(
+                            (
+                                "/usr/bin/systemctl",
+                                "restart",
+                                "perflens-privileged-helper.service",
+                            )
+                        )
+                    rollback_commands.append(
+                        ("/usr/bin/systemctl", "restart", "perflens-collector.service")
+                    )
+                    for rollback_command in rollback_commands:
                         executor(rollback_command)
                 except BaseException as rollback_exc:
                     rollback_errors.append(type(rollback_exc).__name__)
@@ -984,12 +1258,42 @@ def update_collector_policy(
     require_root: bool = True,
     command_executor: CommandExecutor | None = None,
     socket_waiter: SocketWaiter | None = None,
+    _admin_lock_held: bool = False,
 ) -> CollectorPolicyUpdateArtifact:
     """Validate and atomically apply a bounded Collector policy update."""
     stage = "collector_policy_update"
     effective_layout = layout or CollectorSystemLayout()
+    if not dry_run and not _admin_lock_held:
+        if require_root and os.geteuid() != 0:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "Collector policy update must be started explicitly by an administrator",
+                recoverable=True,
+                suggested_actions=(
+                    "Run sudo perflens-admin update-policy --config <reviewed-candidate>.",
+                ),
+            )
+        with _collector_admin_lock(
+            effective_layout,
+            stage=stage,
+            require_root_owner=require_root,
+        ):
+            return update_collector_policy(
+                config_path,
+                dry_run=dry_run,
+                layout=effective_layout,
+                require_root=require_root,
+                command_executor=command_executor,
+                socket_waiter=socket_waiter,
+                _admin_lock_held=True,
+            )
     candidate = load_collector_config(config_path, stage=stage)
-    current = load_collector_config(effective_layout.config_path, stage=stage)
+    current = load_collector_config(
+        effective_layout.config_path,
+        stage=stage,
+        require_root_owner=require_root,
+    )
     if candidate.path == current.path:
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
@@ -1127,6 +1431,7 @@ def update_collector_policy(
             current,
             candidate_raw,
             stage=stage,
+            mode=stat.S_IMODE(current.metadata.st_mode),
         )
         executor(commands[0])
         if socket_waiter is not None:
@@ -1140,7 +1445,11 @@ def update_collector_policy(
         rollback_errors: list[str] = []
         if replacement_attempted:
             try:
-                deployed_candidate = load_collector_config(current.path, stage=stage)
+                deployed_candidate = load_collector_config(
+                    current.path,
+                    stage=stage,
+                    require_root_owner=require_root,
+                )
                 deployed_raw = deployed_candidate.raw_text.encode("utf-8")
                 if deployed_raw != previous_raw:
                     if deployed_raw != candidate_raw:
@@ -1202,12 +1511,34 @@ def undeploy_collector(
     layout: CollectorSystemLayout | None = None,
     require_root: bool = True,
     command_executor: CommandExecutor | None = None,
+    _admin_lock_held: bool = False,
 ) -> CollectorUndeploymentArtifact:
     """Stop and remove only a verified PerfLens-managed service unit.
 
     Administrator policy and collected artifacts are intentionally preserved.
     """
     effective_layout = layout or CollectorSystemLayout()
+    if not dry_run and not _admin_lock_held:
+        if require_root and os.geteuid() != 0:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "collector_undeploy",
+                "Collector removal must be started explicitly by an administrator",
+                recoverable=True,
+                suggested_actions=("Run sudo perflens-admin undeploy.",),
+            )
+        with _collector_admin_lock(
+            effective_layout,
+            stage="collector_undeploy",
+            require_root_owner=require_root,
+        ):
+            return undeploy_collector(
+                dry_run=dry_run,
+                layout=effective_layout,
+                require_root=require_root,
+                command_executor=command_executor,
+                _admin_lock_held=True,
+            )
     service = effective_layout.service_path
     helper_service = effective_layout.helper_service_path
     helper_present = helper_service.exists() or helper_service.is_symlink()
@@ -1271,7 +1602,11 @@ def inspect_collector_spool(
 ) -> CollectorSpoolStatusArtifact:
     """Inspect fixed Collector spool capacity without changing host state."""
     effective_layout = layout or CollectorSystemLayout()
-    source = load_collector_config(config_path, stage="collector_spool_status")
+    source = load_collector_config(
+        config_path,
+        stage="collector_spool_status",
+        require_root_owner=require_root_owned_tools,
+    )
     policy = parse_collector_deployment_policy(
         source.raw_text,
         expected_spool=effective_layout.state_directory,
@@ -1287,6 +1622,7 @@ def load_collector_config(
     path: Path,
     *,
     stage: str = "collector_deploy",
+    require_root_owner: bool = False,
 ) -> CollectorConfigSource:
     candidate = path.expanduser()
     if candidate.is_symlink():
@@ -1312,10 +1648,10 @@ def load_collector_config(
             "Collector deployment config cannot be resolved",
             details={"path": str(path)},
         ) from exc
-    candidate_owner_uid = invoking_uid()
+    expected_owners = {0} if require_root_owner else {0, invoking_uid()}
     if (
         not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid not in {0, candidate_owner_uid}
+        or metadata.st_uid not in expected_owners
         or metadata.st_mode & 0o022
         or metadata.st_size > _MAX_CONFIG_BYTES
     ):
@@ -1323,8 +1659,8 @@ def load_collector_config(
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
             stage,
-            "Collector config must be invoking-user/root owned, non-writable by group/other, "
-            "and bounded",
+            "Collector config must have the required trusted owner, be non-writable by "
+            "group/other, and be bounded",
             details={"path": str(resolved)},
         )
     try:
@@ -1851,11 +2187,13 @@ def _planned_commands(
 
 def _mode_switch_stop_commands(
     current_mode: Literal["cap_perfmon", "paranoid3_helper"],
+    *,
+    helper_present: bool = False,
 ) -> tuple[tuple[str, ...], ...]:
     commands = [
         ("/usr/bin/systemctl", "disable", "--now", "perflens-collector.service"),
     ]
-    if current_mode == "paranoid3_helper":
+    if current_mode == "paranoid3_helper" or helper_present:
         commands.append(
             (
                 "/usr/bin/systemctl",
@@ -1887,10 +2225,16 @@ def _mode_switch_start_commands(
 def _mode_switch_commands(
     current_mode: Literal["cap_perfmon", "paranoid3_helper"],
     target_mode: Literal["cap_perfmon", "paranoid3_helper"],
+    *,
+    helper_present: bool = False,
 ) -> tuple[tuple[str, ...], ...]:
-    if current_mode == target_mode:
+    stale_helper_repair = current_mode == target_mode == "cap_perfmon" and helper_present
+    if current_mode == target_mode and not stale_helper_repair:
         return ()
-    return _mode_switch_stop_commands(current_mode) + _mode_switch_start_commands(target_mode)
+    return _mode_switch_stop_commands(
+        current_mode,
+        helper_present=helper_present,
+    ) + _mode_switch_start_commands(target_mode)
 
 
 def _policy_with_privilege_mode(
@@ -2002,7 +2346,11 @@ def _rollback_mode_switch(
         target_services.append("perflens-privileged-helper.service")
     for service_name in target_services:
         executor(("/usr/bin/systemctl", "disable", "--now", service_name))
-    current_config = load_collector_config(layout.config_path, stage="collector_mode_switch")
+    current_config = load_collector_config(
+        layout.config_path,
+        stage="collector_mode_switch",
+        require_root_owner=require_root_owner,
+    )
     _replace_verified_config(
         layout.config_path,
         current_config,

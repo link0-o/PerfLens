@@ -87,11 +87,8 @@ def run_project_setup(
         requested=collector_privilege_mode,
         deployed=deployed_mode,
         previous=(
-            previous_artifact.collector_privilege_mode
-            if previous_artifact is not None
-            else None
+            previous_artifact.collector_privilege_mode if previous_artifact is not None else None
         ),
-        prepare_collector=prepare_collector,
     )
     selected_collector_command = (
         _collector_command_for_setup(collector_command)
@@ -442,7 +439,11 @@ def detect_deployed_collector_privilege_mode(
         parse_collector_deployment_policy,
     )
 
-    source = load_collector_config(config_path, stage="setup_host_detection")
+    source = load_collector_config(
+        config_path,
+        stage="setup_host_detection",
+        require_root_owner=True,
+    )
     policy = parse_collector_deployment_policy(
         source.raw_text,
         expected_spool=_COLLECTOR_SPOOL_ROOT,
@@ -457,10 +458,9 @@ def _select_collector_privilege_mode(
     requested: Literal["cap_perfmon", "paranoid3_helper"] | None,
     deployed: Literal["cap_perfmon", "paranoid3_helper"] | None,
     previous: Literal["cap_perfmon", "paranoid3_helper"] | None,
-    prepare_collector: bool,
 ) -> Literal["cap_perfmon", "paranoid3_helper"]:
     if requested is not None:
-        if deployed is not None and requested != deployed and not prepare_collector:
+        if deployed is not None and requested != deployed:
             raise PerfLensError(
                 ErrorCode.INVALID_INPUT,
                 "setup",

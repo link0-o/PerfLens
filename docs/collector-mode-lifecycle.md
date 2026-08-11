@@ -29,7 +29,11 @@ Selecting `cap_perfmon` while `perf_event_paranoid > 2` produces a blocked dry-r
 refused before system writes. The administrator must select another outcome or review host
 kernel policy separately.
 
-`perflens init` is project-scoped. It safely validates `/etc/perflens/collector.toml`, detects the active host mode, and configures the project MCP to read the matching spool. An unsafe installed policy is an error rather than a reason to guess. With no deployed policy, it falls back to `cap_perfmon` without deploying anything.
+`perflens init` is project-scoped. It safely validates `/etc/perflens/collector.toml`, detects the active host mode, and configures the project MCP to read the matching spool. An unsafe installed policy is an error rather than a reason to guess. With no deployed policy, a new project falls back to `cap_perfmon` without deploying anything; `perflens init --update` preserves an existing project's recorded candidate mode so its MCP and staged assets stay consistent.
+
+An explicit project mode that conflicts with an installed host policy is always rejected, including
+when `--prepare-collector` is present. This prevents MCP configuration from being pointed at a
+candidate spool before the host switch. Switch the host first, then run `perflens init --update`.
 
 Switches are explicit host-level transactions:
 
@@ -42,6 +46,11 @@ sudo perflens-admin switch-mode paranoid3_helper \
 
 A switch validates the current policy and managed units, stops the old mode, atomically replaces only verified PerfLens files, starts the target mode, and performs an authenticated Socket health check. Failure restores the prior policy, units, and services. Neither spool is migrated or deleted. Switching to `cap_perfmon` is refused while `perf_event_paranoid > 2`; PerfLens never edits that sysctl.
 
+Formal `deploy`, `switch-mode`, `upgrade`, `update-policy`, and `undeploy` mutations share one
+fixed, permission-restricted host transaction lock. The installed
+`/etc/perflens/collector.toml` must be root-owned; an invoking-user-owned mode-`0600` file is only
+accepted as a reviewed candidate input.
+
 After a successful host switch, each previously initialized project runs:
 
 ```bash
@@ -50,5 +59,12 @@ perflens init --update
 
 If the requested mode is already active but the packaged managed unit differs, `switch-mode`
 leaves it untouched and directs the administrator to `perflens-admin upgrade`.
+
+If `cap_perfmon` is active but a managed privileged Helper unit remains, same-mode
+`switch-mode cap_perfmon` and `upgrade` instead converge the host by stopping and removing the
+stale Helper. Failure restores the previous file but leaves that stale Helper stopped rather than
+re-expanding privilege during rollback; the Broker is restored. A failed switch that restores the
+old mode reports `details.rollback_performed=true` in its structured error; a rollback failure
+reports `false`.
 
 `deploy --config` remains the advanced reviewed-policy path. `update-policy` changes bounded fields within the current mode; `upgrade` refreshes managed service files; neither command switches privilege mode.

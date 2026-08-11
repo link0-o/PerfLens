@@ -504,17 +504,17 @@ def test_setup_auto_detects_deployed_helper_and_update_resynchronizes_spool(
     )
 
     assert updated.collector_privilege_mode == "cap_perfmon"
-    assert '"/var/lib/perflens"' in (project / ".codex/config.toml").read_text(
-        encoding="utf-8"
-    )
+    assert '"/var/lib/perflens"' in (project / ".codex/config.toml").read_text(encoding="utf-8")
     assert '"/var/lib/perflens-helper"' not in (project / ".codex/config.toml").read_text(
         encoding="utf-8"
     )
 
 
+@pytest.mark.parametrize("prepare_collector", [False, True])
 def test_setup_rejects_explicit_mode_conflicting_with_deployed_policy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    prepare_collector: bool,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -527,6 +527,7 @@ def test_setup_rejects_explicit_mode_conflicting_with_deployed_policy(
     with pytest.raises(PerfLensError, match="conflicts with the deployed host policy"):
         run_project_setup(
             project,
+            prepare_collector=prepare_collector,
             collector_privilege_mode="cap_perfmon",
             mcp_command=Path(sys.executable),
             perf_path=Path("/bin/true"),
@@ -541,7 +542,8 @@ def test_deployed_mode_detection_reuses_strict_policy_validation(
     config.write_text("[collector]\n", encoding="utf-8")
     calls: list[tuple[str, object]] = []
 
-    def fake_load(path: Path, *, stage: str) -> object:
+    def fake_load(path: Path, *, stage: str, require_root_owner: bool) -> object:
+        assert require_root_owner is True
         calls.append((stage, path))
         return type("Source", (), {"raw_text": "[collector]\n"})()
 
@@ -577,7 +579,8 @@ def test_deployed_mode_detection_does_not_hide_unsafe_policy(
     config = tmp_path / "collector.toml"
     config.write_text("unsafe", encoding="utf-8")
 
-    def reject(_path: Path, *, stage: str) -> object:
+    def reject(_path: Path, *, stage: str, require_root_owner: bool) -> object:
+        assert require_root_owner is True
         raise PerfLensError(ErrorCode.PATH_SAFETY_VIOLATION, stage, "unsafe host policy")
 
     monkeypatch.setattr("perflens.admin.deploy.load_collector_config", reject)

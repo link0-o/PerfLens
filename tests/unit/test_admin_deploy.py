@@ -4,7 +4,9 @@ import os
 import stat
 import subprocess
 import sys
+import threading
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -18,6 +20,7 @@ from perflens.admin.deploy import (
     CollectorSystemLayout,
     deploy_collector,
     inspect_collector_spool,
+    load_collector_config,
     setup_collector,
     switch_collector_mode,
     undeploy_collector,
@@ -53,6 +56,7 @@ def _deployment_inputs(tmp_path: Path) -> tuple[Path, Path, Path, CollectorSyste
         helper_service_path=tmp_path / "system/etc/systemd/perflens-privileged-helper.service",
         helper_state_directory=tmp_path / "system/var/lib/perflens-helper",
         helper_socket_path=tmp_path / "system/run/perflens-helper/helper.sock",
+        admin_lock_path=tmp_path / "perflens-admin.lock",
     )
     config = tmp_path / "collector.toml"
     config.write_text(
@@ -100,6 +104,94 @@ def _configure_switchable_policy(config: Path) -> None:
         .replace("min_free_bytes = 1073741824", "min_free_bytes = 2147483648"),
         encoding="utf-8",
     )
+
+
+def test_admin_mutation_lock_serializes_lifecycle_transactions(tmp_path: Path) -> None:
+    _config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_attempted = threading.Event()
+    second_entered = threading.Event()
+    failures: list[BaseException] = []
+
+    def first_transaction() -> None:
+        try:
+            with admin_deploy._collector_admin_lock(  # pyright: ignore[reportPrivateUsage]
+                layout,
+                stage="test",
+                require_root_owner=False,
+            ):
+                first_entered.set()
+                assert release_first.wait(timeout=2)
+        except BaseException as exc:
+            failures.append(exc)
+
+    def second_transaction() -> None:
+        try:
+            second_attempted.set()
+            with admin_deploy._collector_admin_lock(  # pyright: ignore[reportPrivateUsage]
+                layout,
+                stage="test",
+                require_root_owner=False,
+            ):
+                second_entered.set()
+        except BaseException as exc:
+            failures.append(exc)
+
+    first = threading.Thread(target=first_transaction)
+    second = threading.Thread(target=second_transaction)
+    first.start()
+    assert first_entered.wait(timeout=2)
+    second.start()
+    assert second_attempted.wait(timeout=2)
+    assert not second_entered.wait(timeout=0.05)
+    release_first.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert failures == []
+    assert second_entered.is_set()
+    assert stat.S_IMODE(layout.admin_lock_path.stat().st_mode) == 0o600
+
+
+def test_admin_mutation_lock_rejects_relative_and_permissive_paths(tmp_path: Path) -> None:
+    _config, _perf, _collector, layout = _deployment_inputs(tmp_path)
+    relative_layout = replace(layout, admin_lock_path=Path("relative.lock"))
+
+    with (
+        pytest.raises(PerfLensError, match="lock path is unsafe"),
+        admin_deploy._collector_admin_lock(  # pyright: ignore[reportPrivateUsage]
+            relative_layout,
+            stage="test",
+            require_root_owner=False,
+        ),
+    ):
+        raise AssertionError("unsafe lock was acquired")
+
+    layout.admin_lock_path.write_text("", encoding="utf-8")
+    layout.admin_lock_path.chmod(0o644)
+    with (
+        pytest.raises(PerfLensError, match="unsafe ownership or permissions"),
+        admin_deploy._collector_admin_lock(  # pyright: ignore[reportPrivateUsage]
+            layout,
+            stage="test",
+            require_root_owner=False,
+        ),
+    ):
+        raise AssertionError("permissive lock was acquired")
+
+
+def test_fixed_deployed_config_can_require_exact_root_ownership(tmp_path: Path) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("This denial path requires an ordinary test user")
+    config, _perf, _collector, _layout = _deployment_inputs(tmp_path)
+
+    with pytest.raises(PerfLensError, match="trusted owner") as rejected:
+        load_collector_config(config, require_root_owner=True)
+
+    assert rejected.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 
 def test_admin_cli_help_is_chinese_first_and_keeps_stable_commands() -> None:
@@ -283,8 +375,14 @@ def test_admin_setup_cli_confirms_helper_and_renders_full_result(
         collector_command="/usr/bin/perflens-collector",
         allowed_uids=(1000,),
         planned_commands=(("/usr/bin/systemctl", "daemon-reload"),),
-        warnings=("bounded warning",),
-        next_steps=("run acceptance",),
+        warnings=(
+            "Host perf/kernel policy is not changed; a real collection can still be blocked.",
+            "The Rust Helper runs in a root service bounded to CAP_PERFMON, CAP_SYS_ADMIN, and "
+            "CAP_SYS_PTRACE; this is a larger host-security boundary.",
+        ),
+        next_steps=(
+            "Run perflens accept-collector --authorize-host-acceptance as an ordinary user.",
+        ),
     )
 
     def fake_setup(mode: str, **kwargs: object) -> CollectorSetupArtifact:
@@ -298,8 +396,10 @@ def test_admin_setup_cli_confirms_helper_and_renders_full_result(
     assert result.exit_code == 0, result.output
     assert "选择的权限模式: paranoid3_helper" in result.output
     assert "/usr/bin/systemctl daemon-reload" in result.output
-    assert "bounded warning" in result.output
-    assert "run acceptance" in result.output
+    assert "PerfLens 未修改主机 perf/内核策略" in result.output
+    assert "Rust Helper 以 root 服务运行" in result.output
+    assert "以普通用户运行 perflens accept-collector" in result.output
+    assert "The Rust Helper runs" not in result.output
 
 
 def test_admin_setup_cli_dry_run_renders_exact_helper_command_and_json(
@@ -362,8 +462,8 @@ def test_admin_switch_mode_cli_renders_dry_run_and_json(
         service_update_required=True,
         helper_service_update_required=True,
         planned_commands=(("/usr/bin/systemctl", "daemon-reload"),),
-        warnings=("spools preserved",),
-        next_steps=("update projects",),
+        warnings=("Both Collector spool directories and all retained evidence are preserved.",),
+        next_steps=("Run perflens init --update inside every previously initialized project.",),
     )
 
     def fake_switch(_mode: str, **_kwargs: object) -> CollectorModeSwitchArtifact:
@@ -381,7 +481,9 @@ def test_admin_switch_mode_cli_renders_dry_run_and_json(
     assert "当前模式: cap_perfmon" in summary.output
     assert "证据目录: 保留" in summary.output
     assert "--acknowledge-privileged-helper-risk" in summary.output
-    assert "spools preserved" in summary.output
+    assert "两个 Collector 证据目录及其中已有证据都会保留" in summary.output
+    assert "在每个已初始化项目中运行 perflens init --update" in summary.output
+    assert "Both Collector spool" not in summary.output
     assert machine.exit_code == 0, machine.output
     assert '"target_mode": "paranoid3_helper"' in machine.output
 
@@ -500,7 +602,7 @@ def test_admin_switch_mode_rolls_back_policy_and_units_after_health_failure(
         if checks == 1:
             raise PerfLensError(ErrorCode.EXTERNAL_TOOL_FAILED, "test", "health failed")
 
-    with pytest.raises(PerfLensError, match="health failed"):
+    with pytest.raises(PerfLensError, match="health failed") as failed:
         switch_collector_mode(
             "paranoid3_helper",
             config_path=layout.config_path,
@@ -514,6 +616,7 @@ def test_admin_switch_mode_rolls_back_policy_and_units_after_health_failure(
             acknowledge_privileged_helper_risk=True,
         )
 
+    assert failed.value.details["rollback_performed"] is True
     assert checks == 2
     assert layout.config_path.read_bytes() == policy_before
     assert layout.service_path.read_bytes() == service_before
@@ -595,6 +698,111 @@ def test_admin_switch_same_mode_skips_host_policy_and_reports_unit_drift(
     assert "perflens-admin upgrade" in " ".join(unchanged.next_steps)
 
 
+def test_admin_switch_same_cap_mode_removes_stale_managed_helper(tmp_path: Path) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+    layout.helper_service_path.write_text(
+        "# Managed by PerfLens.\n[Unit]\nDescription=stale helper\n",
+        encoding="utf-8",
+    )
+    layout.helper_service_path.chmod(0o644)
+
+    preview = switch_collector_mode(
+        "cap_perfmon",
+        config_path=layout.config_path,
+        dry_run=True,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+    )
+
+    assert preview.status == "dry_run"
+    assert preview.helper_service_update_required is True
+    assert preview.planned_commands[1][-1] == "perflens-privileged-helper.service"
+
+    commands: list[tuple[str, ...]] = []
+    repaired = switch_collector_mode(
+        "cap_perfmon",
+        config_path=layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=commands.append,
+        socket_waiter=lambda _path: None,
+    )
+
+    assert repaired.status == "repaired"
+    assert not layout.helper_service_path.exists()
+    assert (
+        "/usr/bin/systemctl",
+        "disable",
+        "--now",
+        "perflens-privileged-helper.service",
+    ) in commands
+
+
+def test_admin_switch_to_helper_stops_stale_helper_before_replacement(tmp_path: Path) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_switchable_policy(config)
+    identity = (os.geteuid(), os.getegid())
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+    )
+    layout.helper_service_path.write_text(
+        "# Managed by PerfLens.\n[Unit]\nDescription=stale helper\n",
+        encoding="utf-8",
+    )
+    layout.helper_service_path.chmod(0o644)
+    commands: list[tuple[str, ...]] = []
+
+    switched = switch_collector_mode(
+        "paranoid3_helper",
+        config_path=layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=commands.append,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        perf_event_paranoid=3,
+        acknowledge_privileged_helper_risk=True,
+    )
+
+    helper_stop = commands.index(
+        (
+            "/usr/bin/systemctl",
+            "disable",
+            "--now",
+            "perflens-privileged-helper.service",
+        )
+    )
+    helper_start = commands.index(
+        (
+            "/usr/bin/systemctl",
+            "enable",
+            "--now",
+            "perflens-privileged-helper.service",
+        )
+    )
+    assert switched.status == "switched"
+    assert helper_stop < helper_start
+    assert "CapabilityBoundingSet=" in layout.helper_service_path.read_text(encoding="utf-8")
+
+
 def test_admin_switch_from_helper_to_cap_rolls_back_removed_helper(
     tmp_path: Path,
 ) -> None:
@@ -622,7 +830,7 @@ def test_admin_switch_from_helper_to_cap_rolls_back_removed_helper(
         if checks == 1:
             raise PerfLensError(ErrorCode.EXTERNAL_TOOL_FAILED, "test", "health failed")
 
-    with pytest.raises(PerfLensError, match="health failed"):
+    with pytest.raises(PerfLensError, match="health failed") as failed:
         switch_collector_mode(
             "cap_perfmon",
             config_path=layout.config_path,
@@ -635,6 +843,7 @@ def test_admin_switch_from_helper_to_cap_rolls_back_removed_helper(
             perf_event_paranoid=2,
         )
 
+    assert failed.value.details["rollback_performed"] is True
     assert checks == 2
     assert layout.config_path.read_bytes() == policy_before
     assert layout.service_path.read_bytes() == service_before
@@ -1128,6 +1337,107 @@ def test_admin_upgrade_dry_run_and_restart_preserve_policy_and_data(
     ]
     assert sockets == [layout.socket_path]
     assert service_uids == [os.geteuid()]
+
+
+def test_admin_upgrade_removes_stale_helper_from_cap_perfmon_deployment(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+    layout.helper_service_path.write_text(
+        "# Managed by PerfLens.\n[Unit]\nDescription=stale helper\n",
+        encoding="utf-8",
+    )
+    layout.helper_service_path.chmod(0o644)
+
+    preview = upgrade_collector(
+        layout.config_path,
+        dry_run=True,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+    )
+
+    assert preview.helper_service_update_required is True
+    assert preview.previous_helper_service_sha256 is not None
+    assert preview.candidate_helper_service_sha256 is None
+
+    commands: list[tuple[str, ...]] = []
+    upgraded = upgrade_collector(
+        layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=commands.append,
+        socket_waiter=lambda _path: None,
+    )
+
+    assert upgraded.status == "upgraded"
+    assert upgraded.helper_service_updated is True
+    assert not layout.helper_service_path.exists()
+    assert commands[0] == (
+        "/usr/bin/systemctl",
+        "disable",
+        "--now",
+        "perflens-privileged-helper.service",
+    )
+
+
+def test_admin_upgrade_restores_stale_helper_if_repair_activation_fails(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+    stale_helper = b"# Managed by PerfLens.\n[Unit]\nDescription=stale helper\n"
+    layout.helper_service_path.write_bytes(stale_helper)
+    layout.helper_service_path.chmod(0o644)
+    failed_once = False
+    commands: list[tuple[str, ...]] = []
+
+    def fail_first_broker_restart(command: tuple[str, ...]) -> None:
+        nonlocal failed_once
+        commands.append(command)
+        if command[-1] == "perflens-collector.service" and not failed_once:
+            failed_once = True
+            raise PerfLensError(ErrorCode.EXTERNAL_TOOL_FAILED, "test", "restart failed")
+
+    with pytest.raises(PerfLensError, match="restart failed"):
+        upgrade_collector(
+            layout.config_path,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+            command_executor=fail_first_broker_restart,
+            socket_waiter=lambda _path: None,
+        )
+
+    assert layout.helper_service_path.read_bytes() == stale_helper
+    assert (
+        "/usr/bin/systemctl",
+        "disable",
+        "--now",
+        "perflens-privileged-helper.service",
+    ) in commands
+    assert not any(
+        command[1:3] == ("enable", "--now") and command[-1] == "perflens-privileged-helper.service"
+        for command in commands
+    )
 
 
 def test_admin_upgrade_replaces_only_managed_unit_and_cli_is_versioned(
@@ -1876,6 +2186,7 @@ def test_admin_undeploy_cli_emits_versioned_result(
         helper_service_path=tmp_path / "systemd/perflens-privileged-helper.service",
         helper_state_directory=tmp_path / "var/lib/perflens-helper",
         helper_socket_path=tmp_path / "run/perflens-helper/helper.sock",
+        admin_lock_path=tmp_path / "perflens-admin.lock",
     )
     artifact = undeploy_collector(layout=layout, require_root=False)
 
