@@ -105,7 +105,20 @@ ordinary-user coordinator creates the process, captures its identity, submits
 the PID-only plan, and then releases the same process to execute. The privileged
 Collector never receives or launches the workload command. Interactive,
 setuid/setgid, shell, arbitrary-environment, and system-wide workloads are not
-supported; daemonizing programs should expose a foreground mode.
+supported; daemonizing programs should expose a foreground mode. The user does
+not memorize the fixed token: after exact confirmation, the Agent supplies
+`I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION`. A denied call must not be replaced
+with shell/direct-perf/existing-PID execution. Callgrind, parameter sweeps,
+changed arguments, and other additional executions require separate explicit
+authorization.
+
+Local capability inspection describes the ordinary MCP process, not the
+independent Collector. Under `perf_event_paranoid=3`, local access can be
+blocked while Broker collection succeeds. Treat the executed Collection's
+actual source and fallback reason as authoritative. Older software record
+artifacts without sample CPU identity are read through a narrowly matched
+compatibility path and marked `MISSING_SAMPLE_CPU`; per-CPU analysis is not
+available for those files.
 
 See [Product deployment](deployment.md) for configurable asset rendering, the
 no-PID `accept-collector` host probe, advanced existing-PID verification,

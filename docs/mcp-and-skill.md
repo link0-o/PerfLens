@@ -153,7 +153,15 @@ with `--automatic-collection`, the user may ask to optimize the current project
 without supplying a PID. The Skill must first confirm one exact in-project
 executable, arguments, representative workload, and per-call authorization.
 `collect_project_workload` then launches it as the ordinary MCP user, obtains
-the new PID internally, and gives the Collector only a PID-bound plan.
+the new PID internally, and gives the Collector only a PID-bound plan. The user
+does not need to memorize the internal token. After exact confirmation, the
+Agent supplies the complete fixed `authorization` value
+`I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION`; a boolean, empty value, or
+natural-language paraphrase is invalid. If the call is rejected, only correct
+the argument and retry the same tool inside the confirmed scope. Do not switch
+to a shell/background launch, `timeout`, direct perf, or existing-PID attach.
+Callgrind, parameter sweeps, changed arguments, and other extra executions need
+their own explicit authorization.
 
 ## Tool permissions
 
@@ -191,6 +199,14 @@ surface the returned actual source, fallback reason, and limitations. Continue
 with software CPU-time/scheduling/page-fault or `cpu-clock` hotspot evidence,
 but do not infer IPC, hardware cache, branch, or other microarchitectural facts.
 Matched A/B runs require the same actual source.
+
+`inspect_collection_capabilities` diagnoses local perf access for the ordinary
+MCP process. A `blocked` result under `perf_event_paranoid=3` does not establish
+that the separate Collector is blocked. For an executed collection, the
+Collection's `actual_event_source`, `fallback_used`, and `fallback_reason` are
+the authoritative provenance. When an older software recording lacks the
+sample CPU attribute, the analyzer retries only the exact known conversion
+failure and emits `MISSING_SAMPLE_CPU`; per-CPU analysis is then unavailable.
 
 For a confirmed current-project workload, use `collect_project_workload`, then
 analyze its Collection artifact and perform matched baseline/candidate runs.

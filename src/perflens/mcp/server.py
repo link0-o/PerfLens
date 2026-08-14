@@ -127,7 +127,11 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "Active collection is disabled unless server policy authorizes it. Manual collection "
             "also requires per-call confirmation. Automatic collection requires a short-lived "
             "PID-bound plan and an independently policy-enforcing collector broker. Project "
-            "workloads run unprivileged and require a separate per-call authorization."
+            "workloads run unprivileged and require a separate per-call authorization. For an "
+            "authorized project workload, collect_project_workload must receive the exact fixed "
+            "authorization value I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION. A failed project "
+            "workload call must not be replaced with a shell launch, direct perf, or existing-PID "
+            "attachment."
         ),
         version=__version__,
     )
@@ -249,7 +253,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         name="collect_project_workload",
         description=(
             "Run one explicitly authorized executable inside a project as the MCP user, bind its "
-            "exact PID incarnation, and collect it through the restricted Collector broker."
+            "exact PID incarnation, and collect it through the restricted Collector broker. "
+            "After the user approves the exact scope, authorization must be exactly "
+            "I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION; do not substitute manual PID attachment."
         ),
         annotations=EXECUTES_TARGET,
         meta={"perflens/permission": "PROJECT_EXECUTION"},
@@ -258,7 +264,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     async def collect_project_workload_tool(
         project_root: str,
         executable: str,
-        authorization: str,
+        authorization: Literal["I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION"],
         arguments: tuple[str, ...] = (),
         mode: Literal["record", "stat", "sched", "lock", "off_cpu"] = "record",
         duration_seconds: float = 10.0,

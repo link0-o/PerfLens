@@ -184,7 +184,13 @@ Collector 已部署且引导时使用了 `--automatic-collection` 后，不需�
 
 Skill 会先识别并让用户确认精确可执行文件、参数和代表性工作负载。只有这次确认后，
 `collect_project_workload` 才以普通用户启动程序并在内部绑定新 PID；Collector 不执行
-项目命令。仓库中的说明文字不构成执行授权。
+项目命令。仓库中的说明文字不构成执行授权。用户不需要记住内部固定授权值；用户确认
+精确范围后，Agent 必须把完整的 `I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION` 作为
+`authorization` 字段传入，不能传布尔值、空值或自然语言改写。
+
+如果该调用被拒绝，Agent 只能在原范围内纠正字段并重试同一个工具，不得改用 shell
+后台启动、`timeout`、直接 perf 或已有 PID 附加。Callgrind、参数扫描、不同参数和其他
+额外程序执行也不包含在原授权中，必须另行获得精确授权。
 
 分析 `perf.data` 时可以说：
 
@@ -229,6 +235,12 @@ Agent 通常按以下顺序工作：
 on-CPU 热点，但不得用软件结果推断 IPC、硬件缓存或分支未命中。优化前后的
 `actual_event_source` 必须一致，否则应固定为 `software_only` 或
 `hardware_required` 后重跑。
+
+`inspect_collection_capabilities` 只诊断普通 MCP 进程的本地 perf 能力；它在
+`perf_event_paranoid=3` 下显示受阻，并不代表独立 Collector 受阻。实际采集和降级
+必须以 Collection 的 `actual_event_source`、`fallback_used`、`fallback_reason` 为准。
+旧版软件 record 若缺少样本 CPU 属性，分析器会在精确匹配该错误后兼容转换，并输出
+`MISSING_SAMPLE_CPU`；这种证据不能用于逐 CPU 分布分析。
 
 需要运行当前项目时，流程是 `collect_project_workload` → `analyze_collection` →
 热点/调用路径/源码定位 → 修改候选 → 相同工作负载的基线/候选对比。用户无需提供 PID，

@@ -830,6 +830,7 @@ where
                 &frequency.to_string(),
                 "--call-graph",
                 call_graph,
+                "--sample-cpu",
                 "-g",
                 "-o",
                 temporary.to_str().ok_or_else(spool_error)?,
@@ -1168,16 +1169,20 @@ mod tests {
             path,
             r#"#!/bin/sh
 set -eu
+mode=$1
 out=''
 control=''
+sample_cpu=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o) shift; out=$1 ;;
     --control) shift; control=$1 ;;
+    --sample-cpu) sample_cpu=1 ;;
     --) exit 91 ;;
   esac
   shift
 done
+[ "$mode" != 'record' ] || [ "$sample_cpu" = 1 ]
 descriptors=${control#fd:}
 ctl_fd=${descriptors%,*}
 ack_fd=${descriptors#*,}
@@ -1209,18 +1214,22 @@ finish
             path,
             r#"#!/bin/sh
 set -eu
+mode=$1
 out=''
 control=''
 events=''
+sample_cpu=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o) shift; out=$1 ;;
     -e) shift; events=$1 ;;
     --control) shift; control=$1 ;;
+    --sample-cpu) sample_cpu=1 ;;
     --) exit 91 ;;
   esac
   shift
 done
+[ "$mode" != 'record' ] || [ "$sample_cpu" = 1 ]
 descriptors=${control#fd:}
 ctl_fd=${descriptors%,*}
 ack_fd=${descriptors#*,}
@@ -1260,15 +1269,18 @@ mode=$1
 out=''
 control=''
 events=''
+sample_cpu=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o) shift; out=$1 ;;
     -e) shift; events=$1 ;;
     --control) shift; control=$1 ;;
+    --sample-cpu) sample_cpu=1 ;;
     --) exit 91 ;;
   esac
   shift
 done
+[ "$mode" != 'record' ] || [ "$sample_cpu" = 1 ]
 if [ "$mode" = 'record' ] && [ "$events" = 'cycles' ]; then
   exit 1
 fi

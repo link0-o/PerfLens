@@ -22,6 +22,7 @@ from perflens.domain.ports import ProfileSource
 from perflens.stacks.normalize import normalize_symbol
 
 PERF_SCRIPT_FIELDS = "comm,pid,tid,cpu,time,event,period,ip,sym,dso,srcline"
+PERF_SCRIPT_FIELDS_WITHOUT_CPU = "comm,pid,tid,time,event,period,ip,sym,dso,srcline"
 PERF_WEIGHT_UNIT = "event_count"
 PERF_WEIGHT_SOURCE = "perf_period"
 
@@ -40,6 +41,21 @@ _HEADER_LEGACY = re.compile(
     r"\[(?P<cpu>\d+)\]\s+(?P<time>\d+(?:\.\d+)?):\s+"
     r"(?:(?P<period>\d+)\s+)?(?P<event>\S+):(?:\s+(?P<tail>.*))?$"
 )
+_HEADER_SLASH_WITHOUT_CPU = re.compile(
+    r"^(?P<comm>.*?)\s+(?P<pid>\d+)/(?P<tid>\d+)\s+"
+    r"(?P<time>\d+(?:\.\d+)?):\s+"
+    r"(?:(?P<period>\d+)\s+)?(?P<event>\S+):(?:\s+(?P<tail>.*))?$"
+)
+_HEADER_SPLIT_WITHOUT_CPU = re.compile(
+    r"^(?P<comm>.*?)\s+(?P<pid>\d+)\s+(?P<tid>\d+)\s+"
+    r"(?P<time>\d+(?:\.\d+)?):\s+"
+    r"(?:(?P<period>\d+)\s+)?(?P<event>\S+):(?:\s+(?P<tail>.*))?$"
+)
+_HEADER_LEGACY_WITHOUT_CPU = re.compile(
+    r"^(?P<comm>.*?)\s+(?P<pid>\d+)\s+"
+    r"(?P<time>\d+(?:\.\d+)?):\s+"
+    r"(?:(?P<period>\d+)\s+)?(?P<event>\S+):(?:\s+(?P<tail>.*))?$"
+)
 _FRAME = re.compile(r"^(?P<ip>(?:0x)?[0-9a-fA-F]+)\s+(?P<body>.+)$")
 _FRAME_BODY = re.compile(r"^(?P<symbol>.*?)\s+\((?P<dso>[^()]*)\)(?:\s+(?P<source>.*))?$")
 _SOURCE = re.compile(r"^(?P<file>.*):(?P<line>\d+)(?::(?P<column>\d+))?$")
@@ -50,7 +66,7 @@ class _Header:
     command: str
     process_id: int
     thread_id: int
-    cpu: int
+    cpu: int | None
     timestamp: float
     event: str
     weight: int
@@ -210,7 +226,14 @@ class PerfScriptStream:
             )
 
     def _parse_header(self, line: str) -> tuple[_Header, str] | None:
-        match = _HEADER_SLASH.match(line) or _HEADER_SPLIT.match(line) or _HEADER_LEGACY.match(line)
+        match = (
+            _HEADER_SLASH.match(line)
+            or _HEADER_SPLIT.match(line)
+            or _HEADER_LEGACY.match(line)
+            or _HEADER_SLASH_WITHOUT_CPU.match(line)
+            or _HEADER_SPLIT_WITHOUT_CPU.match(line)
+            or _HEADER_LEGACY_WITHOUT_CPU.match(line)
+        )
         if match is None:
             return None
         fields = match.groupdict()
@@ -219,11 +242,12 @@ class PerfScriptStream:
         weight_source = PERF_WEIGHT_SOURCE if period_text is not None else "sample_count_fallback"
         process_id = int(fields["pid"])
         thread_text = fields.get("tid")
+        cpu_text = fields.get("cpu")
         header = _Header(
             command=fields["comm"].strip() or UNKNOWN,
             process_id=process_id,
             thread_id=int(thread_text) if thread_text is not None else process_id,
-            cpu=int(fields["cpu"]),
+            cpu=int(cpu_text) if cpu_text is not None else None,
             timestamp=float(fields["time"]),
             event=fields["event"],
             weight=weight,

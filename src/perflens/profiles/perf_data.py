@@ -10,10 +10,20 @@ from types import TracebackType
 from typing import Self
 
 from perflens.domain.errors import ErrorCode, PerfLensError
-from perflens.domain.models import FrameTable, ParseDiagnostics, ResourceLimits, StackSample
+from perflens.domain.models import (
+    FrameTable,
+    ParseDiagnostics,
+    ParseWarning,
+    ResourceLimits,
+    StackSample,
+)
 from perflens.domain.ports import ProfileSource
 from perflens.integrations.commands.runner import CommandLimits, CommandRunner
-from perflens.profiles.perf_script import PERF_SCRIPT_FIELDS, PerfScriptStream
+from perflens.profiles.perf_script import (
+    PERF_SCRIPT_FIELDS,
+    PERF_SCRIPT_FIELDS_WITHOUT_CPU,
+    PerfScriptStream,
+)
 
 
 class PerfDataAdapter:
@@ -61,6 +71,7 @@ class PerfDataStream:
         "_path",
         "_perf_path",
         "_runner",
+        "_sample_cpu_missing",
         "_script_stream",
         "_temporary_directory",
         "_timeout_seconds",
@@ -80,6 +91,7 @@ class PerfDataStream:
         self._perf_path = perf_path
         self._runner = runner
         self._timeout_seconds = timeout_seconds
+        self._sample_cpu_missing = False
         self._temporary_directory: tempfile.TemporaryDirectory[str] | None = None
         self._script_stream: PerfScriptStream | None = None
 
@@ -109,29 +121,61 @@ class PerfDataStream:
         self._temporary_directory = tempfile.TemporaryDirectory(prefix="perflens-perf-script-")
         text_path = Path(self._temporary_directory.name) / "profile.perf-script"
         try:
-            with text_path.open("xb") as output:
-                self._runner.run_to_file(
-                    (
-                        str(self._perf_path),
-                        "script",
-                        "--ns",
-                        "-F",
-                        PERF_SCRIPT_FIELDS,
-                        "-i",
-                        str(safe_input),
-                    ),
-                    output,
-                    limits=CommandLimits(
-                        timeout_seconds=self._timeout_seconds,
-                        max_stdout_bytes=self._limits.max_input_bytes,
-                    ),
+            try:
+                self._run_perf_script(safe_input, text_path, PERF_SCRIPT_FIELDS, exclusive=True)
+            except PerfLensError as exc:
+                if not _is_missing_sample_cpu_error(exc):
+                    raise
+                self._sample_cpu_missing = True
+                self._run_perf_script(
+                    safe_input,
+                    text_path,
+                    PERF_SCRIPT_FIELDS_WITHOUT_CPU,
+                    exclusive=False,
                 )
             self._script_stream = PerfScriptStream(text_path, self._limits)
             self._script_stream.__enter__()
+            if self._sample_cpu_missing:
+                self._script_stream.diagnostics().add_warning(
+                    ParseWarning(
+                        code="MISSING_SAMPLE_CPU",
+                        message=(
+                            "perf.data has no sample CPU attribute; analysis continued without "
+                            "per-sample CPU identity."
+                        ),
+                    )
+                )
             return self
         except BaseException:
             self._cleanup()
             raise
+
+    def _run_perf_script(
+        self,
+        safe_input: Path,
+        text_path: Path,
+        fields: str,
+        *,
+        exclusive: bool,
+    ) -> None:
+        mode = "xb" if exclusive else "wb"
+        with text_path.open(mode) as output:
+            self._runner.run_to_file(
+                (
+                    str(self._perf_path),
+                    "script",
+                    "--ns",
+                    "-F",
+                    fields,
+                    "-i",
+                    str(safe_input),
+                ),
+                output,
+                limits=CommandLimits(
+                    timeout_seconds=self._timeout_seconds,
+                    max_stdout_bytes=self._limits.max_input_bytes,
+                ),
+            )
 
     def __iter__(self) -> Iterator[StackSample]:
         if self._script_stream is None:
@@ -171,3 +215,14 @@ def _find_perf() -> Path:
             suggested_actions=("Install Linux perf or pass an explicit --perf-path.",),
         )
     return Path(discovered)
+
+
+def _is_missing_sample_cpu_error(error: PerfLensError) -> bool:
+    if error.code is not ErrorCode.EXTERNAL_TOOL_FAILED:
+        return False
+    stderr = error.details.get("stderr")
+    return (
+        isinstance(stderr, str)
+        and "do not have CPU attribute set" in stderr
+        and "Cannot print 'cpu' field" in stderr
+    )

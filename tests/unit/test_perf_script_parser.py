@@ -48,6 +48,19 @@ def test_marks_kernel_frames_and_period_fallback(fixture_root: Path) -> None:
     assert samples[2].weight_source == "perf_period"
 
 
+def test_parses_perf_script_without_sample_cpu_identity(fixture_root: Path) -> None:
+    with _open(fixture_root / "perf_script" / "missing-cpu.perf-script") as stream:
+        samples = list(stream)
+        frames = [stream.frame_table.resolve(frame_id) for frame_id in samples[0].frames]
+
+    assert len(samples) == 1
+    assert samples[0].cpu is None
+    assert samples[0].process_id == 101
+    assert samples[0].thread_id == 102
+    assert samples[0].event == "cpu-clock"
+    assert [frame.symbol for frame in frames] == ["main", "worker_loop", "leaf"]
+
+
 def test_unknown_and_malformed_input_has_bounded_diagnostics(fixture_root: Path) -> None:
     limits = ResourceLimits(max_warnings=2)
     with _open(

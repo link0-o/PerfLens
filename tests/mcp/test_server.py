@@ -78,6 +78,10 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["collect_project_workload"].meta == {
                 "perflens/permission": "PROJECT_EXECUTION"
             }
+            project_authorization = tools["collect_project_workload"].input_schema["properties"][
+                "authorization"
+            ]
+            assert project_authorization["const"] == "I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION"
             assert tools["analyze_collection"].meta == {"perflens/permission": "PROCESS_EXECUTION"}
 
     asyncio.run(exercise())

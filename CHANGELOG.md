@@ -11,6 +11,15 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
+- The privileged Helper now records per-sample CPU identity for both hardware and software
+  `record` plans. The perf-data adapter also preserves older affected `v0.2.0` evidence by
+  retrying only the exact missing-CPU conversion error without that field and emitting a
+  `MISSING_SAMPLE_CPU` limitation instead of failing the entire analysis.
+- Project-workload MCP authorization is now a single-value typed Schema instead of an arbitrary
+  string. Server guidance, typed error recovery, and the bundled Skill require retrying the same
+  authorized workload with the exact token and prohibit substituting shell/direct-perf/existing-PID
+  execution. Documentation now distinguishes local MCP capability diagnostics, authoritative
+  Collector fallback provenance, and Callgrind instruction-reference percentages.
 - The opt-in `paranoid3_helper` unit now includes `CAP_SYS_PTRACE` in its strict capability
   ceiling so `perf record` can synthesize mappings for the already-authorized PID. Fresh deploys
   require `--acknowledge-privileged-helper-risk`; upgrades detect and report capability expansion

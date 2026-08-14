@@ -5,6 +5,55 @@
 This document records reproduced issues and their bounded workarounds, including
 resolved issues. Do not weaken deployment safety checks to work around them.
 
+## KI-2026-08-12: software record succeeded but analysis required a missing CPU field (resolved)
+
+- Confirmed affected scope: `cpu-clock` perf.data created after software fallback by withdrawn
+  same-version `v0.2.0` `paranoid3_helper` packages. The fix covers both software and hardware
+  record commands; text profiles were not affected.
+- Symptom: the Collection reported a successful, multi-megabyte record artifact, but
+  `analyze_collection` returned `EXTERNAL_TOOL_FAILED`. The underlying `perf script` said that
+  samples did not have the CPU attribute set and that it could not print the `cpu` field.
+- Cause: the Helper's fixed record command omitted `--sample-cpu`, while the PerfLens perf-script
+  adapter requested a per-sample CPU field.
+- New-recording fix: both hardware and software record commands now include fixed
+  `--sample-cpu`. Every perf argument is still derived from the typed plan; arbitrary perf options
+  are not exposed.
+- Existing-artifact compatibility: only after matching that exact perf error, the analyzer retries
+  without the CPU field and emits `MISSING_SAMPLE_CPU`. Hotspots, call paths, and source attribution
+  remain available, but per-CPU distribution does not. Unrelated perf-script errors remain visible.
+
+This was a mismatch between capture and conversion fields, not a
+`perf_event_paranoid=3` or VMware fallback failure. Replacement `v0.2.0` packages preserve CPU
+identity in new recordings; affected existing artifacts do not need to be deleted.
+
+## KI-2026-08-12: project authorization was easy to omit and an Agent escaped its scope (resolved)
+
+- Previous symptom: after the user confirmed a project workload, an Agent omitted the fixed
+  authorization value from `collect_project_workload`. The server correctly denied the call, but
+  the Agent then tried shell/background execution, direct perf, an existing-PID plan, Callgrind,
+  or parameter sweeps.
+- Boundary: one project-workload authorization covers only the confirmed executable, arguments,
+  mode, and limits. It does not authorize shell/`timeout` wrappers, direct perf, existing-PID
+  attachment, Callgrind, parameter sweeps, changed arguments, or extra correctness commands.
+  `PID attachment is disabled by server policy` is the expected result when that separate feature
+  is not enabled; it is not a Collector failure.
+- Fix: the MCP input Schema now constrains `authorization` to the sole fixed value
+  `I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION`. Server instructions, error guidance, and the Skill
+  require correcting that field inside the approved scope and retrying only the same tool. They
+  explicitly prohibit switching execution channels as a workaround.
+- Provenance: `inspect_collection_capabilities` describes the ordinary MCP process. A local
+  `blocked` result under `perf_event_paranoid=3` does not prove the independent Collector is
+  blocked and is not the fallback cause. The Collection's `actual_event_source`, `fallback_used`,
+  and `fallback_reason` are authoritative; a common VMware result is
+  `hardware_probe_produced_no_usable_counts`.
+- Reporting: Callgrind `Ir` is an instruction-reference share produced by simulation or
+  instrumentation, not a PerfLens `cpu-clock` record self-CPU percentage. Reports must name the
+  tool and unit before combining those observations as candidate evidence.
+
+The user does not need to memorize or repeat the fixed token. The Agent supplies it after the user
+explicitly approves the exact workload. If the corrected tool call still fails, preserve and report
+the error instead of widening execution scope.
+
 ## KL-2026-08-09: zero hardware-PMU counts on some VMware/hybrid hosts (automatic fallback available)
 
 Some VMware guests on Intel hybrid hosts expose PMU devices but still return

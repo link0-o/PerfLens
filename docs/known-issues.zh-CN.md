@@ -5,6 +5,48 @@
 本文记录已经复现、具有明确边界和临时处理方法的问题，包括已经修复的问题。
 不要通过降低部署器安全检查来规避问题；升级前仍可按对应版本的临时方法处理。
 
+## KI-2026-08-12：软件 record 成功，但分析报 CPU 属性缺失（已修复）
+
+- 已确认影响范围：已撤回的部分同版本 `v0.2.0` `paranoid3_helper` 包在软件降级后生成的
+  `cpu-clock` `perf.data`；修复同时覆盖软件和硬件 record，文本 Profile 不受影响；
+- 现象：Collection 显示 record 已成功并生成数 MB 证据，但随后
+  `analyze_collection` 返回 `EXTERNAL_TOOL_FAILED`。底层 `perf script` 提示
+  `Samples ... do not have CPU attribute set` 和 `Cannot print 'cpu' field`；
+- 根因：Helper 的固定 `perf record` 参数没有加入 `--sample-cpu`，而 PerfLens 的
+  `perf script` 适配器要求输出每条样本的 CPU 字段；
+- 新采集修复：Helper 现在对硬件和软件 record 都固定加入 `--sample-cpu`；参数仍完全
+  由类型化计划生成，未开放任意 perf 参数；
+- 旧证据兼容：分析器只在识别到上述精确错误时，自动去掉 `cpu` 字段重试，并写入
+  `MISSING_SAMPLE_CPU` 警告。旧文件仍可用于热点、调用路径和源码归因，但不能做逐 CPU
+  分布分析；其他 `perf script` 失败不会被吞掉。
+
+这是采集参数与转换字段不一致，不是 `perf_event_paranoid=3` 或 VMware PMU 自动降级
+失败。替换同版本 `v0.2.0` 包后，新采集会保留 CPU 身份；已经生成的受影响文件无需删除。
+
+## KI-2026-08-12：项目负载授权易漏传，Agent 失败后越过原授权范围（已修复）
+
+- 原现象：用户已经确认当前项目工作负载，但 Agent 调用 `collect_project_workload` 时
+  漏传固定授权值，服务端正确返回 `Project execution requires explicit per-call
+  authorization`；随后 Agent 错误地改用 shell 后台启动、直接 `perf`、已有 PID 计划、
+  Callgrind 或参数扫描；
+- 安全边界：一次项目负载授权只覆盖已确认的可执行文件、参数、模式和上限。它不授权
+  shell/`timeout` 包装器、直接 perf、已有 PID 附加、Callgrind、参数扫描、不同参数或
+  额外正确性命令。`PID attachment is disabled by server policy` 在没有显式开启已有 PID
+  附加时是预期拒绝，不是 Collector 故障；
+- 修复：MCP 输入 Schema 把 `authorization` 收紧为唯一固定值
+  `I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION`；服务说明、错误下一步和 Skill 都要求在
+  已授权范围内纠正该字段并只重试同一个工具，不允许换执行通道绕过；
+- 证据归属：`inspect_collection_capabilities` 描述普通 MCP 进程的本地能力。在
+  `perf_event_paranoid=3` 下显示 `blocked`，不等于独立 Collector 也受阻，也不是实际
+  软件降级原因。Collector 返回的 `actual_event_source`、`fallback_used` 和
+  `fallback_reason` 才是本次采集来源；例如 VMware 上常见的准确原因是
+  `hardware_probe_produced_no_usable_counts`；
+- 报告口径：Callgrind 的 `Ir` 是模拟/插桩得到的指令引用占比，不是 PerfLens
+  `cpu-clock` record 的 CPU self 百分比。只有明确标注工具与单位后才可共同作为候选证据。
+
+用户不需要记住或复述固定授权串；Agent 在用户明确确认精确工作负载后负责填写。若同一
+工具纠正后仍失败，应保留并报告错误，而不是自行扩大执行范围。
+
 ## KL-2026-08-09：部分 VMware/混合架构主机的硬件 PMU 返回零计数（已提供自动降级）
 
 - 现象：软件事件 `task-clock` 等可以计数，但 `cycles`、`instructions` 在持续 CPU 负载下

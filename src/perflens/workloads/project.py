@@ -199,6 +199,13 @@ def _validate_request(
             "authorization",
             "Project execution requires explicit per-call authorization",
             recoverable=True,
+            details={"required_authorization": PROJECT_EXECUTION_AUTHORIZATION},
+            suggested_actions=(
+                "After the user authorizes the exact workload, pass "
+                f"authorization={PROJECT_EXECUTION_AUTHORIZATION} to collect_project_workload.",
+                "Do not replace a denied project-workload call with a shell launch, direct perf, "
+                "or existing-PID attachment.",
+            ),
         )
     try:
         project = request.project_root.expanduser().resolve(strict=True)

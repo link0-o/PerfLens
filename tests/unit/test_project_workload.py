@@ -32,6 +32,9 @@ def test_project_workload_rejects_missing_authorization_before_launch(tmp_path: 
         )
 
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert captured.value.details["required_authorization"] == PROJECT_EXECUTION_AUTHORIZATION
+    assert PROJECT_EXECUTION_AUTHORIZATION in " ".join(captured.value.suggested_actions)
+    assert "existing-PID" in " ".join(captured.value.suggested_actions)
 
 
 def test_project_workload_rejects_executable_escape_and_argument_overflow(
