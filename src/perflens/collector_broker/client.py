@@ -9,6 +9,7 @@ import secrets
 import socket
 import stat
 import struct
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from pydantic import ValidationError
 
 from perflens.collector_broker.protocol import (
     MAX_BROKER_MESSAGE_BYTES,
+    BrokerCollectionReady,
     BrokerCollectRequest,
     BrokerHealthRequest,
     BrokerResponse,
@@ -43,15 +45,23 @@ class CollectorBrokerClient:
         self._socket_path = self._socket.path
         self._timeout_seconds = float(timeout_seconds)
 
-    def collect(self, plan: CollectionPlanArtifact) -> CollectionArtifact:
+    def collect(
+        self,
+        plan: CollectionPlanArtifact,
+        *,
+        ready_callback: Callable[[], None] | None = None,
+    ) -> CollectionArtifact:
         identity = f"{plan.plan_id}\0{plan.target_pid}\0{plan.expires_at}"
         request = BrokerCollectRequest(
             request_id=f"request-{hashlib.sha256(identity.encode()).hexdigest()[:24]}",
             plan=plan,
+            report_ready=ready_callback is not None,
         )
         response, _server_pid, server_uid = self._exchange(
             request.model_dump_json().encode("utf-8") + b"\n",
             expected_request_id=request.request_id,
+            expected_ready=(plan.plan_id, plan.target_pid) if ready_callback is not None else None,
+            ready_callback=ready_callback,
         )
         if not response.ok:
             _raise_rejected_response(response, request.request_id)
@@ -135,6 +145,8 @@ class CollectorBrokerClient:
         payload: bytes,
         *,
         expected_request_id: str,
+        expected_ready: tuple[str, int] | None = None,
+        ready_callback: Callable[[], None] | None = None,
     ) -> tuple[BrokerResponse, int, int]:
         if len(payload) > MAX_BROKER_MESSAGE_BYTES:
             raise PerfLensError(
@@ -156,7 +168,34 @@ class CollectorBrokerClient:
                 server_pid, server_uid, _server_gid = _PEER_CREDENTIALS.unpack(credentials)
                 _validate_connected_peer(self._socket, server_pid, server_uid)
                 connection.sendall(payload)
-                line = _read_response_frame(connection)
+                response_buffer = bytearray()
+                line = _read_response_frame(connection, response_buffer)
+                response = _parse_response(line, expected_request_id)
+                if expected_ready is not None and response.ok:
+                    try:
+                        ready = BrokerCollectionReady.model_validate(response.result)
+                    except ValidationError as exc:
+                        raise PerfLensError(
+                            ErrorCode.PATH_SAFETY_VIOLATION,
+                            "collector_broker",
+                            "Collector readiness response is invalid",
+                        ) from exc
+                    if (ready.plan_id, ready.target_pid) != expected_ready:
+                        raise PerfLensError(
+                            ErrorCode.PATH_SAFETY_VIOLATION,
+                            "collector_broker",
+                            "Collector readiness response does not match the authorized plan",
+                        )
+                    assert ready_callback is not None
+                    ready_callback()
+                    line = _read_response_frame(connection, response_buffer)
+                    response = _parse_response(line, expected_request_id)
+                if response_buffer:
+                    raise PerfLensError(
+                        ErrorCode.INTERNAL_ERROR,
+                        "collector_broker",
+                        "Collector broker returned an unexpected extra response frame",
+                    )
         except PerfLensError:
             raise
         except TimeoutError as exc:
@@ -176,20 +215,6 @@ class CollectorBrokerClient:
                 recoverable=True,
                 details={"socket": str(self._socket_path)},
             ) from exc
-        try:
-            response = BrokerResponse.model_validate_json(line)
-        except ValidationError as exc:
-            raise PerfLensError(
-                ErrorCode.INTERNAL_ERROR,
-                "collector_broker",
-                "Collector broker returned invalid JSON",
-            ) from exc
-        if response.request_id != expected_request_id:
-            raise PerfLensError(
-                ErrorCode.PATH_SAFETY_VIOLATION,
-                "collector_broker",
-                "Collector response request ID does not match the request",
-            )
         return response, server_pid, server_uid
 
 
@@ -453,10 +478,15 @@ def _unsafe_collection_artifact() -> PerfLensError:
     )
 
 
-def _read_response_frame(connection: socket.socket) -> bytes:
-    received = bytearray()
+def _read_response_frame(
+    connection: socket.socket,
+    received: bytearray | None = None,
+) -> bytes:
+    single_frame = received is None
+    if received is None:
+        received = bytearray()
     while b"\n" not in received:
-        remaining = MAX_BROKER_MESSAGE_BYTES - len(received)
+        remaining = MAX_BROKER_MESSAGE_BYTES + 1 - len(received)
         if remaining <= 0:
             raise PerfLensError(
                 ErrorCode.RESOURCE_LIMIT_EXCEEDED,
@@ -467,14 +497,46 @@ def _read_response_frame(connection: socket.socket) -> bytes:
         if not chunk:
             break
         received.extend(chunk)
-    line, separator, trailing = bytes(received).partition(b"\n")
-    if not separator or trailing:
+    newline = received.find(b"\n")
+    if newline >= MAX_BROKER_MESSAGE_BYTES:
+        raise PerfLensError(
+            ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+            "collector_broker",
+            "Collector broker response exceeds the protocol limit",
+        )
+    if newline < 0:
         raise PerfLensError(
             ErrorCode.INTERNAL_ERROR,
             "collector_broker",
             "Collector broker returned a malformed response frame",
         )
+    if single_frame and len(received) != newline + 1:
+        raise PerfLensError(
+            ErrorCode.INTERNAL_ERROR,
+            "collector_broker",
+            "Collector broker returned a malformed response frame",
+        )
+    line = bytes(received[:newline])
+    del received[: newline + 1]
     return line
+
+
+def _parse_response(line: bytes, expected_request_id: str) -> BrokerResponse:
+    try:
+        response = BrokerResponse.model_validate_json(line)
+    except ValidationError as exc:
+        raise PerfLensError(
+            ErrorCode.INTERNAL_ERROR,
+            "collector_broker",
+            "Collector broker returned invalid JSON",
+        ) from exc
+    if response.request_id != expected_request_id:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "collector_broker",
+            "Collector response request ID does not match the request",
+        )
+    return response
 
 
 def _raise_rejected_response(response: BrokerResponse, request_id: str) -> None:

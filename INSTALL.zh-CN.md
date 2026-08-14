@@ -14,8 +14,8 @@ perflens-0.2.0-py3-none-any.whl
 
 其他 Release 文件的用途：
 
-- `perflens_0.2.0-1_amd64.deb`：Debian 13 普通用户主安装包；
-- `perflens-collector_0.2.0-1_amd64.deb`：可选 Collector 与 Rust Helper，需配合同版本主包；
+- `perflens_0.2.0-2_amd64.deb`：Debian 13 普通用户主安装包；
+- `perflens-collector_0.2.0-2_amd64.deb`：可选 Collector 与 Rust Helper，需配合同版本主包；
 - `perflens-0.2.0.tar.gz`：源码发行包；
 - `perflens-skill-0.2.0.zip`：只包含 Agent Skill；
 - `sbom.cdx.json`：依赖安全清单；
@@ -45,7 +45,7 @@ gh attestation verify ./perflens-0.2.0-py3-none-any.whl \
 Debian 13 `amd64` 用户推荐直接安装主 DEB，不需要 pipx：
 
 ```bash
-sudo apt install ./perflens_0.2.0-1_amd64.deb
+sudo apt install ./perflens_0.2.0-2_amd64.deb
 ```
 
 需要自动采集时再安装完全相同版本的 Collector DEB。安装软件包不会自动启动

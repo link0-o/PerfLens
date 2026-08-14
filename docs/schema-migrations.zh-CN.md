@@ -36,4 +36,10 @@ Collector Acceptance 的 `hardware_collection_id` 会关联每一次已经安全
 
 Python Broker 与 Rust Helper 的私有协议从 `1.0` 升级到 `1.1`，因为请求需要携带固定的
 事件来源与降级策略，响应需要返回实际来源和证据事件。该协议不用于用户产物，也不做
-跨版本协商；升级包必须同时升级并重启 Broker 与 Helper，版本错配会安全拒绝。
+跨版本协商。
+
+本轮项目启动握手把公共 Collector Broker 协议从 `1.0` 升级到 `1.1`，并把 Python
+Broker/Rust Helper 私有协议从 `1.1` 升级到 `1.2`。采集请求可明确要求一次
+`collection_ready` 中间响应；响应绑定原 `request_id`、`plan_id` 和目标 PID，并且只有
+在 perf 已绑定、PID 身份已复核、事件已启用后发送。最终 Collection 仍使用公共 Artifact
+Schema `1.0`。升级包必须同时升级并重启 Broker 与 Helper，版本错配会安全拒绝。

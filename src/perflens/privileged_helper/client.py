@@ -6,6 +6,7 @@ import secrets
 import socket
 import stat
 import struct
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from perflens.contracts.artifacts import CollectionPlanArtifact
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.privileged_helper.protocol import (
     MAX_HELPER_MESSAGE_BYTES,
+    HelperCollectionReadyResult,
     HelperCollectionResult,
     HelperCollectPidRequest,
     HelperHealthRequest,
@@ -87,6 +89,7 @@ class HelperClient:
         plan: CollectionPlanArtifact,
         *,
         caller_uid: int,
+        ready_callback: Callable[[], None] | None = None,
     ) -> HelperCollectionResult:
         """Submit one already-authorized typed PID plan to the Rust Helper."""
         try:
@@ -127,10 +130,13 @@ class HelperClient:
             fallback_record_event=plan.fallback_record_event,
             max_output_bytes=plan.max_output_bytes,
             expires_at_unix_milliseconds=expires_milliseconds,
+            report_ready=ready_callback is not None,
         )
         response, _peer_pid = self._exchange(
             request.model_dump_json().encode("utf-8") + b"\n",
             expected_request_id=request.request_id,
+            expected_ready=(plan.plan_id, plan.target_pid) if ready_callback is not None else None,
+            ready_callback=ready_callback,
         )
         if not response.ok or response.result is None:
             error = response.error
@@ -175,7 +181,14 @@ class HelperClient:
             raise _unsafe_helper_identity()
         return result
 
-    def _exchange(self, payload: bytes, *, expected_request_id: str) -> tuple[HelperResponse, int]:
+    def _exchange(
+        self,
+        payload: bytes,
+        *,
+        expected_request_id: str,
+        expected_ready: tuple[str, int] | None = None,
+        ready_callback: Callable[[], None] | None = None,
+    ) -> tuple[HelperResponse, int]:
         identity = _safe_socket_identity(self._socket_path, self._expected_helper_uid)
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
@@ -195,7 +208,30 @@ class HelperClient:
                     self._expected_helper_uid,
                 )
                 connection.sendall(payload)
-                response_frame = _read_frame(connection)
+                response_buffer = bytearray()
+                response_frame = _read_frame(connection, response_buffer)
+                response = _parse_response(response_frame, expected_request_id)
+                if expected_ready is not None and response.ok:
+                    ready = response.result
+                    if (
+                        not isinstance(ready, HelperCollectionReadyResult)
+                        or (
+                            ready.plan_id,
+                            ready.target_pid,
+                        )
+                        != expected_ready
+                    ):
+                        raise _unsafe_helper_identity()
+                    assert ready_callback is not None
+                    ready_callback()
+                    response_frame = _read_frame(connection, response_buffer)
+                    response = _parse_response(response_frame, expected_request_id)
+                if response_buffer:
+                    raise PerfLensError(
+                        ErrorCode.PATH_SAFETY_VIOLATION,
+                        "privileged_helper",
+                        "Privileged Helper returned an unexpected extra response frame",
+                    )
         except PerfLensError:
             raise
         except TimeoutError as exc:
@@ -213,13 +249,6 @@ class HelperClient:
                 "Unable to communicate with the privileged Helper",
                 recoverable=True,
             ) from exc
-        response = parse_helper_response_frame(response_frame)
-        if response.request_id != expected_request_id:
-            raise PerfLensError(
-                ErrorCode.PATH_SAFETY_VIOLATION,
-                "privileged_helper",
-                "Privileged Helper response ID does not match the request",
-            )
         return response, peer_pid
 
 
@@ -264,10 +293,9 @@ def _recheck_socket_identity(path: Path, expected: _SocketIdentity, expected_uid
         raise _unsafe_helper_identity()
 
 
-def _read_frame(connection: socket.socket) -> bytes:
-    received = bytearray()
+def _read_frame(connection: socket.socket, received: bytearray) -> bytes:
     while b"\n" not in received:
-        remaining = MAX_HELPER_MESSAGE_BYTES - len(received)
+        remaining = MAX_HELPER_MESSAGE_BYTES + 1 - len(received)
         if remaining <= 0:
             raise PerfLensError(
                 ErrorCode.RESOURCE_LIMIT_EXCEEDED,
@@ -278,14 +306,33 @@ def _read_frame(connection: socket.socket) -> bytes:
         if not chunk:
             break
         received.extend(chunk)
-    line, separator, trailing = bytes(received).partition(b"\n")
-    if not separator or trailing:
+    newline = received.find(b"\n")
+    if newline >= MAX_HELPER_MESSAGE_BYTES:
+        raise PerfLensError(
+            ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+            "privileged_helper",
+            "Privileged Helper response exceeds the protocol limit",
+        )
+    if newline < 0:
         raise PerfLensError(
             ErrorCode.INTERNAL_ERROR,
             "privileged_helper",
             "Privileged Helper returned a malformed response frame",
         )
-    return line + b"\n"
+    frame = bytes(received[: newline + 1])
+    del received[: newline + 1]
+    return frame
+
+
+def _parse_response(frame: bytes, expected_request_id: str) -> HelperResponse:
+    response = parse_helper_response_frame(frame)
+    if response.request_id != expected_request_id:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "privileged_helper",
+            "Privileged Helper response ID does not match the request",
+        )
+    return response
 
 
 def _unsafe_helper_identity() -> PerfLensError:

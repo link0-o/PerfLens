@@ -16,6 +16,7 @@ from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.privileged_helper.client import HelperClient
 from perflens.privileged_helper.protocol import (
     HELPER_SCHEMA_VERSION,
+    HelperCollectionReadyResult,
     HelperCollectionResult,
     HelperErrorBody,
     HelperHealthResult,
@@ -128,6 +129,7 @@ def test_helper_client_submits_typed_collection_and_binds_result(tmp_path: Path)
             payload = json.loads(request)
             assert payload["operation"] == "collect_pid"
             assert payload["caller_uid"] == os.geteuid()
+            assert payload["report_ready"] is False
             response = HelperResponse(
                 request_id=payload["request_id"],
                 ok=True,
@@ -160,6 +162,118 @@ def test_helper_client_submits_typed_collection_and_binds_result(tmp_path: Path)
         server.join(timeout=2)
         listener.close()
     assert result.plan_id == plan.plan_id
+
+
+def test_helper_client_authenticates_ready_frame_before_callback(tmp_path: Path) -> None:
+    socket_path = tmp_path / "helper.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    socket_path.chmod(0o600)
+    listener.listen(1)
+    plan = _collection_plan()
+
+    def serve() -> None:
+        connection, _address = listener.accept()
+        with connection:
+            payload = json.loads(_read_frame(connection))
+            assert payload["report_ready"] is True
+            ready = HelperResponse(
+                request_id=payload["request_id"],
+                ok=True,
+                result=HelperCollectionReadyResult(
+                    kind="collection_ready",
+                    plan_id=plan.plan_id,
+                    target_pid=plan.target_pid,
+                ),
+            )
+            complete = HelperResponse(
+                request_id=payload["request_id"],
+                ok=True,
+                result=HelperCollectionResult(
+                    kind="collection",
+                    plan_id=plan.plan_id,
+                    mode="stat",
+                    target_pid=plan.target_pid,
+                    artifact_name=f"{plan.plan_id}.stat.csv",
+                    output_bytes=30,
+                    output_sha256="a" * 64,
+                    output_format="perf_stat_delimited",
+                    actual_event_source="hardware",
+                    fallback_used=False,
+                    events=("cycles",),
+                    started_at_unix_milliseconds=1,
+                    finished_at_unix_milliseconds=2,
+                ),
+            )
+            connection.sendall(
+                ready.model_dump_json().encode()
+                + b"\n"
+                + complete.model_dump_json().encode()
+                + b"\n"
+            )
+
+    server = threading.Thread(target=serve)
+    server.start()
+    callbacks: list[str] = []
+    try:
+        result = HelperClient(
+            socket_path,
+            expected_helper_uid=os.geteuid(),
+        ).collect(
+            plan,
+            caller_uid=os.geteuid(),
+            ready_callback=lambda: callbacks.append("ready"),
+        )
+    finally:
+        server.join(timeout=2)
+        listener.close()
+
+    assert callbacks == ["ready"]
+    assert result.plan_id == plan.plan_id
+
+
+def test_helper_client_rejects_mismatched_ready_identity_before_callback(tmp_path: Path) -> None:
+    socket_path = tmp_path / "helper.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    socket_path.chmod(0o600)
+    listener.listen(1)
+    plan = _collection_plan()
+
+    def serve() -> None:
+        connection, _address = listener.accept()
+        with connection:
+            payload = json.loads(_read_frame(connection))
+            response = HelperResponse(
+                request_id=payload["request_id"],
+                ok=True,
+                result=HelperCollectionReadyResult(
+                    kind="collection_ready",
+                    plan_id=plan.plan_id,
+                    target_pid=plan.target_pid + 1,
+                ),
+            )
+            connection.sendall(response.model_dump_json().encode() + b"\n")
+
+    server = threading.Thread(target=serve)
+    server.start()
+    callbacks: list[str] = []
+    try:
+        with pytest.raises(PerfLensError) as mismatch:
+            HelperClient(
+                socket_path,
+                expected_helper_uid=os.geteuid(),
+            ).collect(
+                plan,
+                caller_uid=os.geteuid(),
+                ready_callback=lambda: callbacks.append("ready"),
+            )
+    finally:
+        server.join(timeout=2)
+        listener.close()
+
+    assert callbacks == []
+    assert mismatch.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 
 def test_helper_client_rejects_unsupported_broker_mode_before_exchange(

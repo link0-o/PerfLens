@@ -5,19 +5,55 @@
 This document records reproduced issues and their bounded workarounds, including
 resolved issues. Do not weaken deployment safety checks to work around them.
 
-## KI-2026-08-12: software record succeeded but analysis required a missing CPU field (resolved)
+## KI-2026-08-14: cap_perfmon PID binding and project launch had timing windows (resolved)
 
-- Confirmed affected scope: `cpu-clock` perf.data created after software fallback by withdrawn
-  same-version `v0.2.0` `paranoid3_helper` packages. The fix covers both software and hardware
-  record commands; text profiles were not affected.
+- Original gap 1: the `cap_perfmon` Python Broker checked PID owner/start time before spawning
+  perf, leaving a numeric-PID reuse window before attachment. The Rust Helper already had a
+  disabled-event barrier, but the default mode did not have an equivalent post-bind check.
+- Original gap 2: the project launcher released the workload after a fixed 200ms delay. That was a
+  timing guess: attachment could be slower, while a short program could finish before collection.
+- Fix: both paths start PID perf events disabled with `-D -1`, wait for a bounded control `ping`
+  ACK, revalidate the plan-bound PID/UID/start time, and only then enable events. Identity changes,
+  invalid ACKs, timeouts, and extra frames fail closed without publishing partial evidence.
+- Project handshake: public Broker protocol `1.1` and private Python/Rust Helper protocol `1.2`
+  stream a request/plan/PID-bound readiness frame. The ordinary-user bootstrap execs the approved
+  project program only after authenticating that frame.
+- With `event_source=auto`, the first stage may be the hardware probe or formal collection. The
+  ready frame is emitted once that first stage is bound and enabled, preventing an idle paused
+  bootstrap from falsely producing a zero-count PMU probe. Probe time remains within the original
+  authorization and is capped at 250ms.
+
+No project command, arguments, or environment cross into the Collector, and this adds no root,
+sudo, sysctl, or cross-UID authority. The old Broker and Helper do not negotiate with the new
+protocol; upgrade both matching packages and run `sudo perflens-admin upgrade` to restart them.
+
+## KI-2026-08-14: separate debug files were selected by path existence alone (resolved)
+
+- Original behavior: ELF inspection listed `.gnu_debuglink` and Build-ID candidate paths, but
+  resolver selection checked only that a file existed. A mismatched or replaced debug file could
+  therefore produce incorrect source attribution.
+- Fix: GNU debuglink candidates must match the CRC32 stored in the ELF, and Build-ID directory
+  candidates must carry the same Build ID. The identity is checked again immediately before
+  `addr2line`/`llvm-symbolizer`; mismatch falls back to the verified original DSO, or fails
+  explicitly if that DSO also changed.
+- Boundary: GNU debuglink CRC32 is a compatibility checksum, not a cryptographic publisher
+  signature, and a Build ID is not a signature either. These checks prevent mismatching and common
+  replacement errors; release provenance still requires supply-chain verification.
+
+## KI-2026-08-12: record succeeded but analysis required a missing CPU field (resolved)
+
+- Confirmed affected scope: withdrawn same-version `v0.2.0` packages using the `cap_perfmon`
+  Python path or `paranoid3_helper` after a software `cpu-clock` fallback. The fix covers both
+  software and hardware record; text profiles were not affected.
 - Symptom: the Collection reported a successful, multi-megabyte record artifact, but
   `analyze_collection` returned `EXTERNAL_TOOL_FAILED`. The underlying `perf script` said that
   samples did not have the CPU attribute set and that it could not print the `cpu` field.
-- Cause: the Helper's fixed record command omitted `--sample-cpu`, while the PerfLens perf-script
+- Cause: fixed record commands in both Collector paths did not consistently include
+  `--sample-cpu`, while the PerfLens perf-script
   adapter requested a per-sample CPU field.
-- New-recording fix: both hardware and software record commands now include fixed
-  `--sample-cpu`. Every perf argument is still derived from the typed plan; arbitrary perf options
-  are not exposed.
+- New-recording fix: Python Collector and Helper hardware/software record commands now include
+  fixed `--sample-cpu`. Every perf argument is still derived from the typed plan; arbitrary perf
+  options are not exposed.
 - Existing-artifact compatibility: only after matching that exact perf error, the analyzer retries
   without the CPU field and emits `MISSING_SAMPLE_CPU`. Hotspots, call paths, and source attribution
   remain available, but per-CPU distribution does not. Unrelated perf-script errors remain visible.

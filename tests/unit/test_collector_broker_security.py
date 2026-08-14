@@ -9,6 +9,7 @@ import struct
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -28,7 +29,10 @@ from perflens.collector_broker.client import (
 )
 from perflens.collector_broker.policy import CollectorBrokerPolicy, validate_broker_policy
 from perflens.collector_broker.protocol import (
+    BROKER_SCHEMA_VERSION,
     MAX_BROKER_MESSAGE_BYTES,
+    BrokerCollectionReady,
+    BrokerCollectRequest,
     BrokerError,
     BrokerResponse,
 )
@@ -419,6 +423,22 @@ def test_broker_response_requires_exactly_one_typed_payload(
         )
 
 
+def test_broker_ready_request_is_strict_and_uses_versioned_protocol() -> None:
+    plan = _plan()
+    request = BrokerCollectRequest(
+        request_id="request-0123456789abcdef",
+        plan=plan,
+        report_ready=True,
+    )
+    assert request.schema_version == BROKER_SCHEMA_VERSION == "1.1"
+    with pytest.raises(ValidationError):
+        BrokerCollectRequest(
+            request_id="request-0123456789abcdef",
+            plan=plan,
+            report_ready=1,  # type: ignore[arg-type] - verifies strict protocol rejection
+        )
+
+
 def test_client_rejects_mismatched_response_id_over_real_socket(tmp_path: Path) -> None:
     listener, socket_path = _listening_socket(tmp_path, "m")
 
@@ -442,6 +462,42 @@ def test_client_rejects_mismatched_response_id_over_real_socket(tmp_path: Path) 
     worker.join(timeout=2)
 
     assert not worker.is_alive()
+    assert mismatch.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_client_rejects_mismatched_ready_identity_before_callback(tmp_path: Path) -> None:
+    listener, socket_path = _listening_socket(tmp_path, "ready-mismatch")
+    plan = _plan()
+
+    def respond() -> None:
+        with listener:
+            connection, _ = listener.accept()
+            with connection:
+                request = json.loads(connection.recv(16 << 10).partition(b"\n")[0])
+                assert request["schema_version"] == BROKER_SCHEMA_VERSION
+                assert request["report_ready"] is True
+                response = BrokerResponse(
+                    request_id=request["request_id"],
+                    ok=True,
+                    result=BrokerCollectionReady(
+                        plan_id=plan.plan_id,
+                        target_pid=plan.target_pid + 1,
+                    ).model_dump(mode="json"),
+                )
+                connection.sendall(response.model_dump_json().encode("utf-8") + b"\n")
+
+    worker = threading.Thread(target=respond, daemon=True)
+    worker.start()
+    callbacks: list[str] = []
+    with pytest.raises(PerfLensError, match="does not match the authorized plan") as mismatch:
+        CollectorBrokerClient(socket_path, timeout_seconds=2).collect(
+            plan,
+            ready_callback=lambda: callbacks.append("ready"),
+        )
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert callbacks == []
     assert mismatch.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 
@@ -499,7 +555,11 @@ def test_client_rejects_collection_result_that_does_not_match_plan(
         _payload: bytes,
         *,
         expected_request_id: str,
+        expected_ready: tuple[str, int] | None = None,
+        ready_callback: Callable[[], None] | None = None,
     ) -> tuple[BrokerResponse, int, int]:
+        assert expected_ready is None
+        assert ready_callback is None
         return (
             BrokerResponse(
                 request_id=expected_request_id,

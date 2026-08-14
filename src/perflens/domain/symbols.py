@@ -15,6 +15,8 @@ class ModuleIdentity:
     dso_path: Path
     debug_file_candidates: tuple[Path, ...]
     architecture: str
+    debug_link_name: str | None = None
+    debug_link_crc32: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +49,7 @@ class ElfMetadata:
     is_stripped: bool
     has_debug_info: bool
     debug_link: str | None
+    debug_link_crc32: int | None
     debug_file_candidates: tuple[Path, ...]
 
 

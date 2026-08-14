@@ -127,6 +127,10 @@
           "default": null,
           "title": "Record Event"
         },
+        "report_ready": {
+          "title": "Report Ready",
+          "type": "boolean"
+        },
         "request_id": {
           "pattern": "^request-[a-f0-9]{16,64}$",
           "title": "Request Id",
@@ -142,8 +146,8 @@
           "type": "string"
         },
         "schema_version": {
-          "const": "1.1",
-          "default": "1.1",
+          "const": "1.2",
+          "default": "1.2",
           "title": "Schema Version",
           "type": "string"
         },
@@ -161,7 +165,8 @@
         "requested_event_source",
         "fallback_allowed",
         "max_output_bytes",
-        "expires_at_unix_milliseconds"
+        "expires_at_unix_milliseconds",
+        "report_ready"
       ],
       "title": "HelperCollectPidRequest",
       "type": "object"
@@ -181,8 +186,8 @@
           "type": "string"
         },
         "schema_version": {
-          "const": "1.1",
-          "default": "1.1",
+          "const": "1.2",
+          "default": "1.2",
           "title": "Schema Version",
           "type": "string"
         }

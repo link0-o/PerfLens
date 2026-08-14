@@ -7,6 +7,7 @@ import pytest
 
 from perflens.domain.errors import PerfLensError
 from perflens.privileged_helper.protocol import (
+    HelperCollectionReadyResult,
     HelperCollectionResult,
     HelperCollectPidRequest,
     HelperHealthRequest,
@@ -14,6 +15,7 @@ from perflens.privileged_helper.protocol import (
     helper_request_schema,
     helper_response_schema,
     parse_helper_request_frame,
+    parse_helper_response_frame,
 )
 
 _NOW_MILLISECONDS = 4_102_444_700_000
@@ -42,6 +44,12 @@ def test_privileged_helper_valid_golden_frames() -> None:
     assert isinstance(parsed["health.jsonl"], HelperHealthRequest)
     assert isinstance(parsed["record.jsonl"], HelperCollectPidRequest)
     assert isinstance(parsed["stat.jsonl"], HelperCollectPidRequest)
+    assert parsed["record.jsonl"].report_ready is True
+
+    response_fixture = root.parent / "responses/collection-ready.jsonl"
+    response = parse_helper_response_frame(response_fixture.read_bytes())
+    assert isinstance(response.result, HelperCollectionReadyResult)
+    assert response.result.target_pid == 4321
 
 
 @pytest.mark.parametrize(
@@ -57,7 +65,7 @@ def test_privileged_helper_invalid_golden_frames_are_rejected(fixture: Path) -> 
 
 
 def test_privileged_helper_rejects_missing_newline_and_trailing_frame() -> None:
-    valid = b'{"schema_version":"1.1","operation":"health","request_id":"request-0123456789abcdef"}'
+    valid = b'{"schema_version":"1.2","operation":"health","request_id":"request-0123456789abcdef"}'
     with pytest.raises(PerfLensError):
         parse_helper_request_frame(valid, now_unix_milliseconds=_NOW_MILLISECONDS)
     with pytest.raises(PerfLensError):
@@ -216,6 +224,7 @@ def test_helper_collect_request_rejects_inconsistent_fallback_policy(
         "duration_milliseconds": 1000,
         "max_output_bytes": 1024,
         "expires_at_unix_milliseconds": _NOW_MILLISECONDS + 1000,
+        "report_ready": False,
         **fields,
     }
 

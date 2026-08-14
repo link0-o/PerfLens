@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from perflens import __version__
+from perflens.distribution.debian import DEBIAN_PACKAGE_REVISION
 
 
 def test_release_notes_explain_wheel_installation(tmp_path: Path) -> None:
@@ -27,6 +28,7 @@ def test_release_notes_explain_wheel_installation(tmp_path: Path) -> None:
 
     rendered = output.read_text(encoding="utf-8")
     assert f"perflens-{__version__}-py3-none-any.whl" in rendered
+    assert f"perflens_{__version__}-{DEBIAN_PACKAGE_REVISION}_amd64.deb" in rendered
     assert ".whl` 不要解压" in rendered
     assert f"blob/v{__version__}/INSTALL.zh-CN.md" in rendered
     assert "perflens-admin spool-status" in rendered
@@ -35,6 +37,7 @@ def test_release_notes_explain_wheel_installation(tmp_path: Path) -> None:
     assert "--deny-self-hosted-runners" in rendered
     assert "{version}" not in rendered
     assert "{tag}" not in rendered
+    assert "{debian_revision}" not in rendered
 
 
 def test_release_notes_reject_wrong_tag_and_existing_output(tmp_path: Path) -> None:

@@ -7,11 +7,11 @@ PerfLens 是面向 Linux 的确定性性能分析工具，包含 CLI、MCP Serve
 Debian 13 `amd64` 用户优先下载：
 
 ```text
-perflens_{version}-1_amd64.deb
+perflens_{version}-{debian_revision}_amd64.deb
 ```
 
 ```bash
-sudo apt install ./perflens_{version}-1_amd64.deb
+sudo apt install ./perflens_{version}-{debian_revision}_amd64.deb
 perflens setup --project /绝对路径/你的项目
 ```
 
@@ -43,9 +43,9 @@ uv tool install ./perflens-{version}-py3-none-any.whl
 
 - `perflens-{version}-py3-none-any.whl`：安装 CLI、MCP、Skill、Collector 和
   显式管理员部署入口；
-- `perflens_{version}-1_amd64.deb`：Debian 13 普通用户主安装包；
-- `perflens-collector_{version}-1_<架构>.deb`：可选 Collector 与 Rust Helper，必须与
-  同版本主 DEB 一起安装；安装时不会自动启用服务；
+- `perflens_{version}-{debian_revision}_amd64.deb`：Debian 13 普通用户主安装包；
+- `perflens-collector_{version}-{debian_revision}_<架构>.deb`：可选 Collector 与 Rust
+  Helper，必须与同版本主 DEB 一起安装；安装时不会自动启用服务；
 - `perflens-{version}.tar.gz`：Python 源码发行包；
 - `perflens-skill-{version}.zip`：只安装独立 Skill 时使用；
 - `sbom.cdx.json`：CycloneDX 依赖清单；

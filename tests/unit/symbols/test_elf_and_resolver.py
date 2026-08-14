@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,7 @@ from perflens.application.symbols import inspect_elf, resolve_source
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.domain.symbols import ModuleLocation
 from perflens.symbols.addr2line import Addr2LineResolver, parse_addr2line_group
-from perflens.symbols.elf import ElfInspector
+from perflens.symbols.elf import ElfInspector, select_verified_module_path
 
 
 def _tool(name: str) -> str:
@@ -137,6 +138,8 @@ def test_separate_debug_file_resolves_stripped_binary(fixture_root: Path, tmp_pa
     assert metadata.is_stripped
     assert not metadata.has_debug_info
     assert metadata.debug_link == "sample.debug"
+    assert metadata.debug_link_crc32 is not None
+    assert metadata.debug_file_candidates == (debug_file.resolve(),)
     with Addr2LineResolver(Path(_tool("addr2line"))) as resolver:
         resolved = resolver.resolve(
             inspector.identity(executable),
@@ -144,6 +147,80 @@ def test_separate_debug_file_resolves_stripped_binary(fixture_root: Path, tmp_pa
         )
     assert resolved[0].symbol == "perflens_hot_function"
     assert resolved[0].line == 3
+
+
+def test_rejects_replaced_debuglink_candidate_before_symbolization(
+    fixture_root: Path,
+    tmp_path: Path,
+) -> None:
+    source = fixture_root / "symbols" / "sample.c"
+    executable = tmp_path / "sample"
+    debug_file = tmp_path / "sample.debug"
+    _compile(source, executable)
+    subprocess.run(  # noqa: S603
+        (_tool("objcopy"), "--only-keep-debug", str(executable), str(debug_file)),
+        check=True,
+    )
+    subprocess.run(  # noqa: S603
+        (_tool("strip"), "--strip-unneeded", str(executable)),
+        check=True,
+    )
+    subprocess.run(  # noqa: S603
+        (_tool("objcopy"), f"--add-gnu-debuglink={debug_file.name}", str(executable)),
+        cwd=tmp_path,
+        check=True,
+    )
+    inspector = ElfInspector()
+    identity = inspector.identity(executable)
+    assert identity.debug_file_candidates == (debug_file.resolve(),)
+
+    replacement_source = tmp_path / "replacement.c"
+    replacement_source.write_text(
+        "int unrelated(void) { return 7; } int main(void) { return unrelated(); }\n",
+        encoding="utf-8",
+    )
+    replacement = tmp_path / "replacement"
+    _compile(replacement_source, replacement)
+    subprocess.run(  # noqa: S603
+        (_tool("objcopy"), "--only-keep-debug", str(replacement), str(debug_file)),
+        check=True,
+    )
+
+    assert inspector.inspect(executable).debug_file_candidates == ()
+    assert select_verified_module_path(identity) == executable.resolve()
+
+
+def test_separate_debug_candidate_must_match_module_build_id(
+    fixture_root: Path,
+    tmp_path: Path,
+) -> None:
+    source = fixture_root / "symbols" / "sample.c"
+    executable = tmp_path / "sample"
+    debug_file = tmp_path / "sample.debug"
+    unrelated_source = tmp_path / "unrelated.c"
+    unrelated = tmp_path / "unrelated"
+    _compile(source, executable)
+    subprocess.run(  # noqa: S603
+        (_tool("objcopy"), "--only-keep-debug", str(executable), str(debug_file)),
+        check=True,
+    )
+    unrelated_source.write_text(
+        "int unrelated(void) { return 7; } int main(void) { return unrelated(); }\n",
+        encoding="utf-8",
+    )
+    _compile(unrelated_source, unrelated)
+
+    identity = ElfInspector().identity(executable)
+    build_id_only = replace(
+        identity,
+        debug_file_candidates=(debug_file,),
+        debug_link_name=None,
+        debug_link_crc32=None,
+    )
+    assert select_verified_module_path(build_id_only) == debug_file.resolve()
+
+    mismatched = replace(build_id_only, debug_file_candidates=(unrelated,))
+    assert select_verified_module_path(mismatched) == executable.resolve()
 
 
 def test_runtime_only_address_is_rejected_without_guessing(

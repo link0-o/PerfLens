@@ -7,6 +7,9 @@ import zipfile
 from pathlib import Path
 
 from perflens import __version__
+from perflens.distribution.debian import DEBIAN_PACKAGE_REVISION
+
+_DEBIAN_VERSION = f"{__version__}-{DEBIAN_PACKAGE_REVISION}"
 
 
 def test_release_preparation_builds_skill_archive_and_checksums(tmp_path: Path) -> None:
@@ -16,8 +19,8 @@ def test_release_preparation_builds_skill_archive_and_checksums(tmp_path: Path) 
     wheel = dist / f"perflens-{__version__}-py3-none-any.whl"
     source = dist / f"perflens-{__version__}.tar.gz"
     sbom = dist / "sbom.cdx.json"
-    main_deb = dist / f"perflens_{__version__}-1_amd64.deb"
-    collector_deb = dist / f"perflens-collector_{__version__}-1_amd64.deb"
+    main_deb = dist / f"perflens_{_DEBIAN_VERSION}_amd64.deb"
+    collector_deb = dist / f"perflens-collector_{_DEBIAN_VERSION}_amd64.deb"
     wheel.write_bytes(b"wheel")
     source.write_bytes(b"source")
     sbom.write_text('{"bomFormat":"CycloneDX","specVersion":"1.5"}')
@@ -81,8 +84,10 @@ def test_release_preparation_rejects_stale_artifacts(tmp_path: Path) -> None:
     (dist / f"perflens-{__version__}-py3-none-any.whl").write_bytes(b"wheel")
     (dist / f"perflens-{__version__}.tar.gz").write_bytes(b"source")
     (dist / "sbom.cdx.json").write_text('{"bomFormat":"CycloneDX"}')
-    (dist / f"perflens_{__version__}-1_amd64.deb").write_bytes(b"!<arch>\nmain")
-    (dist / f"perflens-collector_{__version__}-1_amd64.deb").write_bytes(b"!<arch>\ncollector")
+    (dist / f"perflens_{_DEBIAN_VERSION}_amd64.deb").write_bytes(b"!<arch>\nmain")
+    (dist / f"perflens-collector_{_DEBIAN_VERSION}_amd64.deb").write_bytes(
+        b"!<arch>\ncollector"
+    )
     (dist / "perflens-old.whl").write_bytes(b"stale")
 
     completed = subprocess.run(  # noqa: S603 - fixed interpreter and repository script
@@ -130,8 +135,10 @@ def test_release_preparation_requires_native_debian_packages(tmp_path: Path) -> 
     assert completed.returncode != 0
     assert "exactly one architecture-specific perflens DEB" in completed.stderr
 
-    (dist / f"perflens_{__version__}-1_amd64.deb").write_bytes(b"not a deb")
-    (dist / f"perflens-collector_{__version__}-1_amd64.deb").write_bytes(b"!<arch>\ncollector")
+    (dist / f"perflens_{_DEBIAN_VERSION}_amd64.deb").write_bytes(b"not a deb")
+    (dist / f"perflens-collector_{_DEBIAN_VERSION}_amd64.deb").write_bytes(
+        b"!<arch>\ncollector"
+    )
     invalid = subprocess.run(  # noqa: S603 - fixed interpreter and repository script
         completed.args,
         check=False,

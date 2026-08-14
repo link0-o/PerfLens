@@ -128,7 +128,11 @@ Use a `perf` build compatible with the recording host and pass its absolute path
 
 ## Symbols or source lines are missing
 
-Check Build ID, matching DSOs, separate debug files, debug links, and container/build path mappings. Source resolution accepts a verified module-relative offset; it never guesses an ASLR or PIE base from a runtime address. Install `llvm-symbolizer` or `addr2line`, or keep unknown frames visible.
+Check Build ID, matching DSOs, separate debug files, debug links, and container/build path mappings.
+PerfLens accepts a separate file only when its GNU debuglink CRC32 or ELF Build ID matches, and
+rechecks that identity before resolution. Source resolution accepts a verified module-relative
+offset; it never guesses an ASLR or PIE base from a runtime address. Install `llvm-symbolizer` or
+`addr2line`, or keep unknown frames visible.
 
 ## MCP calls are denied
 

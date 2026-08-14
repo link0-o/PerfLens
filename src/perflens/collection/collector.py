@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import socket
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,6 +45,8 @@ FALLBACK_REASONS = (
     "hardware_execution_failed_after_probe",
 )
 DEFAULT_MAX_OUTPUT_BYTES = 256 << 20
+_PERF_CONTROL_TIMEOUT_SECONDS = 5.0
+_PERF_CONTROL_ACK_MAX_BYTES = 16
 CollectionMode = Literal["record", "stat", "sched", "lock", "off_cpu"]
 CallGraphMode = Literal["fp", "dwarf", "lbr"]
 
@@ -77,17 +80,44 @@ class CollectionRequest:
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
 
 
-def collect_profile(request: CollectionRequest) -> CollectionArtifact:
+def collect_profile(
+    request: CollectionRequest,
+    *,
+    pid_identity_validator: Callable[[], None] | None = None,
+    ready_callback: Callable[[], None] | None = None,
+) -> CollectionArtifact:
     """Run one explicitly authorized collection and publish a new immutable output."""
     _validate_request(request)
     perf_path = _resolve_executable(request.perf_path or _find_executable("perf"), "perf")
     target, target_type = _resolve_target(request.target)
+    if pid_identity_validator is not None and target_type != "pid":
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "collection",
+            "PID identity validation is only valid for PID collection",
+        )
+    if ready_callback is not None and pid_identity_validator is None:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "collection",
+            "Collection readiness requires a PID identity validator",
+        )
     safe_output = validate_new_output_file(request.output_path)
     started = datetime.now(tz=UTC)
     temporary_path = _reserve_temporary_path(safe_output)
     runner = CommandRunner({perf_path})
+    control: _PerfControl | None = None
     try:
-        argv = _build_perf_argv(request, perf_path, temporary_path, target, target_type)
+        if pid_identity_validator is not None:
+            control = _PerfControl(pid_identity_validator, ready_callback)
+        argv = _build_perf_argv(
+            request,
+            perf_path,
+            temporary_path,
+            target,
+            target_type,
+            control_argument=control.argument if control is not None else None,
+        )
         with tempfile.TemporaryFile(mode="w+b") as stdout:
             result = runner.run_to_file(
                 argv,
@@ -99,6 +129,8 @@ def collect_profile(request: CollectionRequest) -> CollectionArtifact:
                     max_created_file_bytes=request.max_output_bytes,
                 ),
                 watched_output=temporary_path,
+                pass_fds=control.child_fds if control is not None else (),
+                after_start=control.after_start if control is not None else None,
             )
         output_size = _validate_collected_output(temporary_path, request.max_output_bytes)
         metrics, metric_warnings = _read_metrics(request.mode, temporary_path)
@@ -107,6 +139,9 @@ def collect_profile(request: CollectionRequest) -> CollectionArtifact:
     except BaseException:
         temporary_path.unlink(missing_ok=True)
         raise
+    finally:
+        if control is not None:
+            control.close()
 
     finished = datetime.now(tz=UTC)
     target_hash = _target_hash(target, target_type)
@@ -278,8 +313,10 @@ def _validate_request(request: CollectionRequest) -> None:
             "collection",
             "perf record event does not match the requested event source",
         )
-    if request.mode == "record" and request.fallback_used and (
-        request.record_event != SOFTWARE_RECORD_EVENT
+    if (
+        request.mode == "record"
+        and request.fallback_used
+        and (request.record_event != SOFTWARE_RECORD_EVENT)
     ):
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
@@ -348,6 +385,8 @@ def _build_perf_argv(
     output_path: Path,
     target: tuple[str, ...],
     target_type: Literal["command", "pid"],
+    *,
+    control_argument: str | None = None,
 ) -> tuple[str, ...]:
     if request.mode == "record":
         prefix = (
@@ -359,6 +398,7 @@ def _build_perf_argv(
             str(request.frequency_hz),
             "--call-graph",
             request.call_graph,
+            "--sample-cpu",
             "-g",
             "-o",
             str(output_path),
@@ -389,14 +429,123 @@ def _build_perf_argv(
             str(request.frequency_hz),
             "--call-graph",
             request.call_graph,
+            "--sample-cpu",
             "-g",
             "-o",
             str(output_path),
         )
     if target_type == "command":
+        if control_argument is not None:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "collection",
+                "perf control is only valid for PID collection",
+            )
         return (*prefix, "--", *target)
+    if control_argument is not None:
+        prefix = (*prefix, "-D", "-1", "--control", control_argument)
     sleep_path = _resolve_executable(_find_executable("sleep"), "sleep")
     return (*prefix, "-p", target[0], "--", str(sleep_path), target[1])
+
+
+class _PerfControl:
+    """Keep PID events disabled until perf has bound and the plan identity is revalidated."""
+
+    def __init__(
+        self,
+        pid_identity_validator: Callable[[], None],
+        ready_callback: Callable[[], None] | None,
+    ) -> None:
+        self._validator = pid_identity_validator
+        self._ready_callback = ready_callback
+        control_writer, control_reader = socket.socketpair()
+        try:
+            ack_writer, ack_reader = socket.socketpair()
+        except BaseException:
+            control_writer.close()
+            control_reader.close()
+            raise
+        self._control_writer = control_writer
+        self._control_reader = control_reader
+        self._ack_writer = ack_writer
+        self._ack_reader = ack_reader
+        try:
+            self._control_writer.settimeout(_PERF_CONTROL_TIMEOUT_SECONDS)
+            self._ack_reader.settimeout(_PERF_CONTROL_TIMEOUT_SECONDS)
+        except BaseException:
+            self.close()
+            raise
+        self._ack_buffer = bytearray()
+        self._child_closed = False
+
+    @property
+    def argument(self) -> str:
+        return f"fd:{self._control_reader.fileno()},{self._ack_writer.fileno()}"
+
+    @property
+    def child_fds(self) -> tuple[int, int]:
+        return self._control_reader.fileno(), self._ack_writer.fileno()
+
+    def after_start(self) -> None:
+        self._close_child_ends()
+        self._send("ping")
+        self._validator()
+        self._send("enable")
+        if self._ready_callback is not None:
+            self._ready_callback()
+
+    def close(self) -> None:
+        for endpoint in (
+            self._control_writer,
+            self._control_reader,
+            self._ack_writer,
+            self._ack_reader,
+        ):
+            endpoint.close()
+
+    def _close_child_ends(self) -> None:
+        if self._child_closed:
+            return
+        self._control_reader.close()
+        self._ack_writer.close()
+        self._child_closed = True
+
+    def _send(self, command: str) -> None:
+        try:
+            self._control_writer.sendall(command.encode("ascii") + b"\n")
+            acknowledgement = self._read_acknowledgement()
+        except OSError as exc:
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_FAILED,
+                "external_tool",
+                "perf control channel failed before collection could be enabled",
+                recoverable=True,
+            ) from exc
+        if acknowledgement.lstrip(b"\0") != b"ack\n":
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_FAILED,
+                "external_tool",
+                "perf returned an invalid control acknowledgement",
+                recoverable=True,
+            )
+
+    def _read_acknowledgement(self) -> bytes:
+        while b"\n" not in self._ack_buffer:
+            if len(self._ack_buffer) >= _PERF_CONTROL_ACK_MAX_BYTES:
+                break
+            chunk = self._ack_reader.recv(_PERF_CONTROL_ACK_MAX_BYTES - len(self._ack_buffer))
+            if not chunk:
+                break
+            self._ack_buffer.extend(chunk)
+        newline = self._ack_buffer.find(b"\n")
+        if newline < 0:
+            acknowledgement = bytes(self._ack_buffer)
+            self._ack_buffer.clear()
+            return acknowledgement
+        end = newline + 1
+        acknowledgement = bytes(self._ack_buffer[:end])
+        del self._ack_buffer[:end]
+        return acknowledgement
 
 
 def _read_metrics(

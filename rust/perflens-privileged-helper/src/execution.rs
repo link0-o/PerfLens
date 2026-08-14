@@ -95,12 +95,16 @@ pub struct ExecutionError {
     pub message: &'static str,
 }
 
-pub fn execute_production_plan(
+pub fn execute_production_plan_with_ready<R>(
     plan: &ExecutionPlan,
     allowed_uid: u32,
     artifact_gid: u32,
     configured_perf_path: &Path,
-) -> Result<ExecutionResult, ExecutionError> {
+    ready_notifier: &mut R,
+) -> Result<ExecutionResult, ExecutionError>
+where
+    R: FnMut() -> Result<(), ExecutionError>,
+{
     validate_plan(plan, allowed_uid)?;
     assert_pid_identity(&plan.target)?;
     let perf_path = trusted_root_executable(configured_perf_path)?;
@@ -114,12 +118,13 @@ pub fn execute_production_plan(
     }
     authorize_spool_capacity(&spool_root, plan.max_output_bytes, artifact_gid)?;
     consume_plan(&spool_root, &plan.plan_id)?;
-    execute_perf(
+    execute_perf_with_ready(
         plan,
         &perf_path,
         &spool_root,
         artifact_gid,
         &assert_pid_identity,
+        ready_notifier,
     )
 }
 
@@ -499,6 +504,7 @@ fn consume_plan(spool: &Path, plan_id: &str) -> Result<(), ExecutionError> {
         .map_err(|_error| spool_error())
 }
 
+#[cfg(test)]
 fn execute_perf<V>(
     plan: &ExecutionPlan,
     perf_path: &Path,
@@ -509,8 +515,45 @@ fn execute_perf<V>(
 where
     V: Fn(&HelperTarget) -> Result<(), ExecutionError>,
 {
-    let (selected_plan, fallback_reason) =
-        select_event_source(plan, perf_path, spool, artifact_gid, target_validator)?;
+    execute_perf_with_ready(
+        plan,
+        perf_path,
+        spool,
+        artifact_gid,
+        target_validator,
+        &mut || Ok(()),
+    )
+}
+
+fn execute_perf_with_ready<V, R>(
+    plan: &ExecutionPlan,
+    perf_path: &Path,
+    spool: &Path,
+    artifact_gid: u32,
+    target_validator: &V,
+    ready_notifier: &mut R,
+) -> Result<ExecutionResult, ExecutionError>
+where
+    V: Fn(&HelperTarget) -> Result<(), ExecutionError>,
+    R: FnMut() -> Result<(), ExecutionError>,
+{
+    let mut ready_sent = false;
+    let mut notify_once = || {
+        if ready_sent {
+            return Ok(());
+        }
+        ready_notifier()?;
+        ready_sent = true;
+        Ok(())
+    };
+    let (selected_plan, fallback_reason) = select_event_source(
+        plan,
+        perf_path,
+        spool,
+        artifact_gid,
+        target_validator,
+        &mut notify_once,
+    )?;
     let suffix = if selected_plan.mode == CollectionMode::Stat {
         ".stat.csv"
     } else {
@@ -526,7 +569,7 @@ where
     let temporary = spool.join(format!(".perflens-helper-{}.tmp", plan.plan_id));
     reserve_temporary_output(&temporary)?;
     let hardware_started = Instant::now();
-    let mut outcome = execute_perf_inner(
+    let mut outcome = execute_perf_inner_with_ready(
         &selected_plan,
         perf_path,
         PerfOutput {
@@ -537,6 +580,7 @@ where
             publish: true,
         },
         target_validator,
+        &mut notify_once,
     );
     if let Err(error) = &outcome {
         let elapsed_milliseconds =
@@ -553,7 +597,7 @@ where
             fs::remove_file(&temporary).map_err(|_error| spool_error())?;
             reserve_temporary_output(&temporary)?;
             let software = software_plan(plan, remaining_milliseconds);
-            outcome = execute_perf_inner(
+            outcome = execute_perf_inner_with_ready(
                 &software,
                 perf_path,
                 PerfOutput {
@@ -564,6 +608,7 @@ where
                     publish: true,
                 },
                 target_validator,
+                &mut notify_once,
             );
             if let Ok(result) = &mut outcome {
                 result.fallback_used = true;
@@ -593,15 +638,17 @@ fn reserve_temporary_output(path: &Path) -> Result<(), ExecutionError> {
         .map_err(|_error| spool_error())
 }
 
-fn select_event_source<V>(
+fn select_event_source<V, R>(
     plan: &ExecutionPlan,
     perf_path: &Path,
     spool: &Path,
     artifact_gid: u32,
     target_validator: &V,
+    ready_notifier: &mut R,
 ) -> Result<(ExecutionPlan, Option<&'static str>), ExecutionError>
 where
     V: Fn(&HelperTarget) -> Result<(), ExecutionError>,
+    R: FnMut() -> Result<(), ExecutionError>,
 {
     match plan.requested_event_source {
         RequestedEventSource::SoftwareOnly => {
@@ -631,6 +678,7 @@ where
                 spool,
                 artifact_gid,
                 target_validator,
+                ready_notifier,
             )?;
             let final_milliseconds = plan
                 .duration_milliseconds
@@ -675,16 +723,18 @@ fn software_plan(plan: &ExecutionPlan, duration_milliseconds: u64) -> ExecutionP
     selected
 }
 
-fn probe_hardware_pmu<V>(
+fn probe_hardware_pmu<V, R>(
     plan: &ExecutionPlan,
     duration_milliseconds: u64,
     perf_path: &Path,
     spool: &Path,
     artifact_gid: u32,
     target_validator: &V,
+    ready_notifier: &mut R,
 ) -> Result<Option<&'static str>, ExecutionError>
 where
     V: Fn(&HelperTarget) -> Result<(), ExecutionError>,
+    R: FnMut() -> Result<(), ExecutionError>,
 {
     let temporary = spool.join(format!(".perflens-helper-probe-{}.tmp", plan.plan_id));
     OpenOptions::new()
@@ -705,7 +755,7 @@ where
     probe.record_event = None;
     probe.fallback_record_event = None;
     probe.max_output_bytes = probe.max_output_bytes.min(HARDWARE_PROBE_OUTPUT_BYTES);
-    let outcome = execute_perf_inner(
+    let outcome = execute_perf_inner_with_ready(
         &probe,
         perf_path,
         PerfOutput {
@@ -716,6 +766,7 @@ where
             publish: false,
         },
         target_validator,
+        ready_notifier,
     );
     let result = match outcome {
         Ok(_result) => hardware_probe_has_usable_counts(&temporary).map(|usable| {
@@ -760,14 +811,16 @@ struct PerfOutput<'a> {
 }
 
 #[allow(clippy::too_many_lines)] // Linear lifecycle keeps spawn, watchdog, and publication ordered.
-fn execute_perf_inner<V>(
+fn execute_perf_inner_with_ready<V, R>(
     plan: &ExecutionPlan,
     perf_path: &Path,
     output_settings: PerfOutput<'_>,
     target_validator: &V,
+    ready_notifier: &mut R,
 ) -> Result<ExecutionResult, ExecutionError>
 where
     V: Fn(&HelperTarget) -> Result<(), ExecutionError>,
+    R: FnMut() -> Result<(), ExecutionError>,
 {
     let PerfOutput {
         temporary,
@@ -865,6 +918,10 @@ where
     if send_perf_control(&mut control_writer, &mut acknowledgements, "enable").is_err() {
         terminate_perf(&mut child, Signal::SIGKILL);
         return Err(external_error());
+    }
+    if let Err(error) = ready_notifier() {
+        terminate_perf(&mut child, Signal::SIGKILL);
+        return Err(error);
     }
     let started_at_unix_milliseconds = match unix_milliseconds() {
         Ok(value) => value,
@@ -1129,9 +1186,10 @@ mod tests {
 
     use super::{
         ExecutionPlan, MAX_DURATION_MILLISECONDS, REPLAY_RETENTION, SOFTWARE_STAT_EVENTS,
-        authorize_spool_capacity, consume_plan, denied, execute_perf, perf_status_succeeded,
-        prune_replay_markers, read_perf_control_ack, recover_stale_temporary_files,
-        trusted_root_executable, validate_plan, validate_spool_entries,
+        authorize_spool_capacity, consume_plan, denied, execute_perf, execute_perf_with_ready,
+        perf_status_succeeded, prune_replay_markers, read_perf_control_ack,
+        recover_stale_temporary_files, trusted_root_executable, validate_plan,
+        validate_spool_entries,
     };
     use crate::{
         ActualEventSource, CallGraph, CollectionMode, HelperTarget, RecordEvent,
@@ -1402,14 +1460,27 @@ finish
         plan.call_graph = None;
         plan.events = vec!["cycles".to_owned()];
         plan.duration_milliseconds = 40;
-        let result = execute_perf(
+        let identity_validated = AtomicU64::new(0);
+        let ready_notifications = AtomicU64::new(0);
+        let mut report_ready = || {
+            assert_eq!(identity_validated.load(Ordering::Relaxed), 1);
+            ready_notifications.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        };
+        let result = execute_perf_with_ready(
             &plan,
             &fake_perf,
             &directory,
             nix::unistd::getegid().as_raw(),
-            &|_target| Ok(()),
+            &|_target| {
+                identity_validated.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            },
+            &mut report_ready,
         )
         .expect("execute fixed argv test double");
+        assert_eq!(identity_validated.load(Ordering::Relaxed), 1);
+        assert_eq!(ready_notifications.load(Ordering::Relaxed), 1);
         let artifact = directory.join(&result.artifact_name);
         assert_eq!(
             std::fs::read_to_string(&artifact).expect("read artifact"),
@@ -1459,15 +1530,28 @@ finish
             .collect();
         plan.record_event = None;
         plan.fallback_record_event = None;
-        let result = execute_perf(
+        let identity_validated = AtomicU64::new(0);
+        let ready_notifications = AtomicU64::new(0);
+        let mut report_ready = || {
+            assert_eq!(identity_validated.load(Ordering::Relaxed), 1);
+            ready_notifications.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        };
+        let result = execute_perf_with_ready(
             &plan,
             &fake_perf,
             &directory,
             nix::unistd::getegid().as_raw(),
-            &|_target| Ok(()),
+            &|_target| {
+                identity_validated.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            },
+            &mut report_ready,
         )
         .expect("fall back to software events");
 
+        assert_eq!(identity_validated.load(Ordering::Relaxed), 2);
+        assert_eq!(ready_notifications.load(Ordering::Relaxed), 1);
         assert_eq!(result.actual_event_source, ActualEventSource::Software);
         assert!(result.fallback_used);
         assert_eq!(

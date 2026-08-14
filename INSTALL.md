@@ -5,8 +5,8 @@ English | [简体中文](INSTALL.zh-CN.md)
 Download `perflens-0.2.0-py3-none-any.whl` for the normal CLI/MCP installation. A wheel is an installable Python package: do not extract it. The extracted `perflens/` and `.dist-info/` directories are modules and metadata, not a graphical launcher.
 
 On Debian 13 `amd64`, the recommended alternative is
-`sudo apt install ./perflens_0.2.0-1_amd64.deb`. Add the exact-version
-`perflens-collector_0.2.0-1_amd64.deb` only for automatic collection. Package
+`sudo apt install ./perflens_0.2.0-2_amd64.deb`. Add the exact-version
+`perflens-collector_0.2.0-2_amd64.deb` only for automatic collection. Package
 installation does not activate a privileged service. See
 [Debian packages](docs/debian-packages.md).
 

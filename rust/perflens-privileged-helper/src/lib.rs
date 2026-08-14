@@ -16,9 +16,12 @@ use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use nix::unistd::geteuid;
 use serde::{Deserialize, Serialize};
 
-use crate::execution::{ExecutionPlan, execute_production_plan, prepare_production_environment};
+use crate::execution::{
+    ExecutionError, ExecutionPlan, execute_production_plan_with_ready,
+    prepare_production_environment,
+};
 
-pub const HELPER_SCHEMA_VERSION: &str = "1.1";
+pub const HELPER_SCHEMA_VERSION: &str = "1.2";
 pub const MAX_HELPER_MESSAGE_BYTES: usize = 64 << 10;
 pub const MAX_HELPER_PLAN_TTL_MILLISECONDS: u64 = 120_000;
 pub const MAX_HELPER_DURATION_MILLISECONDS: u64 = 86_400_000;
@@ -98,6 +101,7 @@ pub enum HelperRequest {
         fallback_record_event: Option<RecordEvent>,
         max_output_bytes: u64,
         expires_at_unix_milliseconds: u64,
+        report_ready: bool,
     },
 }
 
@@ -110,6 +114,10 @@ pub enum HelperResult {
         helper_uid: u32,
         privilege_mode: &'static str,
         ready: bool,
+    },
+    CollectionReady {
+        plan_id: String,
+        target_pid: u32,
     },
     Collection {
         plan_id: String,
@@ -284,6 +292,7 @@ fn unsafe_socket_error() -> io::Error {
 /// # Errors
 ///
 /// Returns an I/O error when peer credential lookup, bounded reading, or response writing fails.
+#[allow(clippy::too_many_lines)] // Keep authentication and streamed response order explicit.
 pub fn handle_connection(
     connection: &mut UnixStream,
     policy: &HelperServerPolicy,
@@ -303,40 +312,37 @@ pub fn handle_connection(
     }
 
     let frame = read_bounded_frame(connection)?;
-    let response = response_for_frame(&frame, policy, now_unix_milliseconds);
-    write_response(connection, &response)
-}
-
-fn response_for_frame(
-    frame: &[u8],
-    policy: &HelperServerPolicy,
-    now_unix_milliseconds: u64,
-) -> HelperResponse {
-    match parse_request_frame(frame, now_unix_milliseconds) {
-        Ok(HelperRequest::Health { request_id, .. }) => HelperResponse {
-            schema_version: HELPER_SCHEMA_VERSION,
-            request_id,
-            ok: true,
-            result: Some(HelperResult::Health {
-                helper_version: env!("CARGO_PKG_VERSION"),
-                helper_pid: std::process::id(),
-                helper_uid: geteuid().as_raw(),
-                privilege_mode: "paranoid3_helper",
-                ready: true,
-            }),
-            error: None,
-        },
+    match parse_request_frame(&frame, now_unix_milliseconds) {
+        Ok(HelperRequest::Health { request_id, .. }) => write_response(
+            connection,
+            &HelperResponse {
+                schema_version: HELPER_SCHEMA_VERSION,
+                request_id,
+                ok: true,
+                result: Some(HelperResult::Health {
+                    helper_version: env!("CARGO_PKG_VERSION"),
+                    helper_pid: std::process::id(),
+                    helper_uid: geteuid().as_raw(),
+                    privilege_mode: "paranoid3_helper",
+                    ready: true,
+                }),
+                error: None,
+            },
+        ),
         Ok(HelperRequest::CollectPid {
             request_id,
             caller_uid,
             target,
             ..
         }) if caller_uid != policy.allowed_uid || target.uid != policy.allowed_uid => {
-            rejected_response(
-                &request_id,
-                "PATH_SAFETY_VIOLATION",
-                "authorization",
-                "Privileged Helper policy rejected the caller or target UID",
+            write_response(
+                connection,
+                &rejected_response(
+                    &request_id,
+                    "PATH_SAFETY_VIOLATION",
+                    "authorization",
+                    "Privileged Helper policy rejected the caller or target UID",
+                ),
             )
         }
         Ok(HelperRequest::CollectPid {
@@ -355,10 +361,34 @@ fn response_for_frame(
             record_event,
             fallback_record_event,
             max_output_bytes,
+            report_ready,
             ..
         }) => {
             let target_pid = target.pid;
-            let outcome = execute_production_plan(
+            let mut notify_ready = || {
+                if !report_ready {
+                    return Ok(());
+                }
+                write_response(
+                    connection,
+                    &HelperResponse {
+                        schema_version: HELPER_SCHEMA_VERSION,
+                        request_id: request_id.clone(),
+                        ok: true,
+                        result: Some(HelperResult::CollectionReady {
+                            plan_id: plan_id.clone(),
+                            target_pid,
+                        }),
+                        error: None,
+                    },
+                )
+                .map_err(|_error| ExecutionError {
+                    code: "INTERNAL_ERROR",
+                    stage: "privileged_helper",
+                    message: "Privileged Helper could not report collection readiness",
+                })
+            };
+            let outcome = execute_production_plan_with_ready(
                 &ExecutionPlan {
                     plan_id: plan_id.clone(),
                     caller_uid,
@@ -378,14 +408,21 @@ fn response_for_frame(
                 policy.allowed_uid,
                 policy.artifact_gid,
                 &policy.perf_path,
+                &mut notify_ready,
             );
-            collection_response(request_id, plan_id, mode, target_pid, outcome)
+            write_response(
+                connection,
+                &collection_response(request_id, plan_id, mode, target_pid, outcome),
+            )
         }
-        Err(error) => rejected_response(
-            "unknown",
-            "INVALID_INPUT",
-            "privileged_helper_protocol",
-            error.message,
+        Err(error) => write_response(
+            connection,
+            &rejected_response(
+                "unknown",
+                "INVALID_INPUT",
+                "privileged_helper_protocol",
+                error.message,
+            ),
         ),
     }
 }
@@ -544,6 +581,7 @@ fn validate_request(
             fallback_record_event,
             max_output_bytes,
             expires_at_unix_milliseconds,
+            report_ready: _,
         } => {
             validate_common(schema_version, request_id)?;
             if !valid_identifier(plan_id, "plan-", 20, 20)
@@ -721,8 +759,9 @@ mod tests {
     use nix::unistd::geteuid;
 
     use super::{
-        HelperRequest, HelperServerPolicy, MAX_HELPER_MESSAGE_BYTES, ProtocolErrorKind,
-        bind_private_socket, handle_connection, parse_request_frame, serve_listener,
+        HELPER_SCHEMA_VERSION, HelperRequest, HelperResponse, HelperResult, HelperServerPolicy,
+        MAX_HELPER_MESSAGE_BYTES, ProtocolErrorKind, bind_private_socket, handle_connection,
+        parse_request_frame, serve_listener,
     };
 
     const NOW_MILLISECONDS: u64 = 4_102_444_700_000;
@@ -757,6 +796,26 @@ mod tests {
     }
 
     #[test]
+    fn collection_ready_response_matches_shared_golden_frame() {
+        let expected: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../tests/fixtures/privileged_helper/responses/collection-ready.jsonl"
+        ))
+        .expect("parse shared ready response");
+        let actual = serde_json::to_value(HelperResponse {
+            schema_version: HELPER_SCHEMA_VERSION,
+            request_id: "request-fedcba9876543210".to_owned(),
+            ok: true,
+            result: Some(HelperResult::CollectionReady {
+                plan_id: "plan-fedcba9876543210abcd".to_owned(),
+                target_pid: 4321,
+            }),
+            error: None,
+        })
+        .expect("serialize ready response");
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn rejects_shared_invalid_golden_frames() {
         let fixtures = [
             include_bytes!(
@@ -782,6 +841,10 @@ mod tests {
             )
             .as_slice(),
             include_bytes!(
+                "../../../tests/fixtures/privileged_helper/invalid/report-ready-non-boolean.jsonl"
+            )
+            .as_slice(),
+            include_bytes!(
                 "../../../tests/fixtures/privileged_helper/invalid/stat-with-frequency.jsonl"
             )
             .as_slice(),
@@ -801,7 +864,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_or_multiple_frame_terminators() {
-        let frame = br#"{"schema_version":"1.1","operation":"health","request_id":"request-0123456789abcdef"}"#;
+        let frame = br#"{"schema_version":"1.2","operation":"health","request_id":"request-0123456789abcdef"}"#;
         let error = parse_request_frame(frame, NOW_MILLISECONDS).expect_err("newline is required");
         assert_eq!(error.kind(), ProtocolErrorKind::Frame);
 
@@ -833,7 +896,7 @@ mod tests {
             .expect("server join")
             .expect("server response");
         assert!(response.ends_with('\n'));
-        assert!(response.contains("\"schema_version\":\"1.1\""));
+        assert!(response.contains("\"schema_version\":\"1.2\""));
         assert!(response.contains("\"privilege_mode\":\"paranoid3_helper\""));
         assert!(!response.contains("profile"));
     }

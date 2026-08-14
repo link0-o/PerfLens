@@ -202,7 +202,8 @@ PerfLens 不直接解析 `perf.data` 二进制格式。
 
 - Profile 对应的 DSO 是否存在。
 - Build ID 是否匹配。
-- 独立调试文件和 debug link 是否可用。
+- 独立调试文件和 debug link 是否可用；PerfLens 只接受 CRC32 与 `.gnu_debuglink` 一致，
+  或 Build ID 与原 ELF 一致的候选，并会在解析前再次核验；
 - 容器路径、构建路径和本地源码路径是否正确映射。
 - 是否安装了 `llvm-symbolizer` 或 `addr2line`。
 

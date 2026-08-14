@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -46,14 +47,27 @@ from perflens.privileged_helper.client import HelperClient
 from perflens.privileged_helper.protocol import HelperCollectionResult
 from perflens.workloads.project import PROJECT_EXECUTION_AUTHORIZATION
 
+_FAKE_PERF_CONTROL = (
+    "if '--control' in args:\n"
+    "    descriptors = args[args.index('--control') + 1].removeprefix('fd:').split(',')\n"
+    "    control_fd, ack_fd = map(int, descriptors)\n"
+    "    for expected in (b'ping\\n', b'enable\\n'):\n"
+    "        command = b''\n"
+    "        while not command.endswith(b'\\n'):\n"
+    "            command += os.read(control_fd, 16)\n"
+    "        assert command == expected\n"
+    "        os.write(ack_fd, b'ack\\n\\0')\n"
+)
+
 
 def _fake_perf(tmp_path: Path) -> Path:
     executable = tmp_path / "perf"
     executable.write_text(
         f"#!{sys.executable}\n"
-        "import pathlib, sys, time\n"
+        "import os, pathlib, sys, time\n"
         "args = sys.argv[1:]\n"
-        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        + _FAKE_PERF_CONTROL
+        + "output = pathlib.Path(args[args.index('-o') + 1])\n"
         "time.sleep(0.35)\n"
         "if 'stat' in args:\n"
         "    selected = args[args.index('-e') + 1]\n"
@@ -69,13 +83,33 @@ def _fake_perf(tmp_path: Path) -> Path:
     return executable
 
 
+def _fake_perf_with_delayed_binding(tmp_path: Path) -> Path:
+    executable = tmp_path / "perf-delayed-binding"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import os, pathlib, sys, time\n"
+        "args = sys.argv[1:]\n"
+        "time.sleep(0.35)\n"
+        "target_pid = int(args[args.index('-p') + 1])\n"
+        "assert pathlib.Path(f'/proc/{target_pid}').is_dir()\n"
+        + _FAKE_PERF_CONTROL
+        + "time.sleep(0.1)\n"
+        + "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        "output.write_bytes(b'PERFILE2-ready-project')\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o555)
+    return executable
+
+
 def _fake_perf_with_unusable_hardware_pmu(tmp_path: Path) -> Path:
     executable = tmp_path / "perf-fallback"
     executable.write_text(
         f"#!{sys.executable}\n"
-        "import pathlib, sys\n"
+        "import os, pathlib, sys\n"
         "args = sys.argv[1:]\n"
-        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        + _FAKE_PERF_CONTROL
+        + "output = pathlib.Path(args[args.index('-o') + 1])\n"
         "events = args[args.index('-e') + 1]\n"
         "if events == 'cycles,instructions':\n"
         "    output.write_text('0;;cycles;10;100.0\\n0;;instructions;10;100.0\\n')\n"
@@ -91,9 +125,10 @@ def _fake_perf_with_failed_hardware_probe(tmp_path: Path) -> Path:
     executable = tmp_path / "perf-failed-probe"
     executable.write_text(
         f"#!{sys.executable}\n"
-        "import pathlib, sys\n"
+        "import os, pathlib, sys\n"
         "args = sys.argv[1:]\n"
-        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        + _FAKE_PERF_CONTROL
+        + "output = pathlib.Path(args[args.index('-o') + 1])\n"
         "events = args[args.index('-e') + 1]\n"
         "if events == 'cycles,instructions':\n"
         "    raise SystemExit(1)\n"
@@ -108,9 +143,10 @@ def _fake_perf_with_failed_hardware_record_after_probe(tmp_path: Path) -> Path:
     executable = tmp_path / "perf-failed-hardware-record"
     executable.write_text(
         f"#!{sys.executable}\n"
-        "import pathlib, sys\n"
+        "import os, pathlib, sys\n"
         "args = sys.argv[1:]\n"
-        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        + _FAKE_PERF_CONTROL
+        + "output = pathlib.Path(args[args.index('-o') + 1])\n"
         "event = args[args.index('-e') + 1]\n"
         "if args[0] == 'stat':\n"
         "    output.write_text('100;;cycles;10;100.0\\n200;;instructions;10;100.0\\n')\n"
@@ -128,9 +164,10 @@ def _fake_perf_exceeding_output_after_hardware_probe(tmp_path: Path) -> Path:
     executable = tmp_path / "perf-oversized-hardware-record"
     executable.write_text(
         f"#!{sys.executable}\n"
-        "import pathlib, sys\n"
+        "import os, pathlib, sys\n"
         "args = sys.argv[1:]\n"
-        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        + _FAKE_PERF_CONTROL
+        + "output = pathlib.Path(args[args.index('-o') + 1])\n"
         "event = args[args.index('-e') + 1]\n"
         "if args[0] == 'stat':\n"
         "    output.write_text('100;;cycles;10;100.0\\n200;;instructions;10;100.0\\n')\n"
@@ -148,9 +185,10 @@ def _fake_perf_exhausting_window_after_hardware_probe(tmp_path: Path) -> Path:
     executable = tmp_path / "perf-slow-failed-hardware-record"
     executable.write_text(
         f"#!{sys.executable}\n"
-        "import pathlib, sys, time\n"
+        "import os, pathlib, sys, time\n"
         "args = sys.argv[1:]\n"
-        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        + _FAKE_PERF_CONTROL
+        + "output = pathlib.Path(args[args.index('-o') + 1])\n"
         "event = args[args.index('-e') + 1]\n"
         "if args[0] == 'stat':\n"
         "    output.write_text('100;;cycles;10;100.0\\n200;;instructions;10;100.0\\n')\n"
@@ -169,9 +207,10 @@ def _fake_perf_exceeding_hardware_probe_limit(tmp_path: Path) -> Path:
     executable = tmp_path / "perf-oversized-hardware-probe"
     executable.write_text(
         f"#!{sys.executable}\n"
-        "import pathlib, sys\n"
+        "import os, pathlib, sys\n"
         "args = sys.argv[1:]\n"
-        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        + _FAKE_PERF_CONTROL
+        + "output = pathlib.Path(args[args.index('-o') + 1])\n"
         "events = args[args.index('-e') + 1]\n"
         "if events == 'cycles,instructions':\n"
         "    output.write_bytes(b'x' * 2048)\n"
@@ -644,10 +683,15 @@ def test_cap_perfmon_broker_auto_falls_back_when_hardware_probe_has_no_counts(
         with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
             worker = threading.Thread(target=server.serve_once, daemon=True)
             worker.start()
-            artifact = CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(plan)
+            readiness: list[str] = []
+            artifact = CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(
+                plan,
+                ready_callback=lambda: readiness.append("ready"),
+            )
             worker.join(timeout=5)
 
         assert not worker.is_alive()
+        assert readiness == ["ready"]
         assert artifact.actual_event_source == "software"
         assert artifact.fallback_used is True
         assert artifact.fallback_reason == "hardware_probe_produced_no_usable_counts"
@@ -1065,6 +1109,7 @@ def test_cap_perfmon_broker_removes_artifact_when_permission_application_fails(
             max_output_bytes=1024,
         )
         with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+
             def fail_chmod(*_args: object, **_kwargs: object) -> None:
                 raise OSError
 
@@ -1101,8 +1146,11 @@ def test_broker_delegates_paranoid3_collection_to_typed_helper(tmp_path: Path) -
             plan: CollectionPlanArtifact,
             *,
             caller_uid: int,
+            ready_callback: Callable[[], None] | None = None,
         ) -> HelperCollectionResult:
             assert caller_uid == os.geteuid()
+            if ready_callback is not None:
+                ready_callback()
             payload = b"100;;cycles;10;100.0\n200;;instructions;10;100.0\n"
             output = helper_spool / f"{plan.plan_id}.stat.csv"
             output.write_bytes(payload)
@@ -1156,13 +1204,18 @@ def test_broker_delegates_paranoid3_collection_to_typed_helper(tmp_path: Path) -
             health_worker.join(timeout=5)
             worker = threading.Thread(target=server.serve_once, daemon=True)
             worker.start()
-            artifact = CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(plan)
+            readiness: list[str] = []
+            artifact = CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(
+                plan,
+                ready_callback=lambda: readiness.append("ready"),
+            )
             worker.join(timeout=5)
 
         assert not health_worker.is_alive()
         assert health.privilege_mode == "paranoid3_helper"
         assert health.spool_root == str(helper_spool)
         assert not worker.is_alive()
+        assert readiness == ["ready"]
         assert artifact.output_path.startswith(str(helper_spool))
         assert artifact.output_owner_uid == os.geteuid()
         assert {metric.event for metric in artifact.metrics} == {
@@ -1566,13 +1619,12 @@ def test_mcp_launches_exact_project_workload_then_collects_bound_pid(tmp_path: P
     workload = project / "workload"
     workload.write_text(
         f"#!{sys.executable}\n"
-        "import pathlib, sys, time\n"
-        "pathlib.Path(sys.argv[1]).write_text('started', encoding='utf-8')\n"
-        "time.sleep(10)\n",
+        "import pathlib, sys\n"
+        "pathlib.Path(sys.argv[1]).write_text('started', encoding='utf-8')\n",
         encoding="utf-8",
     )
     workload.chmod(0o555)
-    fake_perf = _fake_perf(tmp_path)
+    fake_perf = _fake_perf_with_delayed_binding(tmp_path)
     broker_policy = CollectorBrokerPolicy(
         spool_root=spool,
         perf_path=fake_perf,
@@ -1631,7 +1683,8 @@ def test_mcp_launches_exact_project_workload_then_collects_bound_pid(tmp_path: P
     assert payload["artifact_type"] == "project-run"
     summary = payload["summary"]
     assert isinstance(summary, dict)
-    assert summary["workload_status"] == "terminated_after_collection"
+    assert summary["workload_status"] == "exited"
+    assert summary["workload_exit_code"] == 0
     assert isinstance(summary["target_pid"], int)
     assert not Path(f"/proc/{summary['target_pid']}").exists()
     assert len(list(artifacts.glob("*.project-run.json"))) == 1

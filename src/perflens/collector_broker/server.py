@@ -17,6 +17,7 @@ import struct
 import sys
 import threading
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -46,6 +47,7 @@ from perflens.collector_broker.policy import (
 from perflens.collector_broker.protocol import (
     BROKER_REQUEST_ADAPTER,
     MAX_BROKER_MESSAGE_BYTES,
+    BrokerCollectionReady,
     BrokerCollectRequest,
     BrokerError,
     BrokerHealthRequest,
@@ -169,6 +171,7 @@ class CollectorBrokerServer:
         operation = "unknown"
         plan_id: str | None = None
         failure: PerfLensError | None = None
+        ready_sent = False
         try:
             peer_uid = _peer_uid(connection)
             payload = _read_frame(connection)
@@ -179,7 +182,29 @@ class CollectorBrokerServer:
                 artifact = self._health(peer_uid)
             else:
                 plan_id = request.plan.plan_id
-                artifact = self._collect(peer_uid, request)
+
+                def report_ready() -> None:
+                    nonlocal ready_sent
+                    if not request.report_ready or ready_sent:
+                        return
+                    _send_broker_response(
+                        connection,
+                        BrokerResponse(
+                            request_id=request_id,
+                            ok=True,
+                            result=BrokerCollectionReady(
+                                plan_id=request.plan.plan_id,
+                                target_pid=request.plan.target_pid,
+                            ).model_dump(mode="json"),
+                        ),
+                    )
+                    ready_sent = True
+
+                artifact = self._collect(
+                    peer_uid,
+                    request,
+                    ready_callback=report_ready if request.report_ready else None,
+                )
                 _emit_operational_event(
                     logging.INFO,
                     "collection_completed",
@@ -226,22 +251,33 @@ class CollectorBrokerServer:
                 stage=failure.stage,
                 recoverable=failure.recoverable,
             )
-        encoded = response.model_dump_json().encode("utf-8") + b"\n"
-        if len(encoded) <= MAX_BROKER_MESSAGE_BYTES:
-            with suppress(OSError):
-                connection.sendall(encoded)
+        with suppress(OSError, PerfLensError):
+            _send_broker_response(connection, response)
 
-    def _collect(self, peer_uid: int, request: BrokerCollectRequest) -> CollectionArtifact:
+    def _collect(
+        self,
+        peer_uid: int,
+        request: BrokerCollectRequest,
+        *,
+        ready_callback: Callable[[], None] | None = None,
+    ) -> CollectionArtifact:
         plan = request.plan
         self._authorize(peer_uid, plan)
         assert_plan_current(plan)
         effective_plan = self._narrow_fallback_to_collector_policy(plan)
         if self._policy.privilege_mode == "paranoid3_helper":
-            artifact = self._collect_with_helper(peer_uid, effective_plan)
+            artifact = self._collect_with_helper(
+                peer_uid,
+                effective_plan,
+                ready_callback=ready_callback,
+            )
         else:
             self._authorize_spool_capacity(effective_plan)
             self._consume_plan(effective_plan)
-            artifact = self._collect_with_cap_perfmon(effective_plan)
+            artifact = self._collect_with_cap_perfmon(
+                effective_plan,
+                ready_callback=ready_callback,
+            )
         if plan.fallback_allowed and not effective_plan.fallback_allowed:
             return artifact.model_copy(
                 update={
@@ -268,7 +304,12 @@ class CollectorBrokerServer:
             }
         )
 
-    def _collect_with_cap_perfmon(self, plan: CollectionPlanArtifact) -> CollectionArtifact:
+    def _collect_with_cap_perfmon(
+        self,
+        plan: CollectionPlanArtifact,
+        *,
+        ready_callback: Callable[[], None] | None = None,
+    ) -> CollectionArtifact:
         events = plan.events or self._policy.allowed_stat_events
         record_event: Literal["cycles", "cpu-clock"] = plan.record_event or DEFAULT_RECORD_EVENT
         duration_seconds = plan.duration_seconds
@@ -278,7 +319,10 @@ class CollectorBrokerServer:
             events = plan.events or SOFTWARE_STAT_EVENTS
             record_event = plan.record_event or SOFTWARE_RECORD_EVENT
         elif plan.fallback_allowed:
-            use_hardware, fallback_reason, probe_seconds = self._probe_hardware_pmu(plan)
+            use_hardware, fallback_reason, probe_seconds = self._probe_hardware_pmu(
+                plan,
+                ready_callback=ready_callback,
+            )
             duration_seconds -= probe_seconds
             if not use_hardware:
                 fallback_used = True
@@ -311,7 +355,9 @@ class CollectorBrokerServer:
                     fallback_reason=fallback_reason,
                     timeout_seconds=min(duration_seconds + 10, 86_400),
                     max_output_bytes=plan.max_output_bytes,
-                )
+                ),
+                pid_identity_validator=lambda: assert_plan_current(plan),
+                ready_callback=ready_callback,
             )
 
         hardware_started = time.monotonic()
@@ -348,6 +394,8 @@ class CollectorBrokerServer:
     def _probe_hardware_pmu(
         self,
         plan: CollectionPlanArtifact,
+        *,
+        ready_callback: Callable[[], None] | None = None,
     ) -> tuple[bool, str | None, float]:
         if plan.duration_seconds < _HARDWARE_PROBE_MINIMUM_PLAN_SECONDS:
             return False, "hardware_probe_skipped_for_short_collection", 0.0
@@ -371,7 +419,9 @@ class CollectorBrokerServer:
                         requested_event_source="hardware_required",
                         timeout_seconds=min(probe_seconds + 10, 86_400),
                         max_output_bytes=min(plan.max_output_bytes, 1 << 20),
-                    )
+                    ),
+                    pid_identity_validator=lambda: assert_plan_current(plan),
+                    ready_callback=ready_callback,
                 )
             except PerfLensError as exc:
                 if exc.code not in {ErrorCode.EXTERNAL_TOOL_FAILED, ErrorCode.PROFILE_PARSE_FAILED}:
@@ -396,6 +446,8 @@ class CollectorBrokerServer:
         self,
         peer_uid: int,
         plan: CollectionPlanArtifact,
+        *,
+        ready_callback: Callable[[], None] | None = None,
     ) -> CollectionArtifact:
         helper = self._helper_client
         if helper is None:
@@ -404,7 +456,11 @@ class CollectorBrokerServer:
                 "privileged_helper",
                 "Privileged Helper client was not initialized",
             )
-        result = helper.collect(plan, caller_uid=peer_uid)
+        result = helper.collect(
+            plan,
+            caller_uid=peer_uid,
+            ready_callback=ready_callback,
+        )
         output_path = self._verify_helper_artifact(plan, result)
         metrics, warnings = (
             PerfStatMetricAdapter().parse(output_path) if plan.mode == "stat" else ((), ())
@@ -603,8 +659,10 @@ class CollectorBrokerServer:
                 "perf stat event is not allowed by collector policy",
                 recoverable=True,
             )
-        if self._policy.allow_software_fallback and plan.mode == "stat" and any(
-            event not in self._policy.allowed_stat_events for event in plan.fallback_events
+        if (
+            self._policy.allow_software_fallback
+            and plan.mode == "stat"
+            and any(event not in self._policy.allowed_stat_events for event in plan.fallback_events)
         ):
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,
@@ -625,9 +683,7 @@ class CollectorBrokerServer:
                 not plan.events or any(event not in HARDWARE_STAT_EVENTS for event in plan.events)
             ):
                 raise _unsafe_event_source_plan()
-            if plan.fallback_allowed and tuple(plan.fallback_events) != tuple(
-                SOFTWARE_STAT_EVENTS
-            ):
+            if plan.fallback_allowed and tuple(plan.fallback_events) != tuple(SOFTWARE_STAT_EVENTS):
                 raise _unsafe_event_source_plan()
             if not plan.fallback_allowed and plan.fallback_events:
                 raise _unsafe_event_source_plan()
@@ -867,6 +923,17 @@ def _error_response(request_id: str, error: PerfLensError) -> BrokerResponse:
             recoverable=error.recoverable,
         ),
     )
+
+
+def _send_broker_response(connection: socket.socket, response: BrokerResponse) -> None:
+    encoded = response.model_dump_json().encode("utf-8") + b"\n"
+    if len(encoded) > MAX_BROKER_MESSAGE_BYTES:
+        raise PerfLensError(
+            ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+            "collector_broker",
+            "Collector broker response exceeds the protocol limit",
+        )
+    connection.sendall(encoded)
 
 
 def _unsafe_helper_artifact() -> PerfLensError:

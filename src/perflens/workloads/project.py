@@ -11,7 +11,6 @@ import stat
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -42,7 +41,6 @@ PROJECT_EXECUTION_AUTHORIZATION = "I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION"
 _MAX_ARGUMENTS = 128
 _MAX_ARGUMENT_BYTES = 32 << 10
 _BOOTSTRAP_READY_TIMEOUT_SECONDS = 3.0
-_COLLECTOR_ATTACH_GRACE_SECONDS = 0.2
 _TERMINATE_GRACE_SECONDS = 1.0
 
 
@@ -120,22 +118,21 @@ def collect_project_workload(
             collector_socket,
             timeout_seconds=min(plan.duration_seconds + 15, 86_500),
         )
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="perflens-project") as executor:
-            collection_future = executor.submit(client.collect, plan)
-            time.sleep(_COLLECTOR_ATTACH_GRACE_SECONDS)
-            if collection_future.done():
-                collection_future.result()
-                raise PerfLensError(
-                    ErrorCode.EXTERNAL_TOOL_FAILED,
-                    "project_workload",
-                    "Collector finished before the project workload could be released",
-                    recoverable=True,
-                )
+
+        def release_workload() -> None:
+            nonlocal release_write, released
             os.write(release_write, b"1")
             os.close(release_write)
             release_write = -1
             released = True
-            collection = collection_future.result()
+
+        collection = client.collect(plan, ready_callback=release_workload)
+        if not released:
+            raise PerfLensError(
+                ErrorCode.INTERNAL_ERROR,
+                "project_workload",
+                "Collector completed without confirming that it attached to the project PID",
+            )
 
         exit_code = process.poll()
         warnings = list(plan.warnings)

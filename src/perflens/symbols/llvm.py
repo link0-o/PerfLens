@@ -19,6 +19,7 @@ from typing import cast
 
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.domain.symbols import ModuleIdentity, ModuleLocation, ResolvedFrame
+from perflens.symbols.elf import select_verified_module_path
 
 _QUERY_BATCH_SIZE = 256
 
@@ -301,19 +302,7 @@ def _validated_offset(location: ModuleLocation) -> int:
 
 
 def _select_module_path(module: ModuleIdentity) -> Path:
-    for candidate in (*module.debug_file_candidates, module.dso_path):
-        try:
-            resolved = candidate.expanduser().resolve(strict=True)
-        except OSError:
-            continue
-        if resolved.is_file():
-            return resolved
-    raise PerfLensError(
-        ErrorCode.INVALID_INPUT,
-        "symbolization",
-        "No module or debug file candidate can be resolved",
-        details={"dso_path": str(module.dso_path)},
-    )
+    return select_verified_module_path(module)
 
 
 def _find_llvm_symbolizer() -> Path:

@@ -47,5 +47,13 @@ PMU worked. The public contract is checked in as
 The private Python-Broker/Rust-Helper protocol moves from `1.0` to `1.1` because
 requests now bind fixed event-source/fallback policy and responses return the
 actual source and evidence events. It is not a user artifact and has no
-cross-version negotiation: packages upgrade and restart Broker and Helper
-together, and a mismatch fails closed.
+cross-version negotiation.
+
+The project-launch readiness handshake moves the public Collector Broker
+protocol from `1.0` to `1.1` and the private Python-Broker/Rust-Helper protocol
+from `1.1` to `1.2`. A collection request can require one intermediate
+`collection_ready` response bound to its request ID, plan ID, and target PID.
+It is sent only after perf has bound the target, PID identity has been
+revalidated, and events have been enabled. The final Collection remains public
+artifact schema `1.0`. Packages upgrade and restart Broker and Helper together;
+a mismatch fails closed.

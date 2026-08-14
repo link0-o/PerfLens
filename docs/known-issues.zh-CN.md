@@ -5,17 +5,50 @@
 本文记录已经复现、具有明确边界和临时处理方法的问题，包括已经修复的问题。
 不要通过降低部署器安全检查来规避问题；升级前仍可按对应版本的临时方法处理。
 
-## KI-2026-08-12：软件 record 成功，但分析报 CPU 属性缺失（已修复）
+## KI-2026-08-14：cap_perfmon PID 绑定与项目启动存在时序窗口（已修复）
 
-- 已确认影响范围：已撤回的部分同版本 `v0.2.0` `paranoid3_helper` 包在软件降级后生成的
-  `cpu-clock` `perf.data`；修复同时覆盖软件和硬件 record，文本 Profile 不受影响；
+- 原问题一：`cap_perfmon` Python Broker 在启动 perf 前核验 PID 所有者和启动时间，但在
+  perf 真正附加前，数值 PID 仍可能被内核复用；Rust Helper 已有启动屏障，默认模式没有
+  同等的附加后复核；
+- 原问题二：项目启动器提交计划后固定等待 200ms 就放行程序。这只是时间猜测，慢机器可能
+  尚未附加，极短程序也可能在采集真正开始前结束；
+- 修复：两条路径都用 perf control fd 以 `-D -1` 禁用事件启动，收到有界 `ping` ACK 后
+  再次核验计划绑定的 PID/UID/启动时间，随后才 `enable`。身份变化、ACK 异常、超时和多余
+  帧全部安全拒绝，不会发布半成品；
+- 项目握手：公共 Broker 协议升级为 `1.1`，Python/Rust 私有 Helper 协议升级为 `1.2`。
+  回执同时绑定 `request_id`、`plan_id` 和目标 PID；普通用户启动器只有在验证回执后才
+  `exec` 已确认的项目程序；
+- `event_source=auto` 的第一阶段可能是硬件探测，也可能是正式采集。Collector 在第一阶段
+  已绑定并启用后立即发送一次就绪回执，避免对仍暂停的引导进程探测而把正常 PMU 误判为
+  零计数；探测仍计入原授权时长，最多 250ms。
+
+这不会把项目命令、参数或环境交给 Collector，也没有增加 root、sudo、sysctl 或跨 UID
+权限。旧 Broker/Helper 不与新协议协商；升级两个同版本 DEB 后必须运行
+`sudo perflens-admin upgrade` 重启配套服务。
+
+## KI-2026-08-14：独立调试文件只按路径存在性选择（已修复）
+
+- 原现象：ELF 检查器会列出 `.gnu_debuglink` 和 Build ID 的候选路径，但解析器使用前只
+  检查“文件存在”，没有证明候选确实属于当前二进制；错误或被替换的调试文件可能产生
+  错误源码归因；
+- 修复：`.gnu_debuglink` 候选必须匹配 ELF 中记录的 CRC32，Build ID 目录候选必须包含
+  相同 Build ID；在调用 `addr2line`/`llvm-symbolizer` 前会再次检查。候选失配时回退到
+  身份匹配的原始 DSO；如果原始 DSO 也已改变，则明确拒绝，不猜测源码位置；
+- 边界：CRC32 是 GNU debuglink 规定的兼容校验，不是通用密码学签名；Build ID 也不是
+  发布者签名。它们用于阻止误配和常见替换，不替代软件供应链签名验证。
+
+## KI-2026-08-12：record 成功，但分析报 CPU 属性缺失（已修复）
+
+- 已确认影响范围：已撤回的部分同版本 `v0.2.0` 包中，`cap_perfmon` Python 采集路径以及
+  `paranoid3_helper` 软件降级后生成的 `cpu-clock` `perf.data`；修复同时覆盖软件和硬件
+  record，文本 Profile 不受影响；
 - 现象：Collection 显示 record 已成功并生成数 MB 证据，但随后
   `analyze_collection` 返回 `EXTERNAL_TOOL_FAILED`。底层 `perf script` 提示
   `Samples ... do not have CPU attribute set` 和 `Cannot print 'cpu' field`；
-- 根因：Helper 的固定 `perf record` 参数没有加入 `--sample-cpu`，而 PerfLens 的
+- 根因：两条 Collector 路径的固定 `perf record` 参数没有完整加入 `--sample-cpu`，而 PerfLens 的
   `perf script` 适配器要求输出每条样本的 CPU 字段；
-- 新采集修复：Helper 现在对硬件和软件 record 都固定加入 `--sample-cpu`；参数仍完全
-  由类型化计划生成，未开放任意 perf 参数；
+- 新采集修复：Python Collector 与 Helper 现在对硬件和软件 record 都固定加入
+  `--sample-cpu`；参数仍完全由类型化计划生成，未开放任意 perf 参数；
 - 旧证据兼容：分析器只在识别到上述精确错误时，自动去掉 `cpu` 字段重试，并写入
   `MISSING_SAMPLE_CPU` 警告。旧文件仍可用于热点、调用路径和源码归因，但不能做逐 CPU
   分布分析；其他 `perf script` 失败不会被吞掉。

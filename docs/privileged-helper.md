@@ -78,10 +78,15 @@ from plan IDs and are published into the fixed spool after identity, symlink/lin
 size, digest, quota, and free-space checks.
 
 To close PID reuse between identity validation and attachment, perf first opens the target with
-events disabled. An inherited control-FD `disable/ack` barrier proves that binding completed; the
+events disabled. An inherited control-FD `ping/ack` barrier proves that binding completed; the
 Helper then revalidates owner and start time before sending `enable`. The resulting kernel event
 descriptors remain bound to the task perf actually opened. The Helper launches only perf and uses
 the control channel plus signals for duration enforcement, never a sleep process or workload.
+
+When a project workload requests readiness, private protocol `1.2` emits exactly one
+request/plan/PID-bound `collection_ready` frame only after that sequence. If `auto` starts with a
+hardware probe, the probe is the first stage and reports readiness. The Python Broker authenticates
+and relays it as public Broker protocol `1.1`; the ordinary-user program does not execute earlier.
 
 Fresh deployment requires `--acknowledge-privileged-helper-risk`. During an
 upgrade, `--dry-run` reports any newly added capability in

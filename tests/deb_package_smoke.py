@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 
 from perflens import __version__
+from perflens.distribution.debian import DEBIAN_PACKAGE_REVISION
 
 
 def main() -> None:
@@ -22,15 +23,18 @@ def main() -> None:
     parser.add_argument("--collector", type=Path)
     arguments = parser.parse_args()
     directory = arguments.directory.resolve(strict=True)
+    package_version = f"{__version__}-{DEBIAN_PACKAGE_REVISION}"
     if arguments.main is None:
-        candidates = tuple(directory.glob(f"perflens_{__version__}-1_*.deb"))
+        candidates = tuple(directory.glob(f"perflens_{package_version}_*.deb"))
         if len(candidates) != 1:
             parser.error("expected exactly one architecture-specific perflens DEB")
         main_package = candidates[0]
     else:
         main_package = arguments.main.resolve(strict=True)
     if arguments.collector is None:
-        collector_candidates = tuple(directory.glob(f"perflens-collector_{__version__}-1_*.deb"))
+        collector_candidates = tuple(
+            directory.glob(f"perflens-collector_{package_version}_*.deb")
+        )
         if len(collector_candidates) != 1:
             parser.error("expected exactly one architecture-specific Collector DEB")
         collector_package = collector_candidates[0]
@@ -44,15 +48,17 @@ def main() -> None:
 
     assert _field(dpkg_deb, main_package, "Package") == "perflens"
     assert _field(dpkg_deb, collector_package, "Package") == "perflens-collector"
-    assert _field(dpkg_deb, main_package, "Version") == f"{__version__}-1"
-    assert _field(dpkg_deb, collector_package, "Version") == f"{__version__}-1"
+    assert _field(dpkg_deb, main_package, "Version") == package_version
+    assert _field(dpkg_deb, collector_package, "Version") == package_version
     main_dependencies = _field(dpkg_deb, main_package, "Depends")
     assert any(
         f"python3 (>= {abi})" in main_dependencies
         and f"python3 (<< 3.{int(abi.removeprefix('3.')) + 1})" in main_dependencies
         for abi in ("3.12", "3.13")
     )
-    assert f"perflens (= {__version__}-1)" in _field(dpkg_deb, collector_package, "Depends")
+    assert f"perflens (= {package_version})" in _field(
+        dpkg_deb, collector_package, "Depends"
+    )
 
     with tempfile.TemporaryDirectory(prefix="perflens-deb-smoke-") as directory:
         root = Path(directory) / "root"

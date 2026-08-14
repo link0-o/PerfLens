@@ -102,8 +102,13 @@ For a current-project request, the user does not need a PID. After confirming
 one exact in-project executable, arguments, representative workload, and the
 per-call authorization, the Skill calls `collect_project_workload`. An
 ordinary-user coordinator creates the process, captures its identity, submits
-the PID-only plan, and then releases the same process to execute. The privileged
-Collector never receives or launches the workload command. Interactive,
+the PID-only plan, and keeps it waiting. The first hardware-probe or formal perf
+stage starts disabled; after perf confirms binding, the Collector revalidates
+PID/UID/start time, enables events, and streams a versioned readiness frame
+bound to the plan and PID. The authenticated client then releases the same
+process to execute, replacing the former fixed 200ms delay. An `auto` probe
+therefore observes the released workload instead of an idle bootstrap. The
+privileged Collector never receives or launches the workload command. Interactive,
 setuid/setgid, shell, arbitrary-environment, and system-wide workloads are not
 supported; daemonizing programs should expose a foreground mode. The user does
 not memorize the fixed token: after exact confirmation, the Agent supplies

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import cast
 
 from perflens import __version__
+from perflens.distribution.debian import DEBIAN_PACKAGE_REVISION
 from perflens.distribution.skill import SKILL_ARCHIVE_BASENAME, SKILL_NAME
 
 _ZIP_TIMESTAMP = (2020, 1, 1, 0, 0, 0)
@@ -61,8 +62,9 @@ def main() -> None:
             parser.error(f"required distribution is missing: {required.name}")
     _validate_sbom(sbom, parser)
 
-    main_debs = tuple(dist_dir.glob(f"perflens_{__version__}-1_*.deb"))
-    collector_debs = tuple(dist_dir.glob(f"perflens-collector_{__version__}-1_*.deb"))
+    debian_version = f"{__version__}-{DEBIAN_PACKAGE_REVISION}"
+    main_debs = tuple(dist_dir.glob(f"perflens_{debian_version}_*.deb"))
+    collector_debs = tuple(dist_dir.glob(f"perflens-collector_{debian_version}_*.deb"))
     if len(main_debs) != 1:
         parser.error("release requires exactly one architecture-specific perflens DEB")
     if len(collector_debs) != 1:

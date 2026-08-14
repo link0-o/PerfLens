@@ -8,7 +8,7 @@ import selectors
 import signal
 import subprocess
 import time
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,10 +69,13 @@ class CommandRunner:
         *,
         limits: CommandLimits | None = None,
         watched_output: Path | None = None,
+        pass_fds: Collection[int] = (),
+        after_start: Callable[[], None] | None = None,
     ) -> CommandResult:
         effective_limits = limits or CommandLimits()
         self._validate_limits(effective_limits)
         safe_argv = self._validate_argv(argv)
+        safe_pass_fds = self._validate_pass_fds(pass_fds)
         started = time.monotonic()
         process: subprocess.Popen[bytes] | None = None
         stderr_buffer = bytearray()
@@ -89,6 +92,7 @@ class CommandRunner:
                     stderr=subprocess.PIPE,
                     shell=False,
                     close_fds=True,
+                    pass_fds=safe_pass_fds,
                     start_new_session=True,
                     env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
                 )
@@ -100,6 +104,8 @@ class CommandRunner:
                     recoverable=True,
                     details={"executable": safe_argv[0]},
                 ) from exc
+            if after_start is not None:
+                after_start()
             assert process.stdout is not None
             assert process.stderr is not None
             selector.register(process.stdout, selectors.EVENT_READ, "stdout")
@@ -254,6 +260,34 @@ class CommandRunner:
                 details={"executable": str(resolved)},
             )
         return (str(resolved), *argv[1:])
+
+    @staticmethod
+    def _validate_pass_fds(pass_fds: Collection[int]) -> tuple[int, ...]:
+        if len(pass_fds) > 8:
+            raise PerfLensError(
+                ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                "external_tool",
+                "External command file-descriptor allowance exceeds the fixed limit",
+            )
+        validated: list[int] = []
+        for descriptor in pass_fds:
+            if type(descriptor) is not int or descriptor < 0:
+                raise PerfLensError(
+                    ErrorCode.INVALID_INPUT,
+                    "external_tool",
+                    "External command file descriptors must be non-negative integers",
+                )
+            try:
+                os.fstat(descriptor)
+            except OSError as exc:
+                raise PerfLensError(
+                    ErrorCode.INVALID_INPUT,
+                    "external_tool",
+                    "External command file descriptor is not open",
+                ) from exc
+            if descriptor not in validated:
+                validated.append(descriptor)
+        return tuple(validated)
 
     @staticmethod
     def _validate_limits(limits: CommandLimits) -> None:

@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import cast
 
 from perflens import __version__
+from perflens.distribution.debian import DEBIAN_PACKAGE_REVISION
 
-_DEBIAN_REVISION = "1"
 _SOURCE_DATE_EPOCH = 1_577_836_800  # 2020-01-01 UTC
 _PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9+.-]+$")
 _ARCHITECTURE = re.compile(r"^[a-z0-9][a-z0-9-]+$")
@@ -77,7 +77,7 @@ def main() -> None:
     if python_abi not in {"3.12", "3.13"}:
         parser.error("Debian package builds require the supported system Python 3.12 or 3.13")
 
-    debian_version = f"{version}-{_DEBIAN_REVISION}"
+    debian_version = f"{version}-{DEBIAN_PACKAGE_REVISION}"
     main_output = output / f"perflens_{debian_version}_{architecture}.deb"
     collector_output = output / f"perflens-collector_{debian_version}_{architecture}.deb"
     for destination in (main_output, collector_output):

@@ -6,20 +6,22 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field, TypeAdapter, model_validator
 
-from perflens.contracts.artifacts import SCHEMA_VERSION, CollectionPlanArtifact, ContractModel
+from perflens.contracts.artifacts import CollectionPlanArtifact, ContractModel
 
 MAX_BROKER_MESSAGE_BYTES = 64 << 10
+BROKER_SCHEMA_VERSION = "1.1"
 
 
 class BrokerCollectRequest(ContractModel):
-    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    schema_version: Literal["1.1"] = BROKER_SCHEMA_VERSION
     operation: Literal["collect_pid"] = "collect_pid"
     request_id: str = Field(pattern=r"^request-[a-f0-9]{16,64}$")
     plan: CollectionPlanArtifact
+    report_ready: bool = Field(default=False, strict=True)
 
 
 class BrokerHealthRequest(ContractModel):
-    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    schema_version: Literal["1.1"] = BROKER_SCHEMA_VERSION
     operation: Literal["health"] = "health"
     request_id: str = Field(pattern=r"^request-[a-f0-9]{16,64}$")
 
@@ -38,8 +40,14 @@ class BrokerError(ContractModel):
     recoverable: bool
 
 
+class BrokerCollectionReady(ContractModel):
+    kind: Literal["collection_ready"] = "collection_ready"
+    plan_id: str = Field(pattern=r"^plan-[a-f0-9]{20}$")
+    target_pid: int = Field(gt=0)
+
+
 class BrokerResponse(ContractModel):
-    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    schema_version: Literal["1.1"] = BROKER_SCHEMA_VERSION
     request_id: str = Field(pattern=r"^(unknown|request-[a-f0-9]{16,64})$")
     ok: bool
     result: dict[str, Any] | None = None

@@ -1,5 +1,32 @@
 {
   "$defs": {
+    "HelperCollectionReadyResult": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "collection_ready",
+          "title": "Kind",
+          "type": "string"
+        },
+        "plan_id": {
+          "pattern": "^plan-[a-f0-9]{20}$",
+          "title": "Plan Id",
+          "type": "string"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "plan_id",
+        "target_pid"
+      ],
+      "title": "HelperCollectionReadyResult",
+      "type": "object"
+    },
     "HelperCollectionResult": {
       "additionalProperties": false,
       "properties": {
@@ -244,6 +271,7 @@
           "discriminator": {
             "mapping": {
               "collection": "#/$defs/HelperCollectionResult",
+              "collection_ready": "#/$defs/HelperCollectionReadyResult",
               "health": "#/$defs/HelperHealthResult"
             },
             "propertyName": "kind"
@@ -251,6 +279,9 @@
           "oneOf": [
             {
               "$ref": "#/$defs/HelperHealthResult"
+            },
+            {
+              "$ref": "#/$defs/HelperCollectionReadyResult"
             },
             {
               "$ref": "#/$defs/HelperCollectionResult"
@@ -265,8 +296,8 @@
       "title": "Result"
     },
     "schema_version": {
-      "const": "1.1",
-      "default": "1.1",
+      "const": "1.2",
+      "default": "1.2",
       "title": "Schema Version",
       "type": "string"
     }

@@ -8,8 +8,8 @@ archive. A release contains:
 - `perflens-<version>-py3-none-any.whl`
 - `perflens-<version>.tar.gz`
 - `perflens-skill-<version>.zip`
-- `perflens_<version>-1_amd64.deb`
-- `perflens-collector_<version>-1_<architecture>.deb`
+- `perflens_<version>-<Debian-revision>_amd64.deb`
+- `perflens-collector_<version>-<Debian-revision>_<architecture>.deb`
 - `sbom.cdx.json`
 - `SHA256SUMS`
 

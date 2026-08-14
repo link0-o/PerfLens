@@ -7,8 +7,8 @@ PerfLens 的正式发布版由不可变的 Python 安装包和独立 Skill 压�
 - `perflens-<版本>-py3-none-any.whl`
 - `perflens-<版本>.tar.gz`
 - `perflens-skill-<版本>.zip`
-- `perflens_<版本>-1_amd64.deb`
-- `perflens-collector_<版本>-1_<架构>.deb`
+- `perflens_<版本>-<Debian修订号>_amd64.deb`
+- `perflens-collector_<版本>-<Debian修订号>_<架构>.deb`
 - `sbom.cdx.json`
 - `SHA256SUMS`
 

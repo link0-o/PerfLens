@@ -4,8 +4,8 @@
 
 PerfLens 为 Debian 13 `amd64` 提供两个职责分离的原生安装包：
 
-- `perflens_<版本>-1_amd64.deb`：普通用户 CLI、MCP Server、Skill 和锁定运行依赖；
-- `perflens-collector_<版本>-1_amd64.deb`：可选的 `perflens-admin`、
+- `perflens_<版本>-<Debian修订号>_amd64.deb`：普通用户 CLI、MCP Server、Skill 和锁定运行依赖；
+- `perflens-collector_<版本>-<Debian修订号>_amd64.deb`：可选的 `perflens-admin`、
   `perflens-collector`、同架构 Rust Helper 和部署示例，依赖同版本主包。
 
 包中的 `/usr/bin/perflens-mcp` 和 `/usr/bin/perflens-collector` 是指向私有运行时启动器
@@ -16,7 +16,7 @@ PerfLens 为 Debian 13 `amd64` 提供两个职责分离的原生安装包：
 只分析已有 Profile、不需要自动采集时，只安装主包：
 
 ```bash
-sudo apt install ./perflens_0.2.0-1_amd64.deb
+sudo apt install ./perflens_0.2.0-2_amd64.deb
 cd /绝对路径/你的项目
 perflens init
 ```
@@ -25,8 +25,8 @@ perflens init
 
 ```bash
 sudo apt install \
-  ./perflens_0.2.0-1_amd64.deb \
-  ./perflens-collector_0.2.0-1_amd64.deb
+  ./perflens_0.2.0-2_amd64.deb \
+  ./perflens-collector_0.2.0-2_amd64.deb
 
 perflens setup \
   --project /绝对路径/你的项目 \
@@ -63,7 +63,9 @@ perflens init --prepare-collector \
 不会让 Python Broker、MCP、Skill 或 Agent 变成 root，也不会自动修改 sysctl；只有
 固定 Rust Helper unit 获得收窄后的 capability bounding set。
 
-版本号只是示例，应替换为下载文件的实际版本。安装包不会自动启动服务、写入
+当前修复包的上游版本仍为 `0.2.0`，Debian 修订号从 `1` 增加到 `2`，因此已经安装
+`0.2.0-1` 的主机可直接用 APT 升级到 `0.2.0-2`，CLI 仍显示 `0.2.0`。文件名只是示例，
+应以实际下载文件为准。安装包不会自动启动服务、写入
 `/etc/perflens`、修改 sysctl/capability 或授予用户权限。检查引导生成的双语
 `collector.toml` 后，由管理员明确执行：
 
@@ -146,8 +148,8 @@ sudo apt remove perflens-collector perflens
 
 主包包含由 `uv.lock` 加哈希锁定的 Python 依赖，安装时不联网。由于其中包含
 Python 原生扩展，主包是架构和 Python ABI 相关的；当前正式目标是 Debian 13、
-`amd64`、系统 Python 3.13。Collector 包本身是 `Architecture: all`，但必须与
-完全相同版本的主包配套。
+`amd64`、系统 Python 3.13。Collector 包包含目标架构的 Rust Helper，因此同样是
+架构相关包，并且必须与完全相同 Debian 版本和架构的主包配套。
 
 构建器固定文件时间和权限；同一 wheel、锁文件、系统 Python 与架构重复构建会
 得到相同 SHA-256。发布流程还会提取两个 DEB，在临时目录执行完整包冒烟测试。

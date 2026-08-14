@@ -4,9 +4,9 @@
 
 PerfLens publishes two role-separated native packages for Debian 13 `amd64`:
 
-- `perflens_<version>-1_amd64.deb` contains the unprivileged CLI, MCP server,
+- `perflens_<version>-<Debian-revision>_amd64.deb` contains the unprivileged CLI, MCP server,
   Skill, and hash-locked runtime dependencies;
-- `perflens-collector_<version>-1_amd64.deb` adds the optional administrator,
+- `perflens-collector_<version>-<Debian-revision>_amd64.deb` adds the optional administrator,
   Collector, target-native Rust Helper, and depends on the exact same main-package version.
 
 The root-managed `/usr/bin/perflens-mcp` and `/usr/bin/perflens-collector`
@@ -18,7 +18,7 @@ MCP or Collector identity. Links in writable directories are rejected.
 For offline profile analysis, install only the main package:
 
 ```bash
-sudo apt install ./perflens_0.2.0-1_amd64.deb
+sudo apt install ./perflens_0.2.0-2_amd64.deb
 cd /absolute/path/to/project
 perflens init
 ```
@@ -27,8 +27,8 @@ For automatic collection, install both packages and generate a reviewed policy:
 
 ```bash
 sudo apt install \
-  ./perflens_0.2.0-1_amd64.deb \
-  ./perflens-collector_0.2.0-1_amd64.deb
+  ./perflens_0.2.0-2_amd64.deb \
+  ./perflens-collector_0.2.0-2_amd64.deb
 
 perflens setup \
   --project /absolute/path/to/project \
@@ -62,6 +62,10 @@ an administrator explicitly runs `sudo perflens-admin deploy --config <policy>`.
 The command prints a Chinese deployment summary by default and distinguishes a
 read-only dry run from a completed authenticated deployment. Add `--json` for
 the complete versioned artifact.
+
+This corrected build keeps upstream version `0.2.0` and increments only the
+Debian revision from `1` to `2`. APT can therefore upgrade an installed
+`0.2.0-1` package to `0.2.0-2`, while the PerfLens CLI still reports `0.2.0`.
 After the user's new login session, `perflens status --project <project>` checks
 runtime readiness and `perflens-admin spool-status` reports Collector storage
 headroom. Both are read-only; add `--json` to the latter for a versioned artifact.
@@ -102,5 +106,8 @@ intentional. See the Chinese guide above for the full flow.
 The main package vendors dependencies selected and hashed by `uv.lock`, so install
 does not access the network. Native Python extensions make it architecture and ABI
 specific; the current release target is Debian 13 `amd64` with system Python 3.13.
+The Collector package is also architecture-specific because it carries the
+target-native Rust Helper, and it must match the main package's full Debian
+version and architecture.
 The build normalizes permissions and timestamps and is checked for byte-for-byte
 reproducibility plus extracted-package command smoke tests.

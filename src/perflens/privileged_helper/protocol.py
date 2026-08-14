@@ -10,7 +10,7 @@ from pydantic import Field, TypeAdapter, model_validator
 from perflens.contracts.artifacts import ContractModel
 from perflens.domain.errors import ErrorCode, PerfLensError
 
-HELPER_SCHEMA_VERSION = "1.1"
+HELPER_SCHEMA_VERSION = "1.2"
 MAX_HELPER_MESSAGE_BYTES = 64 << 10
 MAX_HELPER_PLAN_TTL_MILLISECONDS = 120_000
 MAX_HELPER_DURATION_MILLISECONDS = 86_400_000
@@ -35,13 +35,13 @@ class HelperTarget(ContractModel):
 
 
 class HelperHealthRequest(ContractModel):
-    schema_version: Literal["1.1"] = HELPER_SCHEMA_VERSION
+    schema_version: Literal["1.2"] = HELPER_SCHEMA_VERSION
     operation: Literal["health"] = "health"
     request_id: str = Field(pattern=r"^request-[a-f0-9]{16,64}$")
 
 
 class HelperCollectPidRequest(ContractModel):
-    schema_version: Literal["1.1"] = HELPER_SCHEMA_VERSION
+    schema_version: Literal["1.2"] = HELPER_SCHEMA_VERSION
     operation: Literal["collect_pid"] = "collect_pid"
     request_id: str = Field(pattern=r"^request-[a-f0-9]{16,64}$")
     plan_id: str = Field(pattern=r"^plan-[a-f0-9]{20}$")
@@ -59,6 +59,7 @@ class HelperCollectPidRequest(ContractModel):
     fallback_record_event: Literal["cpu-clock"] | None = None
     max_output_bytes: int = Field(gt=0, le=MAX_HELPER_OUTPUT_BYTES)
     expires_at_unix_milliseconds: int = Field(gt=0)
+    report_ready: bool = Field(strict=True)
 
     @model_validator(mode="after")
     def validate_mode_fields(self) -> HelperCollectPidRequest:
@@ -127,6 +128,12 @@ class HelperHealthResult(ContractModel):
     ready: Literal[True]
 
 
+class HelperCollectionReadyResult(ContractModel):
+    kind: Literal["collection_ready"]
+    plan_id: str = Field(pattern=r"^plan-[a-f0-9]{20}$")
+    target_pid: int = Field(gt=0)
+
+
 class HelperCollectionResult(ContractModel):
     kind: Literal["collection"]
     plan_id: str = Field(pattern=r"^plan-[a-f0-9]{20}$")
@@ -167,9 +174,11 @@ class HelperCollectionResult(ContractModel):
                 _HARDWARE_STAT_EVENTS
             ):
                 raise ValueError("Hardware stat results accept only fixed hardware events")
-        elif self.events or (
-            self.actual_event_source == "software" and self.record_event != "cpu-clock"
-        ) or (self.actual_event_source == "hardware" and self.record_event != "cycles"):
+        elif (
+            self.events
+            or (self.actual_event_source == "software" and self.record_event != "cpu-clock")
+            or (self.actual_event_source == "hardware" and self.record_event != "cycles")
+        ):
             raise ValueError("Record result event does not match its evidence source")
         return self
 
@@ -182,12 +191,12 @@ class HelperErrorBody(ContractModel):
 
 
 class HelperResponse(ContractModel):
-    schema_version: Literal["1.1"] = HELPER_SCHEMA_VERSION
+    schema_version: Literal["1.2"] = HELPER_SCHEMA_VERSION
     request_id: str = Field(pattern=r"^(unknown|request-[a-f0-9]{16,64})$")
     ok: bool
     result: (
         Annotated[
-            HelperHealthResult | HelperCollectionResult,
+            HelperHealthResult | HelperCollectionReadyResult | HelperCollectionResult,
             Field(discriminator="kind"),
         ]
         | None

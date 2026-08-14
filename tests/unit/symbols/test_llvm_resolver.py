@@ -45,7 +45,7 @@ def test_long_lived_llvm_provider_batches_caches_and_reaps(tmp_path: Path) -> No
     module_path = tmp_path / "module"
     module_path.write_bytes(b"fixture")
     identity = ModuleIdentity(
-        build_id="build-1",
+        build_id=f"path:{module_path.resolve()}",
         dso_path=module_path,
         debug_file_candidates=(),
         architecture="test",
@@ -82,7 +82,7 @@ def test_llvm_provider_bounds_large_query_batches(tmp_path: Path) -> None:
     module_path = tmp_path / "module"
     module_path.write_bytes(b"fixture")
     identity = ModuleIdentity(
-        build_id="build-many",
+        build_id=f"path:{module_path.resolve()}",
         dso_path=module_path,
         debug_file_candidates=(),
         architecture="test",

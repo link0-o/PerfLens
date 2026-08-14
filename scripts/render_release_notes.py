@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 from perflens import __version__
+from perflens.distribution.debian import DEBIAN_PACKAGE_REVISION
 
 _MAX_TEMPLATE_BYTES = 256 << 10
 
@@ -43,9 +44,20 @@ def main() -> None:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         parser.error(f"release-note template is not UTF-8: {exc}")
-    if text.count("{version}") < 1 or text.count("{tag}") < 1:
-        parser.error("release-note template requires {version} and {tag} placeholders")
-    rendered = text.replace("{version}", __version__).replace("{tag}", arguments.tag)
+    if (
+        text.count("{version}") < 1
+        or text.count("{tag}") < 1
+        or text.count("{debian_revision}") < 1
+    ):
+        parser.error(
+            "release-note template requires {version}, {tag}, and "
+            "{debian_revision} placeholders"
+        )
+    rendered = (
+        text.replace("{version}", __version__)
+        .replace("{tag}", arguments.tag)
+        .replace("{debian_revision}", DEBIAN_PACKAGE_REVISION)
+    )
     output = output_parent / arguments.output.name
     if output.exists() or output.is_symlink():
         parser.error("release-note output already exists")

@@ -11,10 +11,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
-- The privileged Helper now records per-sample CPU identity for both hardware and software
-  `record` plans. The perf-data adapter also preserves older affected `v0.2.0` evidence by
-  retrying only the exact missing-CPU conversion error without that field and emitting a
-  `MISSING_SAMPLE_CPU` limitation instead of failing the entire analysis.
+- Both the `cap_perfmon` Python Collector path and the privileged Helper now record per-sample CPU
+  identity for hardware and software `record` plans. The perf-data adapter also preserves older
+  affected `v0.2.0` evidence by retrying only the exact missing-CPU conversion error without that
+  field and emitting a `MISSING_SAMPLE_CPU` limitation instead of failing the entire analysis.
 - Project-workload MCP authorization is now a single-value typed Schema instead of an arbitrary
   string. Server guidance, typed error recovery, and the bundled Skill require retrying the same
   authorized workload with the exact token and prohibit substituting shell/direct-perf/existing-PID
@@ -35,6 +35,19 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - Collector acceptance artifacts now retain `hardware_collection_id` whenever a hardware attempt
   was safely published, including zero-count PMU evidence, so an unavailable-PMU conclusion still
   links to the exact retained diagnostic artifact.
+- The `cap_perfmon` Broker now starts PID perf events disabled, waits for a bounded control-channel
+  ping, revalidates the authorized owner/start-time identity after perf has bound the target, and
+  only then enables collection. This closes the same numeric-PID reuse window already closed inside
+  the Rust Helper.
+- Project workload launch no longer guesses Collector attachment with a fixed 200ms sleep. Broker
+  protocol `1.1` and private Helper protocol `1.2` stream an authenticated, plan/PID-bound readiness
+  frame after the first probe or formal perf stage is enabled; only then does the ordinary-user
+  bootstrap exec the approved project program.
+- Separate debug files are accepted only when their GNU debuglink CRC or ELF Build ID matches the
+  inspected module. Resolver selection repeats the identity check, so a missing, mismatched, or
+  replaced candidate is never silently supplied to `addr2line` or `llvm-symbolizer`.
+- Corrected Debian artifacts keep upstream version `0.2.0` and use package revision `0.2.0-2`, so
+  APT upgrades the withdrawn `0.2.0-1` build while CLI and protocol versions remain `0.2.0`.
 
 ## [0.2.0] - 2026-08-07
 
@@ -96,9 +109,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   arbitrary output paths, cross-UID targets, or system-wide collection. Package installation and
   project onboarding still never invoke sudo, change sysctl, or enable a service automatically.
 - Failed first deployments stop newly attempted Broker/Helper services in reverse order before
-  removing their managed units. PID attachment now uses perf's disabled-event control barrier and
-  revalidates owner/start time only after perf has bound the target, closing the numeric-PID reuse
-  window before collection is enabled.
+  removing their managed units. Rust Helper PID attachment uses perf's disabled-event control
+  barrier and revalidates owner/start time only after perf has bound the target, closing the
+  numeric-PID reuse window before collection is enabled.
 - The Helper executes the administrator-configured, independently verified perf path and no longer
   launches a sleep process. Generated units reject systemd path-expansion characters. Strict crash
   recovery removes only provably internal temporary files; malformed worker connections no longer

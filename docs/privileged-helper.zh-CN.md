@@ -74,10 +74,14 @@ Helper 只执行管理员策略中固定、root 所有且不可由非 root 写�
 都必须复核。
 
 为消除数字 PID 在“身份检查后、perf 附加前”被复用的窗口，Helper 先让 perf 以事件禁用
-状态打开目标，并通过继承的本地控制 FD 完成一次 `disable/ack` 屏障；屏障后再次核对 PID
+状态打开目标，并通过继承的本地控制 FD 完成一次非变更 `ping/ack` 屏障；屏障后再次核对 PID
 所有者和启动时间，只有一致时才发送 `enable`。此后内核事件 FD 已绑定到 perf 实际打开
 的任务。Helper 只启动 perf 本身，由控制通道和信号限定采集时长，不再通过 perf 启动
 `sleep` 或任何其他程序。
+
+项目负载要求就绪回执时，私有协议 `1.2` 只会在上述顺序完成后发送一次绑定请求、计划和
+目标 PID 的 `collection_ready`；如果 `auto` 先做硬件探测，该探测就是第一阶段并负责发送
+回执。Python Broker 认证后再转成公共 Broker `1.1` 回执，普通用户程序在此之前不会执行。
 
 首次部署必须带 `--acknowledge-privileged-helper-risk`。升级时，`--dry-run` 会把新增能力
 写入 `helper_capability_expansion`；正式升级没有同一显式确认时，会在修改托管 unit 前

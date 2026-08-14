@@ -115,6 +115,16 @@ collection result must match the authorized PID and mode. Administrator
 readiness additionally requires the dedicated service UID. A socket pathname
 alone is never treated as a healthy service.
 
+Project workloads use the streamed readiness frame in Broker protocol `1.1`
+instead of a fixed delay. The ordinary-user bootstrap keeps the same PID
+waiting while the first hardware-probe or formal perf stage starts with events
+disabled. After the control channel confirms binding, the Collector revalidates
+PID/UID/start time, enables events, and returns `collection_ready` bound to the
+request, plan, and PID. Only then does the authenticated client let the
+bootstrap exec the approved program. Advanced mode forwards the same ordering
+through private Helper protocol `1.2`, where the Helper independently repeats
+the checks; any mismatch leaves the program unreleased.
+
 `perflens status` is a separate read-only diagnostic boundary. It summarizes
 onboarding files, Skill, active project MCP configuration against the selected
 setup, staged assets, socket access, current
