@@ -72,9 +72,20 @@ def _fake_perf(tmp_path: Path) -> Path:
         "if 'stat' in args:\n"
         "    selected = args[args.index('-e') + 1]\n"
         "    if 'task-clock' in selected:\n"
-        "        output.write_text('100;;task-clock;10;100.0\\n2;;context-switches;10;100.0\\n')\n"
+        "        output.write_text(\n"
+        "            '100;;task-clock;10;100.0\\n2;;context-switches;10;100.0\\n'\n"
+        "            '0;;cpu-migrations;10;100.0\\n3;;page-faults;10;100.0\\n'\n"
+        "        )\n"
+        "    elif selected == 'cycles,instructions':\n"
+        "        output.write_text(\n"
+        "            '100;;cycles;10;100.0\\n200;;instructions;10;100.0\\n'\n"
+        "        )\n"
         "    else:\n"
-        "        output.write_text('100;;cycles;10;100.0\\n200;;instructions;10;100.0\\n')\n"
+        "        output.write_text(\n"
+        "            '100;;cycles;10;100.0\\n200;;instructions;10;100.0\\n'\n"
+        "            '30;;cache-references;10;100.0\\n4;;cache-misses;10;100.0\\n'\n"
+        "            '50;;branches;10;100.0\\n5;;branch-misses;10;100.0\\n'\n"
+        "        )\n"
         "else:\n"
         "    output.write_bytes(b'PERFILE2-broker')\n",
         encoding="utf-8",
@@ -87,13 +98,13 @@ def _fake_perf_with_delayed_binding(tmp_path: Path) -> Path:
     executable = tmp_path / "perf-delayed-binding"
     executable.write_text(
         f"#!{sys.executable}\n"
-        "import os, pathlib, sys, time\n"
+        "import os, pathlib, sys\n"
         "args = sys.argv[1:]\n"
-        "time.sleep(0.35)\n"
         "target_pid = int(args[args.index('-p') + 1])\n"
         "assert pathlib.Path(f'/proc/{target_pid}').is_dir()\n"
+        "cmdline = pathlib.Path(f'/proc/{target_pid}/cmdline').read_bytes()\n"
+        "assert b'_bootstrap.py' in cmdline\n"
         + _FAKE_PERF_CONTROL
-        + "time.sleep(0.1)\n"
         + "output = pathlib.Path(args[args.index('-o') + 1])\n"
         "output.write_bytes(b'PERFILE2-ready-project')\n",
         encoding="utf-8",
@@ -114,7 +125,10 @@ def _fake_perf_with_unusable_hardware_pmu(tmp_path: Path) -> Path:
         "if events == 'cycles,instructions':\n"
         "    output.write_text('0;;cycles;10;100.0\\n0;;instructions;10;100.0\\n')\n"
         "else:\n"
-        "    output.write_text('100;;task-clock;10;100.0\\n2;;context-switches;10;100.0\\n')\n",
+        "    output.write_text(\n"
+        "        '100;;task-clock;10;100.0\\n2;;context-switches;10;100.0\\n'\n"
+        "        '0;;cpu-migrations;10;100.0\\n3;;page-faults;10;100.0\\n'\n"
+        "    )\n",
         encoding="utf-8",
     )
     executable.chmod(0o555)
@@ -132,7 +146,10 @@ def _fake_perf_with_failed_hardware_probe(tmp_path: Path) -> Path:
         "events = args[args.index('-e') + 1]\n"
         "if events == 'cycles,instructions':\n"
         "    raise SystemExit(1)\n"
-        "output.write_text('100;;task-clock;10;100.0\\n2;;context-switches;10;100.0\\n')\n",
+        "output.write_text(\n"
+        "    '100;;task-clock;10;100.0\\n2;;context-switches;10;100.0\\n'\n"
+        "    '0;;cpu-migrations;10;100.0\\n3;;page-faults;10;100.0\\n'\n"
+        ")\n",
         encoding="utf-8",
     )
     executable.chmod(0o555)
@@ -154,6 +171,37 @@ def _fake_perf_with_failed_hardware_record_after_probe(tmp_path: Path) -> Path:
         "    raise SystemExit(1)\n"
         "else:\n"
         "    output.write_bytes(b'PERFILE2-software-record')\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o555)
+    return executable
+
+
+def _fake_perf_with_zero_formal_hardware_stat_after_probe(tmp_path: Path) -> Path:
+    executable = tmp_path / "perf-zero-formal-hardware-stat"
+    probe_marker = tmp_path / "hardware-probe-complete"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import os, pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        + _FAKE_PERF_CONTROL
+        + f"probe_marker = pathlib.Path({str(probe_marker)!r})\n"
+        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        "events = args[args.index('-e') + 1]\n"
+        "if events == 'cycles,instructions' and not probe_marker.exists():\n"
+        "    output.write_text('100;;cycles;10;100.0\\n200;;instructions;10;100.0\\n')\n"
+        "    probe_marker.write_text('done')\n"
+        "elif 'task-clock' in events:\n"
+        "    output.write_text(\n"
+        "        '100;;task-clock;10;100.0\\n2;;context-switches;10;100.0\\n'\n"
+        "        '0;;cpu-migrations;10;100.0\\n3;;page-faults;10;100.0\\n'\n"
+        "    )\n"
+        "else:\n"
+        "    output.write_text(\n"
+        "        '0;;cycles;10;100.0\\n0;;instructions;10;100.0\\n'\n"
+        "        '0;;cache-references;10;100.0\\n0;;cache-misses;10;100.0\\n'\n"
+        "        '0;;branches;10;100.0\\n0;;branch-misses;10;100.0\\n'\n"
+        "    )\n",
         encoding="utf-8",
     )
     executable.chmod(0o555)
@@ -864,6 +912,57 @@ def test_cap_perfmon_broker_retries_software_record_when_hardware_execution_fail
         target.wait(timeout=5)
 
 
+def test_cap_perfmon_broker_retries_software_when_formal_hardware_stat_is_unusable(
+    tmp_path: Path,
+) -> None:
+    spool = tmp_path / "spool"
+    runtime = tmp_path / "run"
+    spool.mkdir()
+    runtime.mkdir()
+    spool.chmod(0o750)
+    runtime.chmod(0o750)
+    target = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        start_new_session=True,
+    )
+    try:
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode="stat",
+                pid=target.pid,
+                duration_seconds=0.5,
+                max_output_bytes=1024,
+            ),
+            policy=AutomaticCollectionPolicy(enabled=True),
+            capabilities=_capabilities(),
+        )
+        policy = CollectorBrokerPolicy(
+            spool_root=spool,
+            perf_path=_fake_perf_with_zero_formal_hardware_stat_after_probe(tmp_path),
+            allowed_uids=(os.geteuid(),),
+            allow_software_fallback=True,
+            max_duration_seconds=1,
+            max_output_bytes=1024,
+        )
+        with CollectorBrokerServer(runtime / "collector.sock", policy) as server:
+            worker = threading.Thread(target=server.serve_once, daemon=True)
+            worker.start()
+            artifact = CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(plan)
+            worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        assert artifact.actual_event_source == "software"
+        assert artifact.fallback_used is True
+        assert artifact.fallback_reason == "hardware_execution_failed_after_probe"
+        assert {metric.event for metric in artifact.metrics if not metric.derived} == set(
+            SOFTWARE_STAT_EVENTS
+        )
+        assert len(_collection_artifacts(spool)) == 1
+    finally:
+        target.terminate()
+        target.wait(timeout=5)
+
+
 def test_cap_perfmon_broker_revalidates_pid_identity_before_software_retry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1151,7 +1250,14 @@ def test_broker_delegates_paranoid3_collection_to_typed_helper(tmp_path: Path) -
             assert caller_uid == os.geteuid()
             if ready_callback is not None:
                 ready_callback()
-            payload = b"100;;cycles;10;100.0\n200;;instructions;10;100.0\n"
+            payload = (
+                b"100;;cycles;10;100.0\n"
+                b"200;;instructions;10;100.0\n"
+                b"30;;cache-references;10;100.0\n"
+                b"4;;cache-misses;10;100.0\n"
+                b"50;;branches;10;100.0\n"
+                b"5;;branch-misses;10;100.0\n"
+            )
             output = helper_spool / f"{plan.plan_id}.stat.csv"
             output.write_bytes(payload)
             output.chmod(0o640)
@@ -1221,6 +1327,10 @@ def test_broker_delegates_paranoid3_collection_to_typed_helper(tmp_path: Path) -
         assert {metric.event for metric in artifact.metrics} == {
             "cycles",
             "instructions",
+            "cache-references",
+            "cache-misses",
+            "branches",
+            "branch-misses",
             "instructions-per-cycle",
         }
         assert list(spool.iterdir()) == []
@@ -1619,8 +1729,10 @@ def test_mcp_launches_exact_project_workload_then_collects_bound_pid(tmp_path: P
     workload = project / "workload"
     workload.write_text(
         f"#!{sys.executable}\n"
-        "import pathlib, sys\n"
-        "pathlib.Path(sys.argv[1]).write_text('started', encoding='utf-8')\n",
+        "import pathlib, subprocess, sys\n"
+        "child = subprocess.Popen([sys.executable, '-c', "
+        "'import time; time.sleep(30)'])\n"
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding='utf-8')\n",
         encoding="utf-8",
     )
     workload.chmod(0o555)
@@ -1679,7 +1791,7 @@ def test_mcp_launches_exact_project_workload_then_collects_bound_pid(tmp_path: P
         worker.join(timeout=5)
 
     assert not worker.is_alive()
-    assert marker.read_text(encoding="utf-8") == "started"
+    descendant_pid = int(marker.read_text(encoding="utf-8"))
     assert payload["artifact_type"] == "project-run"
     summary = payload["summary"]
     assert isinstance(summary, dict)
@@ -1687,6 +1799,7 @@ def test_mcp_launches_exact_project_workload_then_collects_bound_pid(tmp_path: P
     assert summary["workload_exit_code"] == 0
     assert isinstance(summary["target_pid"], int)
     assert not Path(f"/proc/{summary['target_pid']}").exists()
+    assert not Path(f"/proc/{descendant_pid}").exists()
     assert len(list(artifacts.glob("*.project-run.json"))) == 1
     assert len(list(artifacts.glob("*.collection.json"))) == 1
     assert len(_collection_artifacts(spool)) == 1

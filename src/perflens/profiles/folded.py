@@ -16,6 +16,9 @@ from perflens.domain.models import (
     StackSample,
 )
 from perflens.domain.ports import ProfileSource
+from perflens.profiles.text import sanitize_surrogateescaped_text
+
+FOLDED_PARSER_VERSION = "folded-v1"
 
 
 class FoldedStackAdapter:
@@ -75,7 +78,7 @@ class FoldedStackStream:
                 details={"actual_bytes": size, "max_input_bytes": self._limits.max_input_bytes},
                 suggested_actions=("Increase the explicit input limit if the file is trusted.",),
             )
-        self._file = self._path.open(encoding="utf-8", errors="replace", newline=None)
+        self._file = self._path.open(encoding="utf-8", errors="surrogateescape", newline="")
         return self
 
     def __iter__(self) -> Iterator[StackSample]:
@@ -107,7 +110,9 @@ class FoldedStackStream:
             if raw_line == "":
                 return
             line_number += 1
-            self._diagnostics.bytes_read += len(raw_line.encode("utf-8", errors="replace"))
+            raw_line, byte_count, invalid_bytes = sanitize_surrogateescaped_text(raw_line)
+            self._diagnostics.unicode_replacement_count += invalid_bytes
+            self._diagnostics.bytes_read += byte_count
             self._check_input_bytes()
             if len(raw_line) > self._limits.max_line_chars:
                 if not raw_line.endswith("\n"):
@@ -145,7 +150,9 @@ class FoldedStackStream:
             chunk = self._file.readline(self._limits.max_line_chars + 1)
             if chunk == "":
                 return
-            self._diagnostics.bytes_read += len(chunk.encode("utf-8", errors="replace"))
+            _sanitized, byte_count, invalid_bytes = sanitize_surrogateescaped_text(chunk)
+            self._diagnostics.unicode_replacement_count += invalid_bytes
+            self._diagnostics.bytes_read += byte_count
             self._check_input_bytes()
             if chunk.endswith("\n"):
                 return

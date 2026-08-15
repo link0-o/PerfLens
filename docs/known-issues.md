@@ -5,6 +5,90 @@
 This document records reproduced issues and their bounded workarounds, including
 resolved issues. Do not weaken deployment safety checks to work around them.
 
+## KI-2026-08-15: raw perf evidence lacked end-to-end Agent projection replay (resolved)
+
+- Risk: a correct raw-file SHA-256 alone does not prove that later typed metrics, hotspots, paths,
+  and Diagnosis content still project that file. Review also found two concrete distortion paths:
+  dropping an unreadable callchain position could transfer Self weight to its caller; and a formal
+  zero-count hardware stat result could occupy the final path before `auto` software fallback.
+- Fix: Collection verification uses one no-follow descriptor snapshot for identity, size, and hash;
+  stat reparses the retained CSV and requires exact typed-metric equality. Analysis binds converter
+  provenance, source Collection, all Agent-visible content, and derived conservation. Record event
+  provenance must match the conversion transcript. Fixed `cpu_core/` and `cpu_atom/` hybrid-PMU
+  expansion is safely canonicalized for matching while raw metric identity remains intact. An
+  unreadable callchain position remains a
+  bounded `unknown` Frame. Formal hardware output is validated while temporary and published only
+  when usable, leaving `auto` able to spend the remaining authorized duration on software events.
+- Agent gate: MCP load and paging validate Analysis, Collection, and Diagnosis artifacts. A
+  Diagnosis binds its source Analysis digest and is safely reusable. Matched A/B rejects different
+  event sources, weight semantics, or converter identities.
+- General boundary: these controls live in the shared CSV, perf-script, aggregation, and Artifact
+  layers rather than a Python-specific branch. C/C++, Rust, Go, CPython, and Java/JIT traverse the
+  same gate; only their external symbol quality differs. Fixtures cover representative formats but
+  are not live-host certification of every compiler, JDK, or perf version.
+- Remaining limit: hashes are not signatures against a malicious file owner and cannot prove the
+  kernel PMU or perf itself correct. PerfLens still does not parse perf.data directly, and unfrozen
+  JIT/Build-ID sidecars cannot promise cross-host/time replay. Unknown formats become `partial`
+  evidence with forbidden conclusions.
+
+## KI-2026-08-14: Frame/annotation precedence, Python perf maps, and duplicate paths (resolved)
+
+- Symptom: a valid CPython `-X perf` recording could parse every sample but still report hundreds
+  of `Callchain frame has no hexadecimal IP` warnings for lines such as
+  `python3.13[offset]` and `[JIT] tid N[offset]`. Public call paths could also contain many rows
+  with identical displayed symbols and DSOs because exact instruction addresses differed.
+- Cause: with `srcline` enabled, perf emits those bracketed lines and standalone
+  `file:line (inlined)` lines as annotations for the preceding frame; they are not frames. Internal
+  call paths used exact Frame identity while the public contract intentionally exposes only
+  `(symbol, DSO)`. An early fix tested source-like annotations before complete Frames, so a valid
+  native parent-with-source immediately after a leaf-without-source could also be swallowed.
+- Fix: the parser now accepts only an annotation whose offset matches the immediately preceding
+  frame and whose label matches its DSO or JIT thread. Strict standalone source annotations enrich
+  only that preceding frame. It also recognizes CPython's documented `py::function:filename`
+  perf-map name. Public paths aggregate by their displayed `(symbol, DSO)` sequence, source
+  locations are projected onto hotspots with a fixed bound, and `has_source_lines` requires a real
+  line number. A complete hexadecimal-IP Frame now always takes precedence over annotation rules.
+- General regression boundary: goldens cover C/C++ templates, inline frames and parenthesized DSOs;
+  Rust hash merging; Go methods; Java/JIT and Python perf maps; and ordinary native parent frames.
+  For `perf.data`, Java/JIT without a frozen transcript or sidecar still forbids cross-time replay.
+  Fixture coverage is not misrepresented as real-host acceptance of every JVM/runtime version.
+- Reporting boundary: PerfLens paths are root/caller to leaf/callee. Missing DWARF lines and
+  unresolved native frames remain visible limitations; the fix does not invent a deeper Python
+  stack than perf recorded.
+- Captured-evidence acceptance: reprocessing the originally reported 272-sample CPython
+  `perf.data` aggregates all 591 Frame lines, classifies 589 address and two source annotations,
+  and reports zero malformed records. The hundreds of false no-hex-IP warnings disappear; one
+  genuine native Frame-without-DSO warning remains. CPU-clock weight is now labeled nanoseconds,
+  while content/fingerprint/conservation/source-SHA checks pass. Quality correctly stays `partial`
+  because the JIT sidecar was not frozen and 5.88% of Self weight is unresolved.
+
+Typed stat reporting was tightened at the same time: `running_percent` is perf event scheduling
+coverage, not process CPU utilization. Low context-switch, migration, or page-fault counts do not
+prove that I/O wait, contention, allocation churn, or memory pressure is absent. Sampled perf
+periods are no longer all labeled `event_count`: CPU/task clock periods are nanoseconds,
+cycles/instructions use their native units, and unfamiliar events remain generic rather than being
+guessed.
+
+The `perf stat` CSV adapter also no longer hides invalid UTF-8 with replacement decoding: invalid
+bytes fail the evidence closed so an event identity cannot change silently. A malformed CSV row
+emits a bounded warning without destroying later valid metrics, and warning overflow is explicitly
+marked as truncated. This repair is independent of the target language.
+
+Source locations are now collected only while accepted samples enter aggregation. A record rejected
+for stack depth or another parse rule cannot attach its location to a same-named valid hotspot.
+Per-hotspot locations remain bounded; truncation is explicit on both Hotspot and EvidenceQuality,
+which gates any claim that the location list is complete.
+
+The same repair makes dedicated-Helper-UID evidence analyzable. Even when an authorized ordinary
+user can read an artifact in `/var/lib/perflens-helper`, `perf script` adds its own current-user/root
+ownership refusal. The adapter now fixes `--force` only after path, size, and SHA-256 validation;
+it grants no OS permission, broadens no allowed root, and accepts no Agent-provided perf option.
+
+The same change adds an Analysis content digest, Collection-to-input hash binding, before/after
+source identity checks, and `verify-analysis`. A future mismatch in Frames, weights, percentages,
+or event provenance therefore fails closed before Agent use; valid but incomplete evidence remains
+`partial` with explicit forbidden conclusions.
+
 ## KI-2026-08-14: cap_perfmon PID binding and project launch had timing windows (resolved)
 
 - Original gap 1: the `cap_perfmon` Python Broker checked PID owner/start time before spawning
@@ -22,6 +106,11 @@ resolved issues. Do not weaken deployment safety checks to work around them.
   ready frame is emitted once that first stage is bound and enabled, preventing an idle paused
   bootstrap from falsely producing a zero-count PMU probe. Probe time remains within the original
   authorization and is capped at 250ms.
+- MCP registers the blocking project runner as a synchronous tool so the SDK executes it in a
+  worker thread instead of blocking the async session. The launcher now gives already-completed
+  short workloads a bounded natural-exit/reap window, and its integration test uses the bootstrap
+  command identity rather than fixed sleeps. This removes the load-sensitive 10-second CI timeout
+  without raising the global timeout.
 
 No project command, arguments, or environment cross into the Collector, and this adds no root,
 sudo, sysctl, or cross-UID authority. The old Broker and Helper do not negotiate with the new

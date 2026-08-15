@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import tempfile
 from collections.abc import Iterator
@@ -14,16 +15,19 @@ from perflens.domain.models import (
     FrameTable,
     ParseDiagnostics,
     ParseWarning,
+    ProfileConversionProvenance,
     ResourceLimits,
     StackSample,
 )
 from perflens.domain.ports import ProfileSource
-from perflens.integrations.commands.runner import CommandLimits, CommandRunner
+from perflens.integrations.commands.runner import CommandLimits, CommandResult, CommandRunner
 from perflens.profiles.perf_script import (
     PERF_SCRIPT_FIELDS,
     PERF_SCRIPT_FIELDS_WITHOUT_CPU,
+    PERF_SCRIPT_PARSER_VERSION,
     PerfScriptStream,
 )
+from perflens.stacks.normalize import SYMBOL_NORMALIZATION_VERSION
 
 
 class PerfDataAdapter:
@@ -67,6 +71,10 @@ class PerfDataStream:
     """Materialize bounded perf-script text in a private temporary directory."""
 
     __slots__ = (
+        "_argv",
+        "_converter_diagnostics",
+        "_converter_sha256",
+        "_converter_version",
         "_limits",
         "_path",
         "_perf_path",
@@ -75,6 +83,8 @@ class PerfDataStream:
         "_script_stream",
         "_temporary_directory",
         "_timeout_seconds",
+        "_transcript_bytes",
+        "_transcript_sha256",
     )
 
     def __init__(
@@ -92,6 +102,12 @@ class PerfDataStream:
         self._runner = runner
         self._timeout_seconds = timeout_seconds
         self._sample_cpu_missing = False
+        self._argv: tuple[str, ...] = ()
+        self._converter_diagnostics: tuple[str, ...] = ()
+        self._converter_sha256: str | None = None
+        self._converter_version: str | None = None
+        self._transcript_bytes = 0
+        self._transcript_sha256: str | None = None
         self._temporary_directory: tempfile.TemporaryDirectory[str] | None = None
         self._script_stream: PerfScriptStream | None = None
 
@@ -121,17 +137,30 @@ class PerfDataStream:
         self._temporary_directory = tempfile.TemporaryDirectory(prefix="perflens-perf-script-")
         text_path = Path(self._temporary_directory.name) / "profile.perf-script"
         try:
+            self._inspect_converter(Path(self._temporary_directory.name))
             try:
-                self._run_perf_script(safe_input, text_path, PERF_SCRIPT_FIELDS, exclusive=True)
+                result = self._run_perf_script(
+                    safe_input, text_path, PERF_SCRIPT_FIELDS, exclusive=True
+                )
             except PerfLensError as exc:
                 if not _is_missing_sample_cpu_error(exc):
                     raise
                 self._sample_cpu_missing = True
-                self._run_perf_script(
+                result = self._run_perf_script(
                     safe_input,
                     text_path,
                     PERF_SCRIPT_FIELDS_WITHOUT_CPU,
                     exclusive=False,
+                )
+            self._argv = result.argv
+            self._capture_converter_diagnostics(result)
+            self._transcript_sha256, self._transcript_bytes = _sha256_file(text_path)
+            if _sha256_file(self._perf_path)[0] != self._converter_sha256:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "external_tool",
+                    "perf executable changed during profile conversion",
+                    details={"path": str(self._perf_path)},
                 )
             self._script_stream = PerfScriptStream(text_path, self._limits)
             self._script_stream.__enter__()
@@ -143,6 +172,14 @@ class PerfDataStream:
                             "perf.data has no sample CPU attribute; analysis continued without "
                             "per-sample CPU identity."
                         ),
+                    )
+                )
+            for diagnostic in self._converter_diagnostics:
+                self._script_stream.diagnostics().add_warning(
+                    ParseWarning(
+                        code="PERF_SCRIPT_DIAGNOSTIC",
+                        message="perf script emitted a conversion diagnostic",
+                        preview=diagnostic,
                     )
                 )
             return self
@@ -157,13 +194,14 @@ class PerfDataStream:
         fields: str,
         *,
         exclusive: bool,
-    ) -> None:
+    ) -> CommandResult:
         mode = "xb" if exclusive else "wb"
         with text_path.open(mode) as output:
-            self._runner.run_to_file(
+            return self._runner.run_to_file(
                 (
                     str(self._perf_path),
                     "script",
+                    "--force",
                     "--ns",
                     "-F",
                     fields,
@@ -176,6 +214,48 @@ class PerfDataStream:
                     max_stdout_bytes=self._limits.max_input_bytes,
                 ),
             )
+
+    def _inspect_converter(self, temporary_root: Path) -> None:
+        self._converter_sha256 = _sha256_file(self._perf_path)[0]
+        version_path = temporary_root / "perf-version.txt"
+        with version_path.open("xb") as output:
+            result = self._runner.run_to_file(
+                (str(self._perf_path), "--version"),
+                output,
+                limits=CommandLimits(
+                    timeout_seconds=min(self._timeout_seconds, 10.0),
+                    max_stdout_bytes=4 << 10,
+                    max_stderr_bytes=4 << 10,
+                ),
+            )
+        version = version_path.read_text(encoding="utf-8", errors="replace").strip()
+        self._converter_version = version[:512] or None
+        self._capture_converter_diagnostics(result)
+
+    def _capture_converter_diagnostics(self, result: CommandResult) -> None:
+        diagnostic = result.stderr.strip()
+        if not diagnostic:
+            return
+        bounded = diagnostic[:2_048]
+        self._converter_diagnostics = (*self._converter_diagnostics, bounded)
+
+    def conversion_provenance(self) -> ProfileConversionProvenance:
+        if self._transcript_sha256 is None or self._converter_sha256 is None:
+            raise RuntimeError("ProfileStream must be entered before reading provenance")
+        return ProfileConversionProvenance(
+            adapter="perf_data",
+            parser_version=PERF_SCRIPT_PARSER_VERSION,
+            normalization_version=SYMBOL_NORMALIZATION_VERSION,
+            converter_path=str(self._perf_path),
+            converter_sha256=self._converter_sha256,
+            converter_version=self._converter_version,
+            argv=self._argv,
+            locale="C",
+            transcript_sha256=self._transcript_sha256,
+            transcript_bytes=self._transcript_bytes,
+            compatibility_fallbacks=("missing_sample_cpu",) if self._sample_cpu_missing else (),
+            diagnostics=self._converter_diagnostics,
+        )
 
     def __iter__(self) -> Iterator[StackSample]:
         if self._script_stream is None:
@@ -226,3 +306,13 @@ def _is_missing_sample_cpu_error(error: PerfLensError) -> bool:
         and "do not have CPU attribute set" in stderr
         and "Cannot print 'cpu' field" in stderr
     )
+
+
+def _sha256_file(path: Path, *, chunk_size: int = 1 << 20) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    total = 0
+    with path.open("rb") as handle:
+        while chunk := handle.read(chunk_size):
+            total += len(chunk)
+            digest.update(chunk)
+    return digest.hexdigest(), total

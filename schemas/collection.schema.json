@@ -23,6 +23,7 @@
             }
           ],
           "default": null,
+          "description": "perf-reported event measurement runtime, not workload wall time",
           "title": "Run Time Ns"
         },
         "running_percent": {
@@ -37,6 +38,7 @@
             }
           ],
           "default": null,
+          "description": "perf event scheduling coverage (time running versus time enabled); this is not workload CPU utilization",
           "title": "Running Percent"
         },
         "status": {
@@ -232,12 +234,29 @@
       "type": "string"
     },
     "output_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
       "title": "Output Sha256",
       "type": "string"
     },
     "perf_executable": {
       "title": "Perf Executable",
       "type": "string"
+    },
+    "record_event": {
+      "anyOf": [
+        {
+          "enum": [
+            "cycles",
+            "cpu-clock"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Record Event"
     },
     "requested_event_source": {
       "default": "auto",

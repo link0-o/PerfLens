@@ -107,11 +107,46 @@ def test_call_paths_are_aggregated_and_deterministic() -> None:
     assert result.has_call_graph
 
 
+def test_call_paths_merge_address_variants_with_the_same_public_identity() -> None:
+    table = FrameTable()
+    root_first = table.intern("root", dso="/app", ip="0x100")
+    leaf_first = table.intern("leaf", dso="/app", ip="0x200")
+    root_second = table.intern("root", dso="/app", ip="0x101")
+    leaf_second = table.intern("leaf", dso="/app", ip="0x201")
+    aggregator = HotspotAggregator(ResourceLimits(max_unique_call_paths=1), table)
+
+    aggregator.add(StackSample(frames=(root_first, leaf_first), weight=3))
+    aggregator.add(StackSample(frames=(root_second, leaf_second), weight=7))
+    result = aggregator.finish()
+
+    assert len(result.call_paths) == 1
+    assert result.call_paths[0].frame_ids == (root_first, leaf_first)
+    assert result.call_paths[0].weight == 10
+    assert result.call_paths[0].record_count == 2
+    assert result.has_call_graph
+
+
 def test_single_frame_samples_do_not_claim_a_call_graph() -> None:
     table = FrameTable()
     frame = table.intern("leaf")
     result = _result(table, [StackSample((frame,), 1)])
     assert not result.has_call_graph
+
+
+def test_symbol_variant_output_is_bounded_and_count_is_a_visible_lower_bound() -> None:
+    table = FrameTable()
+    frames = [
+        table.intern("work", dso="app", raw_symbol=f"work.clone.{index}")
+        for index in range(40)
+    ]
+
+    result = _result(table, [StackSample((frame,), 1) for frame in frames])
+    hotspot = result.hotspots[0]
+
+    assert len(hotspot.symbol_variants) == 32
+    assert hotspot.symbol_variant_count == 33
+    assert hotspot.symbol_variants_truncated
+    assert hotspot.normalization_merged
 
 
 @given(

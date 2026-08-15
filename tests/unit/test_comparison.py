@@ -91,6 +91,33 @@ def test_profile_comparison_reports_dso_and_metadata_differences(tmp_path: Path)
     assert "work" in comparison.dso_changes
 
 
+def test_profile_comparison_rejects_different_converter_identity(tmp_path: Path) -> None:
+    profile = tmp_path / "profile.folded"
+    profile.write_text("main;work 10\n", encoding="utf-8")
+    baseline = analyze_folded(profile)
+    candidate_conversion = baseline.metadata.conversion.model_copy(
+        update={
+            "converter_sha256": "b" * 64,
+            "locale": "different-locale",
+            "compatibility_fallbacks": ("different-field-set",),
+        }
+    )
+    candidate = baseline.model_copy(
+        update={
+            "metadata": baseline.metadata.model_copy(
+                update={"conversion": candidate_conversion}
+            )
+        }
+    )
+
+    comparison = compare_profiles(baseline, candidate)
+
+    assert not comparison.comparable
+    assert comparison.metadata_differences["converter_sha256"] == ("none", "b" * 64)
+    assert "converter_locale" in comparison.metadata_differences
+    assert "compatibility_fallbacks" in comparison.metadata_differences
+
+
 def test_commit_is_expected_variable_and_repeated_gain_stays_candidate() -> None:
     baseline = _benchmark("b1", (100, 101, 99, 100, 100), commit="old")
     candidate = _benchmark("b2", (120, 121, 119, 120, 120), commit="new")

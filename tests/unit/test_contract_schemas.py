@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from perflens.contracts.artifacts import (
     AnalysisArtifact,
+    AnalysisVerificationArtifact,
     ArtifactReference,
     ArtifactTextPage,
     BenchmarkArtifact,
@@ -20,6 +21,7 @@ from perflens.contracts.artifacts import (
     Classification,
     ClassificationPage,
     CollectionArtifact,
+    CollectionEvidenceProvenance,
     CollectorAcceptanceArtifact,
     CollectorDeploymentArtifact,
     CollectorHealthArtifact,
@@ -34,9 +36,11 @@ from perflens.contracts.artifacts import (
     CollectorSpoolStatusArtifact,
     CollectorUndeploymentArtifact,
     CollectorUpgradeArtifact,
+    ConversionProvenance,
     DiagnosisBundle,
     ElfMetadataArtifact,
     Evidence,
+    EvidenceQuality,
     Frame,
     Hotspot,
     HotspotDetails,
@@ -51,6 +55,7 @@ from perflens.contracts.artifacts import (
     SourceContextArtifact,
     SourceResolutionArtifact,
     StackSample,
+    VerificationCheck,
 )
 
 
@@ -59,6 +64,11 @@ def test_checked_in_json_schemas_match_contract_models() -> None:
     schema_root = project_root / "schemas"
     models: dict[str, type[BaseModel]] = {
         "analysis.schema.json": AnalysisArtifact,
+        "analysis-verification.schema.json": AnalysisVerificationArtifact,
+        "verification-check.schema.json": VerificationCheck,
+        "conversion-provenance.schema.json": ConversionProvenance,
+        "collection-evidence-provenance.schema.json": CollectionEvidenceProvenance,
+        "evidence-quality.schema.json": EvidenceQuality,
         "profile.schema.json": ProfileMetadata,
         "sample.schema.json": StackSample,
         "frame.schema.json": Frame,

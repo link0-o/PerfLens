@@ -10,12 +10,20 @@ from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from perflens.application.evidence import (
+    compute_diagnosis_content_sha256,
+    verify_collection_artifact,
+)
+from perflens.application.verify_analysis import verify_analysis_artifact
 from perflens.artifacts.filesystem import serialize_json, write_json_new_atomic
 from perflens.contracts.artifacts import (
     AnalysisArtifact,
     BenchmarkArtifact,
+    BenchmarkComparison,
     CollectionArtifact,
     DiagnosisBundle,
+    ProfileComparison,
+    ProjectRunArtifact,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.security.paths import validate_new_output_file
@@ -142,21 +150,32 @@ class ArtifactStore:
         return output
 
     def load_analysis(self, analysis_id: str) -> AnalysisArtifact:
-        return self._load(analysis_id, "analysis", AnalysisArtifact)
+        analysis = self._load(analysis_id, "analysis", AnalysisArtifact)
+        self._require_embedded_id(analysis.analysis_id, analysis_id, "analysis")
+        verify_analysis_artifact(analysis, verify_source=False)
+        return analysis
 
     def load_diagnosis(self, analysis_id: str) -> DiagnosisBundle | None:
-        try:
-            return self._load(f"diagnosis-{analysis_id}", "diagnosis", DiagnosisBundle)
-        except PerfLensError as exc:
-            if exc.code is ErrorCode.INVALID_INPUT:
-                return None
-            raise
+        diagnosis_id = f"diagnosis-{analysis_id}"
+        if not self._path(diagnosis_id, "diagnosis").exists():
+            return None
+        diagnosis = self._load(diagnosis_id, "diagnosis", DiagnosisBundle)
+        self._require_embedded_id(diagnosis.analysis_id, analysis_id, "diagnosis")
+        analysis = self.load_analysis(analysis_id)
+        self._verify_diagnosis(diagnosis, analysis)
+        return diagnosis
 
     def load_benchmark(self, benchmark_id: str) -> BenchmarkArtifact:
-        return self._load(benchmark_id, "benchmark", BenchmarkArtifact)
+        benchmark = self._load(benchmark_id, "benchmark", BenchmarkArtifact)
+        self._require_embedded_id(benchmark.benchmark_id, benchmark_id, "benchmark")
+        return benchmark
 
     def load_collection(self, collection_id: str) -> CollectionArtifact:
-        return self._load(collection_id, "collection", CollectionArtifact)
+        collection = self._load(collection_id, "collection", CollectionArtifact)
+        self._require_embedded_id(collection.collection_id, collection_id, "collection")
+        self.policy.input_file(collection.output_path)
+        verify_collection_artifact(collection, max_output_bytes=self.max_artifact_bytes)
+        return collection
 
     def read_page(
         self,
@@ -174,9 +193,116 @@ class ArtifactStore:
                 details={"offset": offset, "limit": limit},
             )
         path = self._path(artifact_id, artifact_type)
-        chunk, size = self._read_file_page(path, offset=offset, limit=limit)
+        if artifact_type in {
+            "analysis",
+            "benchmark",
+            "benchmark-comparison",
+            "collection",
+            "diagnosis",
+            "profile-comparison",
+            "project-run",
+        }:
+            # Validate and page the exact same immutable byte snapshot. Performing
+            # a typed load followed by a second open would leave a replacement
+            # window in which unverified bytes could be returned to the Agent.
+            payload = self._read_file(path, maximum=self.max_artifact_bytes)
+            try:
+                self._validate_snapshot(artifact_id, artifact_type, payload)
+            except PerfLensError:
+                raise
+            except ValidationError as exc:
+                raise PerfLensError(
+                    ErrorCode.INVALID_INPUT,
+                    "artifact",
+                    "Artifact was not found or is invalid",
+                    details={"artifact_id": artifact_id, "artifact_type": artifact_type},
+                ) from exc
+            size = len(payload)
+            chunk = payload[offset : offset + limit]
+        else:
+            chunk, size = self._read_file_page(path, offset=offset, limit=limit)
         next_offset = offset + len(chunk) if offset + len(chunk) < size else None
-        return chunk.decode("utf-8", errors="replace"), next_offset, size
+        try:
+            text = chunk.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "artifact",
+                "Artifact page is not lossless UTF-8; regenerate it with the current PerfLens",
+                details={
+                    "artifact_id": artifact_id,
+                    "artifact_type": artifact_type,
+                    "offset": offset,
+                },
+            ) from exc
+        return text, next_offset, size
+
+    def _validate_snapshot(self, artifact_id: str, artifact_type: str, payload: bytes) -> None:
+        if artifact_type == "analysis":
+            analysis = AnalysisArtifact.model_validate_json(payload)
+            self._require_embedded_id(analysis.analysis_id, artifact_id, artifact_type)
+            verify_analysis_artifact(analysis, verify_source=False)
+            return
+        if artifact_type == "collection":
+            collection = CollectionArtifact.model_validate_json(payload)
+            self._require_embedded_id(collection.collection_id, artifact_id, artifact_type)
+            self.policy.input_file(collection.output_path)
+            verify_collection_artifact(collection, max_output_bytes=self.max_artifact_bytes)
+            return
+        if artifact_type == "diagnosis":
+            diagnosis = DiagnosisBundle.model_validate_json(payload)
+            expected_analysis_id = artifact_id.removeprefix("diagnosis-")
+            if artifact_id != f"diagnosis-{expected_analysis_id}":
+                raise self._identity_error(artifact_id, artifact_type)
+            self._require_embedded_id(
+                diagnosis.analysis_id,
+                expected_analysis_id,
+                artifact_type,
+            )
+            self._verify_diagnosis(diagnosis, self.load_analysis(expected_analysis_id))
+            return
+        if artifact_type == "benchmark":
+            model = BenchmarkArtifact.model_validate_json(payload)
+            embedded_id = model.benchmark_id
+        elif artifact_type == "project-run":
+            model = ProjectRunArtifact.model_validate_json(payload)
+            embedded_id = model.project_run_id
+        elif artifact_type == "profile-comparison":
+            model = ProfileComparison.model_validate_json(payload)
+            embedded_id = model.comparison_id
+        elif artifact_type == "benchmark-comparison":
+            model = BenchmarkComparison.model_validate_json(payload)
+            embedded_id = model.comparison_id
+        else:
+            raise self._identity_error(artifact_id, artifact_type)
+        self._require_embedded_id(embedded_id, artifact_id, artifact_type)
+
+    @staticmethod
+    def _verify_diagnosis(diagnosis: DiagnosisBundle, analysis: AnalysisArtifact) -> None:
+        if (
+            diagnosis.analysis_content_sha256 != analysis.content_sha256
+            or diagnosis.content_sha256 != compute_diagnosis_content_sha256(diagnosis)
+        ):
+            raise PerfLensError(
+                ErrorCode.PROFILE_PARSE_FAILED,
+                "evidence_validation",
+                "Diagnosis does not match its verified source Analysis",
+                details={"analysis_id": analysis.analysis_id},
+            )
+
+    @staticmethod
+    def _require_embedded_id(embedded_id: str, requested_id: str, artifact_type: str) -> None:
+        if embedded_id != requested_id:
+            raise ArtifactStore._identity_error(requested_id, artifact_type)
+
+    @staticmethod
+    def _identity_error(artifact_id: str, artifact_type: str) -> PerfLensError:
+        return PerfLensError(
+            ErrorCode.PROFILE_PARSE_FAILED,
+            "evidence_validation",
+            "Stored artifact identifier does not match its Agent-visible content",
+            details={"artifact_id": artifact_id, "artifact_type": artifact_type},
+        )
 
     def uri(self, artifact_id: str, artifact_type: str) -> str:
         self._safe_component(artifact_id)

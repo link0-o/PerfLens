@@ -1,0 +1,146 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "actual_event_source": {
+      "enum": [
+        "hardware",
+        "software",
+        "unknown"
+      ],
+      "title": "Actual Event Source",
+      "type": "string"
+    },
+    "call_graph": {
+      "anyOf": [
+        {
+          "enum": [
+            "fp",
+            "dwarf",
+            "lbr"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Call Graph"
+    },
+    "collection_artifact_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Collection Artifact Sha256",
+      "type": "string"
+    },
+    "collection_id": {
+      "title": "Collection Id",
+      "type": "string"
+    },
+    "duration_seconds": {
+      "minimum": 0,
+      "title": "Duration Seconds",
+      "type": "number"
+    },
+    "evidence_limitations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Limitations",
+      "type": "array"
+    },
+    "fallback_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Fallback Reason"
+    },
+    "fallback_used": {
+      "title": "Fallback Used",
+      "type": "boolean"
+    },
+    "frequency_hz": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Frequency Hz"
+    },
+    "mode": {
+      "enum": [
+        "record",
+        "sched",
+        "lock",
+        "off_cpu"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "output_bytes": {
+      "exclusiveMinimum": 0,
+      "title": "Output Bytes",
+      "type": "integer"
+    },
+    "output_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Output Sha256",
+      "type": "string"
+    },
+    "record_event": {
+      "anyOf": [
+        {
+          "enum": [
+            "cycles",
+            "cpu-clock"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Record Event"
+    },
+    "requested_event_source": {
+      "enum": [
+        "auto",
+        "hardware_required",
+        "software_only"
+      ],
+      "title": "Requested Event Source",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "collection_id",
+    "collection_artifact_sha256",
+    "mode",
+    "duration_seconds",
+    "output_sha256",
+    "output_bytes",
+    "requested_event_source",
+    "actual_event_source",
+    "fallback_used"
+  ],
+  "title": "CollectionEvidenceProvenance",
+  "type": "object"
+}

@@ -16,6 +16,24 @@
 - Source lines: {{ "available" if analysis.metadata.has_source_lines else "unavailable" }}
 - Unresolved self weight: {{ unresolved_percent }}%
 - Analysis status: `{{ analysis.status }}`
+- Analysis fingerprint: `{{ analysis.analysis_fingerprint }}`
+- Content SHA-256: `{{ analysis.content_sha256 }}`
+- Evidence quality: `{{ analysis.evidence_quality.quality_status }}`
+- Source Collection: `{{ analysis.evidence_quality.source_collection_id or "not supplied" }}`
+- Event source: `{{ analysis.evidence_quality.actual_event_source }}`
+- Call-graph weight coverage: {{ analysis.evidence_quality.call_graph_weight_percent }}%
+- Source-line self coverage: {{ analysis.evidence_quality.source_line_self_percent }}%
+- Normalization merges: {{ analysis.evidence_quality.normalization_merge_count }}
+- Omitted hotspot Self weight: {{ analysis.evidence_quality.omitted_hotspot_self_weight }}
+- Omitted call-path weight: {{ analysis.evidence_quality.omitted_call_path_weight }}
+- Parser: `{{ analysis.metadata.conversion.parser_version }}`
+- Normalizer: `{{ analysis.metadata.conversion.normalization_version }}`
+{% for conclusion in analysis.evidence_quality.allowed_conclusions %}
+- Allowed observation: `{{ conclusion }}`
+{% endfor %}
+{% for conclusion in analysis.evidence_quality.forbidden_conclusions %}
+- Not established by this evidence: `{{ conclusion }}`
+{% endfor %}
 {% for limitation in diagnosis.limitations %}
 - Limitation: {{ limitation }}
 {% endfor %}
@@ -30,10 +48,10 @@
 
 ## 4. Top Hotspots
 
-| ID | Symbol | DSO | Self | Inclusive | Categories |
-|---|---|---|---:|---:|---|
+| ID | Symbol | DSO | Self | Inclusive | Identity | Categories |
+|---|---|---|---:|---:|---|---|
 {% for hotspot in analysis.hotspots[:20] %}
-| {{ hotspot.hotspot_id }} | `{{ hotspot.symbol }}` | `{{ hotspot.dso }}` | {{ hotspot.self_percent }}% | {{ hotspot.inclusive_percent }}% | {% for classification in diagnosis.classifications if classification.hotspot_id == hotspot.hotspot_id %}{{ classification.category }}{% if not loop.last %}, {% endif %}{% endfor %} |
+| {{ hotspot.hotspot_id }} | `{{ hotspot.symbol }}` | `{{ hotspot.dso }}` | {{ hotspot.self_percent }}% | {{ hotspot.inclusive_percent }}% | {{ hotspot.symbol_variant_count }}{% if hotspot.symbol_variants_truncated %}+{% endif %} raw variant(s){% if hotspot.normalization_merged %}; normalized merge{% endif %} | {% for classification in diagnosis.classifications if classification.hotspot_id == hotspot.hotspot_id %}{{ classification.category }}{% if not loop.last %}, {% endif %}{% endfor %} |
 {% endfor %}
 
 ## 5. Candidate Root Causes

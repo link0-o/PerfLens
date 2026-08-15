@@ -452,6 +452,49 @@ def test_cli_analyzes_folded_profile(fixture_root: Path, tmp_path: Path) -> None
     assert payload["hotspots"][0]["symbol"] == "compute"
 
 
+def test_cli_verifies_analysis_and_rejects_tampered_agent_fields(tmp_path: Path) -> None:
+    profile = tmp_path / "input.folded"
+    profile.write_text("main;worker 9\n", encoding="utf-8")
+    analysis_path = tmp_path / "analysis.json"
+    write_json_atomic(analyze_folded(profile), analysis_path, max_output_bytes=1 << 20)
+    verification_path = tmp_path / "verification.json"
+
+    verified = runner.invoke(
+        app,
+        [
+            "verify-analysis",
+            "--input",
+            str(analysis_path),
+            "--output",
+            str(verification_path),
+        ],
+    )
+
+    assert verified.exit_code == 0, verified.output
+    payload = json.loads(verification_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "verified"
+    assert payload["checks"][0]["name"] == "analysis_content_sha256"
+
+    tampered = json.loads(analysis_path.read_text(encoding="utf-8"))
+    tampered["evidence_quality"]["actual_event_source"] = "hardware"
+    analysis_path.write_text(json.dumps(tampered), encoding="utf-8")
+    rejected_path = tmp_path / "rejected.json"
+    rejected = runner.invoke(
+        app,
+        [
+            "verify-analysis",
+            "--input",
+            str(analysis_path),
+            "--output",
+            str(rejected_path),
+        ],
+    )
+
+    assert rejected.exit_code == 3
+    assert "PROFILE_PARSE_FAILED" in rejected.stderr
+    assert not rejected_path.exists()
+
+
 def test_cli_status_is_chinese_first_and_can_write_json(tmp_path: Path) -> None:
     displayed = runner.invoke(
         app,

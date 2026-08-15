@@ -15,6 +15,10 @@ After DEB installation, `sudo perflens-admin setup` selects the host Collector m
 `perflens init` then detects that safely deployed mode per project. See the
 [Collector privilege-mode lifecycle](docs/collector-mode-lifecycle.md) for dry-runs,
 switching, rollback, and project resynchronization.
+See the [Collector capability and expansion roadmap](docs/collector-capability-roadmap.md) for the
+current maturity boundary, confirmed repair backlog, and phased extension plan.
+See the [trustworthy perf evidence pipeline](docs/evidence-pipeline.md) for raw-input binding,
+conversion provenance, quality gates, and Agent-facing verification.
 
 PerfLens is an evidence-driven performance-analysis toolkit for Linux
 applications and coding agents.
@@ -436,7 +440,9 @@ See [release readiness](docs/release-readiness.md),
 [release process](docs/releasing.md),
 [real-world profile acceptance](docs/real-world-acceptance.md), and
 [known issues](docs/known-issues.md), and
-[troubleshooting](docs/troubleshooting.md) for final verification evidence,
+[troubleshooting](docs/troubleshooting.md), and the
+[Collector capability roadmap](docs/collector-capability-roadmap.md), plus the
+[perf evidence pipeline](docs/evidence-pipeline.md) for final verification evidence,
 published-version workarounds, and operational failure guidance.
 
 Chinese maintainer documentation is available in the

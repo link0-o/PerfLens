@@ -7,14 +7,31 @@
           "title": "Dso",
           "type": "string"
         },
+        "normalization_merged": {
+          "default": false,
+          "title": "Normalization Merged",
+          "type": "boolean"
+        },
         "symbol": {
           "title": "Symbol",
           "type": "string"
+        },
+        "symbol_variant_count": {
+          "description": "Exact raw-symbol variant count when symbol_variants_truncated is false; otherwise a conservative observed lower bound",
+          "minimum": 1,
+          "title": "Symbol Variant Count",
+          "type": "integer"
+        },
+        "symbol_variants_truncated": {
+          "default": false,
+          "title": "Symbol Variants Truncated",
+          "type": "boolean"
         }
       },
       "required": [
         "symbol",
-        "dso"
+        "dso",
+        "symbol_variant_count"
       ],
       "title": "CallPathFrame",
       "type": "object"

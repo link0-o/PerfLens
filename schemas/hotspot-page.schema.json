@@ -1,5 +1,316 @@
 {
   "$defs": {
+    "EvidenceQuality": {
+      "additionalProperties": false,
+      "properties": {
+        "actual_event_source": {
+          "default": "unknown",
+          "enum": [
+            "hardware",
+            "software",
+            "unknown"
+          ],
+          "title": "Actual Event Source",
+          "type": "string"
+        },
+        "address_annotation_line_count": {
+          "minimum": 0,
+          "title": "Address Annotation Line Count",
+          "type": "integer"
+        },
+        "aggregated_frame_occurrence_count": {
+          "minimum": 0,
+          "title": "Aggregated Frame Occurrence Count",
+          "type": "integer"
+        },
+        "allowed_conclusions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Conclusions",
+          "type": "array"
+        },
+        "call_graph_weight": {
+          "minimum": 0,
+          "title": "Call Graph Weight",
+          "type": "integer"
+        },
+        "call_graph_weight_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Call Graph Weight Percent",
+          "type": "number"
+        },
+        "collection_limitations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Collection Limitations",
+          "type": "array"
+        },
+        "duplicate_frame_line_count": {
+          "minimum": 0,
+          "title": "Duplicate Frame Line Count",
+          "type": "integer"
+        },
+        "event": {
+          "title": "Event",
+          "type": "string"
+        },
+        "exported_call_path_count": {
+          "minimum": 0,
+          "title": "Exported Call Path Count",
+          "type": "integer"
+        },
+        "exported_hotspot_count": {
+          "minimum": 0,
+          "title": "Exported Hotspot Count",
+          "type": "integer"
+        },
+        "fallback_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Reason"
+        },
+        "fallback_used": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Used"
+        },
+        "forbidden_conclusions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Forbidden Conclusions",
+          "type": "array"
+        },
+        "frame_line_count": {
+          "minimum": 0,
+          "title": "Frame Line Count",
+          "type": "integer"
+        },
+        "inline_frame_count": {
+          "minimum": 0,
+          "title": "Inline Frame Count",
+          "type": "integer"
+        },
+        "input_bytes": {
+          "minimum": 0,
+          "title": "Input Bytes",
+          "type": "integer"
+        },
+        "input_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Input Sha256",
+          "type": "string"
+        },
+        "limitations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "malformed_record_count": {
+          "minimum": 0,
+          "title": "Malformed Record Count",
+          "type": "integer"
+        },
+        "normalization_merge_count": {
+          "minimum": 0,
+          "title": "Normalization Merge Count",
+          "type": "integer"
+        },
+        "omitted_call_path_weight": {
+          "minimum": 0,
+          "title": "Omitted Call Path Weight",
+          "type": "integer"
+        },
+        "omitted_hotspot_self_weight": {
+          "minimum": 0,
+          "title": "Omitted Hotspot Self Weight",
+          "type": "integer"
+        },
+        "parser_invariants_passed": {
+          "title": "Parser Invariants Passed",
+          "type": "boolean"
+        },
+        "quality_status": {
+          "enum": [
+            "verified",
+            "partial"
+          ],
+          "title": "Quality Status",
+          "type": "string"
+        },
+        "sample_count": {
+          "minimum": 0,
+          "title": "Sample Count",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_annotation_line_count": {
+          "minimum": 0,
+          "title": "Source Annotation Line Count",
+          "type": "integer"
+        },
+        "source_collection_artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Collection Artifact Sha256"
+        },
+        "source_collection_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Collection Id"
+        },
+        "source_line_frame_count": {
+          "minimum": 0,
+          "title": "Source Line Frame Count",
+          "type": "integer"
+        },
+        "source_line_self_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Source Line Self Percent",
+          "type": "number"
+        },
+        "source_line_self_weight": {
+          "minimum": 0,
+          "title": "Source Line Self Weight",
+          "type": "integer"
+        },
+        "source_locations_truncated_hotspot_count": {
+          "minimum": 0,
+          "title": "Source Locations Truncated Hotspot Count",
+          "type": "integer"
+        },
+        "total_call_path_count": {
+          "minimum": 0,
+          "title": "Total Call Path Count",
+          "type": "integer"
+        },
+        "total_hotspot_count": {
+          "minimum": 0,
+          "title": "Total Hotspot Count",
+          "type": "integer"
+        },
+        "total_weight": {
+          "minimum": 0,
+          "title": "Total Weight",
+          "type": "integer"
+        },
+        "unicode_replacement_count": {
+          "minimum": 0,
+          "title": "Unicode Replacement Count",
+          "type": "integer"
+        },
+        "unresolved_self_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Unresolved Self Percent",
+          "type": "number"
+        },
+        "unresolved_self_weight": {
+          "minimum": 0,
+          "title": "Unresolved Self Weight",
+          "type": "integer"
+        },
+        "warning_count": {
+          "minimum": 0,
+          "title": "Warning Count",
+          "type": "integer"
+        },
+        "warnings_truncated": {
+          "title": "Warnings Truncated",
+          "type": "boolean"
+        },
+        "weight_source": {
+          "title": "Weight Source",
+          "type": "string"
+        },
+        "weight_unit": {
+          "title": "Weight Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "quality_status",
+        "parser_invariants_passed",
+        "input_sha256",
+        "input_bytes",
+        "sample_count",
+        "total_weight",
+        "event",
+        "weight_unit",
+        "weight_source",
+        "malformed_record_count",
+        "warning_count",
+        "warnings_truncated",
+        "unicode_replacement_count",
+        "frame_line_count",
+        "duplicate_frame_line_count",
+        "address_annotation_line_count",
+        "source_annotation_line_count",
+        "aggregated_frame_occurrence_count",
+        "unresolved_self_weight",
+        "unresolved_self_percent",
+        "call_graph_weight",
+        "call_graph_weight_percent",
+        "source_line_frame_count",
+        "source_line_self_weight",
+        "source_line_self_percent",
+        "inline_frame_count",
+        "normalization_merge_count",
+        "source_locations_truncated_hotspot_count",
+        "total_hotspot_count",
+        "exported_hotspot_count",
+        "omitted_hotspot_self_weight",
+        "total_call_path_count",
+        "exported_call_path_count",
+        "omitted_call_path_weight"
+      ],
+      "title": "EvidenceQuality",
+      "type": "object"
+    },
     "Hotspot": {
       "additionalProperties": false,
       "properties": {
@@ -30,6 +341,11 @@
           "title": "Inclusive Weight",
           "type": "integer"
         },
+        "normalization_merged": {
+          "default": false,
+          "title": "Normalization Merged",
+          "type": "boolean"
+        },
         "sample_count": {
           "minimum": 0,
           "title": "Sample Count",
@@ -54,6 +370,11 @@
           "title": "Source Locations",
           "type": "array"
         },
+        "source_locations_truncated": {
+          "default": false,
+          "title": "Source Locations Truncated",
+          "type": "boolean"
+        },
         "stack_occurrence_count": {
           "minimum": 0,
           "title": "Stack Occurrence Count",
@@ -62,6 +383,25 @@
         "symbol": {
           "title": "Symbol",
           "type": "string"
+        },
+        "symbol_variant_count": {
+          "description": "Exact raw-symbol variant count when symbol_variants_truncated is false; otherwise a conservative observed lower bound",
+          "minimum": 0,
+          "title": "Symbol Variant Count",
+          "type": "integer"
+        },
+        "symbol_variants": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Symbol Variants",
+          "type": "array"
+        },
+        "symbol_variants_truncated": {
+          "default": false,
+          "title": "Symbol Variants Truncated",
+          "type": "boolean"
         },
         "thread_count": {
           "minimum": 0,
@@ -95,7 +435,8 @@
         "stack_occurrence_count",
         "self_percent",
         "inclusive_percent",
-        "thread_count"
+        "thread_count",
+        "symbol_variant_count"
       ],
       "title": "Hotspot",
       "type": "object"
@@ -106,6 +447,9 @@
     "analysis_id": {
       "title": "Analysis Id",
       "type": "string"
+    },
+    "evidence_quality": {
+      "$ref": "#/$defs/EvidenceQuality"
     },
     "items": {
       "items": {
@@ -141,6 +485,7 @@
   },
   "required": [
     "analysis_id",
+    "evidence_quality",
     "items",
     "total_items"
   ],

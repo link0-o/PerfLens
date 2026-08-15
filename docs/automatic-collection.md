@@ -37,6 +37,11 @@ scheduler-activity, page-fault, and on-CPU hotspot analysis, but not IPC,
 hardware cache-miss, branch-miss, or microarchitectural conclusions. Matched
 A/B validation requires the same actual source on both sides.
 
+In typed stat metrics, `running_percent` is perf counter scheduling coverage
+(`time_running / time_enabled`), not workload CPU utilization. `task-clock` is accumulated CPU
+time. Low context-switch, migration, or page-fault counts do not by themselves prove that I/O
+wait, lock contention, allocation churn, or memory pressure is absent.
+
 If the probe succeeds but the formal hardware collection subsequently fails,
 `auto` may make one software retry only when at least 50ms remains in the
 original collection window. The retry never extends the user-authorized
@@ -89,8 +94,11 @@ The automatic workflow is:
 2. `plan_automatic_collection`;
 3. verify the plan is allowed;
 4. `execute_collection_plan` once before it expires;
-5. read typed stat metrics or call `analyze_collection` for perf-data output;
-6. continue the normal evidence workflow.
+5. read typed stat metrics or call `analyze_collection` for perf-data output; this binds the
+   Collection ID, output hash/size, event source, fallback, and limitations and rechecks the input
+   before and after conversion;
+6. call `verify_analysis`, inspect EvidenceQuality, and only then continue the normal evidence
+   workflow.
 
 After execution, always inspect `actual_event_source`, `fallback_used`, and
 `evidence_limitations`. A software fallback is a reduced evidence source, not

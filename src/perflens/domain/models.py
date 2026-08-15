@@ -20,6 +20,14 @@ def _empty_thread_ids() -> set[int]:
     return set()
 
 
+def _empty_symbols() -> set[str]:
+    return set()
+
+
+def _empty_source_locations() -> set[str]:
+    return set()
+
+
 @dataclass(frozen=True, slots=True)
 class FrameKey:
     symbol: str
@@ -28,6 +36,8 @@ class FrameKey:
     ip: str | None = None
     source_file: str | None = None
     source_line: int | None = None
+    source_column: int | None = None
+    is_inline: bool = False
     is_kernel: bool = False
     is_unknown: bool = False
 
@@ -50,6 +60,8 @@ class FrameTable:
         ip: str | None = None,
         source_file: str | None = None,
         source_line: int | None = None,
+        source_column: int | None = None,
+        is_inline: bool = False,
         is_kernel: bool = False,
         is_unknown: bool = False,
     ) -> int:
@@ -60,6 +72,8 @@ class FrameTable:
             ip=sys.intern(ip) if ip is not None else None,
             source_file=sys.intern(source_file) if source_file is not None else None,
             source_line=source_line,
+            source_column=source_column,
+            is_inline=is_inline,
             is_kernel=is_kernel,
             is_unknown=is_unknown,
         )
@@ -108,6 +122,11 @@ class ParseDiagnostics:
     skipped_records: int = 0
     malformed_records: int = 0
     bytes_read: int = 0
+    frame_lines: int = 0
+    duplicate_frame_lines: int = 0
+    address_annotation_lines: int = 0
+    source_annotation_lines: int = 0
+    unicode_replacement_count: int = 0
     warnings: list[ParseWarning] = field(default_factory=_empty_warnings)
     warning_count: int = 0
     warnings_truncated: bool = False
@@ -119,6 +138,22 @@ class ParseDiagnostics:
             self.warnings.append(warning)
         else:
             self.warnings_truncated = True
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileConversionProvenance:
+    adapter: str
+    parser_version: str
+    normalization_version: str
+    converter_path: str | None
+    converter_sha256: str | None
+    converter_version: str | None
+    argv: tuple[str, ...]
+    locale: str
+    transcript_sha256: str
+    transcript_bytes: int
+    compatibility_fallbacks: tuple[str, ...] = ()
+    diagnostics: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +192,10 @@ class HotspotAccumulator:
     sample_count: int = 0
     stack_occurrence_count: int = 0
     thread_ids: set[int] = field(default_factory=_empty_thread_ids)
+    symbol_variants: set[str] = field(default_factory=_empty_symbols)
+    symbol_variants_truncated: bool = False
+    source_locations: set[str] = field(default_factory=_empty_source_locations)
+    source_locations_truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +207,12 @@ class HotspotResult:
     sample_count: int
     stack_occurrence_count: int
     thread_count: int
+    symbol_variants: tuple[str, ...]
+    symbol_variant_count: int
+    symbol_variants_truncated: bool
+    normalization_merged: bool
+    source_locations: tuple[str, ...]
+    source_locations_truncated: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,5 +230,12 @@ class AggregationResult:
     event: str
     weight_unit: str
     weight_source: str
+    call_graph_weight: int
+    unknown_self_weight: int
+    source_line_frame_count: int
+    source_line_self_weight: int
+    inline_frame_count: int
+    total_frame_count: int
+    normalization_merge_count: int
     hotspots: tuple[HotspotResult, ...]
     call_paths: tuple[CallPathResult, ...]

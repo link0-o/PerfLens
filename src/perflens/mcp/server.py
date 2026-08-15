@@ -14,8 +14,10 @@ from mcp_types import ToolAnnotations
 
 from perflens import __version__
 from perflens.application.analyze import analyze_folded, analyze_perf_data, analyze_perf_script
+from perflens.application.evidence import build_collection_evidence_provenance
 from perflens.application.symbols import get_source_context as resolve_source_context
 from perflens.application.symbols import resolve_source as resolve_module_source
+from perflens.application.verify_analysis import verify_analysis_artifact
 from perflens.benchmarks.adapters import load_benchmark
 from perflens.classification.engine import build_diagnosis_bundle as create_diagnosis
 from perflens.collection.capabilities import inspect_collection_capabilities
@@ -39,6 +41,7 @@ from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.comparison.benchmarks import compare_benchmarks as compare_benchmark_artifacts
 from perflens.comparison.profiles import compare_profiles as compare_profile_artifacts
 from perflens.contracts.artifacts import (
+    AnalysisVerificationArtifact,
     ArtifactReference,
     ArtifactTextPage,
     CallPathPage,
@@ -240,6 +243,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "target_pid": artifact.target_pid,
                 "output_bytes": artifact.output_bytes,
                 "metric_count": len(artifact.metrics),
+                "record_event": artifact.record_event,
                 "requested_event_source": artifact.requested_event_source,
                 "actual_event_source": artifact.actual_event_source,
                 "fallback_used": artifact.fallback_used,
@@ -261,7 +265,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         meta={"perflens/permission": "PROJECT_EXECUTION"},
         structured_output=True,
     )
-    async def collect_project_workload_tool(
+    def collect_project_workload_tool(
         project_root: str,
         executable: str,
         authorization: Literal["I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION"],
@@ -312,6 +316,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "workload_status": project_run.workload_status,
                 "workload_exit_code": project_run.workload_exit_code,
                 "actual_event_source": collection.actual_event_source,
+                "record_event": collection.record_event,
                 "fallback_used": collection.fallback_used,
                 "fallback_reason": collection.fallback_reason,
                 "evidence_limitations": "; ".join(collection.evidence_limitations),
@@ -337,7 +342,11 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 recoverable=True,
             )
         safe_path = policy.input_file(collection.output_path)
-        analysis = analyze_perf_data(safe_path, perf_path=config.perf_path)
+        analysis = analyze_perf_data(
+            safe_path,
+            perf_path=config.perf_path,
+            collection=build_collection_evidence_provenance(collection),
+        )
         store.save(analysis, analysis.analysis_id, "analysis")
         return ArtifactReference(
             artifact_id=analysis.analysis_id,
@@ -345,10 +354,14 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             uri=store.uri(analysis.analysis_id, "analysis"),
             summary={
                 "status": analysis.status,
+                "quality_status": analysis.evidence_quality.quality_status,
                 "sample_count": analysis.metadata.sample_count,
                 "total_weight": analysis.metadata.total_weight,
                 "hotspot_count": len(analysis.hotspots),
+                "unresolved_self_percent": (analysis.evidence_quality.unresolved_self_percent),
+                "warning_count": analysis.evidence_quality.warning_count,
             },
+            evidence_quality=analysis.evidence_quality,
         )
 
     @server.tool(
@@ -370,7 +383,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             analysis = analyze_perf_script(safe_path)
         else:
             _require_process_execution(config)
-            analysis = analyze_perf_data(safe_path)
+            analysis = analyze_perf_data(safe_path, perf_path=config.perf_path)
         store.save(analysis, analysis.analysis_id, "analysis")
         return ArtifactReference(
             artifact_id=analysis.analysis_id,
@@ -378,11 +391,29 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             uri=store.uri(analysis.analysis_id, "analysis"),
             summary={
                 "status": analysis.status,
+                "quality_status": analysis.evidence_quality.quality_status,
                 "sample_count": analysis.metadata.sample_count,
                 "total_weight": analysis.metadata.total_weight,
                 "hotspot_count": len(analysis.hotspots),
+                "unresolved_self_percent": (analysis.evidence_quality.unresolved_self_percent),
+                "warning_count": analysis.evidence_quality.warning_count,
             },
+            evidence_quality=analysis.evidence_quality,
         )
+
+    @server.tool(
+        name="verify_analysis",
+        description=(
+            "Independently verify a stored Analysis fingerprint, metadata consistency, and "
+            "weight conservation before Agent interpretation."
+        ),
+        annotations=READ_ONLY,
+        meta={"perflens/permission": "READ_ONLY"},
+        structured_output=True,
+    )
+    async def verify_analysis(analysis_id: str) -> AnalysisVerificationArtifact:
+        analysis = store.load_analysis(analysis_id)
+        return verify_analysis_artifact(analysis, verify_source=False)
 
     @server.tool(
         name="list_hotspots",
@@ -417,6 +448,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         next_cursor = cursor + len(page) if cursor + len(page) < len(items) else None
         return HotspotPage(
             analysis_id=analysis_id,
+            evidence_quality=analysis.evidence_quality,
             items=page,
             next_cursor=next_cursor,
             total_items=len(items),
@@ -453,6 +485,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         )
         return HotspotDetails(
             analysis_id=analysis_id,
+            evidence_quality=analysis.evidence_quality,
             hotspot=hotspot,
             dominant_call_paths=paths,
             classifications=classifications,
@@ -484,6 +517,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         next_cursor = cursor + len(page) if cursor + len(page) < len(items) else None
         return CallPathPage(
             analysis_id=analysis_id,
+            evidence_quality=analysis.evidence_quality,
             symbol=symbol,
             items=page,
             next_cursor=next_cursor,
@@ -504,12 +538,14 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     ) -> ClassificationPage:
         if cursor < 0 or limit < 1 or limit > 100:
             raise ValueError("cursor must be non-negative and limit must be between 1 and 100")
-        diagnosis = create_diagnosis(store.load_analysis(analysis_id))
+        analysis = store.load_analysis(analysis_id)
+        diagnosis = create_diagnosis(analysis)
         items = diagnosis.classifications
         page = items[cursor : cursor + limit]
         next_cursor = cursor + len(page) if cursor + len(page) < len(items) else None
         return ClassificationPage(
             analysis_id=analysis_id,
+            evidence_quality=analysis.evidence_quality,
             items=page,
             next_cursor=next_cursor,
             total_items=len(items),
@@ -523,9 +559,22 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         structured_output=True,
     )
     async def build_diagnosis_bundle(analysis_id: str) -> ArtifactReference:
-        diagnosis = create_diagnosis(store.load_analysis(analysis_id))
+        analysis = store.load_analysis(analysis_id)
         artifact_id = f"diagnosis-{analysis_id}"
-        store.save(diagnosis, artifact_id, "diagnosis")
+        diagnosis = store.load_diagnosis(analysis_id)
+        if diagnosis is None:
+            candidate = create_diagnosis(analysis)
+            try:
+                store.save(candidate, artifact_id, "diagnosis")
+                diagnosis = candidate
+            except PerfLensError as exc:
+                # Another request may have published the immutable diagnosis
+                # after the initial lookup. Reuse only a fully verified bundle
+                # for this exact Analysis; unrelated storage failures remain
+                # visible to the caller.
+                diagnosis = store.load_diagnosis(analysis_id)
+                if diagnosis is None:
+                    raise exc
         return ArtifactReference(
             artifact_id=artifact_id,
             artifact_type="diagnosis",
@@ -535,6 +584,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "classification_count": len(diagnosis.classifications),
                 "missing_evidence_count": len(diagnosis.missing_evidence),
             },
+            evidence_quality=analysis.evidence_quality,
         )
 
     @server.tool(
@@ -546,7 +596,15 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     )
     async def read_artifact_page(
         artifact_id: str,
-        artifact_type: str,
+        artifact_type: Literal[
+            "analysis",
+            "benchmark",
+            "benchmark-comparison",
+            "collection",
+            "diagnosis",
+            "profile-comparison",
+            "project-run",
+        ],
         offset: int = 0,
         limit: int = 65_536,
     ) -> ArtifactTextPage:

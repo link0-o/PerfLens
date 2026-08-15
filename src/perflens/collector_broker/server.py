@@ -68,6 +68,7 @@ from perflens.domain.errors import ErrorCode, PerfLensError, stable_error_id
 from perflens.metrics.perf_stat import PerfStatMetricAdapter
 from perflens.privileged_helper.client import HelperClient
 from perflens.privileged_helper.protocol import HelperCollectionResult
+from perflens.profiles.events import canonical_perf_event
 
 _PEER_CREDENTIALS = struct.Struct("3i")
 _MAX_TRACKED_PLANS = 4096
@@ -426,12 +427,17 @@ class CollectorBrokerServer:
             except PerfLensError as exc:
                 if exc.code not in {ErrorCode.EXTERNAL_TOOL_FAILED, ErrorCode.PROFILE_PARSE_FAILED}:
                     raise
-                return False, "hardware_probe_failed", probe_seconds
+                reason = (
+                    "hardware_probe_produced_no_usable_counts"
+                    if _is_no_usable_hardware_collection(exc)
+                    else "hardware_probe_failed"
+                )
+                return False, reason, probe_seconds
             usable = any(
                 metric.status == "measured"
                 and metric.value is not None
                 and metric.value > 0
-                and metric.event in _HARDWARE_PROBE_EVENTS
+                and canonical_perf_event(metric.event) in _HARDWARE_PROBE_EVENTS
                 for metric in artifact.metrics
             )
             return (
@@ -491,6 +497,7 @@ class CollectorBrokerServer:
             duration_seconds=max(0.0, (finished - started).total_seconds()),
             frequency_hz=plan.frequency_hz if plan.mode == "record" else None,
             call_graph=plan.call_graph if plan.mode == "record" else None,
+            record_event=result.record_event if plan.mode == "record" else None,
             events=result.events if plan.mode == "stat" else (),
             requested_event_source=plan.requested_event_source,
             actual_event_source=result.actual_event_source,
@@ -951,6 +958,13 @@ def _unsafe_event_source_plan() -> PerfLensError:
         "authorization",
         "Collection event-source or fallback fields violate the fixed broker policy",
         recoverable=True,
+    )
+
+
+def _is_no_usable_hardware_collection(error: PerfLensError) -> bool:
+    failures = error.details.get("failures")
+    return isinstance(failures, list) and (
+        "hardware Collection contains no usable hardware metric" in failures
     )
 
 

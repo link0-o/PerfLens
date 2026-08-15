@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Literal
 
+from perflens.application.evidence import compute_diagnosis_content_sha256
 from perflens.classification.rules import CompiledRule, load_builtin_rules
 from perflens.contracts.artifacts import (
     AnalysisArtifact,
@@ -76,7 +77,7 @@ def build_diagnosis_bundle(
         f"inclusive={hotspot.inclusive_percent:.3f}%"
         for hotspot in analysis.hotspots[:10]
     )
-    limitations = list(analysis.metadata.warnings)
+    limitations = [*analysis.evidence_quality.limitations, *analysis.metadata.warnings]
     if not analysis.metadata.has_call_graph:
         limitations.append("The profile has no call graph; evidence is limited to L1 hotspots.")
     if not analysis.metadata.has_source_lines:
@@ -88,14 +89,27 @@ def build_diagnosis_bundle(
     missing = {
         item for classification in classifications for item in classification.missing_evidence
     }
+    missing.update(
+        f"Forbidden by evidence quality: {item}"
+        for item in analysis.evidence_quality.forbidden_conclusions
+    )
     if not classifications:
         missing.add("No generic classification rule matched; inspect top call paths manually.")
-    return DiagnosisBundle(
+    diagnosis = DiagnosisBundle(
         analysis_id=analysis.analysis_id,
-        status="partial" if limitations or missing else "complete",
+        analysis_content_sha256=analysis.content_sha256,
+        content_sha256="0" * 64,
+        status=(
+            "partial"
+            if analysis.evidence_quality.quality_status == "partial" or limitations or missing
+            else "complete"
+        ),
         generated_at=datetime.now(tz=UTC).isoformat(),
         classifications=tuple(classifications),
         observations=observations,
         limitations=tuple(dict.fromkeys(limitations)),
         missing_evidence=tuple(sorted(missing)),
+    )
+    return diagnosis.model_copy(
+        update={"content_sha256": compute_diagnosis_content_sha256(diagnosis)}
     )

@@ -604,6 +604,7 @@ def test_client_verifies_collection_file_identity_permissions_and_digest(tmp_pat
         duration_seconds=1,
         frequency_hz=plan.frequency_hz,
         call_graph=plan.call_graph,
+        record_event=plan.record_event,
         requested_event_source=plan.requested_event_source,
         actual_event_source="hardware",
     )
@@ -621,6 +622,7 @@ def test_client_verifies_collection_file_identity_permissions_and_digest(tmp_pat
         update={
             "requested_event_source": "auto",
             "actual_event_source": "software",
+            "record_event": "cpu-clock",
             "fallback_used": True,
             "fallback_reason": "hardware_probe_failed",
             "evidence_limitations": (
@@ -650,11 +652,12 @@ def test_client_verifies_collection_file_identity_permissions_and_digest(tmp_pat
     sched_artifact = artifact.model_copy(
         update={
             "mode": "sched",
-            "frequency_hz": None,
-            "call_graph": None,
-            "actual_event_source": "unknown",
-        }
-    )
+                "frequency_hz": None,
+                "call_graph": None,
+                "record_event": None,
+                "actual_event_source": "unknown",
+            }
+        )
     _verify_collection_artifact(sched_artifact, sched_plan, socket_identity, os.geteuid())
 
     with pytest.raises(PerfLensError, match="artifact policy") as forged_source:

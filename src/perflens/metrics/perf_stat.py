@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import csv
+import io
 import math
+import os
+import stat
 from pathlib import Path
 from typing import TextIO
 
 from perflens.contracts.artifacts import PerfStatMetric
 from perflens.domain.errors import ErrorCode, PerfLensError
+from perflens.profiles.text import sanitize_surrogateescaped_text
+
+_TRUNCATED_WARNINGS = "Additional perf stat parse warnings were truncated."
 
 
 class PerfStatMetricAdapter:
@@ -22,7 +28,7 @@ class PerfStatMetricAdapter:
         max_metrics: int = 256,
         max_warnings: int = 32,
     ) -> None:
-        if max_input_bytes < 1 or max_line_chars < 1 or max_metrics < 1 or max_warnings < 0:
+        if max_input_bytes < 1 or max_line_chars < 1 or max_metrics < 1 or max_warnings < 1:
             raise ValueError("perf stat resource limits are invalid")
         self.max_input_bytes = max_input_bytes
         self.max_line_chars = max_line_chars
@@ -55,37 +61,107 @@ class PerfStatMetricAdapter:
                 details={"actual_bytes": size, "max_input_bytes": self.max_input_bytes},
             )
 
+        with safe_path.open("r", encoding="utf-8", errors="surrogateescape", newline="") as handle:
+            return self._parse_handle(handle)
+
+    def parse_bytes(self, payload: bytes) -> tuple[tuple[PerfStatMetric, ...], tuple[str, ...]]:
+        """Parse an already bounded immutable byte snapshot."""
+        if len(payload) > self.max_input_bytes:
+            raise PerfLensError(
+                ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                "perf_stat",
+                "perf stat output exceeds its input limit",
+                details={"actual_bytes": len(payload), "max_input_bytes": self.max_input_bytes},
+            )
+        text = payload.decode("utf-8", errors="surrogateescape")
+        return self._parse_handle(io.StringIO(text, newline=""))
+
+    def parse_descriptor(
+        self,
+        descriptor: int,
+    ) -> tuple[tuple[PerfStatMetric, ...], tuple[str, ...]]:
+        """Parse the same already-verified file description used for integrity checks."""
+        duplicate = -1
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > self.max_input_bytes:
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "perf_stat",
+                    "perf stat output exceeds its input limit or is not regular",
+                    details={
+                        "actual_bytes": metadata.st_size,
+                        "max_input_bytes": self.max_input_bytes,
+                    },
+                )
+            duplicate = os.dup(descriptor)
+            os.lseek(duplicate, 0, os.SEEK_SET)
+        except PerfLensError:
+            raise
+        except OSError as exc:
+            if duplicate >= 0:
+                os.close(duplicate)
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "perf_stat",
+                "perf stat output descriptor cannot be read safely",
+            ) from exc
+        with os.fdopen(
+            duplicate,
+            "r",
+            encoding="utf-8",
+            errors="surrogateescape",
+            newline="",
+        ) as handle:
+            return self._parse_handle(handle)
+
+    def _parse_handle(self, handle: TextIO) -> tuple[tuple[PerfStatMetric, ...], tuple[str, ...]]:
         metrics: list[PerfStatMetric] = []
         warnings: list[str] = []
-        with safe_path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
-            line_number = 0
-            while True:
-                raw_line = handle.readline(self.max_line_chars + 1)
-                if raw_line == "":
-                    break
-                line_number += 1
-                if len(raw_line) > self.max_line_chars:
-                    if not raw_line.endswith("\n"):
-                        self._drain_line(handle)
-                    self._warn(
-                        warnings,
-                        f"Line {line_number} exceeds the line limit and was skipped.",
-                    )
-                    continue
-                line = raw_line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if len(metrics) >= self.max_metrics:
-                    raise PerfLensError(
-                        ErrorCode.RESOURCE_LIMIT_EXCEEDED,
-                        "perf_stat",
-                        "perf stat output exceeds max_metrics",
-                        details={"max_metrics": self.max_metrics},
-                    )
-                fields = next(csv.reader([line], delimiter=";"))
-                metric = self._parse_row(fields, line_number, warnings)
-                if metric is not None:
-                    metrics.append(metric)
+        line_number = 0
+        while True:
+            raw_line = handle.readline(self.max_line_chars + 1)
+            if raw_line == "":
+                break
+            line_number += 1
+            raw_line, _byte_count, invalid_bytes = sanitize_surrogateescaped_text(raw_line)
+            if invalid_bytes:
+                raise PerfLensError(
+                    ErrorCode.PROFILE_PARSE_FAILED,
+                    "perf_stat",
+                    "perf stat output contains invalid UTF-8",
+                    recoverable=True,
+                    details={"line_number": line_number, "invalid_bytes": invalid_bytes},
+                )
+            if len(raw_line) > self.max_line_chars:
+                if not raw_line.endswith("\n"):
+                    self._drain_line(handle, line_number)
+                self._warn(
+                    warnings,
+                    f"Line {line_number} exceeds the line limit and was skipped.",
+                )
+                continue
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if len(metrics) >= self.max_metrics:
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "perf_stat",
+                    "perf stat output exceeds max_metrics",
+                    details={"max_metrics": self.max_metrics},
+                )
+            try:
+                fields = next(csv.reader([line], delimiter=";", strict=True))
+            except csv.Error:
+                self._warn(
+                    warnings,
+                    f"Line {line_number} is not valid delimited perf stat output and was skipped.",
+                )
+                continue
+            metric = self._parse_row(fields, line_number, warnings)
+            if metric is not None:
+                metrics.append(metric)
 
         metrics = self._append_ipc(metrics)
         if not metrics:
@@ -170,9 +246,9 @@ class PerfStatMetricAdapter:
     @staticmethod
     def _append_ipc(metrics: list[PerfStatMetric]) -> list[PerfStatMetric]:
         values = {
-            metric.event.split(":", maxsplit=1)[0]: metric.value
+            metric.event: metric.value
             for metric in metrics
-            if metric.value is not None
+            if metric.status == "measured" and metric.value is not None
         }
         cycles = values.get("cycles")
         instructions = values.get("instructions")
@@ -192,9 +268,22 @@ class PerfStatMetricAdapter:
     def _warn(self, warnings: list[str], message: str) -> None:
         if len(warnings) < self.max_warnings:
             warnings.append(message)
+        elif warnings and warnings[-1] != _TRUNCATED_WARNINGS:
+            warnings[-1] = _TRUNCATED_WARNINGS
 
-    def _drain_line(self, handle: TextIO) -> None:
+    def _drain_line(self, handle: TextIO, line_number: int) -> None:
         while True:
             chunk = handle.readline(self.max_line_chars + 1)
-            if chunk == "" or chunk.endswith("\n"):
+            if chunk == "":
+                return
+            _sanitized, _byte_count, invalid_bytes = sanitize_surrogateescaped_text(chunk)
+            if invalid_bytes:
+                raise PerfLensError(
+                    ErrorCode.PROFILE_PARSE_FAILED,
+                    "perf_stat",
+                    "perf stat output contains invalid UTF-8",
+                    recoverable=True,
+                    details={"line_number": line_number, "invalid_bytes": invalid_bytes},
+                )
+            if chunk.endswith("\n"):
                 return

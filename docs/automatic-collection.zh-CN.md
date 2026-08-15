@@ -66,6 +66,11 @@ software 时不属于可比 A/B，应使用 `hardware_required` 或 `software_on
 策略文件的 `allow_software_fallback = false` 可禁止自动降级；MCP 启动参数
 `--disable-automatic-software-fallback` 提供独立的第一层限制。
 
+类型化 stat 指标中的 `running_percent` 表示 perf 计数器的调度覆盖率
+（`time_running / time_enabled`），不是程序 CPU 利用率；`task-clock` 是累计 CPU 时间，
+也不是墙钟时间。较低或为零的上下文切换、CPU 迁移、缺页计数只能说明本次观察到的
+对应事件较少，不能单独证明不存在 I/O 等待、锁竞争、频繁分配或内存压力。
+
 旧的 `collect-profile` CLI/MCP 工具仍可用于人工确认的命令或 PID 采集。Agent 驱动的实时 PID 诊断应优先使用计划与 Broker。
 
 ## 先运行权限诊断
@@ -233,8 +238,10 @@ PID/UID/启动时间并启用事件。客户端验证版本化、绑定计划与
 2. `plan_automatic_collection`，默认 `event_source=auto`；
 3. 检查 `policy_status=allowed`；
 4. `execute_collection_plan`；
-5. `stat` 直接读取指标，其他模式调用 `analyze_collection`；
-6. 继续热点、调用路径、候选分类和报告流程。
+5. `stat` 直接读取指标，其他模式调用 `analyze_collection`；该步骤会把 Collection ID、
+   产物哈希/大小、事件来源、回退和限制绑定到 Analysis，并在转换前后复核输入；
+6. 调用 `verify_analysis`，通过后读取 EvidenceQuality，再继续热点、调用路径、候选分类
+   和报告流程。
 
 第 4 步后必须读取 `actual_event_source`、`fallback_used` 和 `evidence_limitations`。发生
 软件降级时继续分析，不把硬件指标缺失误报成整个采集失败。

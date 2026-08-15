@@ -27,6 +27,58 @@ def compare_profiles(
         for field in metadata_fields
         if getattr(baseline.metadata, field) != getattr(candidate.metadata, field)
     }
+    provenance_fields: dict[str, tuple[object, object]] = {
+        "actual_event_source": (
+            baseline.evidence_quality.actual_event_source,
+            candidate.evidence_quality.actual_event_source,
+        ),
+        "parser_version": (
+            baseline.metadata.conversion.parser_version,
+            candidate.metadata.conversion.parser_version,
+        ),
+        "normalization_version": (
+            baseline.metadata.conversion.normalization_version,
+            candidate.metadata.conversion.normalization_version,
+        ),
+        "converter_version": (
+            baseline.metadata.conversion.converter_version or "unknown",
+            candidate.metadata.conversion.converter_version or "unknown",
+        ),
+        "converter_sha256": (
+            baseline.metadata.conversion.converter_sha256 or "none",
+            candidate.metadata.conversion.converter_sha256 or "none",
+        ),
+        "converter_argv": (
+            _semantic_converter_argv(baseline),
+            _semantic_converter_argv(candidate),
+        ),
+        "converter_locale": (
+            baseline.metadata.conversion.locale,
+            candidate.metadata.conversion.locale,
+        ),
+        "compatibility_fallbacks": (
+            baseline.metadata.conversion.compatibility_fallbacks,
+            candidate.metadata.conversion.compatibility_fallbacks,
+        ),
+    }
+    provenance_fields.update(_collection_setting_fields(baseline, candidate))
+    metadata_differences.update(
+        {
+            field: (str(before), str(after))
+            for field, (before, after) in provenance_fields.items()
+            if before != after
+        }
+    )
+    if baseline.evidence_quality.quality_status != "verified":
+        metadata_differences["baseline_quality_status"] = (
+            baseline.evidence_quality.quality_status,
+            "verified",
+        )
+    if candidate.evidence_quality.quality_status != "verified":
+        metadata_differences["candidate_quality_status"] = (
+            candidate.evidence_quality.quality_status,
+            "verified",
+        )
     comparable = not metadata_differences
     baseline_hotspots = {(item.symbol, item.dso): item for item in baseline.hotspots}
     candidate_hotspots = {(item.symbol, item.dso): item for item in candidate.hotspots}
@@ -91,7 +143,8 @@ def compare_profiles(
     ]
     if not comparable:
         warnings.append(
-            "Profile event or weight semantics differ; the profiles are not directly comparable."
+            "Profile acquisition, conversion, event, weight, or evidence-quality semantics "
+            "differ; the profiles are not directly comparable."
         )
     if baseline.metadata.sample_count < 100 or candidate.metadata.sample_count < 100:
         warnings.append(
@@ -182,13 +235,48 @@ def _dso_changes(
 
 
 def _unresolved_percent(analysis: AnalysisArtifact) -> float:
-    unresolved = sum(
-        item.self_weight
-        for item in analysis.hotspots
-        if item.symbol in {"unknown", "[unknown]", "??"} or item.dso in {"unknown", "[unknown]"}
-    )
-    return (
-        round(unresolved * 100 / analysis.metadata.total_weight, 6)
-        if analysis.metadata.total_weight
-        else 0.0
-    )
+    return analysis.evidence_quality.unresolved_self_percent
+
+
+def _semantic_converter_argv(analysis: AnalysisArtifact) -> tuple[str, ...]:
+    """Remove only executable/input paths while retaining conversion behavior."""
+    argv = analysis.metadata.conversion.argv
+    if not argv:
+        return ()
+    normalized: list[str] = []
+    index = 1  # converter identity is compared by SHA/version, not installation path
+    while index < len(argv):
+        argument = argv[index]
+        normalized.append(argument)
+        if argument == "-i" and index + 1 < len(argv):
+            normalized.append("<profile-input>")
+            index += 2
+        else:
+            index += 1
+    return tuple(normalized)
+
+
+def _collection_setting_fields(
+    baseline: AnalysisArtifact,
+    candidate: AnalysisArtifact,
+) -> dict[str, tuple[object, object]]:
+    before = baseline.metadata.collection
+    after = candidate.metadata.collection
+    if before is None or after is None:
+        return {"collection_provenance": (before is not None, after is not None)}
+    return {
+        "collection_mode": (before.mode, after.mode),
+        "collection_frequency_hz": (before.frequency_hz, after.frequency_hz),
+        "collection_call_graph": (before.call_graph, after.call_graph),
+        "collection_record_event": (before.record_event, after.record_event),
+        "collection_requested_event_source": (
+            before.requested_event_source,
+            after.requested_event_source,
+        ),
+        "collection_fallback_used": (before.fallback_used, after.fallback_used),
+        "collection_fallback_reason": (before.fallback_reason, after.fallback_reason),
+        "collection_evidence_limitations": (
+            before.evidence_limitations,
+            after.evidence_limitations,
+        ),
+    }

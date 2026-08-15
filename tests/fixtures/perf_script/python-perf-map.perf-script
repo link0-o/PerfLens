@@ -1,0 +1,15 @@
+python3 109348/109348 [000] 18684.164635674: 10 cpu-clock:
+          55f1e6 _PyEval_EvalFrameDefault (/usr/bin/python3.13)
+  python3.13[55f1e6]
+    7f5ab9b2f979 py::locate_bucket_linear:/workspace/workload.py (/tmp/perf-109348.map)
+  [JIT] tid 109348[7f5ab9b2f979]
+	    7f5ab9824ca7 __libc_start_call_main (/usr/lib/x86_64-linux-gnu/libc.so.6)
+  libc_start_call_main.h:58 (inlined)
+
+python3 109348/109348 [000] 18684.175127950: 20 cpu-clock:
+          55f523 _PyEval_EvalFrameDefault (/usr/bin/python3.13)
+  python3.13[55f523]
+    7f5ab9b2f979 py::locate_bucket_linear:/workspace/workload.py (/tmp/perf-109348.map)
+  [JIT] tid 109348[7f5ab9b2f979]
+	    7f5ab9824ca7 __libc_start_call_main (/usr/lib/x86_64-linux-gnu/libc.so.6)
+  libc_start_call_main.h:58

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from perflens.application.verify_analysis import verify_analysis_artifact
 from perflens.classification.engine import build_diagnosis_bundle
 from perflens.contracts.artifacts import AnalysisArtifact, DiagnosisBundle
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -41,7 +42,7 @@ def load_analysis(path: Path, *, max_input_bytes: int = 128 << 20) -> AnalysisAr
             details={"actual_bytes": max(size, len(payload)), "max_input_bytes": max_input_bytes},
         )
     try:
-        return AnalysisArtifact.model_validate_json(payload)
+        analysis = AnalysisArtifact.model_validate_json(payload)
     except ValidationError as exc:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
@@ -49,6 +50,8 @@ def load_analysis(path: Path, *, max_input_bytes: int = 128 << 20) -> AnalysisAr
             "Input is not a valid PerfLens analysis artifact",
             details={"path": str(safe_path), "validation_errors": exc.error_count()},
         ) from exc
+    verify_analysis_artifact(analysis, verify_source=False)
+    return analysis
 
 
 def classify_analysis(path: Path, *, max_input_bytes: int = 128 << 20) -> DiagnosisBundle:

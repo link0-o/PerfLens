@@ -41,7 +41,9 @@ PROJECT_EXECUTION_AUTHORIZATION = "I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION"
 _MAX_ARGUMENTS = 128
 _MAX_ARGUMENT_BYTES = 32 << 10
 _BOOTSTRAP_READY_TIMEOUT_SECONDS = 3.0
+_WORKLOAD_EXIT_GRACE_SECONDS = 1.0
 _TERMINATE_GRACE_SECONDS = 1.0
+_KILL_REAP_TIMEOUT_SECONDS = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +75,7 @@ def collect_project_workload(
     ready_read, ready_write = os.pipe()
     process: subprocess.Popen[bytes] | None = None
     released = False
+    group_cleaned = False
     try:
         bootstrap = Path(__file__).with_name("_bootstrap.py").resolve(strict=True)
         process = _start_bootstrap(
@@ -134,13 +137,19 @@ def collect_project_workload(
                 "Collector completed without confirming that it attached to the project PID",
             )
 
-        exit_code = process.poll()
+        exit_code = _wait_for_natural_exit(process)
         warnings = list(plan.warnings)
         if exit_code is None:
             _terminate_group(process)
+            group_cleaned = True
             exit_code = process.returncode
             workload_status = "terminated_after_collection"
         else:
+            # A short-lived leader may leave background descendants in the session. The
+            # authorization is bounded to this workload, so terminate its process group even when
+            # the leader exited naturally.
+            _terminate_group(process)
+            group_cleaned = True
             workload_status = "exited"
             if exit_code != 0:
                 warnings.append(f"Project workload exited with code {exit_code}.")
@@ -175,15 +184,18 @@ def collect_project_workload(
         )
         return collection, project_run
     except BaseException:
-        if process is not None and process.poll() is None:
-            _terminate_group(process)
+        if process is not None and not group_cleaned:
+            try:
+                _terminate_group(process)
+            finally:
+                group_cleaned = True
         raise
     finally:
         for descriptor in (release_read, release_write, ready_read, ready_write):
             if descriptor >= 0:
                 with suppress(OSError):
                     os.close(descriptor)
-        if process is not None and released and process.poll() is None:
+        if process is not None and released and not group_cleaned:
             _terminate_group(process)
 
 
@@ -320,14 +332,42 @@ def _wait_until_ready(process: subprocess.Popen[bytes], ready_read: int) -> None
 
 
 def _terminate_group(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
     with suppress(ProcessLookupError):
         os.killpg(process.pid, signal.SIGTERM)
     deadline = time.monotonic() + _TERMINATE_GRACE_SECONDS
-    while process.poll() is None and time.monotonic() < deadline:
+    while _process_group_exists(process.pid) and time.monotonic() < deadline:
+        process.poll()
         time.sleep(0.01)
-    if process.poll() is None:
+    if _process_group_exists(process.pid):
         with suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
-    process.wait()
+    if process.poll() is not None:
+        return
+    try:
+        process.wait(timeout=_KILL_REAP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        raise PerfLensError(
+            ErrorCode.EXTERNAL_TOOL_TIMEOUT,
+            "project_workload",
+            "Project workload did not exit after bounded process-group termination",
+            recoverable=True,
+            retryable=True,
+        ) from exc
+
+
+def _process_group_exists(process_group_id: int) -> bool:
+    try:
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _wait_for_natural_exit(process: subprocess.Popen[bytes]) -> int | None:
+    """Give a short workload a bounded chance to publish its normal exit status."""
+    try:
+        return process.wait(timeout=_WORKLOAD_EXIT_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        return None

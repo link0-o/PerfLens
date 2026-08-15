@@ -16,8 +16,9 @@ from perflens.application.compare import (
     compare_benchmark_files,
     normalize_benchmark,
 )
-from perflens.application.diagnose import classify_analysis, report_analysis
+from perflens.application.diagnose import classify_analysis, load_analysis, report_analysis
 from perflens.application.symbols import get_source_context, inspect_elf, resolve_source
+from perflens.application.verify_analysis import verify_analysis_artifact
 from perflens.artifacts.filesystem import (
     write_json_atomic,
     write_json_new_atomic,
@@ -1162,6 +1163,42 @@ def analyze_perf_data_command(
     typer.echo(str(safe_output))
 
 
+@app.command("verify-analysis")
+def verify_analysis_command(
+    input_path: Annotated[
+        Path,
+        typer.Option("--input", exists=False, dir_okay=False, help="Analysis JSON 输入。"),
+    ],
+    output_path: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="独立验证结果 JSON。"),
+    ],
+    no_source_check: Annotated[
+        bool,
+        typer.Option(
+            "--no-source-check",
+            help="只验证产物内部一致性; 不重新读取原始 Profile。",
+        ),
+    ] = False,
+) -> None:
+    """验证 Analysis 的指纹、来源清单、计数和权重守恒。"""
+    try:
+        analysis = load_analysis(input_path)
+        verification = verify_analysis_artifact(
+            analysis,
+            verify_source=not no_source_check,
+        )
+        safe_output = validate_output_file(output_path, input_path=input_path)
+        write_json_atomic(
+            verification,
+            safe_output,
+            max_output_bytes=8 << 20,
+        )
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(str(safe_output))
+
+
 @app.command("inspect-elf")
 def inspect_elf_command(
     input_path: Annotated[
@@ -2023,6 +2060,8 @@ def _render_collector_verification_chinese(artifact: CollectionArtifact) -> None
     typer.echo(f"采集模式: {artifact.mode}")
     typer.echo(f"请求事件来源: {artifact.requested_event_source}")
     typer.echo(f"实际事件来源: {artifact.actual_event_source}")
+    if artifact.record_event:
+        typer.echo(f"实际采样事件: {_terminal_text(artifact.record_event)}")
     typer.echo(f"已自动降级: {'是' if artifact.fallback_used else '否'}")
     if artifact.fallback_reason:
         typer.echo(f"降级原因: {_terminal_text(artifact.fallback_reason)}")

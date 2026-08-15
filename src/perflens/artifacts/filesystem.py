@@ -16,7 +16,9 @@ from perflens.domain.errors import ErrorCode, PerfLensError
 
 def serialize_json(model: BaseModel) -> bytes:
     payload = model.model_dump(mode="json", exclude_none=True)
-    return (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
+    # ASCII JSON keeps byte-offset pagination lossless: a page boundary can no longer split a
+    # multibyte UTF-8 code point and introduce replacement characters in Agent-visible text.
+    return (json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n").encode()
 
 
 def write_json_atomic(model: BaseModel, output: Path, *, max_output_bytes: int) -> int:

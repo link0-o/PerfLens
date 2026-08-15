@@ -5,6 +5,79 @@
 本文记录已经复现、具有明确边界和临时处理方法的问题，包括已经修复的问题。
 不要通过降低部署器安全检查来规避问题；升级前仍可按对应版本的临时方法处理。
 
+## KI-2026-08-15：原始 perf 证据到 Agent 投影缺少端到端复核（已修复）
+
+- 风险：原始文件的 SHA-256 正确，并不自动证明后续类型化指标、热点、调用路径和 Diagnosis
+  一定仍与它一致。审查还发现两个具体失真路径：无法解析的调用栈行被丢弃时，父帧可能被
+  错记为 Self 热点；硬件探测成功但正式硬件 stat 只返回零计数时，失败产物曾先占用正式
+  路径，使 `auto` 软件回退无法恢复。
+- 修复：Collection 使用同一个禁止跟随符号链接的描述符快照重新校验文件身份、大小和摘要；
+  stat 原始 CSV 会被独立重放，必须逐项得到保存的类型化指标。Analysis 绑定转换清单、来源
+  Collection、完整 Agent 可见内容与全部派生守恒关系；record 事件也必须与转换文本一致。
+  混合架构 PMU 的固定 `cpu_core/`、`cpu_atom/` 事件展开会在核对时安全规范化，同时保留
+  原始指标身份。
+  无法解析的调用栈位置保留为有界 `unknown` Frame。正式硬件结果先在临时文件中验证，只有
+  合格结果才能发布；`auto` 才能在剩余授权时长内安全转为软件事件。
+- Agent 门禁：MCP 加载和分页 Analysis、Collection、Diagnosis 时都执行对应类型校验。
+  Diagnosis 绑定来源 Analysis 内容摘要并可重复安全读取；A/B 比较拒绝不同事件来源、权重
+  语义或转换器身份被当作 matched evidence。
+- 通用边界：这些检查位于共享 CSV、perf-script、聚合和 Artifact 层，不是 Python 专用
+  修补。C/C++、Rust、Go、CPython 和 Java/JIT 都经过同一门禁；语言只影响外部符号质量。
+  回归 fixture 覆盖常见格式，但不等于对所有编译器、JDK 或 perf 版本的实机认证。
+- 剩余限制：摘要不是抵抗恶意文件所有者的数字签名，也不能证明内核 PMU 或 perf 本身绝对
+  正确。PerfLens 仍不直接解析 perf.data；未冻结的 JIT/Build-ID sidecar 不能承诺跨主机、
+  跨时间完全重放。遇到未知格式会降为 `partial` 并禁止超出证据的结论。
+
+## KI-2026-08-14：Frame/注释误判、Python perf-map 与重复公开调用路径（已修复）
+
+- 现象：有效的 CPython `-X perf` 证据虽然全部样本都能解析，但会针对
+  `python3.13[offset]`、`[JIT] tid N[offset]` 产生数百条
+  `Callchain frame has no hexadecimal IP`；由于精确 IP 不同，公开结果还可能出现大量
+  符号和 DSO 完全相同的重复调用路径；
+- 根因：启用 `srcline` 后，这两种方括号行和独立的 `文件:行号 (inlined)` 行是 perf 对
+  上一帧输出的注释，并不是 Frame；内部调用路径使用精确 Frame 身份，而公开契约只显示
+  `(symbol, DSO)`。早期修复先判断“像源码注释”，再判断完整 Frame，导致“无源码叶帧后
+  紧跟有源码父帧”这种合法 native 栈也可能把父帧吞掉；
+- 修复：只有偏移与上一帧相同、标签又匹配该 DSO 或 JIT 线程的行才会作为重复注释忽略；
+  严格的独立源码注释只补充紧邻的上一帧。解析器同时识别 CPython 官方的
+  `py::函数:文件名` perf-map 格式。公开路径按显示的 `(symbol, DSO)` 序列聚合，源码位置
+  以固定上限汇总到热点，只有真实行号才会设置 `has_source_lines=true`。完整十六进制 IP
+  Frame 现在始终先解析，再考虑严格注释；
+- 通用性验证：Golden 同时覆盖 C/C++ 模板/内联/带括号 DSO、Rust hash 合并、Go 方法、
+  Java/JIT perf-map、Python perf-map 和普通 native 父子帧。对 `perf.data`，Java/JIT 没有
+  冻结转换文本或 sidecar 时仍明确禁止跨时间符号重放；不把 fixture 通过夸大成所有 JVM
+  版本均已实机验收；
+- 报告边界：PerfLens 调用路径顺序固定为“根/调用者 → 叶子/被调用者”。缺失 DWARF 行号
+  和未解析的原生帧仍会如实保留；修复不会凭空补出 perf 没有记录的 Python 深层栈。
+- 实际证据复验：对最初报告问题的 CPython `perf.data`（272 个样本）重新转换后，591 条
+  Frame 全部进入聚合，589 条地址注释和 2 条源码注释被单独计数，malformed 为 0；原来
+  数百条“没有十六进制 IP”警告消失，只保留 1 条确实缺少 DSO 的 native Frame 警告。
+  `cpu-clock` 总权重现在明确标为纳秒，独立验证的内容/指纹/权重守恒/原始 SHA 均通过；
+  因 JIT sidecar 未冻结和 5.88% 未解析 Self，质量仍诚实保持 `partial`。
+
+同一轮还收紧了 stat 报告口径：`running_percent` 是 perf 事件调度覆盖率，不是进程 CPU
+利用率；较低的上下文切换、迁移或缺页计数不能证明不存在 I/O 等待、锁竞争、频繁分配
+或内存压力。采样 Profile 的 `perf period` 也不再统一标成 `event_count`：
+`cpu-clock`/`task-clock` 明确为纳秒，cycles/instructions 使用对应单位，陌生事件才保留
+通用计数单位，避免 Agent 把正确数值配上错误物理单位。
+
+`perf stat` CSV 解析也不再用替换模式吞掉非法 UTF-8：非法字节会让该证据失败关闭，避免
+事件名被静默改变；错误的 CSV 行会产生有界警告而不破坏后续合法指标，警告超限则明确
+标记为已截断。该修复与被测语言无关。
+
+源码位置现在只在有效样本进入聚合时收集；被栈深等规则排除的坏记录不会再给同名有效热点
+附加错误位置。每个热点的位置列表保持固定上限，发生截断时会在 Hotspot 和
+EvidenceQuality 中同时暴露，Agent 不得宣称位置列表完整。
+
+同一修复还解决了专用 Helper UID 产物无法分析的问题：普通授权用户虽然能读取
+`/var/lib/perflens-helper` 中的证据，`perf script` 仍会额外拒绝非当前用户/root 所有的
+文件。适配器现在只对已经通过路径、大小和 SHA-256 校验的输入固定追加 `--force`；它不
+提升权限、不放宽允许目录，也不接受 Agent 自定义 perf 参数。
+
+同一轮加入了 Analysis 内容摘要、Collection→输入哈希绑定、分析前后输入身份复核和
+`verify-analysis`。因此类似问题如果再次造成 Frame/权重/百分比/事件来源不自洽，会在
+交给 Agent 前失败关闭；合法但不完整的数据则标记 `partial` 并携带禁止结论。
+
 ## KI-2026-08-14：cap_perfmon PID 绑定与项目启动存在时序窗口（已修复）
 
 - 原问题一：`cap_perfmon` Python Broker 在启动 perf 前核验 PID 所有者和启动时间，但在
@@ -21,6 +94,10 @@
 - `event_source=auto` 的第一阶段可能是硬件探测，也可能是正式采集。Collector 在第一阶段
   已绑定并启用后立即发送一次就绪回执，避免对仍暂停的引导进程探测而把正常 PMU 误判为
   零计数；探测仍计入原授权时长，最多 250ms。
+- MCP 现在把会阻塞的项目运行器注册为同步工具，由 SDK 在线程中执行，不再堵塞异步会话；
+  启动器会给已经完成的短程序一个有界自然退出/回收窗口，集成测试也改为核对 bootstrap
+  命令身份，不再依赖固定 sleep。该修复消除了 CI 负载下偶发的 10 秒超时，没有提高全局
+  pytest 超时掩盖问题。
 
 这不会把项目命令、参数或环境交给 Collector，也没有增加 root、sudo、sysctl 或跨 UID
 权限。旧 Broker/Helper 不与新协议协商；升级两个同版本 DEB 后必须运行

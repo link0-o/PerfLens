@@ -10,3 +10,13 @@ Read Self and Inclusive together:
 - Kernel weight: inspect the user-to-kernel path and correlate system metrics; do not label the kernel defective.
 
 Check unresolved-symbol weight, missing stacks, event mixing, profile duration, and workload representativeness. Prefer several hypotheses over a single name-based story.
+
+Read `EvidenceQuality` before ranking functions. Distinguish unresolved Self weight from missing
+call graphs and missing source lines; they constrain different claims. Check output omissions and
+normalization merges before calling a displayed symbol/path complete or unique. A structurally
+verified profile is still a sampled distribution, not a causal proof.
+
+PerfLens exposes call paths in root/caller-to-leaf/callee order. For `perf stat`, never interpret
+`running_percent` as CPU utilization: it is the percentage of enabled measurement time for which
+perf could schedule that event. Use `task-clock` plus a trustworthy wall interval for a bounded CPU
+utilization estimate, and remember that multi-threaded task-clock can exceed one CPU.

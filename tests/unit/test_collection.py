@@ -146,6 +146,7 @@ def test_collect_stat_parses_metrics_and_ipc(tmp_path: Path) -> None:
             output_path=tmp_path / "stat.csv",
             authorization=ACTIVE_COLLECTION_AUTHORIZATION,
             perf_path=_fake_perf(tmp_path),
+            events=("cycles", "instructions"),
         )
     )
     assert artifact.output_format == "perf_stat_delimited"
@@ -155,6 +156,36 @@ def test_collect_stat_parses_metrics_and_ipc(tmp_path: Path) -> None:
         "instructions-per-cycle",
     ]
     assert artifact.metrics[-1].value == 2.0
+
+
+def test_invalid_hardware_stat_is_rejected_before_output_publication(tmp_path: Path) -> None:
+    perf = tmp_path / "perf-zero-hardware"
+    perf.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        "output.write_text('0;;cycles;10;100.0\\n0;;instructions;10;100.0\\n')\n",
+        encoding="utf-8",
+    )
+    perf.chmod(0o500)
+    output = tmp_path / "invalid-stat.csv"
+
+    with pytest.raises(PerfLensError) as captured:
+        collect_profile(
+            CollectionRequest(
+                mode="stat",
+                target=CollectionTarget(executable=Path(sys.executable)),
+                output_path=output,
+                authorization=ACTIVE_COLLECTION_AUTHORIZATION,
+                perf_path=perf,
+                events=("cycles", "instructions"),
+            )
+        )
+
+    assert captured.value.code is ErrorCode.PROFILE_PARSE_FAILED
+    assert not output.exists()
+    assert not tuple(tmp_path.glob(".perflens-collect-*"))
 
 
 def test_pid_attach_requires_separate_authorization(tmp_path: Path) -> None:

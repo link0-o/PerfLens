@@ -190,6 +190,11 @@
   },
   "additionalProperties": false,
   "properties": {
+    "analysis_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Analysis Content Sha256",
+      "type": "string"
+    },
     "analysis_id": {
       "title": "Analysis Id",
       "type": "string"
@@ -200,6 +205,11 @@
       },
       "title": "Classifications",
       "type": "array"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
     },
     "generated_at": {
       "title": "Generated At",
@@ -243,6 +253,8 @@
   },
   "required": [
     "analysis_id",
+    "analysis_content_sha256",
+    "content_sha256",
     "status",
     "generated_at",
     "classifications",

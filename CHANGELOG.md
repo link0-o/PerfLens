@@ -11,6 +11,48 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
+- The raw-evidence projection now fails closed end to end: immutable Collection snapshots are
+  re-hashed and stat CSV is reparsed before Agent use; record events are bound to the conversion
+  transcript; unreadable callchain positions retain bounded unknown Frames so Self weight cannot
+  move to a caller; Analysis/Diagnosis content and source identities are revalidated during MCP
+  load and paging; repeated Diagnosis construction reuses the verified immutable artifact; and
+  matched A/B rejects incompatible acquisition or conversion provenance. Formal hardware stat
+  output is validated before publication, allowing an authorized `auto` request to recover with
+  software evidence when the probe passed but the real counters are unusable. These shared checks
+  cover native, Rust, Go, CPython, and Java/JIT inputs without language-specific metric exceptions.
+  Fixed `cpu_core/` and `cpu_atom/` hardware-event spellings are also accepted as the exact
+  hybrid-PMU expansion of requested generic stat/record events without accepting arbitrary aliases.
+- CPython perf-map parsing now recognizes `py::function:filename`, consumes only address-matched
+  `dso[offset]`/`[JIT] tid N[offset]` annotations, and attaches strict `file:line (inlined)`
+  annotations to the preceding frame. Complete native Frames take precedence over annotation
+  parsing, preventing a sourced parent frame after an unsourced leaf from being swallowed. Public
+  call paths aggregate exact-IP variants by their displayed `(symbol, DSO)` sequence, eliminating
+  duplicate-looking paths. C/C++, Rust, Go, Python, Java/JIT, odd-path, inline, and native-parent
+  fixtures now share one regression matrix. Stat schemas and the Skill state that
+  `running_percent` is event scheduling coverage, not CPU utilization. Profile `period` weights
+  now expose native units for CPU/task clock, cycles, and instructions instead of labeling every
+  event as a generic count. Source-line availability is tracked independently from leaf-Self
+  source coverage, so valid Python/JIT stacks with only parent-frame line data are not rejected;
+  `file:line:column` input also retains the column through hotspot source locations. The fixed
+  `perf script` adapter uses `--force` after input validation so readable evidence owned by the
+  dedicated Helper UID is not rejected by perf's additional owner check.
+- The language-independent `perf stat` adapter now rejects invalid UTF-8 instead of silently
+  changing event identities, isolates malformed CSV rows while preserving later valid metrics,
+  and explicitly marks bounded-warning truncation.
+- Profile Analysis now binds Collection output SHA-256/size before parsing, rechecks input identity
+  after conversion, records converter/parser/normalizer provenance, exposes normalization merges
+  and bounded-output omissions, and carries a typed `EvidenceQuality` gate on every Agent-facing
+  response. A canonical Analysis content digest plus CLI/MCP `verify_analysis` rejects modified or
+  internally inconsistent hotspots, percentages, event provenance, and conclusion gates before
+  Agent interpretation. Invalid UTF-8 bytes are loss-visible without misclassifying a genuine
+  U+FFFD character. Collection event-source/fallback/format invariants are revalidated when loaded,
+  and the generic artifact paging tool now routes Analysis and Collection pages through the same
+  typed gates so it cannot bypass integrity checks.
+- Project-workload collection no longer blocks the MCP async event loop. Short workloads receive a
+  bounded natural-exit/reap window, and the Unix-socket integration test uses a deterministic
+  bootstrap-identity check instead of fixed sleeps, removing its load-sensitive 10-second CI
+  timeout without weakening the global timeout.
+
 - Both the `cap_perfmon` Python Collector path and the privileged Helper now record per-sample CPU
   identity for hardware and software `record` plans. The perf-data adapter also preserves older
   affected `v0.2.0` evidence by retrying only the exact missing-CPU conversion error without that

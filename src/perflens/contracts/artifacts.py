@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SCHEMA_VERSION = "1.0"
 
@@ -20,6 +20,11 @@ class ParseStatistics(ContractModel):
     warning_count: int = Field(ge=0)
     warnings_truncated: bool
     bytes_read: int = Field(ge=0)
+    frame_lines: int = Field(ge=0)
+    duplicate_frame_lines: int = Field(ge=0)
+    address_annotation_lines: int = Field(ge=0)
+    source_annotation_lines: int = Field(ge=0)
+    unicode_replacement_count: int = Field(ge=0)
 
 
 class Warning(ContractModel):
@@ -29,12 +34,94 @@ class Warning(ContractModel):
     preview: str | None = None
 
 
+class ConversionProvenance(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    adapter: Literal["folded", "perf_script", "perf_data"]
+    parser_version: str
+    normalization_version: str
+    converter_path: str | None = None
+    converter_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    converter_version: str | None = None
+    argv: tuple[str, ...] = ()
+    locale: str
+    transcript_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    transcript_bytes: int = Field(ge=0)
+    compatibility_fallbacks: tuple[str, ...] = ()
+    diagnostics: tuple[str, ...] = ()
+
+
+class CollectionEvidenceProvenance(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    collection_id: str
+    collection_artifact_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    mode: Literal["record", "sched", "lock", "off_cpu"]
+    duration_seconds: float = Field(ge=0)
+    frequency_hz: int | None = Field(default=None, ge=1)
+    call_graph: Literal["fp", "dwarf", "lbr"] | None = None
+    record_event: Literal["cycles", "cpu-clock"] | None = None
+    output_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    output_bytes: int = Field(gt=0)
+    requested_event_source: Literal["auto", "hardware_required", "software_only"]
+    actual_event_source: Literal["hardware", "software", "unknown"]
+    fallback_used: bool
+    fallback_reason: str | None = None
+    evidence_limitations: tuple[str, ...] = ()
+
+
+class EvidenceQuality(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    quality_status: Literal["verified", "partial"]
+    parser_invariants_passed: bool
+    actual_event_source: Literal["hardware", "software", "unknown"] = "unknown"
+    fallback_used: bool | None = None
+    fallback_reason: str | None = None
+    input_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    input_bytes: int = Field(ge=0)
+    source_collection_id: str | None = None
+    source_collection_artifact_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    sample_count: int = Field(ge=0)
+    total_weight: int = Field(ge=0)
+    event: str
+    weight_unit: str
+    weight_source: str
+    malformed_record_count: int = Field(ge=0)
+    warning_count: int = Field(ge=0)
+    warnings_truncated: bool
+    unicode_replacement_count: int = Field(ge=0)
+    frame_line_count: int = Field(ge=0)
+    duplicate_frame_line_count: int = Field(ge=0)
+    address_annotation_line_count: int = Field(ge=0)
+    source_annotation_line_count: int = Field(ge=0)
+    aggregated_frame_occurrence_count: int = Field(ge=0)
+    unresolved_self_weight: int = Field(ge=0)
+    unresolved_self_percent: float = Field(ge=0, le=100)
+    call_graph_weight: int = Field(ge=0)
+    call_graph_weight_percent: float = Field(ge=0, le=100)
+    source_line_frame_count: int = Field(ge=0)
+    source_line_self_weight: int = Field(ge=0)
+    source_line_self_percent: float = Field(ge=0, le=100)
+    inline_frame_count: int = Field(ge=0)
+    normalization_merge_count: int = Field(ge=0)
+    source_locations_truncated_hotspot_count: int = Field(ge=0)
+    total_hotspot_count: int = Field(ge=0)
+    exported_hotspot_count: int = Field(ge=0)
+    omitted_hotspot_self_weight: int = Field(ge=0)
+    total_call_path_count: int = Field(ge=0)
+    exported_call_path_count: int = Field(ge=0)
+    omitted_call_path_weight: int = Field(ge=0)
+    allowed_conclusions: tuple[str, ...] = ()
+    forbidden_conclusions: tuple[str, ...] = ()
+    collection_limitations: tuple[str, ...] = ()
+    limitations: tuple[str, ...] = ()
+
+
 class ProfileMetadata(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     profile_id: str
     source_type: Literal["folded", "perf_script", "perf_data"]
     input_path: str
-    input_sha256: str
+    input_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    input_bytes: int = Field(ge=0)
     created_at: str
     sample_count: int = Field(ge=0)
     total_weight: int = Field(ge=0)
@@ -44,6 +131,8 @@ class ProfileMetadata(ContractModel):
     has_call_graph: bool
     has_source_lines: bool
     aggregation_semantics: Literal["unique_symbol_dso_per_sample"]
+    conversion: ConversionProvenance
+    collection: CollectionEvidenceProvenance | None = None
     parse_statistics: ParseStatistics
     warnings: tuple[str, ...] = ()
 
@@ -90,7 +179,18 @@ class Hotspot(ContractModel):
     self_percent: float = Field(ge=0, le=100)
     inclusive_percent: float = Field(ge=0, le=100)
     thread_count: int = Field(ge=0)
+    symbol_variants: tuple[str, ...] = ()
+    symbol_variant_count: int = Field(
+        ge=0,
+        description=(
+            "Exact raw-symbol variant count when symbol_variants_truncated is false; otherwise "
+            "a conservative observed lower bound"
+        ),
+    )
+    symbol_variants_truncated: bool = False
+    normalization_merged: bool = False
     source_locations: tuple[str, ...] = ()
+    source_locations_truncated: bool = False
     top_callers: tuple[str, ...] = ()
     top_callees: tuple[str, ...] = ()
     categories: tuple[str, ...] = ()
@@ -99,6 +199,15 @@ class Hotspot(ContractModel):
 class CallPathFrame(ContractModel):
     symbol: str
     dso: str
+    symbol_variant_count: int = Field(
+        ge=1,
+        description=(
+            "Exact raw-symbol variant count when symbol_variants_truncated is false; otherwise "
+            "a conservative observed lower bound"
+        ),
+    )
+    symbol_variants_truncated: bool = False
+    normalization_merged: bool = False
 
 
 class CallPath(ContractModel):
@@ -127,9 +236,11 @@ class AnalysisArtifact(ContractModel):
     perflens_version: str
     analysis_id: str
     analysis_fingerprint: str
+    content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     status: Literal["complete", "partial", "failed"]
     aggregation_semantics: Literal["unique_symbol_dso_per_sample"]
     metadata: ProfileMetadata
+    evidence_quality: EvidenceQuality
     hotspots: tuple[Hotspot, ...]
     call_paths: tuple[CallPath, ...]
     warnings: tuple[Warning, ...]
@@ -228,6 +339,8 @@ class Classification(ContractModel):
 class DiagnosisBundle(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     analysis_id: str
+    analysis_content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     status: Literal["complete", "partial"]
     generated_at: str
     classifications: tuple[Classification, ...]
@@ -242,11 +355,13 @@ class ArtifactReference(ContractModel):
     artifact_type: str
     uri: str
     summary: dict[str, str | int | float | bool | None]
+    evidence_quality: EvidenceQuality | None = None
 
 
 class HotspotPage(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     analysis_id: str
+    evidence_quality: EvidenceQuality
     items: tuple[Hotspot, ...]
     next_cursor: int | None = Field(default=None, ge=0)
     total_items: int = Field(ge=0)
@@ -255,6 +370,7 @@ class HotspotPage(ContractModel):
 class CallPathPage(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     analysis_id: str
+    evidence_quality: EvidenceQuality
     symbol: str | None
     items: tuple[CallPath, ...]
     next_cursor: int | None = Field(default=None, ge=0)
@@ -264,6 +380,7 @@ class CallPathPage(ContractModel):
 class HotspotDetails(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     analysis_id: str
+    evidence_quality: EvidenceQuality
     hotspot: Hotspot
     dominant_call_paths: tuple[CallPath, ...]
     classifications: tuple[Classification, ...]
@@ -273,9 +390,24 @@ class HotspotDetails(ContractModel):
 class ClassificationPage(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     analysis_id: str
+    evidence_quality: EvidenceQuality
     items: tuple[Classification, ...]
     next_cursor: int | None = Field(default=None, ge=0)
     total_items: int = Field(ge=0)
+
+
+class VerificationCheck(ContractModel):
+    name: str
+    status: Literal["passed", "skipped"]
+    detail: str
+
+
+class AnalysisVerificationArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    analysis_id: str
+    status: Literal["verified", "partial"]
+    checks: tuple[VerificationCheck, ...]
+    warnings: tuple[str, ...] = ()
 
 
 class ArtifactTextPage(ContractModel):
@@ -407,10 +539,45 @@ class PerfStatMetric(ContractModel):
     event: str
     value: float | None
     unit: str
-    run_time_ns: int | None = Field(default=None, ge=0)
-    running_percent: float | None = Field(default=None, ge=0, le=100)
+    run_time_ns: int | None = Field(
+        default=None,
+        ge=0,
+        description="perf-reported event measurement runtime, not workload wall time",
+    )
+    running_percent: float | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description=(
+            "perf event scheduling coverage (time running versus time enabled); this is not "
+            "workload CPU utilization"
+        ),
+    )
     derived: bool = False
     status: Literal["measured", "not_counted", "not_supported", "derived"]
+
+    @model_validator(mode="after")
+    def validate_metric_semantics(self) -> PerfStatMetric:
+        if not self.event.strip():
+            raise ValueError("perf stat event must not be empty")
+        if self.status in {"measured", "derived"} and self.value is None:
+            raise ValueError("measured and derived metrics require a value")
+        if self.status in {"not_counted", "not_supported"} and self.value is not None:
+            raise ValueError("unavailable metrics must not contain a numeric value")
+        if self.status == "derived" and not self.derived:
+            raise ValueError("derived status requires derived=true")
+        if self.status != "derived" and self.derived:
+            raise ValueError("derived=true requires derived status")
+        if self.derived and (
+            self.event != "instructions-per-cycle"
+            or self.unit != "instructions/cycle"
+            or self.run_time_ns is not None
+            or self.running_percent is not None
+        ):
+            raise ValueError("unsupported derived perf stat metric")
+        if self.event == "instructions-per-cycle" and not self.derived:
+            raise ValueError("instructions-per-cycle must be a derived metric")
+        return self
 
 
 class CollectionModeCapability(ContractModel):
@@ -487,7 +654,7 @@ class CollectionArtifact(ContractModel):
     target_argv_sha256: str | None = None
     target_pid: int | None = Field(default=None, gt=0)
     output_path: str
-    output_sha256: str
+    output_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     output_bytes: int = Field(gt=0)
     output_format: Literal["perf_data", "perf_stat_delimited"]
     output_owner_uid: int | None = Field(default=None, ge=0)
@@ -497,6 +664,7 @@ class CollectionArtifact(ContractModel):
     duration_seconds: float = Field(ge=0)
     frequency_hz: int | None = Field(default=None, ge=1)
     call_graph: Literal["fp", "dwarf", "lbr"] | None = None
+    record_event: Literal["cycles", "cpu-clock"] | None = None
     events: tuple[str, ...] = ()
     requested_event_source: Literal["auto", "hardware_required", "software_only"] = "auto"
     actual_event_source: Literal["hardware", "software", "unknown"] = "unknown"

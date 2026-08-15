@@ -13,31 +13,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from perflens.application.evidence import verify_collection_artifact
 from perflens.contracts.artifacts import CollectionArtifact, PerfStatMetric
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.integrations.commands.runner import CommandLimits, CommandRunner
 from perflens.metrics.perf_stat import PerfStatMetricAdapter
+from perflens.perf_events import (
+    DEFAULT_RECORD_EVENT,
+    DEFAULT_STAT_EVENTS,
+    HARDWARE_STAT_EVENTS,
+    SOFTWARE_RECORD_EVENT,
+    SOFTWARE_STAT_EVENTS,
+)
 from perflens.security.paths import validate_new_output_file
 
 ACTIVE_COLLECTION_AUTHORIZATION = "I_EXPLICITLY_AUTHORIZE_TARGET_PROFILING"
 PID_ATTACH_AUTHORIZATION = "I_EXPLICITLY_AUTHORIZE_PID_ATTACH"
-HARDWARE_STAT_EVENTS = (
-    "cycles",
-    "instructions",
-    "cache-references",
-    "cache-misses",
-    "branches",
-    "branch-misses",
-)
-SOFTWARE_STAT_EVENTS = (
-    "task-clock",
-    "context-switches",
-    "cpu-migrations",
-    "page-faults",
-)
-DEFAULT_STAT_EVENTS = (*HARDWARE_STAT_EVENTS, *SOFTWARE_STAT_EVENTS)
-DEFAULT_RECORD_EVENT = "cycles"
-SOFTWARE_RECORD_EVENT = "cpu-clock"
 FALLBACK_REASONS = (
     "hardware_probe_skipped_for_short_collection",
     "hardware_probe_failed",
@@ -135,7 +126,6 @@ def collect_profile(
         output_size = _validate_collected_output(temporary_path, request.max_output_bytes)
         metrics, metric_warnings = _read_metrics(request.mode, temporary_path)
         output_sha256 = _sha256_file(temporary_path)
-        _publish_without_overwrite(temporary_path, safe_output)
     except BaseException:
         temporary_path.unlink(missing_ok=True)
         raise
@@ -169,7 +159,7 @@ def collect_profile(
             "off_cpu records sched:sched_switch tracepoint stacks; interpreting blocked time "
             "still requires workload-aware post-processing."
         )
-    return CollectionArtifact(
+    temporary_artifact = CollectionArtifact(
         collection_id=collection_id,
         mode=request.mode,
         target_type=target_type,
@@ -177,7 +167,7 @@ def collect_profile(
         target_argument_count=len(target) - 1 if target_type == "command" else 0,
         target_argv_sha256=target_hash if target_type == "command" else None,
         target_pid=request.target.pid if target_type == "pid" else None,
-        output_path=str(safe_output),
+        output_path=str(temporary_path),
         output_sha256=output_sha256,
         output_bytes=output_size,
         output_format="perf_stat_delimited" if request.mode == "stat" else "perf_data",
@@ -187,6 +177,7 @@ def collect_profile(
         duration_seconds=result.duration_seconds,
         frequency_hz=request.frequency_hz if request.mode in {"record", "off_cpu"} else None,
         call_graph=request.call_graph if request.mode in {"record", "off_cpu"} else None,
+        record_event=request.record_event if request.mode == "record" else None,
         events=request.events if request.mode == "stat" else (),
         requested_event_source=request.requested_event_source,
         actual_event_source=actual_event_source,
@@ -198,6 +189,22 @@ def collect_profile(
         diagnostics_truncated=result.stderr_truncated or result.stderr_bytes > (1 << 20),
         warnings=tuple(warnings),
     )
+    try:
+        # Validate the exact raw file and its typed projection before publication. This keeps an
+        # invalid formal hardware attempt from occupying the fixed output name and blocking the
+        # policy-bounded software fallback.
+        verify_collection_artifact(
+            temporary_artifact,
+            max_output_bytes=request.max_output_bytes,
+        )
+        _publish_without_overwrite(temporary_path, safe_output)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
+    artifact = temporary_artifact.model_copy(update={"output_path": str(safe_output)})
+    # Re-open the published hard link so publication identity, size, and digest are also checked.
+    verify_collection_artifact(artifact, max_output_bytes=request.max_output_bytes)
+    return artifact
 
 
 def _validate_request(request: CollectionRequest) -> None:

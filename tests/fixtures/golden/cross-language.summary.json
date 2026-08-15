@@ -1,0 +1,124 @@
+{
+  "status": "complete",
+  "quality_status": "verified",
+  "sample_count": 8,
+  "total_weight": 161,
+  "weight_unit": "nanoseconds",
+  "frame_lines": 16,
+  "source_annotations": 1,
+  "inline_frame_count": 1,
+  "normalization_merge_count": 1,
+  "hotspots": [
+    {
+      "symbol": "mycrate::worker::run",
+      "dso": "/opt/rust/app",
+      "self_weight": 41,
+      "symbol_variants": [
+        "mycrate::worker::run::h0123456789abcdef",
+        "mycrate::worker::run::hfedcba9876543210"
+      ],
+      "normalization_merged": true,
+      "source_locations": ["/src/main.rs:12", "/src/other.rs:31"]
+    },
+    {
+      "symbol": "java.lang.String.indexOf(Ljava/lang/String;)I",
+      "dso": "/tmp/perf-103.map",
+      "self_weight": 40,
+      "symbol_variants": ["java.lang.String.indexOf(Ljava/lang/String;)I"],
+      "normalization_merged": false,
+      "source_locations": []
+    },
+    {
+      "symbol": "main.(*Worker).Run",
+      "dso": "/opt/go/app",
+      "self_weight": 30,
+      "symbol_variants": ["main.(*Worker).Run"],
+      "normalization_merged": false,
+      "source_locations": ["/src/main.go:42"]
+    },
+    {
+      "symbol": "leaf_without_source",
+      "dso": "/opt/native/app",
+      "self_weight": 17,
+      "symbol_variants": ["leaf_without_source"],
+      "normalization_merged": false,
+      "source_locations": []
+    },
+    {
+      "symbol": "odd_path_leaf",
+      "dso": "/opt/My App (test)/bin",
+      "self_weight": 12,
+      "symbol_variants": ["odd_path_leaf"],
+      "normalization_merged": false,
+      "source_locations": ["/src/odd.cc:8"]
+    },
+    {
+      "symbol": "inline_leaf",
+      "dso": "/opt/cpp/app",
+      "self_weight": 11,
+      "symbol_variants": ["inline_leaf"],
+      "normalization_merged": false,
+      "source_locations": ["/src/inline.hpp:17"]
+    },
+    {
+      "symbol": "std::vector<int>::push_back(int const&)",
+      "dso": "/opt/cpp/app",
+      "self_weight": 10,
+      "symbol_variants": ["std::vector<int>::push_back(int const&)"],
+      "normalization_merged": false,
+      "source_locations": ["/src/app.cc:10"]
+    },
+    {
+      "symbol": "mycrate::main",
+      "dso": "/opt/rust/app",
+      "self_weight": 0,
+      "symbol_variants": ["mycrate::main::h1111111111111111"],
+      "normalization_merged": false,
+      "source_locations": ["/src/main.rs:4"]
+    },
+    {
+      "symbol": "com.example.Main.main([Ljava/lang/String;)V",
+      "dso": "/tmp/perf-103.map",
+      "self_weight": 0,
+      "symbol_variants": ["com.example.Main.main([Ljava/lang/String;)V"],
+      "normalization_merged": false,
+      "source_locations": []
+    },
+    {
+      "symbol": "main",
+      "dso": "/opt/cpp/app",
+      "self_weight": 0,
+      "symbol_variants": ["main"],
+      "normalization_merged": false,
+      "source_locations": ["/src/main.cc:4"]
+    },
+    {
+      "symbol": "main.main",
+      "dso": "/opt/go/app",
+      "self_weight": 0,
+      "symbol_variants": ["main.main"],
+      "normalization_merged": false,
+      "source_locations": ["/src/main.go:8"]
+    },
+    {
+      "symbol": "parent_with_source",
+      "dso": "/opt/native/app",
+      "self_weight": 0,
+      "symbol_variants": ["parent_with_source"],
+      "normalization_merged": false,
+      "source_locations": ["/src/parent.c:9"]
+    }
+  ],
+  "call_paths": [
+    ["mycrate::main", "mycrate::worker::run"],
+    [
+      "com.example.Main.main([Ljava/lang/String;)V",
+      "java.lang.String.indexOf(Ljava/lang/String;)I"
+    ],
+    ["main.main", "main.(*Worker).Run"],
+    ["parent_with_source", "leaf_without_source"],
+    ["main", "odd_path_leaf"],
+    ["main", "inline_leaf"],
+    ["main", "std::vector<int>::push_back(int const&)"]
+  ]
+}

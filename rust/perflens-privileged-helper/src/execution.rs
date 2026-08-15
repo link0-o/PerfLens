@@ -794,11 +794,102 @@ fn hardware_probe_has_usable_counts(path: &Path) -> Result<bool, ExecutionError>
         let Some(event) = fields.next() else {
             return false;
         };
-        matches!(event.trim(), "cycles" | "instructions")
-            && raw_value
-                .trim()
-                .parse::<f64>()
-                .is_ok_and(|value| value > 0.0)
+        matches!(
+            canonical_stat_event(event.trim()),
+            "cycles" | "instructions"
+        ) && raw_value
+            .trim()
+            .parse::<f64>()
+            .is_ok_and(|value| value > 0.0)
+    }))
+}
+
+fn canonical_stat_event(event: &str) -> &str {
+    let base = event.rsplit_once(':').map_or(event, |(name, modifier)| {
+        if !modifier.is_empty()
+            && modifier.bytes().all(|value| {
+                matches!(
+                    value,
+                    b'u' | b'k'
+                        | b'h'
+                        | b'G'
+                        | b'H'
+                        | b'p'
+                        | b'P'
+                        | b'S'
+                        | b'D'
+                        | b'W'
+                        | b'e'
+                        | b'b'
+                        | b'R'
+                )
+            })
+        {
+            name
+        } else {
+            event
+        }
+    });
+    if base == "cpu-cycles" {
+        return "cycles";
+    }
+    for prefix in ["cpu/", "cpu_core/", "cpu_atom/"] {
+        if let Some(name) = base
+            .strip_prefix(prefix)
+            .and_then(|candidate| candidate.strip_suffix('/'))
+            && ALLOWED_STAT_EVENTS[..6].contains(&name)
+        {
+            return name;
+        }
+    }
+    base
+}
+
+fn stat_output_has_usable_requested_hardware_counts(
+    path: &Path,
+    requested_events: &[String],
+) -> Result<bool, ExecutionError> {
+    let requested = requested_events
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let hardware = ALLOWED_STAT_EVENTS[..6]
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
+    let probe_events = ["cycles", "instructions"]
+        .into_iter()
+        .filter(|event| requested.contains(event))
+        .collect::<HashSet<_>>();
+    let relevant = if probe_events.is_empty() {
+        requested
+            .intersection(&hardware)
+            .copied()
+            .collect::<HashSet<_>>()
+    } else {
+        probe_events
+    };
+    let text = fs::read_to_string(path).map_err(|_error| spool_error())?;
+    Ok(text.lines().any(|line| {
+        let mut fields = line.split(';');
+        let Some(raw_value) = fields.next() else {
+            return false;
+        };
+        let _unit = fields.next();
+        let Some(event) = fields.next().map(str::trim).map(canonical_stat_event) else {
+            return false;
+        };
+        if !relevant.contains(event) {
+            return false;
+        }
+        raw_value.trim().parse::<f64>().is_ok_and(|value| {
+            value.is_finite()
+                && if matches!(event, "cycles" | "instructions") {
+                    value > 0.0
+                } else {
+                    value >= 0.0
+                }
+        })
     }))
 }
 
@@ -935,6 +1026,9 @@ where
     let mut status = None;
     let mut sent_bounded_sigint = false;
     while started.elapsed() < duration {
+        if !target_process_exists(plan.target.pid) {
+            break;
+        }
         let completed = match child.try_wait() {
             Ok(value) => value,
             Err(_error) => {
@@ -1001,6 +1095,13 @@ where
     {
         return Err(spool_error());
     }
+    if publish
+        && plan.mode == CollectionMode::Stat
+        && plan.requested_event_source == RequestedEventSource::HardwareRequired
+        && !stat_output_has_usable_requested_hardware_counts(temporary, &plan.events)?
+    {
+        return Err(external_error());
+    }
     let actual_event_source = if plan.requested_event_source == RequestedEventSource::SoftwareOnly {
         ActualEventSource::Software
     } else {
@@ -1050,6 +1151,10 @@ where
         .and_then(|directory| directory.sync_all())
         .map_err(|_error| spool_error())?;
     Ok(result)
+}
+
+fn target_process_exists(pid: u32) -> bool {
+    PathBuf::from(format!("/proc/{pid}")).is_dir()
 }
 
 fn perf_status_succeeded(status: ExitStatus, sent_bounded_sigint: bool) -> bool {
@@ -1188,8 +1293,8 @@ mod tests {
         ExecutionPlan, MAX_DURATION_MILLISECONDS, REPLAY_RETENTION, SOFTWARE_STAT_EVENTS,
         authorize_spool_capacity, consume_plan, denied, execute_perf, execute_perf_with_ready,
         perf_status_succeeded, prune_replay_markers, read_perf_control_ack,
-        recover_stale_temporary_files, trusted_root_executable, validate_plan,
-        validate_spool_entries,
+        recover_stale_temporary_files, stat_output_has_usable_requested_hardware_counts,
+        trusted_root_executable, validate_plan, validate_spool_entries,
     };
     use crate::{
         ActualEventSource, CallGraph, CollectionMode, HelperTarget, RecordEvent,
@@ -1375,6 +1480,66 @@ finish
     #[test]
     fn immutable_policy_accepts_bounded_owner_only_record() {
         assert!(validate_plan(&record_plan(), 1000).is_ok());
+    }
+
+    #[test]
+    fn target_liveness_check_distinguishes_current_and_missing_processes() {
+        assert!(super::target_process_exists(std::process::id()));
+        assert!(!super::target_process_exists(u32::MAX));
+    }
+
+    #[test]
+    fn formal_hardware_stat_requires_a_usable_requested_counter() {
+        let path = std::env::temp_dir().join(format!(
+            "perflens-helper-hardware-counts-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let events = vec!["cycles".to_owned(), "instructions".to_owned()];
+        std::fs::write(&path, "0;;cycles;1;100.0;;\n0;;instructions;1;100.0;;\n")
+            .expect("write unusable stat output");
+        assert!(
+            !stat_output_has_usable_requested_hardware_counts(&path, &events)
+                .expect("parse unusable stat output")
+        );
+        std::fs::write(
+            &path,
+            "100;;cycles;1;100.0;;\n200;;instructions;1;100.0;;\n",
+        )
+        .expect("write usable stat output");
+        assert!(
+            stat_output_has_usable_requested_hardware_counts(&path, &events)
+                .expect("parse usable stat output")
+        );
+        std::fs::write(
+            &path,
+            "100;;cpu_core/cycles/;1;100.0;;\n\
+             200;;cpu_core/instructions/;1;100.0;;\n\
+             <not counted>;;cpu_atom/cycles/;0;0.0;;\n",
+        )
+        .expect("write hybrid PMU stat output");
+        assert!(
+            stat_output_has_usable_requested_hardware_counts(&path, &events)
+                .expect("accept fixed hybrid-PMU event spellings")
+        );
+        assert!(
+            super::hardware_probe_has_usable_counts(&path)
+                .expect("accept a hybrid-PMU hardware probe")
+        );
+        let mixed_events = vec!["cycles".to_owned(), "cache-misses".to_owned()];
+        std::fs::write(&path, "0;;cycles;1;100.0;;\n0;;cache-misses;1;100.0;;\n")
+            .expect("write misleading zero-count stat output");
+        assert!(
+            !stat_output_has_usable_requested_hardware_counts(&path, &mixed_events)
+                .expect("reject zero probe counter despite another zero hardware metric")
+        );
+        std::fs::write(&path, "100;;cycles:untrusted-alias;1;100.0;;\n")
+            .expect("write untrusted event alias");
+        assert!(
+            !stat_output_has_usable_requested_hardware_counts(&path, &events)
+                .expect("reject an arbitrary event alias")
+        );
+        std::fs::remove_file(path).expect("remove stat output");
     }
 
     #[test]

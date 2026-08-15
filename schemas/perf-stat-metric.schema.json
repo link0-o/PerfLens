@@ -21,6 +21,7 @@
         }
       ],
       "default": null,
+      "description": "perf-reported event measurement runtime, not workload wall time",
       "title": "Run Time Ns"
     },
     "running_percent": {
@@ -35,6 +36,7 @@
         }
       ],
       "default": null,
+      "description": "perf event scheduling coverage (time running versus time enabled); this is not workload CPU utilization",
       "title": "Running Percent"
     },
     "status": {

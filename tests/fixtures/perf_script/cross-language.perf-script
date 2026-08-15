@@ -1,0 +1,32 @@
+cpp 100/100 [000] 1.000000000: 10 cpu-clock:
+        400001 std::vector<int>::push_back(int const&) (/opt/cpp/app) /src/app.cc:10
+        400000 main (/opt/cpp/app) /src/main.cc:4
+
+cpp 100/100 [000] 1.100000000: 11 cpu-clock:
+        400101 inline_leaf (/opt/cpp/app)
+  /src/inline.hpp:17 (inlined)
+        400000 main (/opt/cpp/app) /src/main.cc:4
+
+cpp 100/100 [000] 1.200000000: 12 cpu-clock:
+        400201 odd_path_leaf (/opt/My App (test)/bin) /src/odd.cc:8
+        400000 main (/opt/cpp/app) /src/main.cc:4
+
+native 200/200 [000] 1.300000000: 17 cpu-clock:
+        400301 leaf_without_source (/opt/native/app)
+        400300 parent_with_source (/opt/native/app) /src/parent.c:9
+
+rust 101/101 [001] 2.000000000: 20 cpu-clock:
+        500001 mycrate::worker::run::h0123456789abcdef (/opt/rust/app) /src/main.rs:12
+        500000 mycrate::main::h1111111111111111 (/opt/rust/app) /src/main.rs:4
+
+rust 101/101 [001] 2.100000000: 21 cpu-clock:
+        500101 mycrate::worker::run::hfedcba9876543210 (/opt/rust/app) /src/other.rs:31
+        500000 mycrate::main::h1111111111111111 (/opt/rust/app) /src/main.rs:4
+
+go 102/102 [002] 3.000000000: 30 cpu-clock:
+        600001 main.(*Worker).Run (/opt/go/app) /src/main.go:42
+        600000 main.main (/opt/go/app) /src/main.go:8
+
+java 103/103 [003] 4.000000000: 40 cpu-clock:
+        700001 java.lang.String.indexOf(Ljava/lang/String;)I (/tmp/perf-103.map)
+        700000 com.example.Main.main([Ljava/lang/String;)V (/tmp/perf-103.map)

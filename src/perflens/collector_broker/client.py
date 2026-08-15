@@ -15,6 +15,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from perflens.application.evidence import validate_collection_invariants
 from perflens.collector_broker.protocol import (
     MAX_BROKER_MESSAGE_BYTES,
     BrokerCollectionReady,
@@ -28,6 +29,7 @@ from perflens.contracts.artifacts import (
     CollectorHealthArtifact,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
+from perflens.metrics.perf_stat import PerfStatMetricAdapter
 
 _PEER_CREDENTIALS = struct.Struct("3i")
 
@@ -89,6 +91,7 @@ class CollectorBrokerClient:
                 "collector_broker",
                 "Collector result does not match the authorized collection plan",
             )
+        validate_collection_invariants(artifact)
         _verify_collection_artifact(artifact, plan, self._socket, server_uid)
         return artifact
 
@@ -357,6 +360,12 @@ def _verify_collection_artifact(
         or (plan.mode == "stat" and artifact.events != expected_events)
         or (plan.mode != "stat" and artifact.events)
         or (
+            plan.mode == "record"
+            and artifact.record_event
+            != (plan.fallback_record_event if artifact.fallback_used else plan.record_event)
+        )
+        or (plan.mode != "record" and artifact.record_event is not None)
+        or (
             artifact.actual_event_source == "software"
             and not software_limitations.issubset(artifact.evidence_limitations)
         )
@@ -418,6 +427,12 @@ def _verify_collection_artifact(
                     "Collector output exceeds the authorized plan limit",
                 )
             digest.update(chunk)
+        parsed_metrics: tuple[object, ...] | None = None
+        parsed_warnings: tuple[str, ...] = ()
+        if plan.mode == "stat":
+            parsed_metrics, parsed_warnings = PerfStatMetricAdapter(
+                max_input_bytes=plan.max_output_bytes
+            ).parse_descriptor(descriptor)
         after = os.fstat(descriptor)
     except PerfLensError:
         raise
@@ -446,6 +461,8 @@ def _verify_collection_artifact(
         or _file_identity(after) != _file_identity(current)
         or actual_bytes != artifact.output_bytes
         or digest.hexdigest() != artifact.output_sha256
+        or (parsed_metrics is not None and tuple(parsed_metrics) != artifact.metrics)
+        or any(warning not in artifact.warnings for warning in parsed_warnings)
     ):
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,

@@ -14,6 +14,10 @@
 安装 DEB 后可用 `sudo perflens-admin setup` 一次选择 Collector 模式；之后如需切换，先用
 `perflens-admin switch-mode <模式> --dry-run`。项目内只需运行 `perflens init`，它会自动
 识别安全的已部署模式。详见[《Collector 权限模式选择与切换》](docs/collector-mode-lifecycle.zh-CN.md)。
+现有能力的成熟度、待修复项和后续扩展顺序见
+[《Collector 能力评估、修复清单与扩展路线》](docs/collector-capability-roadmap.zh-CN.md)。
+perf 原始证据如何转换、校验并带着质量边界交给 Agent，见
+[《Perf 原始证据到 Agent 数据的可信链路》](docs/evidence-pipeline.zh-CN.md)。
 
 PerfLens 是一个面向 Linux 应用和编码 Agent 的、基于证据的性能分析工具包。它把 Profile 解析、热点计算、源码定位和诊断规则做成确定性工具，再由 Skill 约束 Agent 如何解释这些证据。
 
@@ -438,6 +442,8 @@ uv run pip-audit
 - [自研与依赖复用决策](docs/dependency-decisions.zh-CN.md)
 - [MCP 与 Skill 使用指南](docs/mcp-and-skill.zh-CN.md)
 - [自动采集与 Collector Broker](docs/automatic-collection.zh-CN.md)
+- [Collector 能力评估、修复清单与扩展路线](docs/collector-capability-roadmap.zh-CN.md)
+- [Perf 原始证据到 Agent 数据的可信链路](docs/evidence-pipeline.zh-CN.md)
 - [产品部署、验收、升级与卸载](docs/deployment.zh-CN.md)
 - [安全策略](SECURITY.zh-CN.md)
 - [发布就绪检查](docs/release-readiness.zh-CN.md)

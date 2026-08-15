@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
 
+from perflens.application.analyze import analyze_folded
+from perflens.classification.engine import build_diagnosis_bundle
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.storage import ArtifactStore, PathPolicy
 
@@ -113,3 +116,59 @@ def test_artifact_read_pins_root_and_pages_safe_regular_file(tmp_path: Path) -> 
     with pytest.raises(PerfLensError, match="root identity changed") as replaced:
         store.read_page("page", "test", offset=0, limit=8)
     assert replaced.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_json_artifact_byte_paging_is_lossless_for_non_ascii_text(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    store = ArtifactStore(root, PathPolicy((tmp_path,)), allow_writes=True)
+    output = store.save(_TestArtifact(value="中文性能证据"), "unicode", "test")
+
+    pieces: list[str] = []
+    offset = 0
+    while True:
+        text, next_offset, total = store.read_page(
+            "unicode", "test", offset=offset, limit=1
+        )
+        pieces.append(text)
+        if next_offset is None:
+            break
+        offset = next_offset
+
+    assert "".join(pieces).encode("utf-8") == output.read_bytes()
+    assert total == output.stat().st_size
+
+
+def test_typed_artifact_filename_cannot_alias_a_different_embedded_id(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "artifacts"
+    store = ArtifactStore(root, PathPolicy((tmp_path,)), allow_writes=True)
+    profile = tmp_path / "profile.folded"
+    profile.write_text("root;leaf 7\n", encoding="utf-8")
+    analysis = analyze_folded(profile)
+    store.save(analysis, "different-analysis-id", "analysis")
+
+    with pytest.raises(PerfLensError, match="identifier does not match"):
+        store.load_analysis("different-analysis-id")
+
+
+def test_corrupt_diagnosis_is_not_silently_reported_as_missing(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    store = ArtifactStore(root, PathPolicy((tmp_path,)), allow_writes=True)
+    profile = tmp_path / "profile.folded"
+    profile.write_text("root;leaf 7\n", encoding="utf-8")
+    analysis = analyze_folded(profile)
+    diagnosis = build_diagnosis_bundle(analysis)
+    store.save(analysis, analysis.analysis_id, "analysis")
+    diagnosis_path = store.save(
+        diagnosis,
+        f"diagnosis-{analysis.analysis_id}",
+        "diagnosis",
+    )
+    payload = json.loads(diagnosis_path.read_text(encoding="utf-8"))
+    payload["observations"] = ["forged observation"]
+    diagnosis_path.write_text(json.dumps(payload), encoding="utf-8")
+    diagnosis_path.chmod(0o600)
+
+    with pytest.raises(PerfLensError, match="does not match"):
+        store.load_diagnosis(analysis.analysis_id)

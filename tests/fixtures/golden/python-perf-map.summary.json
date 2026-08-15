@@ -1,0 +1,22 @@
+{
+  "status": "complete",
+  "sample_count": 2,
+  "total_weight": 30,
+  "weight_unit": "nanoseconds",
+  "warning_count": 0,
+  "has_source_lines": true,
+  "source_line_frame_count": 2,
+  "source_line_self_weight": 0,
+  "hotspots": [
+    ["_PyEval_EvalFrameDefault", "/usr/bin/python3.13", 30, 30, []],
+    ["__libc_start_call_main", "/usr/lib/x86_64-linux-gnu/libc.so.6", 0, 30, ["libc_start_call_main.h:58"]],
+    ["py::locate_bucket_linear", "/tmp/perf-109348.map", 0, 30, ["/workspace/workload.py"]]
+  ],
+  "call_paths": [
+    {
+      "frames": ["__libc_start_call_main", "py::locate_bucket_linear", "_PyEval_EvalFrameDefault"],
+      "weight": 30,
+      "record_count": 2
+    }
+  ]
+}

@@ -1,11 +1,285 @@
 {
   "$defs": {
+    "CollectionEvidenceProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "actual_event_source": {
+          "enum": [
+            "hardware",
+            "software",
+            "unknown"
+          ],
+          "title": "Actual Event Source",
+          "type": "string"
+        },
+        "call_graph": {
+          "anyOf": [
+            {
+              "enum": [
+                "fp",
+                "dwarf",
+                "lbr"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Call Graph"
+        },
+        "collection_artifact_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Collection Artifact Sha256",
+          "type": "string"
+        },
+        "collection_id": {
+          "title": "Collection Id",
+          "type": "string"
+        },
+        "duration_seconds": {
+          "minimum": 0,
+          "title": "Duration Seconds",
+          "type": "number"
+        },
+        "evidence_limitations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Limitations",
+          "type": "array"
+        },
+        "fallback_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Reason"
+        },
+        "fallback_used": {
+          "title": "Fallback Used",
+          "type": "boolean"
+        },
+        "frequency_hz": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frequency Hz"
+        },
+        "mode": {
+          "enum": [
+            "record",
+            "sched",
+            "lock",
+            "off_cpu"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "output_bytes": {
+          "exclusiveMinimum": 0,
+          "title": "Output Bytes",
+          "type": "integer"
+        },
+        "output_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Output Sha256",
+          "type": "string"
+        },
+        "record_event": {
+          "anyOf": [
+            {
+              "enum": [
+                "cycles",
+                "cpu-clock"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Record Event"
+        },
+        "requested_event_source": {
+          "enum": [
+            "auto",
+            "hardware_required",
+            "software_only"
+          ],
+          "title": "Requested Event Source",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "collection_id",
+        "collection_artifact_sha256",
+        "mode",
+        "duration_seconds",
+        "output_sha256",
+        "output_bytes",
+        "requested_event_source",
+        "actual_event_source",
+        "fallback_used"
+      ],
+      "title": "CollectionEvidenceProvenance",
+      "type": "object"
+    },
+    "ConversionProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "enum": [
+            "folded",
+            "perf_script",
+            "perf_data"
+          ],
+          "title": "Adapter",
+          "type": "string"
+        },
+        "argv": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Argv",
+          "type": "array"
+        },
+        "compatibility_fallbacks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Compatibility Fallbacks",
+          "type": "array"
+        },
+        "converter_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Converter Path"
+        },
+        "converter_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Converter Sha256"
+        },
+        "converter_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Converter Version"
+        },
+        "diagnostics": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Diagnostics",
+          "type": "array"
+        },
+        "locale": {
+          "title": "Locale",
+          "type": "string"
+        },
+        "normalization_version": {
+          "title": "Normalization Version",
+          "type": "string"
+        },
+        "parser_version": {
+          "title": "Parser Version",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "transcript_bytes": {
+          "minimum": 0,
+          "title": "Transcript Bytes",
+          "type": "integer"
+        },
+        "transcript_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Transcript Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "adapter",
+        "parser_version",
+        "normalization_version",
+        "locale",
+        "transcript_sha256",
+        "transcript_bytes"
+      ],
+      "title": "ConversionProvenance",
+      "type": "object"
+    },
     "ParseStatistics": {
       "additionalProperties": false,
       "properties": {
+        "address_annotation_lines": {
+          "minimum": 0,
+          "title": "Address Annotation Lines",
+          "type": "integer"
+        },
         "bytes_read": {
           "minimum": 0,
           "title": "Bytes Read",
+          "type": "integer"
+        },
+        "duplicate_frame_lines": {
+          "minimum": 0,
+          "title": "Duplicate Frame Lines",
+          "type": "integer"
+        },
+        "frame_lines": {
+          "minimum": 0,
+          "title": "Frame Lines",
           "type": "integer"
         },
         "malformed_records": {
@@ -21,6 +295,16 @@
         "skipped_records": {
           "minimum": 0,
           "title": "Skipped Records",
+          "type": "integer"
+        },
+        "source_annotation_lines": {
+          "minimum": 0,
+          "title": "Source Annotation Lines",
+          "type": "integer"
+        },
+        "unicode_replacement_count": {
+          "minimum": 0,
+          "title": "Unicode Replacement Count",
           "type": "integer"
         },
         "warning_count": {
@@ -39,7 +323,12 @@
         "malformed_records",
         "warning_count",
         "warnings_truncated",
-        "bytes_read"
+        "bytes_read",
+        "frame_lines",
+        "duplicate_frame_lines",
+        "address_annotation_lines",
+        "source_annotation_lines",
+        "unicode_replacement_count"
       ],
       "title": "ParseStatistics",
       "type": "object"
@@ -51,6 +340,20 @@
       "const": "unique_symbol_dso_per_sample",
       "title": "Aggregation Semantics",
       "type": "string"
+    },
+    "collection": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CollectionEvidenceProvenance"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "conversion": {
+      "$ref": "#/$defs/ConversionProvenance"
     },
     "created_at": {
       "title": "Created At",
@@ -68,11 +371,17 @@
       "title": "Has Source Lines",
       "type": "boolean"
     },
+    "input_bytes": {
+      "minimum": 0,
+      "title": "Input Bytes",
+      "type": "integer"
+    },
     "input_path": {
       "title": "Input Path",
       "type": "string"
     },
     "input_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
       "title": "Input Sha256",
       "type": "string"
     },
@@ -130,6 +439,7 @@
     "source_type",
     "input_path",
     "input_sha256",
+    "input_bytes",
     "created_at",
     "sample_count",
     "total_weight",
@@ -139,6 +449,7 @@
     "has_call_graph",
     "has_source_lines",
     "aggregation_semantics",
+    "conversion",
     "parse_statistics"
   ],
   "title": "ProfileMetadata",

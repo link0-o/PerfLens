@@ -7,6 +7,7 @@ from pathlib import Path
 
 from perflens.contracts.artifacts import (
     AnalysisArtifact,
+    AnalysisVerificationArtifact,
     ArtifactReference,
     ArtifactTextPage,
     BenchmarkArtifact,
@@ -21,6 +22,7 @@ from perflens.contracts.artifacts import (
     ClassificationPage,
     CollectionArtifact,
     CollectionCapabilityArtifact,
+    CollectionEvidenceProvenance,
     CollectionModeCapability,
     CollectionPlanArtifact,
     CollectorAcceptanceArtifact,
@@ -37,9 +39,11 @@ from perflens.contracts.artifacts import (
     CollectorSpoolStatusArtifact,
     CollectorUndeploymentArtifact,
     CollectorUpgradeArtifact,
+    ConversionProvenance,
     DiagnosisBundle,
     ElfMetadataArtifact,
     Evidence,
+    EvidenceQuality,
     Frame,
     Hotspot,
     HotspotDetails,
@@ -55,11 +59,17 @@ from perflens.contracts.artifacts import (
     SourceContextArtifact,
     SourceResolutionArtifact,
     StackSample,
+    VerificationCheck,
 )
 from perflens.privileged_helper.protocol import helper_request_schema, helper_response_schema
 
 MODELS = {
     "analysis.schema.json": AnalysisArtifact,
+    "analysis-verification.schema.json": AnalysisVerificationArtifact,
+    "verification-check.schema.json": VerificationCheck,
+    "conversion-provenance.schema.json": ConversionProvenance,
+    "collection-evidence-provenance.schema.json": CollectionEvidenceProvenance,
+    "evidence-quality.schema.json": EvidenceQuality,
     "profile.schema.json": ProfileMetadata,
     "sample.schema.json": StackSample,
     "frame.schema.json": Frame,
