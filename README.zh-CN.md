@@ -86,6 +86,12 @@ Debian 13 用户也可以直接安装原生 `.deb`，不需要自己创建 Pytho
 root Rust Helper；该模式不会自动启用，必须由管理员确认受限 root、`CAP_SYS_ADMIN` 与
 `CAP_SYS_PTRACE` 风险。
 
+当前 `main` 已进入尚未发布的 v0.3.0 实施阶段：源码包含独立 Trace Helper、目标内核过滤
+后端、`sched/off_cpu/lock` 确定性分析和 `full_diagnostics` 生命周期。发布版 `0.2.0` 仍只有
+稳定的 `stat/record` 闭环；在完整 Python/Rust/DEB/真实主机门禁通过前，不把源码能力
+描述成已发布功能。详细状态见
+[《v0.3.x Collector 与用户态锁能力路线图》](docs/collector-capability-roadmap.zh-CN.md)。
+
 随时可以运行只读状态检查，不需要记住多条排错命令：
 
 ```bash
@@ -115,6 +121,10 @@ perflens accept-collector --authorize-host-acceptance
 分支未命中。自动化程序使用
 `--json` 获取完整机器可读结果；需要留档时使用
 `--output ./collector-acceptance.json` 写入一个新的版本化证据文件。
+
+在 v0.3.0 源码的 `full_diagnostics` 配置中，同一命令还会验证 `sched`、`off_cpu`、`lock`
+的实质目标证据、确定性分析和 verifier；空事件或守恒失败不会通过。Trace Helper 使用
+包内固定 eBPF 在内核中先按授权 TGID/TID 过滤，不调用或回退到 `perf -a`。
 
 上面的 wheel 安装方式会安装 `perflens`、`perflens-mcp`、可选的 `perflens-collector`
 和管理员入口 `perflens-admin`。可以这样确认版本：
@@ -344,10 +354,11 @@ perflens collect-profile \
   --authorization I_EXPLICITLY_AUTHORIZE_TARGET_PROFILING
 ```
 
-当前正式支持 `record` 和 `stat`。公共 CLI 与 `cap_perfmon` Broker 还保留默认关闭的
-`sched`、`lock`、`off_cpu` 原始实验入口，但它们尚无专用确定性分析器，生成策略默认
-不开放；`paranoid3_helper` 会拒绝这三种模式。附加到已有 PID 还需要独立开关、有限
-时长以及授权短语 `I_EXPLICITLY_AUTHORIZE_PID_ATTACH`。
+发布版 `0.2.0` 正式支持 `record` 和 `stat`。v0.3.0 源码新增的 `full_diagnostics` 通过
+独立 Trace Helper 提供 `sched`、`off_cpu`、`lock`，并生成专用、可验证的确定性 Artifact；
+现有 paranoid=3 Rust Helper 仍严格只处理 `stat/record`。高级模式默认不因包安装而启用，
+必须由管理员选择功能配置并通过真实验收。附加到已有 PID 还需要独立开关、有限时长以及
+授权短语 `I_EXPLICITLY_AUTHORIZE_PID_ATTACH`。
 
 PerfLens 永远不会自行执行 sudo、修改内核策略或降低主机安全限制。若系统的
 `perf_event_paranoid`、容器策略或能力设置不允许任何采样，应由系统管理员提供经过
@@ -357,7 +368,7 @@ PerfLens 永远不会自行执行 sudo、修改内核策略或降低主机安全
 ## 权限和安全边界
 
 运行 `perflens doctor` 可以用中文在不采样、不附加 PID 的情况下检查五种模式的本地权限
-前置条件；这不是三种原始 trace 实验的成熟度声明，也不证明独立 Collector 已成功采集。
+前置条件；这不是高级模式的真实验收，也不证明独立 Trace Helper 已成功采集。
 机器读取使用 `perflens doctor --json`。Agent 自动采集使用短期、单次、绑定 PID 所有者和
 启动时间的计划，并由 Unix Socket Collector 再次检查调用 UID、目标、模式、单次资源
 上限、spool 累计配额和磁盘空闲余量。达到存储边界时只拒绝新采集，不自动删除旧证据。
@@ -432,9 +443,9 @@ uv run pip-audit
 - `perf.data` 能否迁移分析取决于本机 `perf` 版本和匹配的 DSO/调试符号。
 - 主动采样取决于 Linux 内核权限；普通进程在 `perf_event_paranoid=3` 下受阻，不代表
   已部署 Collector 必然受阻，仍应以真实短时验收和 Collection 的实际事件来源为准。
-- `sched`、`lock`、`off_cpu` 是 `cap_perfmon` Broker 中默认关闭的原始实验入口，不是
-  稳定分析模式；当前不能输出调度延迟、锁等待/持有、owner/waiter 或配对后的 off-CPU
-  时长产物，`paranoid3_helper` 也会拒绝这些模式。
+- 发布版 `0.2.0` 没有稳定的 `sched/lock/off_cpu` 闭环。v0.3.0 源码已经生成调度延迟、
+  off-CPU 区间和底层锁/futex 候选 Artifact，但仍等待完整发布门禁；它也不能把 futex
+  候选升级成特定语言锁、在缺少配对时猜 owner/持锁时长，或覆盖所有用户态快路径。
 
 更多中文资料：
 

@@ -15,9 +15,9 @@ host-level switch, then run `perflens init --update` in initialized projects. Se
 the [Collector privilege-mode lifecycle](collector-mode-lifecycle.md). The staged
 asset flow below remains the advanced path for reviewed custom policy.
 
-## Planned `v0.3.0` guided setup
+## Guided setup in the pre-release `v0.3.0` source tree
 
-`v0.3.0` changes first configuration to a feature-first, privilege-second wizard. DEB
+The v0.3.0 source tree implements a feature-first, privilege-second wizard. DEB
 installation remains non-interactive and inactive: it does not generate policy, start services,
 or edit sysctl, and only directs the administrator to run:
 
@@ -38,7 +38,7 @@ partial deployment cannot use the full-profile name. The wizard then recommends 
 `paranoid3_helper` from host facts. Feature profile answers what may be collected, while privilege
 mode answers which bounded process holds privilege.
 
-The planned non-interactive preflight is:
+The non-interactive preflight is:
 
 ```bash
 sudo perflens-admin setup \
@@ -50,10 +50,10 @@ sudo perflens-admin setup \
 Full diagnostics requires acknowledgement of trace metadata, call-path, disk, and overhead risk.
 The level-3 path additionally requires both `--acknowledge-privileged-helper-risk` and
 `--acknowledge-trace-risk`. The existing Rust Helper remains limited to `stat/record`; a separate
-Trace Helper handles the advanced modes. These are planned `v0.3.0` interfaces and are not current
-`0.2.0` commands.
+Trace Helper handles the advanced modes. These interfaces exist in the v0.3.0 source tree but not
+in `0.2.0` packages; production users must wait for the full CI, DEB, and real-host release gates.
 
-The planned post-install profile lifecycle is transactional:
+The post-install profile lifecycle is transactional:
 
 ```bash
 sudo perflens-admin switch-profile full_diagnostics --dry-run
@@ -257,6 +257,14 @@ existing PID. It is Chinese-first on success; automation must add `--json` for
 the complete Collection Artifact, while `--output <new-file.json>` preserves it
 safely.
 
+When the active feature profile is `full_diagnostics`, the same fixed probe also creates bounded
+sleep/wakeup and lock-contention activity. Acceptance then captures, deterministically analyzes,
+and replay-verifies `sched`, `off_cpu`, and `lock` in order. Every mode must produce substantive
+target evidence; an empty stream, missing mode, or conservation failure fails acceptance.
+`partial` preserves boundary/loss limitations and is not presented as verification failure. The
+packaged Trace Helper filters the authorized TGID/TIDs in kernel before userspace; PerfLens never
+invokes or falls back to `perf -a` or equivalent all-CPU capture.
+
 Production releases now ship separate `perflens` and `perflens-collector` DEBs.
 They install offline and do not activate the service. Future RPM installers must
 preserve the same boundaries: preserve administrator configuration, avoid
@@ -279,7 +287,7 @@ restores every unit changed by that attempt before reloading the services. Run
 ordinary-user `perflens accept-collector
 --authorize-host-acceptance` again after every upgrade.
 
-An existing `0.2.0` host upgraded to planned `v0.3.0` remains `cpu_only`: package upgrade must not
+An existing `0.2.0` host upgraded to v0.3.0 remains `cpu_only`: package upgrade must not
 create trace policy, activate the Trace Helper, or expand `allowed_modes`. After the normal CPU
 acceptance, the administrator separately reviews and runs `switch-profile full_diagnostics`.
 This migration rule overrides the fresh-install recommendation so upgrades never widen privilege

@@ -2,15 +2,20 @@
 
 简体中文 | [English](collector-capability-roadmap.md)
 
-状态：**下一版本设计与验收计划**
+状态：**v0.3.0 源码实施中；尚未发布**
 
-最后审计：2026-08-16，基于 `a7a5002` 之后的 `0.2.0` 代码线
+最后审计：2026-08-16，基于当前 `main` 的 v0.3.0 预发布实现
 
 候选目标版本：`v0.3.0`、`v0.3.1`
 
-本文是后续实现、测试和发布说明的设计合同，严格区分“当前已经实现”和“计划实现”。
-除标记为“当前正式”的内容外，任何条目都不能在实现和验收完成前写成功能宣传、默认
-可用能力或 Skill 的自动采集承诺。
+本文是实现、测试和发布说明的设计合同，严格区分“`0.2.0` 已发布”“v0.3.0 已在源码
+实现但等待发布门禁”和“v0.3.1 计划实现”。源码存在不等于已发布；只有完整 CI、Rust、
+DEB、升级/回滚和真实 Debian 主机验收通过后，v0.3.0 才能写成稳定发布能力。
+
+当前源码已经完成 v0.3.0 的版本化 Trace 合同、目标内核过滤 Rust Trace Helper、三类
+确定性分析器和 verifier、独立策略/Socket/spool、`setup/switch-profile/status/upgrade/
+undeploy` 事务，以及 `accept-collector` 三模式真实验收。仍待本路线图末尾的完整发布门禁；
+v0.3.1 四类用户态锁 Adapter 尚未实现。
 
 ## 1. 决策摘要
 
@@ -121,7 +126,8 @@ sudo perflens-admin setup \
   --dry-run
 ```
 
-这些参数在 `0.2.0` 尚未实现；只有 `v0.3.0` 代码和测试完成后才可作为用户命令发布。
+这些参数已经进入 v0.3.0 源码，但 `0.2.0` 安装包没有这些接口；在 v0.3.0 发布门禁完成
+前只能用于源码/本机构建验收，不能当作稳定发布命令。
 
 ### 3.3 权限实现自动推荐
 
@@ -129,7 +135,7 @@ sudo perflens-admin setup \
 
 | 权限模式 | 推荐条件 | `cpu_only` | `full_diagnostics` |
 |---|---|---|---|
-| `cap_perfmon` | 主机策略允许专用 capability，真实短时预检通过 | Python Broker 执行 stat/record | Python Collector 按固定策略执行全部已验收模式 |
+| `cap_perfmon` | 主机策略允许专用 capability，真实短时预检通过 | Python Broker 执行 stat/record | Broker + 独立 Trace Helper；Trace Helper 只获得审计后的 Trace capability |
 | `paranoid3_helper` | 必须保留 Debian `perf_event_paranoid=3` | Broker → 现有 Rust Helper | 现有 Helper 负责 stat/record；独立 Trace Helper 负责高级模式 |
 
 向导根据实际主机检查给出推荐，但管理员仍可用 `--mode` 显式选择。PerfLens 不自动降低
@@ -159,7 +165,7 @@ sudo perflens-admin switch-profile cpu_only --dry-run
 sudo perflens-admin switch-profile cpu_only
 ```
 
-`switch-profile` 是 `v0.3.0` 计划接口，必须：
+`switch-profile` 已在 v0.3.0 源码实现，并遵守以下事务合同：
 
 1. 验证当前策略、受管 unit、目标配置和主机能力；
 2. 生成可审查的确定性差异和命令计划；
@@ -184,14 +190,13 @@ sudo perflens-admin switch-profile cpu_only
               │ typed plan，明确 PID/工作负载授权
               ▼
         非特权 Python Broker
-          ├─ cap_perfmon：固定 perf trace argv
-          └─ paranoid=3：私有 Trace Helper Socket
-                            │
-                            ▼
-                    独立 Rust Trace Helper
-                            │ 私有原始 perf.data
-                            ▼
-        固定 perf script 转换 → 规范化有界事件 → 确定性分析 Artifact
+                    │ 私有 Trace Helper Socket
+                    ▼
+        独立 Rust Trace Helper + 包内固定 eBPF 程序
+                    │ 在内核中按授权 TGID/TID 过滤
+                    │ 私有 target-only NDJSON（不是 perf.data）
+                    ▼
+        固定流式解析/脱敏 → TraceEvidence → 确定性分析 + verifier
 ```
 
 现有 Rust Helper 继续只接受 `Record/Stat`。新的 Trace Helper 必须拥有独立：
@@ -202,8 +207,13 @@ sudo perflens-admin switch-profile cpu_only
 - 管理员策略和固定私有 spool；
 - capability 审计、风险确认、升级、回滚和卸载流程。
 
-Helper Socket 不得向普通用户开放。原始 trace 只进入私有 spool；公开给 MCP 的派生产物
+两个权限模式的高级采集都使用独立 Trace Helper；`cap_perfmon` 不让 Python Broker 承担
+全 CPU trace。Helper Socket 不得向普通用户开放。目标内私有 trace 只进入私有 spool；公开给 MCP 的派生产物
 必须先经过目标范围、大小、事件、丢失和隐私检查。
+
+stock `perf record -p PID` 无法完整观察外部唤醒者和目标 switch-in，因此不能作为稳定的
+`sched/off_cpu` 后端。PerfLens 不调用也不静默回退到 `perf -a` 或等价的 `-C 0-N` 全 CPU
+采集。固定包内后端必须在任何事件或目标外元数据进入用户态 spool 前完成内核目标过滤。
 
 ### 4.2 固定安全边界
 
@@ -215,7 +225,8 @@ Helper Socket 不得向普通用户开放。原始 trace 只进入私有 spool�
 - 事件丢失、未配对或截断超过分析门槛时返回 `partial` 或失败；
 - 新 Trace Helper 的 capability 不得超过经过审计的最小集合；不足时失败关闭，不能临时
   加入不受限 root 或让 Python Broker 获得 `CAP_SYS_ADMIN`；
-- PerfLens 继续不直接解析 `perf.data` 二进制，由固定系统 perf Adapter 转换。
+- Trace 路径不产生或公开 `perf.data`；record Profile 仍由固定系统 perf Adapter 转换，
+  PerfLens 不直接解析其二进制格式。
 
 ## 5. v0.3.0 确定性分析合同
 
@@ -232,8 +243,9 @@ Helper Socket 不得向普通用户开放。原始 trace 只进入私有 spool�
 - `LockAnalysisArtifact`：内核锁及通用 futex/用户态等待候选；
 - `TraceAnalysisVerificationArtifact`：独立重算哈希、事件数量、区间守恒和质量结论。
 
-`TraceEvidenceArtifact` 不嵌入或重新编码 `perf.data`，只引用不可变原始产物的 SHA-256、
-大小、采集 ID、目标身份和固定转换 manifest，并保存规范化 NDJSON 的 SHA-256。转换器
+`TraceEvidenceArtifact` 不包含私有路径、目标外身份或原始地址，只引用不可变私有
+target-only NDJSON 的 SHA-256、大小、采集 ID、目标身份和固定转换 manifest，并保存公开
+规范化 NDJSON 的 SHA-256。转换器
 输出必须先写入新临时文件、完整验证后原子发布；任何解析失败都保留有界原始诊断，不能
 覆盖源 Profile。
 
@@ -261,15 +273,16 @@ Helper Socket 不得向普通用户开放。原始 trace 只进入私有 spool�
 
 ## 6. v0.3.0 实施里程碑
 
-1. 冻结 `stat/record` 基线和现有策略兼容性。
-2. 固定 trace 转换命令、公共事件 IR、Schema、Golden 和 verifier。
-3. 完成 `sched` 分析、分页、诊断包和守恒测试。
-4. 在统一调度 IR 上完成 `off_cpu` 区间分析。
-5. 完成内核锁和 futex 等待候选分析，严格区分等待与持锁语义。
-6. 在 `cap_perfmon` 模式完成固定高级采集、隐私检查和真实主机验收。
-7. 定义私有协议并实现独立 Rust Trace Helper。
-8. 完成 `setup/switch-profile/status/accept-collector`、MCP 和 Skill 路由。
-9. 完成升级、回滚、卸载、DEB 非激活和真实 Debian 发布验收。
+1. **源码已完成：** 冻结 `stat/record` 基线和现有策略兼容性。
+2. **源码已完成：** 固定目标过滤事件 IR、Schema、Golden 和 verifier。
+3. **源码已完成：** `sched/off_cpu/lock` 确定性分析、守恒和拒绝路径。
+4. **源码已完成：** 私有协议、独立 Rust Trace Helper、BPF 目标过滤和隐私检查。
+5. **源码已完成：** `setup/switch-profile/status/accept-collector`、MCP 路由和生命周期回滚。
+6. **发布前待完成：** 同步 Skill/中英文文档并冻结用户体验。
+7. **发布前待完成：** 完整 Python 覆盖率、Rust fmt/clippy/test/audit/deny 和跨语言协议矩阵。
+8. **发布前待完成：** 两个 DEB 的安装、升级、切换、卸载、非激活和可复现 smoke test。
+9. **发布前待完成：** Debian 12/13 上四组合真实验收，含外部唤醒、switch-in、动态线程、
+   锁竞争、事件丢失、跨 UID 拒绝和公开字节隐私扫描。
 
 Skill 的默认证据选择为：
 

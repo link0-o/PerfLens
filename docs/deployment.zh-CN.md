@@ -15,6 +15,8 @@ PerfLens 应拆成普通用户分析端和系统 Collector 两部分部署：
           ├─ 默认：CAP_PERFMON
           └─ 可选：无 capability Broker → root Rust Helper
                     （CAP_PERFMON/CAP_SYS_ADMIN/CAP_SYS_PTRACE）
+完整诊断：两种权限模式都另用独立 Trace Helper + 包内固定 eBPF
+          （内核先按授权 TGID/TID 过滤；不使用 perf -a）
 ```
 
 管理员只负责首次安装、策略和主机权限。日常 Agent、MCP 和分析命令不使用 sudo，也不持有 perf capability。
@@ -31,9 +33,9 @@ sudo perflens-admin setup
 [《Collector 权限模式选择与切换》](collector-mode-lifecycle.zh-CN.md)。下文的
 `stage-collector-assets`/`deploy --config` 流程继续作为自定义策略和离线审查的高级入口。
 
-## `v0.3.0` 计划的安装向导
+## `v0.3.0` 预发布源码中的安装向导
 
-`v0.3.0` 将把首次配置改成“功能配置优先、权限实现随后推荐”的两阶段向导。DEB 安装
+v0.3.0 源码已把首次配置改成“功能配置优先、权限实现随后推荐”的两阶段向导。DEB 安装
 本身仍然不交互、不生成策略、不启动服务、不修改 sysctl；安装完成只提示管理员运行：
 
 ```bash
@@ -51,7 +53,7 @@ sudo perflens-admin setup
 主机事实推荐 `cap_perfmon` 或 `paranoid3_helper`。功能配置决定“采集什么”，权限模式
 决定“谁持有什么权限”，两者不能混为一谈。
 
-计划中的非交互预检示例为：
+非交互预检为：
 
 ```bash
 sudo perflens-admin setup \
@@ -63,9 +65,10 @@ sudo perflens-admin setup \
 选择完整配置必须确认 trace 的线程元数据、调用路径、磁盘和采集开销风险。在
 `paranoid3_helper` 下还需要同时传入 `--acknowledge-privileged-helper-risk` 和
 `--acknowledge-trace-risk`。现有 Rust Helper 保持只处理 `stat/record`，高级模式由独立
-Trace Helper 处理。这些是 `v0.3.0` 计划接口，当前 `0.2.0` 用户不能提前运行。
+Trace Helper 处理。这些接口已在 v0.3.0 源码实现，但当前 `0.2.0` 安装包不能运行；正式
+用户仍需等待 v0.3.0 的完整 CI、DEB 和真实主机发布门禁。
 
-安装后可通过计划中的 `switch-profile` 在两个配置之间事务化切换：
+安装后可通过 `switch-profile` 在两个配置之间事务化切换：
 
 ```bash
 sudo perflens-admin switch-profile full_diagnostics --dry-run
@@ -389,10 +392,16 @@ PerfLens 安装和运行时不会自动修改 sysctl、文件 capability 或 sys
 perflens accept-collector --authorize-host-acceptance
 ```
 
-PerfLens 会以当前普通用户启动一个固定、隔离、最长约 30 秒的内置 CPU 测试负载，
+PerfLens 会以当前普通用户启动一个固定、隔离、最长约 30 秒的内置测试负载，
 通过 Collector 分别验证硬件计数、固定软件计数和 `cpu-clock` 软件采样；每次默认 1 秒、
 最多 5 秒，完成后无论成功失败都会终止测试进程。Collector 仍然只接收绑定 PID、UID
 和启动时间的短期单次计划，不会收到任意命令、环境变量或输出路径。
+
+如果主机功能配置是 `full_diagnostics`，同一命令还会让固定负载产生睡眠/唤醒和锁竞争，
+依次验证 `sched`、`off_cpu`、`lock` 的目标内采集、确定性分析和 verifier。每种模式必须
+产生实质证据；空事件、模式缺失或守恒失败都会使验收失败。`partial` 表示边界区间、事件
+丢失或证据限制已被保留，不等于校验失败。Trace Helper 用包内固定 eBPF 在内核中先按
+授权 TGID/TID 过滤；PerfLens 不调用或回退到 `perf -a`/等价全 CPU 采集。
 
 成功时默认输出中文验收摘要，直接显示硬件 PMU、软件计数和软件采样状态，以及证据
 路径、SHA-256、指标数量，并明确说明它只证明本机当前配置。硬件 PMU 不可用但两个
@@ -506,7 +515,7 @@ sudo perflens-admin undeploy
 `/etc/perflens/collector.toml`、`/var/lib/perflens`、系统用户或组。之后再卸载
 DEB 或 `/opt/perflens` 运行环境。性能数据只有管理员明确确认后才能删除。
 
-从 `0.2.0` 升级到计划中的 `v0.3.0` 时，已部署主机必须保持 `cpu_only`：包升级不得创建
+从 `0.2.0` 升级到 v0.3.0 时，已部署主机必须保持 `cpu_only`：包升级不得创建
 trace 策略、启用 Trace Helper 或扩展 `allowed_modes`。管理员完成升级和普通 CPU 验收后，
 再单独审查并执行 `switch-profile full_diagnostics`。这条迁移规则优先于“完整配置是新安装
 推荐项”，避免升级过程静默扩大已有主机权限。

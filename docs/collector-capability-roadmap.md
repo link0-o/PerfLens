@@ -2,15 +2,20 @@
 
 English | [简体中文](collector-capability-roadmap.zh-CN.md)
 
-Status: **next-version design and acceptance contract**
+Status: **v0.3.0 implemented in source; not released**
 
-Last audited: 2026-08-16 against the `0.2.0` line after `a7a5002`
+Last audited: 2026-08-16 against the current pre-release v0.3.0 `main`
 
 Candidate releases: `v0.3.0` and `v0.3.1`
 
-This document separates shipped facts from planned work. Nothing marked as planned may be
-advertised as available, selected by the Skill, or enabled by default before implementation and
-all acceptance gates are complete.
+This document separates the shipped `0.2.0` baseline, v0.3.0 code awaiting release gates, and
+planned v0.3.1 work. Source presence is not a stable release claim. v0.3.0 still requires the full
+Python, Rust, DEB, lifecycle, and real-Debian-host gates below.
+
+The source tree now contains the versioned Trace contracts, target-filtered Rust Trace Helper,
+three deterministic analyzers and verifier, separate policy/socket/spool, transactional setup and
+profile lifecycle, and three-mode `accept-collector` probe. The v0.3.1 runtime adapters remain
+unimplemented.
 
 ## 1. Decisions
 
@@ -93,13 +98,14 @@ sudo perflens-admin setup \
   --dry-run
 ```
 
-`--feature-profile` is a `v0.3.0` design, not a command shipped by `0.2.0`.
+`--feature-profile` is implemented in the v0.3.0 source tree but is not present in `0.2.0`
+packages. It remains a source/local-build validation interface until the release gates pass.
 
 ### 3.3 Privilege recommendation and acknowledgement
 
 | Privilege mode | Recommended host | `cpu_only` | `full_diagnostics` |
 |---|---|---|---|
-| `cap_perfmon` | dedicated capability works in a real short probe | Python Broker runs stat/record | bounded Python Collector trace path |
+| `cap_perfmon` | dedicated capability works in a real short probe | Python Broker runs stat/record | Broker plus separate Trace Helper with audited Trace capabilities |
 | `paranoid3_helper` | Debian level 3 must remain | current Helper runs stat/record | current Helper plus a separate Trace Helper |
 
 The wizard recommends from observed host facts while retaining explicit `--mode` selection. It
@@ -117,7 +123,7 @@ sudo perflens-admin setup \
 
 ### 3.4 Post-install profile switching
 
-The planned profile lifecycle is separate from privilege-mode switching:
+The implemented v0.3.0 profile lifecycle is separate from privilege-mode switching:
 
 ```bash
 sudo perflens-admin switch-profile full_diagnostics --dry-run
@@ -144,18 +150,26 @@ ordinary Agent / Skill / MCP
         │ typed, explicitly authorized PID/workload plan
         ▼
 unprivileged Python Broker
-  ├─ cap_perfmon: fixed perf trace argv
-  └─ level 3: private Trace Helper socket → separate Rust Trace Helper
-                                                   │ private raw perf.data
-                                                   ▼
-fixed perf adapter → bounded canonical events → deterministic analysis artifact
+        │ private Trace Helper socket
+        ▼
+separate Rust Trace Helper + packaged fixed eBPF
+        │ in-kernel authorized-TGID/TID filtering
+        │ private target-only NDJSON (not perf.data)
+        ▼
+fixed streaming sanitizer → TraceEvidence → deterministic analysis + verifier
 ```
 
-The current Rust Helper continues to accept only `Record/Stat`. The new Trace Helper has a
+Both privilege modes use the separate Trace Helper for advanced collection; the Python Broker does
+not perform all-CPU trace. The current Rust Helper continues to accept only `Record/Stat`. The new Trace Helper has a
 separate binary, systemd unit, private socket/group, Rust protocol and JSON Schema, policy, fixed
 raw spool, capability audit, acknowledgement, upgrade, rollback, and removal path. Ordinary users
 cannot access its socket or raw spool; only target-scoped, bounded, privacy-checked derived evidence
 is published to the MCP-readable spool.
+
+Stock `perf record -p PID` cannot completely observe an external waker or the target's switch-in
+event, so it is not a stable sched/off-CPU backend. PerfLens never invokes or silently falls back
+to `perf -a` or equivalent `-C 0-N` capture. The packaged backend filters the authorized target in
+kernel before any event or foreign metadata reaches a user-space spool.
 
 Fixed constraints include:
 
@@ -167,7 +181,8 @@ Fixed constraints include:
 - `partial` or failure for excessive loss, unpaired records, or truncation;
 - no capability expansion beyond the independently audited minimum; failure is preferred to an
   unrestricted root service or `CAP_SYS_ADMIN` on the Python Broker;
-- external-tool adapters rather than direct `perf.data` binary parsing.
+- no `perf.data` in the Trace path; record profiles still use an external-tool adapter rather than
+  direct binary parsing.
 
 ## 5. `v0.3.0` deterministic analysis
 
@@ -186,9 +201,9 @@ migration rather than same-version MCP guessing:
 - **TraceAnalysisVerificationArtifact:** independent input identity, event-count, interval
   conservation, quality, and Agent-visible-content verification.
 
-TraceEvidenceArtifact references the immutable raw artifact by SHA-256, size, collection ID,
-target identity, and fixed converter manifest and carries the canonical NDJSON SHA-256. It neither
-embeds nor re-encodes `perf.data`. Conversion writes a new temporary output and publishes it
+TraceEvidenceArtifact carries no private path, foreign identity, or raw address. It references the
+immutable private target-only NDJSON by SHA-256, size, collection ID, target identity, and fixed
+converter manifest and carries the public canonical NDJSON SHA-256. Conversion writes a new temporary output and publishes it
 atomically only after complete validation; bounded raw diagnostics are retained on parser failure,
 and the source profile is never overwritten.
 
@@ -210,15 +225,17 @@ publishing that analysis as usable evidence.
 
 ## 6. `v0.3.0` milestones
 
-1. Freeze the `stat/record` and policy-compatibility baseline.
-2. Fix conversion commands, common event IR, Schemas, Goldens, and verifiers.
-3. Implement sched analysis, paging, diagnosis bundles, and conservation tests.
-4. Implement off-CPU interval analysis over the common scheduler IR.
-5. Implement kernel-lock and futex wait candidates without conflating wait and hold time.
-6. Pass privacy and real-host gates for fixed `cap_perfmon` trace collection.
-7. Define the private protocol and implement the separate Rust Trace Helper.
-8. Implement setup, switch-profile, status, acceptance, MCP, and Skill routing.
-9. Pass upgrade, rollback, removal, DEB non-activation, and real-Debian release acceptance.
+1. **Complete in source:** freeze stat/record compatibility.
+2. **Complete in source:** target-filtered IR, Schemas, Goldens, and verification.
+3. **Complete in source:** deterministic sched/off-CPU/lock analysis and denial paths.
+4. **Complete in source:** separate Rust Trace Helper, private protocol, BPF target filtering, and
+   privacy checks.
+5. **Complete in source:** setup/switch-profile/status/acceptance, MCP routing, lifecycle rollback.
+6. **Pre-release:** synchronize the Skill and bilingual user documentation.
+7. **Pre-release:** full Python coverage plus Rust fmt/clippy/test/audit/deny and protocol matrix.
+8. **Pre-release:** reproducible two-DEB install/upgrade/switch/remove/non-activation smoke tests.
+9. **Pre-release:** Debian 12/13 four-topology host tests including external wakeup, switch-in,
+   dynamic threads, lock contention, loss, cross-UID denial, and public-byte privacy scanning.
 
 Installed capability is not permission to collect everything on every request. The Skill starts
 with short stat evidence, adds record for CPU stacks, sched for runnable-delay candidates, off-CPU

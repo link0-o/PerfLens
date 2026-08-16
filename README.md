@@ -42,9 +42,9 @@ The current release formally supports Milestones 0 through 9:
 - a repository Performance Analysis Skill for evidence-constrained Agent workflows.
 - profile and repeated-benchmark comparison with environment comparability checks;
 - pyperf, Google Benchmark, and hyperfine JSON normalization;
-- default-off, explicitly authorized `stat`/`record` collection, with disabled
-  raw experimental `sched`/`lock`/`off_cpu` entry points in the `cap_perfmon`
-  Broker.
+- default-off, explicitly authorized `stat`/`record` collection. The pre-release v0.3.0 source
+  also contains a separate target-filtered Trace Helper and verified `sched`/`off_cpu`/`lock`
+  pipeline; it is not a shipped `0.2.0` claim.
 
 It does **not** include an AI/LLM API, Web UI, source-code patch tool, benchmark
 runner, or custom agent framework.
@@ -100,6 +100,12 @@ plans to a bounded root Rust Helper while `perf_event_paranoid=3` remains unchan
 enabled automatically and requires administrator acknowledgement of the bounded root,
 `CAP_SYS_ADMIN`, and `CAP_SYS_PTRACE` risk.
 
+Current `main` is implementing unreleased v0.3.0. It contains a separate Trace Helper,
+in-kernel target filtering, deterministic sched/off-CPU/lock analysis, and the
+`full_diagnostics` lifecycle. Release 0.2.0 still has only the stable stat/record loop; source
+features remain pre-release until full Python/Rust/DEB/real-host gates pass. See the
+[v0.3.x roadmap](docs/collector-capability-roadmap.md).
+
 Run a read-only readiness summary at any time:
 
 ```bash
@@ -140,6 +146,11 @@ bounds and continues with fixed software events. The result explicitly rules
 out IPC, hardware cache-miss, and branch-miss claims. Use `--json` for complete
 machine-readable output or `--output ./collector-acceptance.json` to preserve a
 new versioned evidence file.
+
+With the pre-release v0.3.0 `full_diagnostics` profile, the same command also requires substantive
+target evidence, deterministic analysis, and replay verification for sched, off-CPU, and lock.
+Empty evidence or failed conservation does not pass. The packaged fixed eBPF filters authorized
+TGID/TIDs in kernel and never falls back to `perf -a`.
 
 The wheel installation commands provide `perflens`, `perflens-mcp`, the optional
 `perflens-collector`, and the explicit administrator entry point
@@ -283,12 +294,12 @@ perflens collect-profile \
   --authorization I_EXPLICITLY_AUTHORIZE_TARGET_PROFILING
 ```
 
-`record` and `stat` are the supported modes; `stat` uses an independent typed
+Release 0.2.0 supports `record` and `stat`; `stat` uses an independent typed
 metric adapter and derives IPC when cycles and instructions are available.
-The public CLI and `cap_perfmon` Broker also expose raw `sched`, `lock`, and
-`off_cpu` experiments, but generated policy disables them and PerfLens does not
-yet provide their dedicated deterministic analyzers. The
-`paranoid3_helper` rejects those modes. PID attachment requires `--pid`, a bounded duration,
+The pre-release v0.3.0 `full_diagnostics` source adds `sched`, `off_cpu`, and `lock` through a
+separate Trace Helper and produces dedicated verified artifacts. The existing paranoid=3 Rust
+Helper remains strictly stat/record-only. Package installation never enables advanced modes;
+an administrator selects the profile and runs real acceptance. PID attachment requires `--pid`, a bounded duration,
 `--authorize-pid-attach`, and the separate phrase
 `I_EXPLICITLY_AUTHORIZE_PID_ATTACH`. PerfLens never invokes sudo or changes
 kernel policy. See [MCP server and Skill setup](docs/mcp-and-skill.md) for the
@@ -477,7 +488,7 @@ Chinese version.
 - Active collection depends on kernel perf permissions. An ordinary process is
   blocked by `perf_event_paranoid=3`; an installed Collector may still pass its
   separate host acceptance, including an explicitly reported software fallback.
-- `sched`, `lock`, and `off_cpu` are disabled raw experiments in the
-  `cap_perfmon` Broker, not stable analysis modes. PerfLens does not yet produce
-  scheduler-delay, lock wait/hold, owner/waiter, or paired off-CPU duration
-  artifacts from them; the `paranoid3_helper` rejects them.
+- Release 0.2.0 has no stable sched/lock/off-CPU loop. The v0.3.0 source produces scheduler-delay,
+  off-CPU interval, and low-level lock/futex-candidate artifacts but still awaits release gates.
+  It cannot promote a futex candidate to a language lock, invent owner/hold time without pairs, or
+  cover every user-space fast path.

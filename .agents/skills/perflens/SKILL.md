@@ -1,6 +1,6 @@
 ---
 name: perflens
-description: Analyze and optimize Linux runtime performance with PerfLens MCP tools using an evidence-first workflow. Use for performance analysis or optimization of an executable project, authorized bounded workload or live-PID collection, FlameGraph, perf.data, perf script, folded profiles, CPU hotspots, source attribution, regressions, or matched A/B validation. 当用户要求性能分析、性能优化、CPU 热点、火焰图、perf.data、性能回归或授权采集时使用；不要用于没有性能问题的一般代码审查。
+description: Analyze and optimize Linux runtime performance with PerfLens MCP tools using an evidence-first workflow. Use for performance analysis or optimization of an executable project, authorized bounded workload or live-PID collection, FlameGraph, perf.data, perf script, folded profiles, CPU hotspots, scheduling delay, off-CPU waits, lock contention, source attribution, regressions, or matched A/B validation. 当用户要求性能分析、性能优化、CPU 热点、调度延迟、off-CPU 等待、锁竞争、火焰图、perf.data、性能回归或授权采集时使用；不要用于没有性能问题的一般代码审查。
 ---
 
 # PerfLens Performance Analysis
@@ -68,8 +68,11 @@ When the user asks to optimize the current executable project, do not require th
 3. Call `collect_project_workload` only for an executable inside the approved project root. Pass
    `I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION` only after that authorization exists.
    This is the complete value of the `authorization` field, not text the user must repeat.
-4. Use the returned `collection_id`: inspect typed metrics directly for `stat`, or call
-   `analyze_collection` for perf-data modes. Continue the evidence workflow above.
+4. Use the returned `collection_id`: inspect typed metrics directly for `stat`; call
+   `analyze_collection` for `record`; or call `analyze_trace_evidence` for a returned
+   `trace-evidence` artifact from `sched`, `off_cpu`, or `lock`. Then call
+   `verify_trace_analysis` and respect its status, quality, allowed conclusions, forbidden
+   conclusions, unpaired counts, and limitations before interpretation.
 5. After a change, rerun the same executable, arguments, workload, mode, and limits. Run correctness
    tests and matched A/B comparison before claiming an improvement.
 
@@ -90,16 +93,17 @@ Read [active-collection-safety.md](references/active-collection-safety.md) befor
 When the user identifies a live PID and the MCP server has an administrator-approved automatic collection policy:
 
 1. Call `inspect_collection_capabilities`; preserve blocked/conditional modes as evidence.
-2. Start with the least intrusive supported mode: `stat`, then `record`. In the current release,
-   `sched`, `lock`, and `off_cpu` are disabled raw experiments in the `cap_perfmon` Broker, lack
-   mode-specific deterministic analyzers, and are rejected by `paranoid3_helper`. Do not select
-   them automatically for ordinary analysis or optimization, including requests phrased as “deep.”
-   Report the missing evidence boundary instead. A future mode-specific workflow may use one only
-   when the administrator explicitly enabled that exact mode, the user authorized that exact
-   experiment, and its dedicated analyzer is available.
+2. Start with the least intrusive supported mode: `stat`, then `record` when on-CPU stacks are
+   needed. Select exactly one advanced mode only when the prior evidence and performance question
+   require it: `sched` for runnable delay/migration, `off_cpu` for low-CPU wall-time gaps, or
+   `lock` for a concrete contention candidate. Advanced collection requires the installed
+   `full_diagnostics` profile, an allowed plan, explicit target/workload authorization, and the
+   separate target-filtered Trace Helper. Never run all three merely because the user said “deep.”
 3. Call `plan_automatic_collection` with the exact PID, short duration, bounded frequency and output size. Do not execute a denied plan or alter the target to make it pass.
 4. Call `execute_collection_plan` only if the MCP host's active-tool approval and server policy permit it. The plan is PID-incarnation-bound, short-lived, and single-use.
-5. For `stat`, interpret the typed metrics already stored in the collection artifact. For perf-data modes, call `analyze_collection`, then continue the default evidence workflow.
+5. For `stat`, interpret typed metrics. For `record`, call `analyze_collection`. For an advanced
+   result, call `analyze_trace_evidence`, then `verify_trace_analysis`; never send TraceEvidence to
+   the on-CPU analyzer or expose a private Trace spool.
 6. Escalate to a stronger mode only when the prior result names missing evidence that the stronger mode can supply.
 
 `inspect_collection_capabilities` describes the unprivileged MCP process. A local `blocked` result
@@ -118,6 +122,11 @@ hardware PMU evidence was unavailable and continue with the returned software ev
   bottlenecks from a software fallback;
 - baseline and candidate must have the same `actual_event_source`; otherwise the A/B result is not
   comparable and must be rerun with an explicit common source.
+
+For `sched`, `off_cpu`, and `lock`, use the fixed Trace recipe only. Do not supply arbitrary events,
+frequency, call graph, output path, or software fallback. A `partial` Trace artifact may support
+only its explicit allowed conclusions. Treat lost, truncated, unpaired, unknown-duration,
+candidate-only futex, missing owner, and unstable low-sample percentiles as material limits.
 
 For typed `stat` metrics, `running_percent` is perf's event scheduling coverage
 (`time_running / time_enabled`), not process CPU utilization. `task-clock` is accumulated CPU time,

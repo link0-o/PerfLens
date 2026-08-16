@@ -14,7 +14,8 @@ Use active collection when the performance question needs live evidence and the 
   and start time, and sends only that typed PID plan to the Collector.
 - If that coordinator call fails, do not bypass it with shell execution, direct perf, a wrapper,
   or existing-PID planning. Those are different authorization scopes.
-- For perf-data results call `analyze_collection`; for `stat`, read the typed metrics in the collection artifact.
+- For record perf-data results call `analyze_collection`; for `stat`, read typed metrics. For a
+  public `trace-evidence` result call `analyze_trace_evidence` and `verify_trace_analysis`.
 - `event_source=auto` permits only the Collector policy's fixed hardware probe and fixed software
   fallback. It does not broaden PID, duration, frequency, output, path, or event authorization.
 - Report `fallback_used`, its reason, and the returned evidence limitations. Use
@@ -43,12 +44,17 @@ separate executions and require their own explicit authorization.
 
 For manual command collection, state the exact target executable, arguments, collection mode, limits, and output before collection. For automatic PID collection, inspect capabilities, create a plan, verify `policy_status=allowed`, and execute that exact plan without substitution.
 
-Use supported `record` for on-CPU stacks and `stat` for typed counters. The current
-`cap_perfmon` Broker contains disabled raw `sched`, `lock`, and `off_cpu` experiments, but there
-are no dedicated deterministic analyzers for scheduler delay, lock wait/hold, or paired off-CPU
-duration; `paranoid3_helper` rejects those modes. Do not select them automatically or describe the
-generic on-CPU analyzer as an advanced trace analyzer. Until a mode-specific workflow passes its
-release gates, report the missing evidence boundary or analyze a user-provided export only within
-the fields it actually preserves.
+Use `record` for on-CPU stacks and `stat` for typed counters. When an installed
+`full_diagnostics` profile and its policy allow it, use exactly one of `sched`, `off_cpu`, or
+`lock` only for a matching evidence gap. Both privilege modes route advanced collection through a
+separate Trace Helper with packaged fixed eBPF and in-kernel authorized-TGID/TID filtering. Never
+invoke or emulate `perf -a`, `-C 0-N`, arbitrary tracepoints, or arbitrary BPF. Never read the
+private Trace socket/spool. Empty target evidence, failed deterministic verification, or a denied
+plan is a hard stop rather than a reason to broaden capture.
+
+The existing paranoid=3 Rust Helper remains stat/record-only. The Trace verifier may return
+`partial` when a public caller cannot independently rehash the private snapshot or when evidence
+has declared loss/boundary limits; use only explicit allowed conclusions and never invent owner,
+hold time, exact contention counts, or complete blocked/runnable splits.
 
 If kernel policy rejects local collection, use the configured Broker only when its policy already permits the target. Otherwise report the limitation and continue with existing evidence or user-generated exports. Do not start, install, reconfigure, or elevate the Broker automatically.

@@ -3,8 +3,8 @@
 [English](collector-mode-lifecycle.md) | 简体中文
 
 本文记录 PerfLens `0.2.0` 已实现的 Collector 首次部署、项目初始化和权限模式切换，
-并定义 `v0.3.0` 计划中的功能配置向导与切换合同。计划命令在实现和验收完成前不可当作
-当前可用命令。
+并定义 v0.3.0 源码已经实现的功能配置向导与切换合同。这些命令不在 `0.2.0` 包中；
+v0.3.0 完整发布门禁通过前只能作为源码/本机构建验收接口。
 
 ## 目标
 
@@ -17,7 +17,7 @@ PerfLens 继续提供两个明确、互斥的 Collector 权限模式：
 
 安装 DEB 只把两种模式需要的程序和模板放到系统中，不应自动选择模式、修改 sysctl、启动服务或扩大权限。
 
-`v0.3.0` 还计划提供两个相互独立的**功能配置**：
+v0.3.0 源码还提供两个相互独立的**功能配置**：
 
 | 功能配置 | 采集能力 | 产品定位 |
 | --- | --- | --- |
@@ -65,7 +65,7 @@ sudo perflens-admin setup \
 如果选择 `cap_perfmon` 时检测到 `perf_event_paranoid > 2`，预检会标记为不可用，正式
 部署会在写入系统前拒绝，并提示改选 Helper、仅分析或由管理员单独审查内核策略。
 
-## `v0.3.0` 计划的两阶段向导
+## `v0.3.0` 源码中的两阶段向导
 
 DEB 安装继续保持非交互和非激活，只在安装完成摘要中提示：
 
@@ -89,7 +89,7 @@ DEB 安装继续保持非交互和非激活，只在安装完成摘要中提示�
 不作为第三个主要功能配置。
 
 选择功能配置后，向导根据主机事实推荐 `cap_perfmon` 或 `paranoid3_helper`。管理员仍可
-显式指定模式，但冲突选择必须在写系统前拒绝。计划中的非交互接口为：
+显式指定模式，但冲突选择必须在写系统前拒绝。非交互接口为：
 
 ```bash
 sudo perflens-admin setup \
@@ -109,6 +109,10 @@ sudo perflens-admin setup \
 交给拥有独立 unit、Socket、协议、策略和 spool 的 Trace Helper。PerfLens 仍不修改
 `perf_event_paranoid`，也不让 Agent、Skill、MCP 或 Python Broker 以 root 运行。
 
+两个权限模式的完整配置都使用该独立 Trace Helper 和包内固定 eBPF。后端在内核中先按
+授权 TGID/TID 过滤，再把 target-only NDJSON 写入私有 spool；它不使用 stock `perf -p`
+冒充完整调度证据，也不调用或回退到 `perf -a`/等价全 CPU 采集。
+
 ## 项目初始化体验
 
 Collector 是主机级服务，`perflens init` 是项目级集成。二者只需要分别执行一次：
@@ -125,7 +129,7 @@ perflens init
 
 如果系统没有部署 Collector，则新项目初始化回退到 `cap_perfmon`，但不会部署或启动它。已有项目执行 `perflens init --update` 时会保留其已记录的候选模式，避免 MCP 与尚未部署的候选资产互相矛盾。如果系统策略存在却所有者、权限、大小或内容不安全，初始化必须失败并提示修复，不能静默猜测。
 
-`v0.3.0` 实现后，普通 `perflens init` 还应自动读取已部署功能配置，生成一致的 MCP
+普通 `perflens init` 已自动读取已部署功能配置，生成一致的 MCP
 模式白名单和证据根目录。项目用户不需要记住 `--feature-profile` 或 Collector 权限参数；
 只有主机管理员通过 `setup/switch-profile/switch-mode` 改变系统状态。
 
@@ -185,7 +189,7 @@ Helper；`upgrade` 也会完成同样的收敛。修复失败会恢复原文件�
 
 该命令重新检测主机模式并同步 MCP 允许读取的 spool。未初始化的项目不受影响，也不会自动加载 PerfLens Skill。
 
-## `v0.3.0` 计划的功能配置切换
+## `v0.3.0` 源码中的功能配置切换
 
 功能配置使用独立命令，不能通过修改 `allowed_modes` 或借用 `switch-mode` 绕过：
 
@@ -201,6 +205,10 @@ sudo perflens-admin switch-profile cpu_only
 展示确定性差异，原子更新 trace 拓扑并完成认证健康检查。失败恢复原策略、unit 和服务。
 切回 `cpu_only` 时停止并禁用 Trace Helper，但保留管理员配置和全部证据。
 
+完整配置切换成功只证明拓扑健康。管理员还必须以普通用户运行
+`perflens accept-collector --authorize-host-acceptance`；该命令依次验证 `sched/off_cpu/lock`
+的实质目标证据、确定性分析和 verifier，不能用空事件或仅服务存活代替真实验收。
+
 已启用完整配置时再运行 `switch-mode`，同一事务必须把 Broker、现有 Helper 和 Trace
 Helper 收敛为目标权限模式对应的拓扑。任何切换均不删除或迁移 spool。切换完成后，
 已经初始化的项目运行一次 `perflens init --update` 同步 MCP 配置。
@@ -214,7 +222,7 @@ trace 策略、启动 Trace Helper 或扩大权限。管理员审查后显式执
 - `perflens-admin deploy --config ...` 继续保留，适合审查过自定义 TOML 的高级部署。
 - `perflens-admin update-policy` 只修改同一模式内的策略，不负责切换模式。
 - `perflens-admin upgrade` 只升级已部署服务文件并保留管理员策略，不负责切换模式。
-- `v0.3.0` 的 `switch-profile` 只切换功能配置，不能借机切换授权 UID、spool 或权限模式。
+- `switch-profile` 只切换功能配置，不能借机切换授权 UID、spool 或权限模式。
 - 旧的 `--acknowledge-cap-sys-admin-risk` 参数继续作为兼容别名，但新文档使用 `--acknowledge-privileged-helper-risk`。
 - 安装、初始化、预检和切换都不能静默修改 sysctl、文件 capability 或未知 unit。
 - 只允许替换带 PerfLens 托管标记且身份、所有权和权限通过验证的文件。
@@ -234,7 +242,7 @@ trace 策略、启动 Trace Helper 或扩大权限。管理员审查后显式执
 - `paranoid3_helper` 仍通过 Rust Helper 独立校验协议、PID、事件、时限、频率、输出和固定 spool。
 - Python lint、类型检查、完整测试、覆盖率门槛，Rust fmt/clippy/test，以及 DEB smoke test
   全部通过后，才可发布下一版本；新能力按 `v0.3.0` 路线图验收，不能移动已经公开的标签。
-- `v0.3.0` 新向导还必须覆盖两个功能配置、环境动态推荐、非 TTY 参数缺失、两类风险确认、
+- v0.3.0 发布门还必须覆盖两个功能配置、环境动态推荐、非 TTY 参数缺失、两类风险确认、
   两个权限模式乘两个功能配置的组合、profile 切换回滚和证据保留。
 - DEB 首次安装和从 `0.2.0` 升级都必须保持服务非激活；升级不得自动从 `cpu_only` 扩大到
   `full_diagnostics`。

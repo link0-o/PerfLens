@@ -1,8 +1,9 @@
 # Collector privilege-mode and feature-profile lifecycle
 
 This document records the shipped PerfLens `0.2.0` first-deployment, project-detection, and
-privilege-mode lifecycle and defines the planned `v0.3.0` feature-profile contract. Planned
-commands are not current commands until their implementation and acceptance gates pass. See the
+privilege-mode lifecycle and defines the feature-profile contract implemented in the pre-release
+v0.3.0 source tree. These commands are absent from `0.2.0` packages and remain source/local-build
+validation interfaces until all v0.3.0 release gates pass. See the
 [complete Simplified Chinese guide](collector-mode-lifecycle.zh-CN.md).
 
 PerfLens ships, but never automatically activates, two mutually exclusive host-level modes:
@@ -32,7 +33,7 @@ Selecting `cap_perfmon` while `perf_event_paranoid > 2` produces a blocked dry-r
 refused before system writes. The administrator must select another outcome or review host
 kernel policy separately.
 
-## Planned `v0.3.0` feature-profile wizard
+## Feature-profile wizard in the pre-release `v0.3.0` source tree
 
 Feature profiles are independent from the two privilege modes:
 
@@ -42,7 +43,7 @@ Feature profiles are independent from the two privilege modes:
   existing `0.2.0` deployment after package upgrade.
 
 DEB installation remains non-interactive and inactive and only directs the administrator to
-`sudo perflens-admin setup`. The planned wizard shows these two primary profiles first. It retains
+`sudo perflens-admin setup`. The wizard shows these two primary profiles first. It retains
 `analysis_only` as an advanced automation/fallback value, not a third feature profile. Missing
 tracefs, perf, kernel-event, privilege, or real-probe prerequisites mark full diagnostics
 unavailable and make CPU-only the recommendation; a partial feature set must not be deployed under
@@ -50,7 +51,7 @@ the full name.
 
 After profile selection, the wizard recommends `cap_perfmon` or `paranoid3_helper` from observed
 host facts. An explicit incompatible choice is rejected before writes, and PerfLens never changes
-`perf_event_paranoid`. The planned automation interface is:
+`perf_event_paranoid`. The automation interface is:
 
 ```bash
 sudo perflens-admin setup \
@@ -70,9 +71,14 @@ also requires the existing Helper acknowledgement. The current Rust Helper stays
 `stat/record`; a separate Trace Helper owns its own unit, private socket, protocol, policy, raw
 spool, lifecycle, and risk review.
 
+Full diagnostics in both privilege modes uses that separate Trace Helper and packaged fixed eBPF.
+It filters the authorized TGID/TIDs in kernel before writing target-only NDJSON to the private
+spool. It neither treats stock `perf -p` as complete scheduler evidence nor invokes or falls back
+to `perf -a` or equivalent all-CPU capture.
+
 `perflens init` is project-scoped. It safely validates `/etc/perflens/collector.toml`, detects the active host mode, and configures the project MCP to read the matching spool. An unsafe installed policy is an error rather than a reason to guess. With no deployed policy, a new project falls back to `cap_perfmon` without deploying anything; `perflens init --update` preserves an existing project's recorded candidate mode so its MCP and staged assets stay consistent.
 
-After the `v0.3.0` profile contract is implemented, plain `perflens init` also discovers the
+Plain `perflens init` now discovers the
 deployed feature profile and produces consistent MCP mode gates and evidence roots. Project users
 do not need host privilege or feature-profile flags.
 
@@ -114,7 +120,7 @@ reports `false`.
 
 `deploy --config` remains the advanced reviewed-policy path. `update-policy` changes bounded fields within the current mode; `upgrade` refreshes managed service files; neither command switches privilege mode.
 
-## Planned `v0.3.0` feature-profile switching
+## Feature-profile switching in the pre-release `v0.3.0` source tree
 
 Feature changes use a separate transaction rather than editing `allowed_modes` or overloading
 `switch-mode`:
@@ -130,6 +136,11 @@ sudo perflens-admin switch-profile cpu_only
 profile, and host capabilities, presents a deterministic diff, atomically applies the trace
 topology, authenticates health, and restores prior policy/units/services on failure. Returning to
 CPU-only stops the Trace Helper but preserves administrator configuration and all evidence.
+
+A successful profile switch proves topology health only. The administrator must then run
+`perflens accept-collector --authorize-host-acceptance` as the ordinary user. For full diagnostics
+it requires substantive target evidence plus deterministic analysis and replay verification for
+`sched`, `off_cpu`, and `lock`; an empty stream or merely live service cannot pass.
 
 When a privilege-mode switch occurs with full diagnostics active, the same transaction converges
 the Broker, current Helper, and Trace Helper to the selected privilege topology. No switch migrates
