@@ -117,6 +117,9 @@ pub fn probe(mode: TraceMode) -> bool {
         };
         links.push(link);
     }
+    // The links must remain alive until every fixed attachment has been proved attachable.
+    // Dropping the guard vector here detaches them before the probe returns.
+    drop(links);
     true
 }
 
