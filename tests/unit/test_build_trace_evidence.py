@@ -610,3 +610,179 @@ def test_malformed_foreign_identity_is_rejected_without_echoing_it() -> None:
     assert captured.value.code is ErrorCode.PROFILE_PARSE_FAILED
     assert "991122" not in str(captured.value)
     assert "991123" not in str(captured.value)
+
+
+def test_every_parser_degradation_is_preserved_as_an_explicit_limitation() -> None:
+    migration = domain.SchedMigrateEvent(
+        event_id="migration-with-degraded-input",
+        sequence=0,
+        timestamp_ns=10,
+        cpu=0,
+        target=TARGET,
+        semantics=domain.EvidenceSemantics.EXACT,
+        task=TARGET_TASK,
+        task_scope=domain.TraceScope.TARGET,
+        origin_cpu=0,
+        destination_cpu=1,
+    )
+    diagnostic = TraceParseDiagnostic(
+        code="BOUNDED_DIAGNOSTIC",
+        line_number=1,
+        message="bounded parser diagnostic",
+    )
+    statistics = TraceParseStatistics(
+        input_bytes=128,
+        input_line_count=9,
+        input_event_count=9,
+        emitted_event_count=1,
+        lost_event_count=1,
+        malformed_event_count=1,
+        duplicate_event_count=1,
+        out_of_order_event_count=1,
+        unsupported_event_count=1,
+        truncated_event_count=1,
+        foreign_event_dropped_count=1,
+        provisional_enrichment_event_count=1,
+        lock_phase_enrichment_event_count=1,
+        diagnostic_count=2,
+        diagnostics=(diagnostic,),
+        diagnostics_truncated=True,
+    )
+    parsed = TraceStreamParseResult(
+        events=(migration,),
+        observed_target_tids=(4242,),
+        statistics=statistics,
+    )
+
+    evidence = _build(parsed)
+
+    assert isinstance(evidence.events[0], public.SchedMigrateEvent)
+    assert evidence.status == "partial"
+    assert evidence.quality.quality_status == "partial"
+    assert evidence.quality.merged_enrichment_event_count == 2
+    assert evidence.quality.lost_event_count == 1
+    assert evidence.quality.malformed_event_count == 1
+    assert evidence.quality.duplicate_event_count == 1
+    assert evidence.quality.out_of_order_event_count == 1
+    assert evidence.quality.unsupported_event_count == 1
+    assert evidence.quality.truncated_event_count == 1
+    assert evidence.quality.foreign_event_dropped_count == 1
+    assert evidence.quality.diagnostics_truncated is True
+    assert len(evidence.quality.limitations) == 9
+    validate_trace_evidence_invariants(evidence)
+
+
+def test_builder_rejects_wrong_adapter_source_cpu_stack_and_observed_tid_set() -> None:
+    migration = domain.SchedMigrateEvent(
+        event_id="bounded-migration",
+        sequence=0,
+        timestamp_ns=10,
+        cpu=0,
+        target=TARGET,
+        semantics=domain.EvidenceSemantics.EXACT,
+        task=TARGET_TASK,
+        task_scope=domain.TraceScope.TARGET,
+        origin_cpu=0,
+        destination_cpu=1,
+    )
+    parsed = TraceStreamParseResult(
+        events=(migration,),
+        observed_target_tids=(4242,),
+        statistics=_statistics(emitted=1),
+    )
+    source = _source().model_copy(update={"output_format": "target_filtered_trace_ndjson"})
+    with pytest.raises(PerfLensError, match="source format"):
+        build_trace_evidence(
+            source=source,
+            verified_raw=_snapshot(),
+            parsed=parsed,
+            conversion=_conversion(),
+            target=TARGET,
+            observation_window=public.TraceObservationWindow(
+                start_timestamp_ns=0,
+                end_timestamp_ns=100,
+                source="collector_monotonic_bounds",
+            ),
+            limits=public.TraceResourceLimits(),
+            perflens_version="0.3.0",
+        )
+
+    for unsafe_event in (
+        replace(migration, cpu=None),
+        replace(migration, stack=("private unreviewed frame",)),
+    ):
+        unsafe = TraceStreamParseResult(
+            events=(unsafe_event,),
+            observed_target_tids=(4242,),
+            statistics=_statistics(emitted=1),
+        )
+        with pytest.raises(PerfLensError) as captured:
+            _build(unsafe)
+        assert captured.value.code is ErrorCode.PROFILE_PARSE_FAILED
+
+    noncanonical_tids = TraceStreamParseResult(
+        events=(migration,),
+        observed_target_tids=(4242, 4242),
+        statistics=_statistics(emitted=1),
+    )
+    with pytest.raises(PerfLensError, match="non-canonical"):
+        _build(noncanonical_tids)
+
+
+@pytest.mark.parametrize(
+    ("limits", "expected"),
+    (
+        (public.TraceResourceLimits(max_input_bytes=1), "raw trace"),
+        (public.TraceResourceLimits(max_input_lines=1), "input_lines"),
+        (public.TraceResourceLimits(max_input_events=1), "input_events"),
+        (public.TraceResourceLimits(max_diagnostics=1), "diagnostics"),
+    ),
+)
+def test_builder_enforces_each_private_transcript_limit(
+    limits: public.TraceResourceLimits,
+    expected: str,
+) -> None:
+    migration = domain.SchedMigrateEvent(
+        event_id="bounded-limit-migration",
+        sequence=0,
+        timestamp_ns=10,
+        cpu=0,
+        target=TARGET,
+        semantics=domain.EvidenceSemantics.EXACT,
+        task=TARGET_TASK,
+        task_scope=domain.TraceScope.TARGET,
+        origin_cpu=0,
+        destination_cpu=1,
+    )
+    diagnostic = TraceParseDiagnostic(
+        code="LIMIT_DIAGNOSTIC",
+        line_number=1,
+        message="bounded",
+    )
+    parsed = TraceStreamParseResult(
+        events=(migration,),
+        observed_target_tids=(4242,),
+        statistics=TraceParseStatistics(
+            input_bytes=128,
+            input_line_count=2,
+            input_event_count=2,
+            emitted_event_count=1,
+            lost_event_count=0,
+            malformed_event_count=1,
+            duplicate_event_count=0,
+            out_of_order_event_count=0,
+            unsupported_event_count=0,
+            truncated_event_count=0,
+            foreign_event_dropped_count=0,
+            provisional_enrichment_event_count=0,
+            lock_phase_enrichment_event_count=0,
+            diagnostic_count=2,
+            diagnostics=(diagnostic,),
+            diagnostics_truncated=True,
+        ),
+    )
+
+    with pytest.raises(PerfLensError) as captured:
+        _build(parsed, limits=limits)
+    assert captured.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+    assert expected in captured.value.message

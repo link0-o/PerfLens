@@ -115,7 +115,6 @@ def build_trace_evidence(
             raise _invalid_evidence("normalized trace unexpectedly discarded parsed events")
         _validate_export_limits(
             source=source,
-            parsed=parsed,
             events=projected,
             observed_tids=observed_tids,
             observation_window=observation_window,
@@ -254,6 +253,12 @@ def _validate_parser_result(
     limits: public.TraceResourceLimits,
 ) -> None:
     statistics = parsed.statistics
+    if statistics.input_line_count > limits.max_input_lines:
+        raise _resource_error("trace transcript exceeds max_input_lines")
+    if statistics.input_event_count > limits.max_input_events:
+        raise _resource_error("trace transcript exceeds max_input_events")
+    if statistics.diagnostic_count > limits.max_diagnostics:
+        raise _resource_error("trace diagnostics exceed max_diagnostics")
     if statistics.emitted_event_count != len(parsed.events):
         raise _invalid_evidence("parser event count differs from its disposition accounting")
     if tuple(sorted(set(parsed.observed_target_tids))) != parsed.observed_target_tids or any(
@@ -303,21 +308,13 @@ def _validate_window(
 def _validate_export_limits(
     *,
     source: public.TraceRawArtifactReference,
-    parsed: TraceStreamParseResult,
     events: tuple[public.TraceEvent, ...],
     observed_tids: tuple[int, ...],
     observation_window: public.TraceObservationWindow,
     limits: public.TraceResourceLimits,
 ) -> None:
-    statistics = parsed.statistics
     if source.output_bytes > limits.max_input_bytes:
         raise _resource_error("private raw trace exceeds max_input_bytes")
-    if statistics.input_line_count > limits.max_input_lines:
-        raise _resource_error("trace transcript exceeds max_input_lines")
-    if statistics.input_event_count > limits.max_input_events:
-        raise _resource_error("trace transcript exceeds max_input_events")
-    if statistics.diagnostic_count > limits.max_diagnostics:
-        raise _resource_error("trace diagnostics exceed max_diagnostics")
     if len(events) > limits.max_exported_events:
         raise _resource_error("normalized trace exceeds max_exported_events")
     if len(observed_tids) > limits.max_unique_target_tids:

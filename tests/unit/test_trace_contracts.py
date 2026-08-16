@@ -18,12 +18,16 @@ from perflens.contracts.trace import (
     OffCpuThreadAggregate,
     RunnableLatencyInterval,
     SchedMigrateEvent,
+    SchedSwitchEvent,
     SchedulerAnalysisArtifact,
     SchedulerThreadAggregate,
+    SchedWakeupEvent,
     TraceAnalysisVerificationArtifact,
+    TraceAnalysisWarning,
     TraceCaptureManifest,
     TraceConversionManifest,
     TraceEventAccounting,
+    TraceEventIdLedger,
     TraceEvidenceArtifact,
     TraceQuality,
     TraceTargetIdentity,
@@ -213,6 +217,19 @@ def _events() -> list[dict[str, Any]]:
     ]
 
 
+def _evidence_data() -> dict[str, Any]:
+    return {
+        **_common(),
+        "trace_evidence_id": "trace-evidence-aaaaaaaaaaaaaaaa",
+        "evidence_fingerprint": SHA_C,
+        "normalized_ndjson_sha256": SHA_D,
+        "normalized_ndjson_bytes": 200,
+        "input_line_count": 2,
+        "diagnostic_count": 0,
+        "events": _events(),
+    }
+
+
 def _ledger(event_ids: tuple[str, ...]) -> dict[str, Any]:
     return {
         "total_count": len(event_ids),
@@ -235,16 +252,7 @@ def _accounting(event_ids: tuple[str, ...] = ()) -> dict[str, Any]:
 
 
 def test_trace_evidence_is_strict_frozen_and_discriminated() -> None:
-    data: dict[str, Any] = {
-        **_common(),
-        "trace_evidence_id": "trace-evidence-aaaaaaaaaaaaaaaa",
-        "evidence_fingerprint": SHA_C,
-        "normalized_ndjson_sha256": SHA_D,
-        "normalized_ndjson_bytes": 200,
-        "input_line_count": 2,
-        "diagnostic_count": 0,
-        "events": _events(),
-    }
+    data = _evidence_data()
     artifact = TraceEvidenceArtifact.model_validate(data)
 
     assert artifact.schema_version == "1.0"
@@ -264,6 +272,129 @@ def test_trace_evidence_is_strict_frozen_and_discriminated() -> None:
     assert "raw_path" not in public_schema
     assert "foreign_tid" not in public_schema
     assert "foreign_pid" not in public_schema
+
+
+def test_trace_artifact_base_rejects_every_bounded_conclusion_violation() -> None:
+    base = _evidence_data()
+    partial_quality = {
+        **_quality(),
+        "quality_status": "partial",
+        "lost_event_count": 1,
+        "limitations": ["kernel reported one lost event"],
+    }
+    two_tids = {
+        **cast(dict[str, Any], base["target"]),
+        "observed_target_tids": [123, 124],
+    }
+    invalid_payloads: tuple[dict[str, Any], ...] = (
+        {
+            **base,
+            "conversion": {
+                **cast(dict[str, Any], base["conversion"]),
+                "recipe_id": "off-cpu-v1",
+            },
+        },
+        {
+            **base,
+            "target": two_tids,
+            "limits": {
+                **cast(dict[str, Any], base["limits"]),
+                "max_unique_target_tids": 1,
+            },
+        },
+        {
+            **base,
+            "observation_window": {
+                "start_timestamp_ns": 0,
+                "end_timestamp_ns": 10_000_000_001,
+                "source": "collector_monotonic_bounds",
+            },
+        },
+        {
+            **base,
+            "limits": {
+                **cast(dict[str, Any], base["limits"]),
+                "max_input_events": 1,
+            },
+        },
+        {
+            **base,
+            "limits": {
+                **cast(dict[str, Any], base["limits"]),
+                "max_exported_events": 1,
+            },
+        },
+        {**base, "quality": partial_quality},
+        {**base, "status": "partial"},
+        {**base, "allowed_conclusions": []},
+        {**base, "forbidden_conclusions": []},
+        {**base, "allowed_conclusions": [" "]},
+        {**base, "forbidden_conclusions": [" "]},
+        {**base, "allowed_conclusions": ["bounded", "bounded"]},
+        {**base, "forbidden_conclusions": ["forbidden", "forbidden"]},
+        {
+            **base,
+            "allowed_conclusions": ["same conclusion"],
+            "forbidden_conclusions": ["same conclusion"],
+        },
+    )
+
+    for payload in invalid_payloads:
+        with pytest.raises(ValidationError):
+            TraceEvidenceArtifact.model_validate(payload)
+
+
+def test_trace_evidence_rejects_every_bound_and_scope_escape() -> None:
+    base = _evidence_data()
+    events = _events()
+    invalid_payloads: tuple[dict[str, Any], ...] = (
+        {**base, "input_sha256": SHA_D},
+        {**base, "input_bytes": 101, "source": {**base["source"], "output_bytes": 100}},
+        {
+            **base,
+            "limits": {**base["limits"], "max_input_bytes": 99},
+        },
+        {**base, "events": events[:1]},
+        {**base, "limits": {**base["limits"], "max_input_lines": 1}},
+        {**base, "input_line_count": 1},
+        {**base, "limits": {**base["limits"], "max_diagnostics": 1}, "diagnostic_count": 2},
+        {**base, "limits": {**base["limits"], "max_output_bytes": 199}},
+        {
+            **base,
+            "observation_window": {
+                "start_timestamp_ns": 10,
+                "end_timestamp_ns": 19,
+                "source": "observed_event_bounds",
+            },
+        },
+        {
+            **base,
+            "observation_window": {
+                "start_timestamp_ns": 11,
+                "end_timestamp_ns": 20,
+                "source": "collector_monotonic_bounds",
+            },
+        },
+        {
+            **base,
+            "target": {
+                **cast(dict[str, Any], base["target"]),
+                "observed_target_tids": [123, 124],
+            },
+            "events": [
+                {
+                    **events[0],
+                    "waker_relation": "same_target",
+                    "waker_target_tid": 125,
+                },
+                events[1],
+            ],
+        },
+    )
+
+    for payload in invalid_payloads:
+        with pytest.raises(ValidationError):
+            TraceEvidenceArtifact.model_validate(payload)
 
 
 def test_trace_quality_rejects_nonconservation_and_false_verified_status() -> None:
@@ -540,6 +671,115 @@ def test_nanosecond_distribution_rejects_nonfinite_and_inconsistent_values() -> 
         NanosecondDistribution.model_validate({**_distribution(), "percentiles_stable": True})
 
 
+def test_trace_leaf_contracts_reject_inconsistent_identity_and_accounting() -> None:
+    with pytest.raises(ValidationError, match="unpaired trace events"):
+        TraceQuality.model_validate(
+            {**_quality(input_events=1, emitted_events=1), "unpaired_event_count": 2}
+        )
+
+    switch = _events()[1]
+    with pytest.raises(ValidationError, match="switch_out requires"):
+        SchedSwitchEvent.model_validate({**switch, "direction": "switch_out"})
+    with pytest.raises(ValidationError, match="switch_in must not"):
+        SchedSwitchEvent.model_validate({**switch, "previous_state": "running"})
+
+    wakeup = _events()[0]
+    with pytest.raises(ValidationError, match="waker TID presence"):
+        SchedWakeupEvent.model_validate(
+            {**wakeup, "waker_relation": "same_target", "waker_target_tid": None}
+        )
+    with pytest.raises(ValidationError, match="waker TID presence"):
+        SchedWakeupEvent.model_validate(
+            {**wakeup, "waker_relation": "redacted", "waker_target_tid": 123}
+        )
+
+    for payload in (
+        {**_distribution(count=0, total=0), "total_ns": 1},
+        {**_distribution(count=0, total=0), "percentiles_stable": True},
+        {**_distribution(count=2, total=10), "mean_ns": 4},
+        {
+            **_distribution(count=2, total=10),
+            "minimum_ns": 6,
+            "p50_ns": 6,
+            "p95_ns": 6,
+            "p99_ns": 6,
+            "maximum_ns": 6,
+        },
+        {
+            **_distribution(count=2, total=10),
+            "minimum_ns": 4,
+            "p50_ns": 4,
+            "p95_ns": 4,
+            "p99_ns": 4,
+            "maximum_ns": 4,
+        },
+    ):
+        with pytest.raises(ValidationError):
+            NanosecondDistribution.model_validate(payload)
+
+    first = "event-aaaaaaaaaaaaaaaa"
+    second = "event-bbbbbbbbbbbbbbbb"
+    ledger_base = _ledger((first, second))
+    for payload in (
+        {**ledger_base, "sample_event_ids": [first, first]},
+        {**ledger_base, "total_count": 1},
+        {**ledger_base, "sample_truncated": True},
+        {**ledger_base, "all_event_ids_sha256": SHA_D},
+    ):
+        with pytest.raises(ValidationError):
+            TraceEventIdLedger.model_validate(payload)
+
+    warning = TraceAnalysisWarning(code="BOUNDARY", message="bounded", target_tid=123)
+    accounting = _accounting((first, second))
+    with pytest.raises(ValidationError, match="warning sample"):
+        TraceEventAccounting.model_validate(
+            {**accounting, "warning_count": 0, "warnings": [warning.model_dump(mode="json")]}
+        )
+    with pytest.raises(ValidationError, match="warning truncation"):
+        TraceEventAccounting.model_validate(
+            {**accounting, "warning_count": 1, "warnings": [], "warnings_truncated": False}
+        )
+
+    interval = RunnableLatencyInterval(
+        target_tid=123,
+        wakeup_timestamp_ns=10,
+        switch_in_timestamp_ns=20,
+        duration_ns=10,
+    )
+    with pytest.raises(ValidationError, match="ends before"):
+        RunnableLatencyInterval.model_validate(
+            {**interval.model_dump(mode="json"), "switch_in_timestamp_ns": 9}
+        )
+    with pytest.raises(ValidationError, match="duration is inconsistent"):
+        RunnableLatencyInterval.model_validate(
+            {**interval.model_dump(mode="json"), "duration_ns": 9}
+        )
+
+    distribution = NanosecondDistribution.model_validate(_distribution())
+    with pytest.raises(ValidationError, match="exceed the sample count"):
+        SchedulerThreadAggregate(
+            target_tid=123,
+            runtime_ns=1,
+            run_interval_count=1,
+            context_switch_count=1,
+            migration_count=0,
+            runnable_latency=NanosecondDistribution.model_validate(
+                _distribution(count=0, total=0)
+            ),
+            worst_runnable_intervals=(interval,),
+        )
+    with pytest.raises(ValidationError, match="different thread"):
+        SchedulerThreadAggregate(
+            target_tid=124,
+            runtime_ns=1,
+            run_interval_count=1,
+            context_switch_count=1,
+            migration_count=0,
+            runnable_latency=distribution,
+            worst_runnable_intervals=(interval,),
+        )
+
+
 def test_analysis_event_accounting_requires_an_exact_bounded_partition() -> None:
     accounting = _accounting(("event-aaaaaaaaaaaaaaaa", "event-bbbbbbbbbbbbbbbb"))
     assert TraceEventAccounting.model_validate(accounting).observed_event_count == 2
@@ -661,6 +901,96 @@ def test_off_cpu_analysis_enforces_interval_and_aggregate_conservation() -> None
     assert unsplit.unknown_duration_ns == unsplit.off_cpu_duration_ns
     with pytest.raises(ValidationError, match="classify all time as unknown"):
         OffCpuInterval.model_validate({**unsplit.model_dump(mode="json"), "unknown_duration_ns": 9})
+
+
+def test_off_cpu_interval_rejects_incomplete_or_fabricated_timing() -> None:
+    split = {
+        "target_tid": 123,
+        "switch_out_timestamp_ns": 10,
+        "wakeup_timestamp_ns": 15,
+        "switch_in_timestamp_ns": 20,
+        "off_cpu_duration_ns": 10,
+        "blocked_duration_ns": 5,
+        "runnable_duration_ns": 5,
+        "unknown_duration_ns": 0,
+        "task_state": "interruptible_sleep",
+        "candidate_wait_category": "sleep",
+        "total_complete": True,
+        "split_complete": True,
+    }
+    unsplit = {
+        **split,
+        "wakeup_timestamp_ns": None,
+        "blocked_duration_ns": None,
+        "runnable_duration_ns": None,
+        "unknown_duration_ns": 10,
+        "split_complete": False,
+        "incomplete_reason": "wakeup was unavailable",
+    }
+    incomplete = {
+        "target_tid": 123,
+        "switch_out_timestamp_ns": 10,
+        "wakeup_timestamp_ns": None,
+        "switch_in_timestamp_ns": None,
+        "off_cpu_duration_ns": None,
+        "blocked_duration_ns": None,
+        "runnable_duration_ns": None,
+        "unknown_duration_ns": None,
+        "task_state": "interruptible_sleep",
+        "candidate_wait_category": "unknown",
+        "total_complete": False,
+        "split_complete": False,
+        "incomplete_reason": "trace boundary",
+    }
+    invalid: tuple[dict[str, Any], ...] = (
+        {**split, "wakeup_timestamp_ns": 9},
+        {**split, "wakeup_timestamp_ns": 21},
+        {**split, "switch_out_timestamp_ns": None},
+        {
+            **unsplit,
+            "switch_in_timestamp_ns": 9,
+            "off_cpu_duration_ns": 1,
+            "unknown_duration_ns": 1,
+        },
+        {**split, "off_cpu_duration_ns": 9},
+        {**split, "incomplete_reason": "must not be present"},
+        {**unsplit, "incomplete_reason": None},
+        {**incomplete, "off_cpu_duration_ns": 10},
+        {**incomplete, "switch_in_timestamp_ns": 20},
+        {**incomplete, "incomplete_reason": None},
+        {**incomplete, "split_complete": True},
+        {
+            **split,
+            "wakeup_timestamp_ns": None,
+            "blocked_duration_ns": None,
+        },
+        {**split, "blocked_duration_ns": 4},
+        {**unsplit, "blocked_duration_ns": 1},
+        {**unsplit, "unknown_duration_ns": 9},
+        {**split, "observed_blocked_prefix_ns": 5},
+        {**incomplete, "observed_blocked_prefix_ns": 5},
+        {
+            **incomplete,
+            "wakeup_timestamp_ns": 15,
+            "observed_blocked_prefix_ns": 4,
+        },
+        {**split, "observed_runnable_suffix_ns": 5},
+        {**incomplete, "observed_runnable_suffix_ns": 5},
+        {
+            **incomplete,
+            "switch_out_timestamp_ns": None,
+            "wakeup_timestamp_ns": 15,
+            "switch_in_timestamp_ns": 20,
+            "observed_runnable_suffix_ns": 4,
+        },
+    )
+
+    assert OffCpuInterval.model_validate(split).total_complete is True
+    assert OffCpuInterval.model_validate(unsplit).unknown_duration_ns == 10
+    assert OffCpuInterval.model_validate(incomplete).total_complete is False
+    for payload in invalid:
+        with pytest.raises(ValidationError):
+            OffCpuInterval.model_validate(payload)
 
 
 def test_lock_analysis_preserves_candidate_semantics_and_conservation() -> None:
