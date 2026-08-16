@@ -13,6 +13,7 @@ Symbol providers               ─→ verified source resolution
 Manual collection service      ─→ bounded command runner ─→ system perf
 Ordinary-user project launcher ─→ new PID ─┐
 Automatic PID plan ─→ Unix socket ─→ restricted Collector ─→ fixed spool
+Full-diagnostics plan ─→ public Broker ─→ separate Trace Helper ─→ target-filtered evidence
 Explicit admin deploy ─→ versioned TOML ─→ perflens-admin ─→ systemd
 ```
 
@@ -23,13 +24,12 @@ ordinary users, Agents, MCP, and the Skill from calling it directly. See the
 [privileged Helper design](privileged-helper.md). Package installation does not enable this mode;
 an administrator must explicitly select it, acknowledge the risk, and run real acceptance.
 
-The generated policy and `paranoid3_helper` protocol support only `stat` and
-`record`. The public Python types and `cap_perfmon` Broker retain disabled raw
-`sched`, `lock`, and `off_cpu` entry points, but the generic on-CPU analyzer is
-not a scheduler/lock/off-CPU analyzer. The next-version design deliberately
-builds deterministic offline analyzers and privacy gates before considering any
-runtime policy expansion. See the
-[collector capability roadmap](collector-capability-roadmap.md).
+Release `0.2.0` policy and the `paranoid3_helper` protocol support only `stat` and `record`.
+The current unreleased v0.3.0 source adds a separate Trace Helper, in-kernel target filtering,
+private trace spool, and normalized evidence, deterministic analysis, and verification for
+`sched`, `off_cpu`, and `lock`. It does not expand the existing stat/record Rust Helper protocol or
+privilege. These source capabilities become a release claim only after full CI, package, and
+real-host gates. See the [Collector and user-space-lock roadmap](collector-capability-roadmap.md).
 
 The domain layer uses frozen/slotted records, integer Frame IDs, and standard
 library protocols. It imports neither Pydantic nor Typer. Format adapters own
@@ -155,3 +155,29 @@ configuration and the systemd unit preserve the verified
 dispatch retains the requested identity. A symlink pathname is preserved only
 when its direct parent and resolved target satisfy the corresponding ownership
 and non-writable checks.
+
+## Planned Docker target runtime
+
+`v0.3.1` plans a fixed local-Docker adapter in front of the existing host-PID plan. Docker remains
+a target runtime rather than a privilege mode:
+
+```text
+Explicit authorization in one Agent conversation
+        ↓
+Fixed ordinary-user Docker adapter ─→ immutable container/image identity + host-PID candidates
+        ↓
+/proc NSpid + PID namespace + start time + cgroup-inode revalidation
+        ↓
+existing Broker / stat-record Helper / Trace Helper
+        ↓
+perf process evidence + before/after cgroup v2 snapshots
+```
+
+The adapter only supplies and binds local Docker identity; the Linux Broker and Helpers still
+verify the real process independently. The Docker socket never enters the Collector, Helpers,
+Agent, MCP, or Skill. DEBs do not install/start Docker, edit the `docker` group, or build/pull
+images. Public artifacts omit full inspect responses, environment variables, labels, host mount
+sources, and foreign processes. The current implementation has only container path mapping for
+existing evidence, not active Docker discovery, launch, or attachment. Planned artifacts, rootful
+boundaries, conversation authorization, and release gates are specified in the
+[v0.3.1 Docker process roadmap](docker-container-roadmap.md).

@@ -75,8 +75,35 @@ sudo perflens-admin switch-profile cpu_only
 
 Returning to CPU-only stops the Trace Helper without deleting policy or retained evidence. Project
 users still run plain `perflens init`; it discovers the deployed privilege mode and feature
-profile. See the [v0.3.x capability roadmap](collector-capability-roadmap.md) for the implementation
+profile. See the [Collector and user-space-lock roadmap](collector-capability-roadmap.md) for the implementation
 and acceptance contract.
+
+## Planned `v0.3.1` Docker deployment boundary
+
+`v0.3.1` plans collection from one explicit process in a local Linux Docker Engine using cgroup
+v2. These interfaces are not implemented yet. Neither current packages nor the pre-release v0.3.0
+source may advertise active Docker collection as available. See the
+[v0.3.1 Docker process roadmap](docker-container-roadmap.md).
+
+Docker is the `host/docker` target-runtime axis, not a third Collector privilege mode. It remains
+orthogonal to `cpu_only/full_diagnostics` and `cap_perfmon/paranoid3_helper`. Future DEBs:
+
+- do not install or start Docker and do not edit the `docker` group, daemon configuration, or
+  Docker-socket permissions;
+- do not build or pull images, enable container support, or expose the Docker socket to the
+  Collector, Helpers, Agent, MCP, or Skill;
+- permit only a fixed ordinary-user adapter to access the fixed local Engine, after which the
+  Broker/Helper independently revalidates `/proc`, PID namespace, start time, and cgroup identity;
+- deny rootful UID-0 targets until an administrator explicitly enables the dedicated
+  `allow_rootful_container_targets` risk boundary; daily collection still uses no sudo;
+- require planned `perflens init --docker`, followed by per-run confirmation or a
+  `bounded_session` confirmed once at the start of the current Agent conversation. That grant is
+  memory-only and bound to the exact image, command, mounts, resources, and target. Conversation
+  end, MCP restart, identity/configuration change, or the default two-hour hard backstop revokes it.
+
+Silence never means consent, and there is no permanent project grant. Each Collector child plan
+remains short-lived and single-use even inside the session, and each trace remains at most ten
+seconds.
 
 Ordinary users should complete [Installation and first use](../INSTALL.md) and run `perflens init` in the selected project first. This page focuses on administrator-managed Collector deployment.
 
@@ -306,8 +333,9 @@ acceptance, the administrator separately reviews and runs `switch-profile full_d
 This migration rule overrides the fresh-install recommendation so upgrades never widen privilege
 silently.
 
-Planned `v0.3.1` adds native C/C++, Java, Python, and Go user-space lock adapters on top of full
-diagnostics. JDK, Go, async-profiler, and SystemTap remain optional external dependencies detected
+Planned `v0.4.0` adds native C/C++, Java, Python, and Go user-space lock adapters on top of full
+diagnostics. The checked-in Runtime Lock public contracts are groundwork, not available adapters.
+JDK, Go, async-profiler, and SystemTap remain optional external dependencies detected
 with Chinese setup guidance; they are not downloaded or bundled in the two core DEBs. Projects
 explicitly opt in with planned `perflens init --runtime-locks`, and `LD_PRELOAD`, JVM/JFR
 attachment, pprof access, or probe deployment still requires explicit per-operation authorization.

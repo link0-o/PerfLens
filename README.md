@@ -15,8 +15,10 @@ After DEB installation, `sudo perflens-admin setup` selects the host Collector m
 `perflens init` then detects that safely deployed mode per project. See the
 [Collector privilege-mode lifecycle](docs/collector-mode-lifecycle.md) for dry-runs,
 switching, rollback, and project resynchronization.
-See the [Collector capability and expansion roadmap](docs/collector-capability-roadmap.md) for the
-current maturity boundary, confirmed repair backlog, and phased extension plan.
+See the [Collector and user-space-lock roadmap](docs/collector-capability-roadmap.md) for the
+current maturity boundary and phased extension plan. Planned v0.3.1 local-Docker single-process
+support is specified separately in the [Docker process roadmap](docs/docker-container-roadmap.md);
+active Docker discovery, launch, and collection are not current capabilities.
 See the [trustworthy perf evidence pipeline](docs/evidence-pipeline.md) for raw-input binding,
 conversion provenance, quality gates, and Agent-facing verification.
 
@@ -104,7 +106,10 @@ Current `main` is implementing unreleased v0.3.0. It contains a separate Trace H
 in-kernel target filtering, deterministic sched/off-CPU/lock analysis, and the
 `full_diagnostics` lifecycle. Release 0.2.0 still has only the stable stat/record loop; source
 features remain pre-release until full Python/Rust/DEB/real-host gates pass. See the
-[v0.3.x roadmap](docs/collector-capability-roadmap.md).
+[Collector and user-space-lock roadmap](docs/collector-capability-roadmap.md). `v0.3.1` is now the
+local-Docker single-process release, while the four runtime-lock adapters move to `v0.4.0`.
+Checked-in Runtime Lock public contracts are groundwork, not available adapters. See the
+[v0.3.1 Docker process roadmap](docs/docker-container-roadmap.md).
 
 Run a read-only readiness summary at any time:
 
@@ -460,7 +465,8 @@ See [release readiness](docs/release-readiness.md),
 [real-world profile acceptance](docs/real-world-acceptance.md), and
 [known issues](docs/known-issues.md), and
 [troubleshooting](docs/troubleshooting.md), and the
-[Collector capability roadmap](docs/collector-capability-roadmap.md), plus the
+[Collector and user-space-lock roadmap](docs/collector-capability-roadmap.md), the
+[v0.3.1 Docker process roadmap](docs/docker-container-roadmap.md), plus the
 [perf evidence pipeline](docs/evidence-pipeline.md) for final verification evidence,
 published-version workarounds, and operational failure guidance.
 
@@ -492,3 +498,6 @@ Chinese version.
   off-CPU interval, and low-level lock/futex-candidate artifacts but still awaits release gates.
   It cannot promote a futex candidate to a language lock, invent owner/hold time without pairs, or
   cover every user-space fast path.
+- Active Docker discovery, launch, and collection are not currently supported. Existing container
+  path mapping applies only to already captured evidence; active local-Docker support is planned
+  for v0.3.1.

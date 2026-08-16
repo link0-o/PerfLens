@@ -36,10 +36,16 @@ Profile 比较描述所选事件的相对分布，不能证明绝对耗时发生
 均值使用近似正态 95% 区间，同时检查实际影响阈值和环境可比性；没有工作负载匹配且
 保持正确性的 A/B 证据时，不会声称优化已经验证成功。
 
-当前正式、默认启用的 Collector 模式只有 `stat` 和 `record`。`cap_perfmon` Broker 的
-`sched`、`lock`、`off_cpu` 入口默认关闭，只能产生原始实验性 perf 证据；
-`paranoid3_helper` 会拒绝它们。通用 `perf.data` on-CPU 分析器不是高级模式分析器：当前
-不会计算可运行等待/调度延迟，不会重建锁等待/持有时间与 owner/waiter 关系，也不会把
-`sched_switch`/`sched_wakeup` 配对为带持续时间的 off-CPU 区间。因此不能仅凭这些入口
-声称已经定位调度、锁或阻塞根因。下一步边界见
-[采集能力扩展路线图](collector-capability-roadmap.zh-CN.md)。
+发布版 `0.2.0` 正式、默认启用的 Collector 模式只有 `stat` 和 `record`。当前 v0.3.0
+预发布源码已经为 `sched`、`off_cpu`、`lock` 增加独立 Trace Helper、目标过滤、专用
+确定性分析和一致性验证，但仍须通过完整发布门禁。即使验证通过，丢失、截断、边界缺失
+或无法配对的证据仍必须报告 `partial`；futex 只能是用户态锁候选，缺少真实来源时不能
+猜测 owner 或持锁时间。详见
+[Collector 与用户态锁能力路线图](collector-capability-roadmap.zh-CN.md)。
+
+当前版本不支持主动 Docker 采集。已有的容器/build 路径映射只能帮助解释用户已经提供的
+Profile；PerfLens 尚不能发现容器进程、启动托管容器、绑定容器身份或读取 cgroup 上下文。
+这些能力计划进入 `v0.3.1`，并且只覆盖本地 Linux Docker Engine、cgroup v2 和单个明确
+进程。它不会自动扩大成整容器、多容器、远程 Engine、Compose 或 Kubernetes 采集，详见
+[v0.3.1 Docker 路线图](docker-container-roadmap.zh-CN.md)。C/C++、Java、Python 和 Go
+用户态锁 Adapter 已移到 `v0.4.0`；公共合同骨架存在不代表 Adapter 当前可用。

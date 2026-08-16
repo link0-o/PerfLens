@@ -15,7 +15,10 @@
 `perflens-admin switch-mode <模式> --dry-run`。项目内只需运行 `perflens init`，它会自动
 识别安全的已部署模式。详见[《Collector 权限模式选择与切换》](docs/collector-mode-lifecycle.zh-CN.md)。
 现有能力的成熟度、待修复项和后续扩展顺序见
-[《Collector 能力评估、修复清单与扩展路线》](docs/collector-capability-roadmap.zh-CN.md)。
+[《Collector 与用户态锁能力路线图》](docs/collector-capability-roadmap.zh-CN.md)。计划中的
+`v0.3.1` 本地 Docker 单进程采集见
+[《Docker 进程采集与分析路线图》](docs/docker-container-roadmap.zh-CN.md)；当前版本尚未提供
+Docker 主动发现、启动或采集能力。
 perf 原始证据如何转换、校验并带着质量边界交给 Agent，见
 [《Perf 原始证据到 Agent 数据的可信链路》](docs/evidence-pipeline.zh-CN.md)。
 
@@ -90,7 +93,10 @@ root Rust Helper；该模式不会自动启用，必须由管理员确认受限 
 后端、`sched/off_cpu/lock` 确定性分析和 `full_diagnostics` 生命周期。发布版 `0.2.0` 仍只有
 稳定的 `stat/record` 闭环；在完整 Python/Rust/DEB/真实主机门禁通过前，不把源码能力
 描述成已发布功能。详细状态见
-[《v0.3.x Collector 与用户态锁能力路线图》](docs/collector-capability-roadmap.zh-CN.md)。
+[《Collector 与用户态锁能力路线图（v0.3.0 / v0.4.0）》](docs/collector-capability-roadmap.zh-CN.md)。
+`v0.3.1` 改为本地 Docker 单进程能力，四类用户态锁 Adapter 的目标版本为 `v0.4.0`；
+已经提交的 Runtime Lock 公共合同只是前置骨架，不代表 Adapter 已可用。Docker 计划见
+[《v0.3.1 Docker 进程采集与分析路线图》](docs/docker-container-roadmap.zh-CN.md)。
 
 随时可以运行只读状态检查，不需要记住多条排错命令：
 
@@ -446,6 +452,8 @@ uv run pip-audit
 - 发布版 `0.2.0` 没有稳定的 `sched/lock/off_cpu` 闭环。v0.3.0 源码已经生成调度延迟、
   off-CPU 区间和底层锁/futex 候选 Artifact，但仍等待完整发布门禁；它也不能把 futex
   候选升级成特定语言锁、在缺少配对时猜 owner/持锁时长，或覆盖所有用户态快路径。
+- 当前没有正式的 Docker 主动采集：已有容器路径映射只用于分析已有证据，不会发现容器、
+  启动容器或把 Collector 附加到容器内进程。该能力是 `v0.3.1` 计划。
 
 更多中文资料：
 
@@ -460,7 +468,8 @@ uv run pip-audit
 - [自研与依赖复用决策](docs/dependency-decisions.zh-CN.md)
 - [MCP 与 Skill 使用指南](docs/mcp-and-skill.zh-CN.md)
 - [自动采集与 Collector Broker](docs/automatic-collection.zh-CN.md)
-- [采集能力扩展路线图](docs/collector-capability-roadmap.zh-CN.md)
+- [Collector 与用户态锁能力路线图](docs/collector-capability-roadmap.zh-CN.md)
+- [v0.3.1 Docker 进程采集与分析路线图](docs/docker-container-roadmap.zh-CN.md)
 - [Perf 原始证据到 Agent 数据的可信链路](docs/evidence-pipeline.zh-CN.md)
 - [产品部署、验收、升级与卸载](docs/deployment.zh-CN.md)
 - [安全策略](SECURITY.zh-CN.md)

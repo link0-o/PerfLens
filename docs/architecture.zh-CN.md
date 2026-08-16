@@ -13,6 +13,7 @@ Symbol Provider                ─→ 已验证的源码定位
 手工采集服务                   ─→ 有界命令执行器 ─→ 系统 perf
 普通用户项目启动器 ─→ 新 PID ─┐
 自动 PID 计划 ─→ Unix Socket ─→ 受限 Collector ─→ 固定 spool
+完整诊断计划 ─→ 公共 Broker ─→ 独立 Trace Helper ─→ 目标过滤证据
 管理员显式部署 ─→ 版本化 TOML ─→ perflens-admin ─→ systemd
 ```
 
@@ -22,11 +23,12 @@ Symbol Provider                ─→ 已验证的源码定位
 连接。详细约束见[《高权限 Helper 设计》](privileged-helper.zh-CN.md)。软件安装本身不会
 自动启用等级 3 Helper；管理员仍需显式选择、确认风险并完成真实短时验收。
 
-生成策略和 `paranoid3_helper` 协议当前只支持 `stat`、`record`。公共 Python 类型与
-`cap_perfmon` Broker 保留默认关闭的 `sched`、`lock`、`off_cpu` 原始入口，但通用
-on-CPU 分析器不是调度/锁/off-CPU 专用分析器。下一版本会先完成离线确定性分析和隐私
-门禁，再决定是否扩大运行时策略，详见
-[《采集能力扩展路线图》](collector-capability-roadmap.zh-CN.md)。
+发布版 `0.2.0` 的生成策略和 `paranoid3_helper` 协议只支持 `stat`、`record`。当前尚未发布
+的 v0.3.0 源码增加了独立 Trace Helper、内核侧目标过滤、私有 trace spool，以及
+`sched`、`off_cpu`、`lock` 的规范化证据、确定性分析和 verifier；现有 stat/record Rust
+Helper 的协议和权限没有被扩大。只有完整 CI、包和真实主机门禁通过后，这些源码能力才
+能成为发布声明，详见
+[《Collector 与用户态锁能力路线图》](collector-capability-roadmap.zh-CN.md)。
 
 ## Core 与边界层
 
@@ -137,6 +139,30 @@ Debian 的多个命令入口可以共享私有运行时启动器，但 Codex 配
 经过验证的 `/usr/bin/perflens-mcp` 与 `/usr/bin/perflens-collector` 入口名，启动器才能
 确定要进入 MCP 或 Collector。只有父目录与解析目标满足相应所有者和不可写检查时，
 引导与部署器才会保留符号链接路径。
+
+## 计划中的 Docker 目标运行时
+
+`v0.3.1` 计划在现有 Host PID 计划之前增加固定的本地 Docker Adapter，但不把 Docker
+变成新的权限模式：
+
+```text
+Agent 对话内显式授权
+        ↓
+普通用户固定 Docker Adapter ─→ 不可变容器/镜像身份 + 宿主 PID 候选
+        ↓
+/proc NSpid + PID namespace + 启动时间 + cgroup inode 复核
+        ↓
+现有 Broker / stat-record Helper / Trace Helper
+        ↓
+perf 进程证据 + cgroup v2 前后快照
+```
+
+Adapter 只负责提示和绑定本地 Docker 身份；Linux Broker 与 Helper 仍独立验证真实进程。
+Docker Socket 不进入 Collector、Helper、Agent、MCP 或 Skill，DEB 也不安装/启动 Docker、
+修改 `docker` 用户组或自动 build/pull 镜像。公开产物不保存完整 inspect、环境变量、标签、
+宿主挂载源路径或目标外进程。当前版本只有已有证据的容器路径映射，没有主动 Docker
+发现、启动或附加能力。计划中的产物、rootful 边界、会话授权和测试门见
+[《v0.3.1 Docker 进程采集与分析路线图》](docker-container-roadmap.zh-CN.md)。
 
 ## 依赖方向
 

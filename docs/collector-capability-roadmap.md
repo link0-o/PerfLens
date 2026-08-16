@@ -1,4 +1,4 @@
-# PerfLens v0.3.x Collector and user-space lock roadmap
+# PerfLens Collector and user-space lock roadmap (v0.3.0 / v0.4.0)
 
 English | [简体中文](collector-capability-roadmap.zh-CN.md)
 
@@ -6,16 +6,20 @@ Status: **v0.3.0 implemented in source; not released**
 
 Last audited: 2026-08-16 against the current pre-release v0.3.0 `main`
 
-Candidate releases: `v0.3.0` and `v0.3.1`
+Candidate releases: `v0.3.0` and `v0.4.0`
 
 This document separates the shipped `0.2.0` baseline, v0.3.0 code awaiting release gates, and
-planned v0.3.1 work. Source presence is not a stable release claim. v0.3.0 still requires the full
+planned v0.4.0 work. Source presence is not a stable release claim. v0.3.0 still requires the full
 Python, Rust, DEB, lifecycle, and real-Debian-host gates below.
 
 The source tree now contains the versioned Trace contracts, target-filtered Rust Trace Helper,
 three deterministic analyzers and verifier, separate policy/socket/spool, transactional setup and
-profile lifecycle, and three-mode `accept-collector` probe. The v0.3.1 runtime adapters remain
-unimplemented.
+profile lifecycle, and three-mode `accept-collector` probe. The Runtime Lock public contract
+skeleton is checked in, but the four v0.4.0 runtime adapters remain unimplemented.
+
+`v0.3.1` is now reserved for collection and analysis of one explicit process in a local Docker
+container; it is not the user-space-lock release target. See the
+[v0.3.1 Docker process roadmap](docker-container-roadmap.md).
 
 ## 1. Decisions
 
@@ -30,7 +34,7 @@ unimplemented.
 4. **The existing Rust Helper remains permanently limited to `stat/record`.** Level-3 trace work
    goes through a new, separate Trace Helper with its own service, socket, protocol, policy, raw
    spool, lifecycle, and audit.
-5. **`v0.3.1` adds four formal user-space lock adapters:** native pthread, Java JFR, CPython locks,
+5. **`v0.4.0` adds four formal user-space lock adapters:** native pthread, Java JFR, CPython locks,
    and Go mutex/block profiles. Custom, inlined, uninstrumented, spinning, and lock-free paths must
    disclose visibility gaps rather than claim universal coverage.
 6. Evidence semantics, Golden fixtures, conservation checks, and independent verification precede
@@ -250,17 +254,19 @@ with short stat evidence, adds record for CPU stacks, sched for runnable-delay c
 for low-CPU wall-time gaps, or lock evidence for contention. It cannot expand the authorized PID,
 command, duration, event set, or privilege.
 
-## 7. `v0.3.1` user-space lock adapters
+## 7. `v0.4.0` user-space lock adapters
 
 ### 7.1 Coverage contract
 
 There is no single perf command that observes every user-space lock implementation. “Complete
-coverage” in `v0.3.1` means that four formal runtime families have capability discovery,
+coverage” in `v0.4.0` means that four formal runtime families have capability discovery,
 collection/import, normalized deterministic analysis, and explicit quality boundaries. It does not
 mean that arbitrary custom locks, lock-free algorithms, inlined paths, or invisible fast paths are
 observable.
 
-`v0.3.1` fixes these public artifacts:
+`v0.4.0` plans to build on the checked-in public contract skeleton with these artifacts. Contract
+presence means that the boundary model can be reviewed; it does not mean that any runtime adapter
+can already collect or analyze a real program:
 
 - **RuntimeAdapterCapabilityArtifact:** runtime/version, adapter/backend version, availability,
   supported locks/events, required external tools, launch-instrumentation/attach/privilege needs,
@@ -366,7 +372,7 @@ frames, invalid/mismatched PIDs, reversed time, undeclared semantics, non-conser
 and fabricated owner capability are rejected before artifact publication. This remains an adapter
 boundary, not a new Agent or plugin framework.
 
-### 7.7 `v0.3.1` implementation commit order
+### 7.7 `v0.4.0` implementation commit order
 
 Implementation is split into independent, reviewable, reversible commits:
 
@@ -377,7 +383,7 @@ Implementation is split into independent, reviewable, reversible commits:
 5. Go mutex/block pprof adapter with both sampling models.
 6. CLI/MCP/Skill selection, unified reports, paging, and diagnosis bundles.
 7. Security denials, instrumentation overhead, compatibility matrix, and four real runtimes.
-8. Bilingual release docs, both-DEB upgrade/removal smoke tests, and the `v0.3.1` release gate.
+8. Bilingual release docs, both-DEB upgrade/removal smoke tests, and the `v0.4.0` release gate.
 
 ## 8. Acceptance and release wording
 
@@ -400,13 +406,13 @@ Any additional capability needs evidence from the corresponding isolated service
 and acceptance path.
 
 Until those gates pass, the shipped release continues to advertise only `stat/record` as stable.
-`v0.3.0` may advertise `full_diagnostics` only if every included mode is complete. `v0.3.1` must
+`v0.3.0` may advertise `full_diagnostics` only if every included mode is complete. `v0.4.0` must
 publish an exact runtime/backend/version/sampling/fast-path support matrix. Software fallback still
 forbids IPC/cache/branch claims, and PerfLens remains outside heap profiling, request-level I/O APM,
 GPU profiling, and distributed tracing. Release notes must be generated from the final
 implementation and test evidence, not copied from this roadmap.
 
-`v0.3.1` is stable only after all four adapters, the shared verifier, security denial paths, the
+`v0.4.0` is stable only after all four adapters, the shared verifier, security denial paths, the
 real-runtime matrix, and installation, upgrade, rollback, and removal tests for both DEBs pass. If
 one adapter is missing, the release claim is narrowed or the version is delayed; it cannot retain
 the “four formal runtime families” wording.

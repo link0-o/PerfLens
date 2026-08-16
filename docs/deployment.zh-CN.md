@@ -88,7 +88,31 @@ sudo perflens-admin switch-profile cpu_only
 切回标准配置只停止 Trace Helper，不删除策略或历史证据。主机配置完成后，项目用户仍只需
 运行普通 `perflens init`；它将自动识别已部署权限模式和功能配置，不要求用户记住上述
 管理员参数。完整设计和验收门见
-[《v0.3.x Collector 与用户态锁能力路线图》](collector-capability-roadmap.zh-CN.md)。
+[《Collector 与用户态锁能力路线图（v0.3.0 / v0.4.0）》](collector-capability-roadmap.zh-CN.md)。
+
+## `v0.3.1` 计划中的 Docker 部署边界
+
+`v0.3.1` 计划增加本地 Linux Docker Engine、cgroup v2 下单个明确容器进程的采集。
+这些接口当前尚未实现，现有安装包和 v0.3.0 预发布源码都不能把 Docker 主动采集写成
+正式能力。完整合同见
+[《v0.3.1 Docker 进程采集与分析路线图》](docker-container-roadmap.zh-CN.md)。
+
+Docker 是 `host/docker` 目标运行时选择，不是第三种 Collector 权限模式，也不改变
+`cpu_only/full_diagnostics` 与 `cap_perfmon/paranoid3_helper` 两组现有选择。未来 DEB：
+
+- 不安装或启动 Docker，不修改 `docker` 用户组、daemon 配置或 Docker Socket 权限；
+- 不自动 build/pull 镜像，不启用容器支持，也不把 Docker Socket 交给 Collector、Helper、
+  Agent、MCP 或 Skill；
+- 只允许普通用户侧固定 Adapter 访问固定本地 Engine，并由 Broker/Helper 使用 `/proc`、
+  PID namespace、启动时间和 cgroup 身份独立复核目标；
+- rootful 容器 UID 0 默认拒绝，只能由管理员一次启用专用
+  `allow_rootful_container_targets` 风险边界；日常采集仍不使用 sudo；
+- 项目用户显式运行计划中的 `perflens init --docker`，再选择逐次确认，或在当前 Agent
+  对话开始时确认一次的 `bounded_session`。会话授权只保存在内存中，精确绑定镜像、命令、
+  挂载、资源和目标；对话结束、MCP 重启、身份/配置改变或默认两小时硬截止都会使其失效。
+
+无响应不会被解释为同意，也不提供永久项目授权。即使在有界会话内，每次 Collector
+子计划仍然短期、单次使用，trace 单次仍不超过 10 秒。
 
 ## 从当前 wheel 部署
 
@@ -530,7 +554,8 @@ trace 策略、启用 Trace Helper 或扩展 `allowed_modes`。管理员完成�
 再单独审查并执行 `switch-profile full_diagnostics`。这条迁移规则优先于“完整配置是新安装
 推荐项”，避免升级过程静默扩大已有主机权限。
 
-`v0.3.1` 计划在完整配置上增加 C/C++、Java、Python 和 Go 用户态锁 Adapter。JDK、Go、
+`v0.4.0` 计划在完整配置上增加 C/C++、Java、Python 和 Go 用户态锁 Adapter。已经提交的
+Runtime Lock 公共合同只是前置骨架，不代表四类 Adapter 当前可用。JDK、Go、
 async-profiler、SystemTap 等保持可选外部依赖，由 PerfLens 检测并提供中文安装/启用说明，
 不随核心两个 DEB 隐式下载或捆绑。项目必须显式运行计划中的
 `perflens init --runtime-locks`，而 `LD_PRELOAD`、JVM/JFR 附加、pprof 访问或 probe 部署

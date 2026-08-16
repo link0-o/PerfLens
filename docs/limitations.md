@@ -50,12 +50,18 @@ normal 95% interval for repeated means, a practical-impact threshold, and
 environment checks; it does not claim a verified improvement without matched
 correctness-preserving A/B evidence.
 
-Only `stat` and `record` are supported and enabled by the generated Collector
-policy. The `cap_perfmon` Broker's `sched`, `lock`, and `off_cpu` entry points
-are disabled raw experiments; the `paranoid3_helper` rejects them. The generic
-`perf.data` on-CPU analyzer is not a mode-specific trace analyzer: PerfLens does
-not yet calculate runnable wait/scheduler latency, reconstruct lock wait/hold
-time or owner/waiter relationships, or pair `sched_switch`/`sched_wakeup` into
-duration-attributed off-CPU intervals. These raw entry points therefore cannot
-establish scheduler, lock, or blocking root causes. See the
-[collector capability roadmap](collector-capability-roadmap.md).
+Release `0.2.0` formally enables only `stat` and `record`. The current pre-release v0.3.0 source
+adds a separate Trace Helper, target filtering, dedicated deterministic analysis, and consistency
+verification for `sched`, `off_cpu`, and `lock`, but still requires all release gates. Even after
+verification, lost, truncated, boundary-censored, or unpaired evidence remains `partial`; a futex
+is only a user-space-lock candidate, and owner or hold time is unavailable without genuine source
+evidence. See the [Collector and user-space-lock roadmap](collector-capability-roadmap.md).
+
+Active Docker collection is not currently supported. Existing container/build path mapping only
+helps interpret profiles supplied by the user; PerfLens cannot yet discover container processes,
+start a managed container, bind container identity, or collect cgroup context. These capabilities
+are planned for v0.3.1 and are limited to a local Linux Docker Engine, cgroup v2, and one explicit
+process. They do not silently expand into whole-container, multi-container, remote-Engine,
+Compose, or Kubernetes collection; see the [v0.3.1 Docker roadmap](docker-container-roadmap.md).
+The C/C++, Java, Python, and Go user-space-lock adapters move to v0.4.0. A checked-in public
+contract skeleton does not mean that those adapters are available.
