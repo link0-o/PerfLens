@@ -25,11 +25,59 @@ PerfLens 应拆成普通用户分析端和系统 Collector 两部分部署：
 sudo perflens-admin setup
 ```
 
-向导提供 `cap_perfmon`、`paranoid3_helper` 和仅分析三种选择。已部署后切换模式应先运行
+当前 `0.2.0` 向导提供 `cap_perfmon`、`paranoid3_helper` 和仅分析三种选择。已部署后切换模式应先运行
 `sudo perflens-admin switch-mode <模式> --dry-run`；切换成功后在已初始化项目运行
 `perflens init --update`。事务回滚、`perf_event_paranoid` 前置检查和证据保留规则见
 [《Collector 权限模式选择与切换》](collector-mode-lifecycle.zh-CN.md)。下文的
 `stage-collector-assets`/`deploy --config` 流程继续作为自定义策略和离线审查的高级入口。
+
+## `v0.3.0` 计划的安装向导
+
+`v0.3.0` 将把首次配置改成“功能配置优先、权限实现随后推荐”的两阶段向导。DEB 安装
+本身仍然不交互、不生成策略、不启动服务、不修改 sysctl；安装完成只提示管理员运行：
+
+```bash
+sudo perflens-admin setup
+```
+
+向导首先显示两个主要功能配置：
+
+1. `full_diagnostics`（完整性能诊断，兼容主机上的推荐项）：`stat`、`record`、`sched`、
+   `off_cpu`、`lock`；
+2. `cpu_only`（标准 CPU 调优）：只开放当前正式的 `stat`、`record`，权限和证据面更小。
+
+完整配置只有在 tracefs、perf、内核事件、权限和真实短时预检全部通过时才显示为推荐；
+否则向导将它标为当前不可用并推荐 `cpu_only`，不能静默少装一部分能力。随后向导根据
+主机事实推荐 `cap_perfmon` 或 `paranoid3_helper`。功能配置决定“采集什么”，权限模式
+决定“谁持有什么权限”，两者不能混为一谈。
+
+计划中的非交互预检示例为：
+
+```bash
+sudo perflens-admin setup \
+  --feature-profile full_diagnostics \
+  --mode cap_perfmon \
+  --dry-run
+```
+
+选择完整配置必须确认 trace 的线程元数据、调用路径、磁盘和采集开销风险。在
+`paranoid3_helper` 下还需要同时传入 `--acknowledge-privileged-helper-risk` 和
+`--acknowledge-trace-risk`。现有 Rust Helper 保持只处理 `stat/record`，高级模式由独立
+Trace Helper 处理。这些是 `v0.3.0` 计划接口，当前 `0.2.0` 用户不能提前运行。
+
+安装后可通过计划中的 `switch-profile` 在两个配置之间事务化切换：
+
+```bash
+sudo perflens-admin switch-profile full_diagnostics --dry-run
+sudo perflens-admin switch-profile full_diagnostics --acknowledge-trace-risk
+sudo perflens-admin switch-profile cpu_only --dry-run
+sudo perflens-admin switch-profile cpu_only
+```
+
+切回标准配置只停止 Trace Helper，不删除策略或历史证据。主机配置完成后，项目用户仍只需
+运行普通 `perflens init`；它将自动识别已部署权限模式和功能配置，不要求用户记住上述
+管理员参数。完整设计和验收门见
+[《v0.3.x Collector 与用户态锁能力路线图》](collector-capability-roadmap.zh-CN.md)。
 
 ## 从当前 wheel 部署
 
@@ -458,6 +506,17 @@ sudo perflens-admin undeploy
 `/etc/perflens/collector.toml`、`/var/lib/perflens`、系统用户或组。之后再卸载
 DEB 或 `/opt/perflens` 运行环境。性能数据只有管理员明确确认后才能删除。
 
+从 `0.2.0` 升级到计划中的 `v0.3.0` 时，已部署主机必须保持 `cpu_only`：包升级不得创建
+trace 策略、启用 Trace Helper 或扩展 `allowed_modes`。管理员完成升级和普通 CPU 验收后，
+再单独审查并执行 `switch-profile full_diagnostics`。这条迁移规则优先于“完整配置是新安装
+推荐项”，避免升级过程静默扩大已有主机权限。
+
+`v0.3.1` 计划在完整配置上增加 C/C++、Java、Python 和 Go 用户态锁 Adapter。JDK、Go、
+async-profiler、SystemTap 等保持可选外部依赖，由 PerfLens 检测并提供中文安装/启用说明，
+不随核心两个 DEB 隐式下载或捆绑。项目必须显式运行计划中的
+`perflens init --runtime-locks`，而 `LD_PRELOAD`、JVM/JFR 附加、pprof 访问或 probe 部署
+仍需要每次明确授权。
+
 ## 面向其他用户的正式发行
 
 正式产品已经提供两个 DEB：
@@ -471,6 +530,8 @@ DEB 满足以下边界，未来 RPM 也应保持一致：
 - 不静默修改 `perf_event_paranoid`；
 - 不自动授予 `CAP_SYS_ADMIN`；
 - 安装软件包时不生成管理员配置、不启动服务；
+- 安装完成只提示运行 `sudo perflens-admin setup`，不得由 DEB maintainer script 代替管理员选择；
+- 既有主机升级后保持 `cpu_only`，不得自动启用计划中的完整诊断；
 - 部署后采用经管理员审查的最小模式和短时限；
 - 提示管理员把明确的普通用户加入组并配置 `allowed_uids`；
 - 提供无需手工 PID 的 `accept-collector` 作为安装后显式真实验收，而不是声称服务启动就等于 perf 可用。

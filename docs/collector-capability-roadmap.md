@@ -1,236 +1,284 @@
-# PerfLens v0.3.0 Collector capability expansion plan
+# PerfLens v0.3.x Collector and user-space lock roadmap
 
-[简体中文](collector-capability-roadmap.zh-CN.md) | English
+English | [简体中文](collector-capability-roadmap.zh-CN.md)
 
-Status: **next-release design and acceptance plan**
+Status: **next-version design and acceptance contract**
 
-Last audited: 2026-08-15 against the post-`b8b1eec` `0.2.0` line
+Last audited: 2026-08-16 against the `0.2.0` line after `a7a5002`
 
-Candidate target: `v0.3.0`
+Candidate releases: `v0.3.0` and `v0.3.1`
 
-This document separates shipped behavior from planned work. A planned item is not a product claim,
-an onboarding default, or authorization for a Skill to collect it.
+This document separates shipped facts from planned work. Nothing marked as planned may be
+advertised as available, selected by the Skill, or enabled by default before implementation and
+all acceptance gates are complete.
 
-## Decision
+## 1. Decisions
 
-PerfLens should expand scheduler, lock, and off-CPU analysis, but in this order:
+1. **`v0.3.0` completes generic wait diagnosis.** It retains the stable `stat/record` CPU workflow
+   and adds deterministic `sched`, `off_cpu`, and `lock` analysis, bounded collection, guided
+   deployment, and real-host acceptance.
+2. **Feature profiles and privilege modes are orthogonal.** `full_diagnostics/cpu_only` select the
+   evidence surface; `cap_perfmon/paranoid3_helper` select how system services obtain privilege.
+3. **Full diagnostics is recommended for a compatible fresh host, but never silently activated.**
+   DEB installation remains non-interactive and inactive. An administrator explicitly runs
+   `sudo perflens-admin setup`, reviews preflight, chooses a profile, and acknowledges risk.
+4. **The existing Rust Helper remains permanently limited to `stat/record`.** Level-3 trace work
+   goes through a new, separate Trace Helper with its own service, socket, protocol, policy, raw
+   spool, lifecycle, and audit.
+5. **`v0.3.1` adds four formal user-space lock adapters:** native pthread, Java JFR, CPython locks,
+   and Go mutex/block profiles. Custom, inlined, uninstrumented, spinning, and lock-free paths must
+   disclose visibility gaps rather than claim universal coverage.
+6. Evidence semantics, Golden fixtures, conservation checks, and independent verification precede
+   every privilege expansion.
 
-1. Build deterministic offline analysis before expanding live privilege.
-2. Keep `stat` and `record` as the only default, stable collection modes.
-3. Consider one `cap_perfmon` trace mode at a time only after its analyzer, privacy checks, and
-   real-host acceptance pass. Every advanced mode remains default-off.
-4. Keep `paranoid3_helper` hard-limited to `stat/record` throughout `v0.3.0`.
-5. If level-3 trace collection is eventually required, design a separate optional Trace Helper,
-   unit, socket, protocol, policy, private raw spool, acknowledgement, and lifecycle.
-
-The recommended `v0.3.0` position is therefore: retain the reliable CPU-tuning core, add
-quality-gated offline waiting/scheduling analysis, and expose only security-approved experimental
-`cap_perfmon` trace collection without widening the existing root Helper.
-
-## Current `0.2.0` facts
-
-Collector privilege modes (`cap_perfmon`, `paranoid3_helper`) are distinct from collection modes
-(`stat`, `record`, `sched`, `lock`, `off_cpu`). A mode appearing in a Python type or public Schema
-does not prove that every privilege mode safely supports it or that PerfLens can interpret it.
+## 2. Current `0.2.0` baseline
 
 | Layer | `stat` / `record` | `sched` / `lock` / `off_cpu` |
 |---|---|---|
-| Public Python types and Schemas | represented | represented |
-| MCP/CLI parameters | exposed | exposed, not a stability claim |
-| Project onboarding defaults | enabled | disabled |
-| Broker policy default | allowed | denied |
-| `cap_perfmon` Python Collector | fixed argv and artifacts | fixed raw command entry points |
-| `paranoid3_helper` Python policy | allowed | hard-denied |
-| Rust Helper private protocol | `Record`, `Stat` only | enum absent and rejected |
-| Deterministic Agent analysis | typed stat; record hotspots, paths, source, verification | no dedicated delay/wait Artifact |
-| Maturity | **stable current** | **raw experimental entry point** |
+| Public Python and CLI/MCP types | shipped and used | raw entry points exist; this is not stable support |
+| Generated policy | permits `record, stat` | denies by default |
+| `cap_perfmon` Collector | fixed argv, duration, and artifacts | fixed raw commands but no dedicated analysis loop |
+| `paranoid3_helper` | Rust protocol permits `Record/Stat` | strictly rejects them |
+| Deterministic analysis | typed stat plus verified on-CPU profiles | no stable interval/latency/wait artifacts |
 
-The Python path can construct `perf sched record`, `perf lock record`, and a
-`sched:sched_switch` stack recording. Those commands do not provide stable paired intervals,
-latency distributions, owner/waiter attribution, loss accounting, or mode-specific conclusion
-gates. Generic perf-script hotspot parsing is not a replacement for those analyzers.
+The shipped CPU workflow binds the exact workload, runs short stat and optional record collection,
+binds raw evidence hashes and event source through conversion, and requires correctness plus a
+matched A/B before claiming a verified improvement. Software fallback remains useful for on-CPU
+hotspots but cannot support IPC, hardware cache-miss, or branch-miss conclusions.
 
-The post-`b8b1eec` baseline already includes raw-stat replay, Collection/event/conversion binding,
-unknown-frame preservation, Agent-visible content digests, independent analysis verification,
-weight conservation, cross-language symbol fixtures, identity-checked MCP paging, project process
-cleanup, readiness handshakes, and bounded hardware-to-software recovery. Those are completed
-foundations, not future backlog.
+The missing areas are runnable delay, paired off-CPU intervals, stable kernel-lock/futex
+relationships, and runtime-specific user-space lock semantics. A low context-switch, migration, or
+page-fault count does not prove that I/O waits, contention, allocator churn, or memory pressure are
+absent.
 
-## Present tuning boundary
+## 3. `v0.3.0` guided setup and mode model
 
-| Question | Current result | Boundary |
-|---|---|---|
-| CPU saturation and algorithmic cost | good | requires correctness and matched A/B for an improvement claim |
-| functions and call paths | good | depends on unwind, symbols, Build ID, and debug information |
-| C/C++/Rust/Go CPU tuning | good | may be symbol-only without debug data |
-| Python/JIT CPU tuning | moderate to good | depends on runtime maps/sidecars; replay may be time-bounded |
-| IPC/cache/branch behavior | conditional | hardware PMU evidence is mandatory |
-| before/after CPU validation | usable | workload and actual event source must match |
-| scheduler delay/runnable starvation | incomplete | activity counters do not reconstruct delay intervals |
-| lock contention/owner-waiter | incomplete | on-CPU lock frames do not prove wait duration |
-| low CPU with long wall time | incomplete | paired off-CPU/wakeup/run intervals are missing |
-| heap, device/network latency, GPU, distributed tracing | unsupported | outside `v0.3.0` |
+### 3.1 Package boundary
 
-The current product can perform useful, verifiable CPU-bound tuning. Software fallback in a VM
-still supports on-CPU hotspots and paths, but not IPC or microarchitecture. Low switch, migration,
-or fault counts do not prove the absence of I/O wait, lock contention, allocation churn, or memory
-pressure.
+The `perflens` and `perflens-collector` DEBs install only programs, templates, and documentation.
+Package installation must not prompt, create administrator policy, start services, edit sysctl or
+file capabilities, or touch projects. Its completion message may direct the administrator to:
 
-## `v0.3.0` scope
-
-Required:
-
-- preserve the existing `stat/record` policy and artifact compatibility;
-- introduce versioned, streaming, bounded scheduling/wait evidence models;
-- complete imported `sched` and `off_cpu` deterministic analysis;
-- give `lock` at least a stable conversion contract, public model, fixtures, and golden tests, and
-  promote it only if aggregation semantics pass;
-- return mode-specific EvidenceQuality, allowed/forbidden conclusions, loss, unpaired, and
-  truncation counts;
-- make Skill, CLI, MCP, status, and documentation use the same maturity terms.
-
-Conditional: one default-off `cap_perfmon` advanced mode may ship experimentally only after every
-privacy and host gate passes.
-
-Excluded: widening the existing Rust Helper, system-wide collection, arbitrary tracepoints or perf
-arguments, automatic sysctl/tracefs/capability changes, direct perf.data binary parsing, eBPF as a
-shortcut, heap/APM/GPU/distributed tracing, and non-Linux platforms.
-
-## Evidence models
-
-Every advanced Artifact must retain schema version, ID, input digest/size, converter path/version/
-digest/argv/locale, target identity and time range when available, clock/unit, CPUs and events,
-lost/duplicate/out-of-order/unpaired/truncated counts, observed non-target metadata, EvidenceQuality,
-allowed and forbidden conclusions, a content digest, and a conversion fingerprint. System `perf`
-converts perf.data to fixed text; PerfLens does not decode the binary format.
-
-### SchedulerAnalysisArtifact
-
-Reconstruct per-thread on-CPU intervals and wakeup-to-switch-in run-queue delay. Report runtime,
-switches, wakeups, migrations, mean/p50/p95/p99/max with sample counts, bounded worst intervals and
-paths, preempted versus sleeping state, and trace-boundary/PID-reuse/unpaired-event loss. Never emit
-a delay when the required pair is incomplete.
-
-### OffCpuAnalysisArtifact
-
-Represent switch-out, optional blocked/sleeping interval, wakeup, runnable delay, and switch-in.
-Retain PID/TID, times, total off-CPU duration, separable blocked/runnable duration, switch-out path,
-waker, task state, CPU movement, and completeness. Disk/network/lock/timer labels remain candidates
-unless discriminating evidence confirms them.
-
-### LockAnalysisArtifact
-
-Where the selected perf/kernel output actually supports it, retain contention count, wait
-distribution, stable opaque lock identity, owner/waiter and acquire/wait paths, source, and hold
-duration only from reliable acquire/release pairs. Unavailable hold or owner evidence remains
-unavailable; wait time must never be relabeled as hold time.
-
-## Milestones
-
-### M0: freeze the CPU core
-
-Keep `stat/record` defaults and compatibility. Move completed integrity work out of backlog and fix
-stale TTL, host-version, coverage, release-candidate, and five-mode support wording. Existing Python,
-Rust, wheel, and DEB gates must not regress.
-
-### M1: conversion contracts and Schemas
-
-Fix the external conversion commands and fields, implement a common event IR and three versioned
-Artifacts, reject unknown/non-finite/reversed/over-limit input, add real and synthetic fixtures,
-goldens, schemas, bounded diagnostics, and deterministic replay.
-
-### M2: imported sched analysis
-
-Pair switch and wakeup events, expose per-thread runtime and runnable delay, handle migration,
-preemption, trace boundaries, PID/TID reuse, loss and ordering, and add CLI/MCP analyze/detail/page/
-verify/bundle tools. Incomplete pairing yields `partial`, never fabricated precision.
-
-### M3: imported off-CPU analysis
-
-Build on the scheduling IR, separate provable sleeping/blocked and runnable intervals, aggregate
-switch-out paths, wakers and task states, preserve boundary/unpaired loss, and prevent cross-task
-metadata from escaping through details or pages.
-
-### M4: imported lock analysis
-
-Fix supported perf output contracts, implement contention/wait/optional hold and owner/waiter
-semantics, link related scheduling evidence by Artifact ID rather than merging unlike weights, and
-require concurrency, stress, and race validation.
-
-### M5: `cap_perfmon` experimental-collection decision
-
-Real-host research must prove target-only publication, minimal tracefs/kernel/LSM capabilities,
-no silent `CAP_SYS_ADMIN` expansion, owner/start-time binding, fixed events, bounded loss, and raw
-artifact privacy. If any gate fails, no advanced live collection ships.
-
-If accepted, a policy-v2 experimental section is explicit and default-off; installed policy v1
-continues to support `stat/record` and is never auto-migrated. This example is a design target, not
-current syntax:
-
-```toml
-[collector]
-policy_version = 2
-allowed_modes = ["record", "stat"]
-
-[collector.experimental_trace]
-enabled = false
-allowed_modes = []
-max_duration_seconds = 10
-max_output_bytes = 67108864
-allow_other_task_metadata = false
+```bash
+sudo perflens-admin setup
 ```
 
-### M6: Skill routing and validation
+### 3.2 Two primary feature profiles
 
-Use short stat triage, record for on-CPU stacks, and an advanced analyzer only when its named
-missing evidence is required and the approved policy permits it. The Skill cannot widen PID,
-command, mode, event, duration, output, or privilege. A verified optimization still requires the
-same workload/environment/actual event source, correctness tests, and matched A/B.
-
-### M7: release, upgrade, and rollback
-
-Preserve policies, spools, service mode, and old artifacts. Experimental policy is default-off and
-atomically rollbackable. The Helper protocol stays `record/stat`. Packages do not activate a
-service or modify host policy. A failed advanced-mode gate removes live collection from release
-scope rather than blocking CPU-core fixes.
-
-## Why the existing Helper stays narrow
-
-Scheduler and lock traces naturally mention schedulers, wakers, owners, and tasks beyond the
-target. Tracefs, LSM, kernel, and perf behavior varies; raw data may expose other task names, PIDs,
-stacks, or kernel addresses; and each perf subcommand adds lifecycle and cleanup semantics. The
-current Rust protocol and conformance matrix prove only `stat/record`. Adding allowlist strings
-would bypass that independent design.
-
-A future `v0.4.0+` Trace Helper would need a separate unit, user, private socket and raw spool,
-protocol, capability review, derived/redacted publication, administrator acknowledgement, full
-lifecycle, and cross-UID/non-target/PID-reuse/replay/expiry/limit/escape/failure tests.
-
-## Performance, security, and release gates
-
-New parsers remain streaming and bounded, document exact versus approximate quantiles, benchmark
-high event/TID/lock cardinality, deep stacks, loss and disorder with throughput/p95/peak RSS, and
-return only bounded MCP pages. Budgets are recorded from reproducible measurements, not guessed.
-
-Each mode requires versioned Schemas and semantics, real-format and malformed/limit/loss fixtures,
-goldens, digests and an independent verifier, authorization and cross-UID denials, PID-reuse/replay/
-expiry/unknown-field/path/command/event denials, spool and failure cleanup, package non-activation,
-real Debian systemd acceptance with kernel/perf/tracefs/LSM/capability records, Python quality gates,
-and Rust/cross-language gates whenever the privileged boundary changes.
-
-Only an accepted analyzer may enter collection-security review. Only an accepted security and host
-matrix may become experimental support. Stable-by-default support requires at least one release
-cycle of field evidence.
-
-## Recommended order and release wording
+The planned interactive wizard first presents exactly two primary profiles:
 
 ```text
-M0 CPU baseline → M1 contracts → M2 sched → M3 off_cpu → M4 lock
-                → M5 one cap_perfmon experiment → M6 Skill/A-B → M7 release
+1. Full diagnostics (recommended)
+   stat + record + sched + off_cpu + lock
+
+2. CPU-only tuning
+   stat + record, with a smaller evidence and privilege surface
 ```
 
-Do not expand Helper privilege while inventing all three analyzers. Release notes must be generated
-from completed implementation and tests, not copied from this plan. Until each gate passes, the
-accurate user-facing statement remains: `stat/record` are stable; advanced modes are raw or planned;
-`paranoid3_helper` supports only `stat/record`; software fallback cannot support IPC/cache/branch
-claims; and PerfLens is not a heap profiler, I/O APM, GPU profiler, or distributed tracer.
+- `full_diagnostics` is recommended only when every required host preflight passes.
+- `cpu_only` is the minimum profile and the compatibility result for every existing `0.2.0`
+  deployment after package upgrade.
+- If tracefs, kernel events, perf support, or a security prerequisite is missing, the wizard marks
+  full diagnostics unavailable and recommends `cpu_only`; it never deploys a partial profile under
+  the full name.
+- `analysis_only` remains an advanced automation value and failure fallback, not a third primary
+  feature profile.
+
+The planned non-interactive form is:
+
+```bash
+sudo perflens-admin setup \
+  --feature-profile full_diagnostics \
+  --mode cap_perfmon \
+  --dry-run
+```
+
+`--feature-profile` is a `v0.3.0` design, not a command shipped by `0.2.0`.
+
+### 3.3 Privilege recommendation and acknowledgement
+
+| Privilege mode | Recommended host | `cpu_only` | `full_diagnostics` |
+|---|---|---|---|
+| `cap_perfmon` | dedicated capability works in a real short probe | Python Broker runs stat/record | bounded Python Collector trace path |
+| `paranoid3_helper` | Debian level 3 must remain | current Helper runs stat/record | current Helper plus a separate Trace Helper |
+
+The wizard recommends from observed host facts while retaining explicit `--mode` selection. It
+never changes `perf_event_paranoid`; an incompatible explicit choice is rejected before writes.
+Full diagnostics requires trace-data/privacy/overhead acknowledgement. The level-3 implementation
+also requires the existing privileged-Helper acknowledgement:
+
+```bash
+sudo perflens-admin setup \
+  --feature-profile full_diagnostics \
+  --mode paranoid3_helper \
+  --acknowledge-privileged-helper-risk \
+  --acknowledge-trace-risk
+```
+
+### 3.4 Post-install profile switching
+
+The planned profile lifecycle is separate from privilege-mode switching:
+
+```bash
+sudo perflens-admin switch-profile full_diagnostics --dry-run
+sudo perflens-admin switch-profile full_diagnostics --acknowledge-trace-risk
+sudo perflens-admin switch-profile cpu_only --dry-run
+sudo perflens-admin switch-profile cpu_only
+```
+
+`switch-profile` validates policy, managed units, host capabilities, and a deterministic command
+plan; applies the trace topology atomically; authenticates health; and restores the previous
+policy, units, and services on failure. Switching back to CPU-only stops the Trace Helper but
+preserves administrator configuration and every artifact.
+
+Existing `switch-mode` continues to change only `cap_perfmon/paranoid3_helper`. With full
+diagnostics active, that transaction must converge the Broker and both Helper topologies to the
+selected mode. Package upgrade from `0.2.0` never creates trace policy, starts a Trace Helper, or
+expands allowed modes. Projects continue to run plain `perflens init`, which safely discovers both
+the deployed privilege mode and feature profile.
+
+## 4. `v0.3.0` Trace architecture
+
+```text
+ordinary Agent / Skill / MCP
+        │ typed, explicitly authorized PID/workload plan
+        ▼
+unprivileged Python Broker
+  ├─ cap_perfmon: fixed perf trace argv
+  └─ level 3: private Trace Helper socket → separate Rust Trace Helper
+                                                   │ private raw perf.data
+                                                   ▼
+fixed perf adapter → bounded canonical events → deterministic analysis artifact
+```
+
+The current Rust Helper continues to accept only `Record/Stat`. The new Trace Helper has a
+separate binary, systemd unit, private socket/group, Rust protocol and JSON Schema, policy, fixed
+raw spool, capability audit, acknowledgement, upgrade, rollback, and removal path. Ordinary users
+cannot access its socket or raw spool; only target-scoped, bounded, privacy-checked derived evidence
+is published to the MCP-readable spool.
+
+Fixed constraints include:
+
+- same-UID PID/TID and start-time binding, short expiry, and single use;
+- no `perf -a`, system-wide target, arbitrary tracepoint, arbitrary argv, arbitrary output, shell,
+  environment, or privileged workload launch;
+- fixed mode/event allowlists, at most 10 seconds, 64 MiB, and one concurrent worker by default;
+- isolation or redaction of other-task metadata;
+- `partial` or failure for excessive loss, unpaired records, or truncation;
+- no capability expansion beyond the independently audited minimum; failure is preferred to an
+  unrestricted root service or `CAP_SYS_ADMIN` on the Python Broker;
+- external-tool adapters rather than direct `perf.data` binary parsing.
+
+## 5. `v0.3.0` deterministic analysis
+
+Every new artifact carries `schema_version`, input hash/size, converter path/version/hash/argv,
+target identity, event clock and units, loss/order/duplicate/unpaired counts, `quality_status`,
+allowed and forbidden conclusions, content digest, conversion fingerprint, and an independent
+verifier.
+
+- **SchedulerAnalysisArtifact:** per-thread runtime, runnable delay, switches, migrations, mean,
+  p50/p95/p99/max, sample count, and worst intervals. Missing wakeup/switch-in pairs never produce
+  fabricated latency.
+- **OffCpuAnalysisArtifact:** paired switch-out, wakeup, and switch-in intervals; separable blocked
+  and runnable time; task state, switch-out stack, waker, and completeness. Disk/network/lock/timer
+  categories remain candidates unless directly established.
+- **LockAnalysisArtifact:** only contention counts, wait distributions, opaque lock identity,
+  owner/waiter, and call paths actually supplied by evidence. Hold time requires reliable
+  acquire/release pairing. Futex/off-CPU correlation is a user-lock wait candidate in `v0.3.0`, not
+  a complete language-runtime lock view.
+
+## 6. `v0.3.0` milestones
+
+1. Freeze the `stat/record` and policy-compatibility baseline.
+2. Fix conversion commands, common event IR, Schemas, Goldens, and verifiers.
+3. Implement sched analysis, paging, diagnosis bundles, and conservation tests.
+4. Implement off-CPU interval analysis over the common scheduler IR.
+5. Implement kernel-lock and futex wait candidates without conflating wait and hold time.
+6. Pass privacy and real-host gates for fixed `cap_perfmon` trace collection.
+7. Define the private protocol and implement the separate Rust Trace Helper.
+8. Implement setup, switch-profile, status, acceptance, MCP, and Skill routing.
+9. Pass upgrade, rollback, removal, DEB non-activation, and real-Debian release acceptance.
+
+Installed capability is not permission to collect everything on every request. The Skill starts
+with short stat evidence, adds record for CPU stacks, sched for runnable-delay candidates, off-CPU
+for low-CPU wall-time gaps, or lock evidence for contention. It cannot expand the authorized PID,
+command, duration, event set, or privilege.
+
+## 7. `v0.3.1` user-space lock adapters
+
+### 7.1 Coverage contract
+
+There is no single perf command that observes every user-space lock implementation. “Complete
+coverage” in `v0.3.1` means that four formal runtime families have capability discovery,
+collection/import, normalized deterministic analysis, and explicit quality boundaries. It does not
+mean that arbitrary custom locks, lock-free algorithms, inlined paths, or invisible fast paths are
+observable.
+
+The common contract distinguishes exact events, thresholded events, sampled contention, and
+cumulative profiles. It carries runtime/backend, target identity, opaque lock ID, waiter and only
+evidence-supplied owner, timestamps/durations, stacks/source, sampling rate/threshold, loss,
+truncation, fast-path visibility, coverage scope, allowed/forbidden conclusions, content digest,
+converter manifest, and verifier. Sample counts are never presented as exact event counts, and
+hold time is unavailable without reliable acquire/release pairing.
+
+### 7.2 Native C/C++
+
+- Formally support dynamically linked glibc/pthread mutex, rwlock, and condition-variable paths.
+- Offer explicit launch-time instrumentation/interposition that runs as the target ordinary user.
+- Import existing USDT/uprobe evidence while recording library version, symbol, and ABI capability.
+- Mark static linkage, inlined/custom atomics, spin locks, and uncontended fast paths
+  `partial/unsupported` when they are not observable.
+- Any future live eBPF/uprobe privilege uses a separate policy and risk gate, not either existing
+  Helper.
+
+### 7.3 Java
+
+- Prefer a user-installed JDK Flight Recorder and support JDK 17, 21, and 25 LTS.
+- Use versioned JFR settings for monitor enter/wait, thread park, and available virtual-thread
+  events; preserve thresholds and missing-event semantics.
+- Detect async-profiler as an optional enhanced backend; expose JVMTI only as a controlled import
+  interface.
+- Do not bundle a JDK, async-profiler, or a general custom JVMTI agent in the core DEBs.
+
+### 7.4 Python
+
+- Formally support CPython 3.12/3.13 `threading.Lock`, `RLock`, `Condition`, and `Semaphore`.
+- Model the GIL, CPython-internal locks, and application threading locks separately.
+- Detect CPython 3.13 free-threaded builds and suppress traditional GIL conclusions.
+- Treat DTrace/SystemTap/USDT as optional import backends with build/version capability reporting.
+- Mark C-extension, custom atomic, and uninstrumented locks invisible or partial.
+
+### 7.5 Go
+
+- Adapt the official mutex and block profiles from an existing local pprof endpoint or an
+  application that explicitly configures `SetMutexProfileFraction/SetBlockProfileRate`.
+- Use the user's fixed `go tool pprof` as the adapter rather than directly parsing the binary
+  profile format.
+- Preserve sampling and cumulative semantics; never invent exact owners or per-event wait/hold
+  intervals.
+- Report channels, WaitGroups, Conds, and runtime-internal locks only to the extent represented by
+  the official profile.
+
+JDK, Go, async-profiler, and SystemTap remain optional external dependencies. PerfLens detects
+versions and gives Chinese setup guidance but neither downloads nor bundles them into the two core
+DEBs. Runtime instrumentation or attachment (`LD_PRELOAD`, JVM/JFR attachment, pprof access, or
+probe deployment) always needs a separate explicit authorization and runs as the target ordinary
+user whenever possible. The planned project opt-in is `perflens init --runtime-locks`.
+
+Custom locks may use a versioned NDJSON import contract. This remains an adapter boundary, not a
+new Agent or plugin framework.
+
+## 8. Acceptance and release wording
+
+Every new mode and adapter needs versioned Schemas, bilingual semantics, real fixtures, Goldens,
+strict unknown-field rejection, malformed/bounded/loss/order/PID-reuse/tool-substitution tests,
+hash and conservation verification, cross-UID/replay/path/command/spool-escape denial tests,
+overhead budgets, exact-versus-statistical acceptance, complete deployment lifecycle tests, Python
+and Rust quality gates, a real Debian systemd matrix, and real C/C++/Java/Python/Go workloads.
+
+Until those gates pass, the shipped release continues to advertise only `stat/record` as stable.
+`v0.3.0` may advertise `full_diagnostics` only if every included mode is complete. `v0.3.1` must
+publish an exact runtime/backend/version/sampling/fast-path support matrix. Software fallback still
+forbids IPC/cache/branch claims, and PerfLens remains outside heap profiling, request-level I/O APM,
+GPU profiling, and distributed tracing. Release notes must be generated from the final
+implementation and test evidence, not copied from this roadmap.

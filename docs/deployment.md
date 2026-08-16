@@ -9,11 +9,63 @@ for development acceptance and other Linux distributions.
 Deploy PerfLens as two privilege domains: ordinary-user CLI/MCP/Skill processes and a dedicated `perflens-collector` system service with only the host-approved perf capability. The Agent and MCP server must not run as root.
 
 After installing the DEBs, the recommended first host configuration is
-`sudo perflens-admin setup`. It offers `cap_perfmon`, `paranoid3_helper`, and
-analysis-only. Use `perflens-admin switch-mode <mode> --dry-run` before an explicit
+`sudo perflens-admin setup`. The current `0.2.0` wizard offers `cap_perfmon`,
+`paranoid3_helper`, and analysis-only. Use `perflens-admin switch-mode <mode> --dry-run` before an explicit
 host-level switch, then run `perflens init --update` in initialized projects. See
 the [Collector privilege-mode lifecycle](collector-mode-lifecycle.md). The staged
 asset flow below remains the advanced path for reviewed custom policy.
+
+## Planned `v0.3.0` guided setup
+
+`v0.3.0` changes first configuration to a feature-first, privilege-second wizard. DEB
+installation remains non-interactive and inactive: it does not generate policy, start services,
+or edit sysctl, and only directs the administrator to run:
+
+```bash
+sudo perflens-admin setup
+```
+
+The wizard first presents two primary feature profiles:
+
+1. `full_diagnostics` (recommended on a compatible host): `stat`, `record`, `sched`, `off_cpu`,
+   and `lock`.
+2. `cpu_only`: the current stable `stat` and `record` with a smaller evidence and privilege
+   surface.
+
+Full diagnostics is recommended only after tracefs, perf, kernel-event, privilege, and real short
+probe prerequisites all pass. Otherwise it is marked unavailable and CPU-only is recommended; a
+partial deployment cannot use the full-profile name. The wizard then recommends `cap_perfmon` or
+`paranoid3_helper` from host facts. Feature profile answers what may be collected, while privilege
+mode answers which bounded process holds privilege.
+
+The planned non-interactive preflight is:
+
+```bash
+sudo perflens-admin setup \
+  --feature-profile full_diagnostics \
+  --mode cap_perfmon \
+  --dry-run
+```
+
+Full diagnostics requires acknowledgement of trace metadata, call-path, disk, and overhead risk.
+The level-3 path additionally requires both `--acknowledge-privileged-helper-risk` and
+`--acknowledge-trace-risk`. The existing Rust Helper remains limited to `stat/record`; a separate
+Trace Helper handles the advanced modes. These are planned `v0.3.0` interfaces and are not current
+`0.2.0` commands.
+
+The planned post-install profile lifecycle is transactional:
+
+```bash
+sudo perflens-admin switch-profile full_diagnostics --dry-run
+sudo perflens-admin switch-profile full_diagnostics --acknowledge-trace-risk
+sudo perflens-admin switch-profile cpu_only --dry-run
+sudo perflens-admin switch-profile cpu_only
+```
+
+Returning to CPU-only stops the Trace Helper without deleting policy or retained evidence. Project
+users still run plain `perflens init`; it discovers the deployed privilege mode and feature
+profile. See the [v0.3.x capability roadmap](collector-capability-roadmap.md) for the implementation
+and acceptance contract.
 
 Ordinary users should complete [Installation and first use](../INSTALL.md) and run `perflens init` in the selected project first. This page focuses on administrator-managed Collector deployment.
 
@@ -210,6 +262,9 @@ They install offline and do not activate the service. Future RPM installers must
 preserve the same boundaries: preserve administrator configuration, avoid
 silently changing sysctl, and never grant `CAP_SYS_ADMIN` by default. Host-level
 Collector plus a controlled Unix socket is preferred over a privileged container.
+Package completion may direct the administrator to `sudo perflens-admin setup`, but maintainer
+scripts must never make that choice. Existing deployments remain CPU-only across the planned
+profile migration unless an administrator explicitly opts in.
 
 For upgrades, install the new wheel or system packages first, then run `sudo
 perflens-admin upgrade --dry-run` and `sudo perflens-admin upgrade`. The command
@@ -223,6 +278,18 @@ are preserved. A restart or health failure
 restores every unit changed by that attempt before reloading the services. Run
 ordinary-user `perflens accept-collector
 --authorize-host-acceptance` again after every upgrade.
+
+An existing `0.2.0` host upgraded to planned `v0.3.0` remains `cpu_only`: package upgrade must not
+create trace policy, activate the Trace Helper, or expand `allowed_modes`. After the normal CPU
+acceptance, the administrator separately reviews and runs `switch-profile full_diagnostics`.
+This migration rule overrides the fresh-install recommendation so upgrades never widen privilege
+silently.
+
+Planned `v0.3.1` adds native C/C++, Java, Python, and Go user-space lock adapters on top of full
+diagnostics. JDK, Go, async-profiler, and SystemTap remain optional external dependencies detected
+with Chinese setup guidance; they are not downloaded or bundled in the two core DEBs. Projects
+explicitly opt in with planned `perflens init --runtime-locks`, and `LD_PRELOAD`, JVM/JFR
+attachment, pprof access, or probe deployment still requires explicit per-operation authorization.
 
 For backward compatibility, a retained policy without `allow_software_fallback` is read as
 `false`; package upgrade never silently expands its event policy. To opt in, review a candidate

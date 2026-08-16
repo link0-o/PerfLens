@@ -1,77 +1,47 @@
-# PerfLens v0.3.0 Collector 能力扩展计划
+# PerfLens v0.3.x Collector 与用户态锁能力路线图
 
 简体中文 | [English](collector-capability-roadmap.md)
 
 状态：**下一版本设计与验收计划**
 
-最后审计：2026-08-15，基于 `b8b1eec` 之后的 `0.2.0` 代码线
+最后审计：2026-08-16，基于 `a7a5002` 之后的 `0.2.0` 代码线
 
-候选目标版本：`v0.3.0`
+候选目标版本：`v0.3.0`、`v0.3.1`
 
-本文严格区分“当前已经实现”和“下一版本计划”。除标记为“当前正式”的内容外，任何
-路线图条目都不能写进功能宣传、安装向导的默认选项或 Skill 的自动采集承诺。
+本文是后续实现、测试和发布说明的设计合同，严格区分“当前已经实现”和“计划实现”。
+除标记为“当前正式”的内容外，任何条目都不能在实现和验收完成前写成功能宣传、默认
+可用能力或 Skill 的自动采集承诺。
 
 ## 1. 决策摘要
 
-建议扩大 PerfLens 对调度、锁和 off-CPU 问题的分析边界，但按以下顺序推进：
+PerfLens 按两个版本扩大 Linux 性能诊断边界：
 
-1. **先扩确定性离线分析，再扩实时采集权限。** 先分析用户已有或管理员导出的证据，证明
-   数据模型和结论确实有用。
-2. **`stat` 和 `record` 继续是唯一默认正式采集模式。** 当前 CPU 调优闭环已经有实际价值，
-   不应为了增加模式数量破坏稳定性。
-3. **`cap_perfmon` 只在专用分析器、隐私检查和真实主机验收全部通过后，实验性开放单个
-   高级模式。** 不能一次性打开 `sched`、`lock`、`off_cpu`。
-4. **`paranoid3_helper` 在 `v0.3.0` 继续硬限制为 `stat/record`。** 不向现有 Rust 协议枚举、
-   Helper Socket 或 systemd capability 集加入 trace 模式。
-5. **如果以后必须支持 `paranoid=3` trace 采集，另建可选 Trace Helper。** 它必须拥有独立
-   unit、Socket、协议、策略、私有原始 spool、风险确认和卸载流程。
+1. **`v0.3.0` 完成通用等待诊断。** 在保留 `stat/record` CPU 调优闭环的基础上，正式完成
+   `sched`、`off_cpu` 和 `lock` 的确定性分析、受控采集、安装向导和真实主机验收。
+2. **功能配置与权限模式分离。** `full_diagnostics/cpu_only` 决定开放哪些证据能力；
+   `cap_perfmon/paranoid3_helper` 决定系统服务如何获得权限。两者不是同一组模式。
+3. **完整诊断是新安装的推荐配置，但不是无条件自动启用。** DEB 安装不交互、不启动服务；
+   管理员运行 `sudo perflens-admin setup`，经过主机预检、明确选择和风险确认后才部署。
+4. **现有 Rust Helper 永远保持 `stat/record`。** `perf_event_paranoid=3` 下的高级 trace
+   由新的独立 Trace Helper 承担，不把 trace 协议和权限塞进现有 Helper。
+5. **`v0.3.1` 增加四类正式用户态锁 Adapter。** 覆盖 C/C++ pthread、Java JFR、
+   CPython 锁和 Go mutex/block profile；自定义、内联、无探针或 lock-free 实现必须准确
+   报告覆盖缺口，不能宣称任意程序的所有锁都可见。
+6. **先证明证据语义，再扩大权限。** 每个分析器先通过冻结输入、Golden、守恒和 verifier，
+   再进入实时采集、安全和真实主机门禁。
 
-因此，`v0.3.0` 的推荐产品定位是：
+## 2. 当前 `0.2.0` 事实基线
 
-> 保持可靠的 CPU 调优核心；新增有证据质量门禁的等待/调度离线分析；只把通过安全验收的
-> `cap_perfmon` trace 采集作为默认关闭的实验能力，不扩大 paranoid=3 的 root 边界。
-
-## 2. 两类模式不能混淆
-
-- **Collector 权限模式**：`cap_perfmon`、`paranoid3_helper`；决定哪个系统进程持有什么权限。
-- **性能采集模式**：`stat`、`record`、`sched`、`lock`、`off_cpu`；决定采集哪类证据。
-
-权限模式和采集模式不是一一对应。策略或 Schema 中出现某个采集模式，也不代表该权限模式
-已经安全支持它，更不代表 PerfLens 已经能稳定解释其结果。
-
-本文使用四个成熟度标签：
-
-- **当前正式**：默认产品路径、具有确定性分析和发布验收；
-- **当前实验入口**：代码能生成固定命令或保存原始产物，但没有完整专用分析闭环；
-- **v0.3.0 计划**：只有实现和验收完成后才能对用户开放；
-- **明确不支持**：本版本不应执行或宣传。
-
-## 3. 当前 `0.2.0` 事实基线
-
-### 3.1 代码和策略实际状态
+### 2.1 当前正式能力
 
 | 层 | `stat` / `record` | `sched` / `lock` / `off_cpu` |
 |---|---|---|
-| 公共 Python 类型与 Schema | 已表达 | 已表达 |
-| MCP/CLI 参数 | 已暴露 | 已暴露，但不等于正式支持 |
-| 项目初始化默认自动模式 | 默认启用 | 默认不启用 |
-| Broker 默认策略 | `record, stat` | 默认拒绝 |
-| `cap_perfmon` Python Collector | 固定 argv、产物和边界 | 有固定原始采集命令入口 |
-| `paranoid3_helper` Python 策略 | 允许 | 硬拒绝其他模式 |
-| Rust Helper 私有协议 | 仅 `Record`、`Stat` | 枚举不存在，严格拒绝 |
-| Agent 可用的确定性分析 | stat 类型化指标；record 热点、调用路径、源码和证据校验 | 只有通用 perf.data 路径，没有专用延迟/等待 Artifact |
+| 公共 Python 类型与 CLI/MCP | 已表达并正式使用 | 已有原始入口，不等于正式支持 |
+| 默认 Collector 策略 | 允许 `record, stat` | 默认拒绝 |
+| `cap_perfmon` Python Collector | 固定 argv、时限和产物 | 能构造固定原始命令，但没有专用分析闭环 |
+| `paranoid3_helper` | Rust 协议仅允许 `Record/Stat` | 严格拒绝 |
+| 确定性分析 | stat 指标；record 热点、调用路径、源码和完整性验证 | 缺少稳定的区间、延迟和等待 Artifact |
 | 当前成熟度 | **当前正式** | **当前实验入口** |
-
-当前 `cap_perfmon` 路径固定构造：
-
-- `perf sched record`；
-- `perf lock record`；
-- `perf record -e sched:sched_switch` 形式的 off-CPU 栈证据。
-
-这些入口仍缺少稳定的配对区间、延迟分布、锁 owner/waiter、丢失事件解释和专用结论门禁。
-把普通 `perf script` 热点分析套在 trace 产物上，不能替代这些分析器。
-
-### 3.2 当前 CPU 调优闭环
 
 当前正式闭环为：
 
@@ -82,328 +52,317 @@
         ↓
 需要调用栈时 record（cycles 或 cpu-clock）
         ↓
-原始证据哈希、事件和来源绑定
+原始证据哈希、事件来源和转换身份绑定
         ↓
 热点、调用路径、源码和 EvidenceQuality
         ↓
 正确性测试 + 同工作负载、同事件来源 A/B
 ```
 
-`b8b1eec` 已完成的关键基础不再列为待修复：
+它足以对 CPU 饱和、算法复杂度和函数热点做有价值的调优。硬件 PMU 不可用时，软件
+降级仍能定位 on-CPU 热点，但不能得出 IPC、硬件缓存未命中或分支未命中结论。
 
-- stat 原始 CSV 哈希与类型化指标精确回放；
-- record Collection、事件来源、转换文本和 Analysis 身份绑定；
-- 未知调用栈位置保留为 unknown Frame，避免错误 Self 归因；
-- Agent 可见内容摘要、分析指纹、权重守恒和独立 `verify_analysis`；
-- Python/JIT、C/C++、Rust、Go、Java 样式符号回归矩阵；
-- MCP 分页和详情加载时重新校验对象身份；
-- 项目工作负载就绪握手、进程组清理和 CI 超时稳定性；
-- 硬件正式采集无可用计数时，在原授权窗口内安全降级。
+### 2.2 当前不足
 
-仍然缺少的是更高层的工作负载身份、稳定 Benchmark 编排、等待/竞争分析器和更宽真实主机
-矩阵，而不是原始证据到 Agent 的基本完整性门禁。
-
-## 4. 当前能力够不够做性能调优
-
-| 性能问题 | 当前效果 | 能否做较好调优 | 证据边界 |
-|---|---|---|---|
-| CPU 饱和、算法复杂度 | 好 | 可以 | 仍需正确性和匹配 A/B 才能称为改进 |
-| 函数热点、调用路径 | 好 | 可以 | 取决于 unwind、符号、Build ID 和调试信息 |
-| C/C++/Rust/Go CPU 热点 | 好 | 可以 | 缺调试信息时只能到符号级 |
-| Python/JIT CPU 热点 | 中到好 | 可以 | 依赖运行时 perf map/sidecar；跨时间回放可能受限 |
-| IPC、缓存、分支预测 | 条件性 | PMU 可用时可以 | 软件降级时明确不支持这些结论 |
-| 修改前后 CPU 验证 | 基本可用 | 可以 | 必须同工作负载、同事件来源并包含正确性测试 |
-| 调度延迟、线程长期 runnable | 不完整 | 目前不够 | stat 活动计数不能给出延迟区间或分位数 |
-| 锁竞争、owner/waiter | 不完整 | 目前不够 | on-CPU futex/mutex 栈不能证明等待时长 |
-| CPU 不高但墙钟时间长 | 不完整 | 目前不够 | 缺少配对 off-CPU/唤醒/重新运行区间 |
-| 内存分配、泄漏、碎片 | 不支持 | 不够 | 需要独立 allocator/heap Adapter |
-| 磁盘、网络请求延迟 | 不支持 | 不够 | 需要设备/系统调用/请求级关联证据 |
-| GPU、跨主机追踪、生产 APM | 不在边界 | 不够 | 不是下一版本目标 |
-
-结论：当前能力足以对 CPU 密集型程序做有价值且可以验证的算法级、函数级调优；硬件 PMU
-可用时还能提供微架构候选。在当前 VMware 软件降级环境中，仍能定位 on-CPU 热点和调用
-路径，但不能推断 IPC、缓存或分支。对于“程序很慢但 CPU 不高”的问题，必须扩大等待和
-调度证据，不能继续依赖 on-CPU Profile 猜测。
+| 问题 | 当前边界 | v0.3.x 方向 |
+|---|---|---|
+| 线程长期 runnable | 只有活动计数，缺少等待区间和分位数 | `sched` |
+| CPU 不高但墙钟时间长 | 缺少切出、唤醒和重新运行配对 | `off_cpu` |
+| 内核锁和 futex 等待 | 原始证据不等于稳定 owner/waiter 分析 | `lock` |
+| C/C++ 用户态锁快路径 | futex 只能看到部分慢路径 | Native Adapter |
+| JVM 监视器和 park | 通用 perf 不能表达完整 JVM 语义 | JFR Adapter |
+| GIL 与 Python 应用锁 | 两者语义不同，不能从符号名称互推 | CPython Adapter |
+| Go runtime 锁和阻塞 | 应保留 runtime profile 的采样语义 | Go pprof Adapter |
+| heap、I/O 请求、GPU、跨主机 APM | 不在本路线图边界 | 独立后续 Adapter |
 
 较少的 context-switch、migration 或 page-fault 只代表本次观察到这些事件较少，不能证明
 不存在 I/O 等待、锁竞争、分配抖动或内存压力。
 
-## 5. `v0.3.0` 发布范围
+## 3. v0.3.0 安装向导与模式模型
 
-### 5.1 必须交付
+### 3.1 DEB 安装边界
 
-1. 当前 `stat/record` 闭环保持兼容，现有 `0.2.0` Collector 策略和证据可继续使用。
-2. 新增版本化、流式、有界的调度与等待证据公共模型。
-3. 完成导入型 `sched` 与 `off_cpu` 确定性分析；`lock` 至少完成公共模型、转换契约和
-   Golden，只有聚合语义稳定后才标记 beta。
-4. 每种分析都返回独立 EvidenceQuality、允许/禁止结论、丢失/未配对/截断统计。
-5. Skill 能根据问题选择现有正式证据；高级模式不可用时明确报告缺口，不得假装已经采集。
-6. 文档、CLI 帮助、MCP 描述和状态输出使用同一成熟度术语。
+`perflens` 和 `perflens-collector` DEB 继续只安装程序、模板和文档。安装过程：
 
-### 5.2 条件性交付
+- 不弹交互问题；
+- 不生成管理员策略；
+- 不启动或启用服务；
+- 不修改 sysctl、文件 capability 或用户项目；
+- 只在安装完成摘要中提示下一步运行 `sudo perflens-admin setup`。
 
-只有全部安全门通过，才在 `cap_perfmon` 中加入默认关闭的实验性 `sched` 或 `off_cpu`
-实时采集。`lock` 采集不因已有命令包装器而自动晋级。
+这样无人值守升级和镜像构建不会意外扩大主机权限。
 
-### 5.3 明确不进入 `v0.3.0`
+### 3.2 两个主要功能配置
 
-- 不扩大现有 Rust Helper 的 `Record/Stat` 枚举；
-- 不给 Agent、Skill 或 MCP root、sudo 或 capability；
-- 不允许 `perf -a`、任意 tracepoint、任意 perf 参数或任意输出路径；
-- 不自动修改 `perf_event_paranoid`、tracefs、sysctl、capability 或 LSM；
-- 不承诺生产常驻监控、Web UI、Windows/macOS、GPU、分布式追踪；
-- 不把 eBPF 作为绕过证据模型和权限审查的捷径；
-- 不直接解析 `perf.data` 二进制。
-
-## 6. 数据模型与确定性分析设计
-
-### 6.1 共同来源模型
-
-三类高级分析必须共享以下来源字段：
-
-- `schema_version`、artifact ID、输入 SHA-256/大小；
-- 固定外部转换器的规范路径、版本、SHA-256、精确 argv 和 locale；
-- 目标 PID/TID、UID、启动时间和采集时间范围（可用时）；
-- 时间戳时钟/单位、CPU、事件类型、原始事件数；
-- 丢失事件、乱序、重复、未配对、未知任务状态、解析警告和截断数量；
-- 是否观察到目标外任务元数据，以及该数据是否被拒绝或隔离；
-- `quality_status`、`allowed_conclusions`、`forbidden_conclusions`、`limitations`；
-- 内容摘要和转换指纹，支持独立验证和不可变分页。
-
-系统 `perf` 负责把 `perf.data` 转换为固定文本字段。PerfLens 解析转换结果，不实现自己的
-二进制 perf.data 解码器。
-
-### 6.2 SchedulerAnalysisArtifact
-
-至少包含：
-
-- 每个 PID/TID 的 on-CPU 区间与总运行时间；
-- wakeup 到 switch-in 的 runnable/run-queue 延迟；
-- switch-in、switch-out、wakeup、migration 和上下文切换次数；
-- 平均值、p50、p95、p99、最大值以及分位数样本数；
-- 最严重延迟区间对应的线程、CPU 和有界调用路径；
-- preempted/runnable 与 sleeping/blocked 状态的明确区分；
-- 开头/结尾被截断、PID/TID 复用、缺失 wakeup 或 switch 事件的数量。
-
-没有完整 wakeup 与 switch-in 配对时，不能输出伪造的 runnable 延迟。低事件数分位数必须
-标为不稳定，不能只展示 p99 而隐藏样本数量。
-
-### 6.3 OffCpuAnalysisArtifact
-
-每个完整区间至少记录：
+`v0.3.0` 的交互式 `setup` 首先展示：
 
 ```text
-switch-out
-    ↓ blocked/sleeping interval（仅在任务状态和 wakeup 完整时）
-wakeup
-    ↓ runnable delay
-switch-in
+请选择 PerfLens 功能配置：
+
+1. 完整性能诊断（推荐）
+   stat + record + sched + off_cpu + lock
+
+2. 标准 CPU 调优
+   stat + record；权限范围和证据面更小
 ```
 
-字段包括 PID/TID、开始/结束时间、总 off-CPU 时长、可分离时的 blocked 时长和 runnable
-时长、切出调用栈、唤醒者、任务状态、CPU 迁移以及完整性状态。
+- `full_diagnostics` 是主机通过全部前置检查时的新安装推荐项。
+- `cpu_only` 是最小权限配置，并且是所有 `0.2.0` 已部署主机升级后的兼容配置。
+- 如果完整配置缺少 tracefs、内核事件、perf 支持或安全前置条件，向导必须把它标为
+  “当前主机不可用”，动态推荐 `cpu_only`，不能静默部署一个不完整的“完整配置”。
+- `analysis_only` 继续作为高级自动化值和失败回退，不占两个主要功能选项。
 
-“磁盘”“网络”“锁”“定时器”等等待类别只能是带证据说明的候选。仅凭函数名、线程名或
-任务状态不能确认等待机制。
+计划中的非交互接口为：
 
-### 6.4 LockAnalysisArtifact
-
-在底层 perf 输出确实提供相应字段时，聚合：
-
-- 竞争次数、成功/失败/未知事件数；
-- 总等待、平均、p50/p95/p99、最大等待；
-- owner/waiter 关系和锁地址的稳定匿名 ID；
-- 等待方和获取方调用路径、源码归因；
-- 持锁时间只在 acquire/release 能可靠配对时输出；
-- 递归锁、读写锁、事件丢失和地址复用限制。
-
-如果所用 perf/kernel 只能提供 contention 而不能可靠提供持锁区间，字段必须为 unavailable，
-不能用等待时间代替持锁时间。
-
-## 7. 实施里程碑
-
-### M0：冻结当前 CPU 核心基线
-
-- 保留 `stat/record` 默认策略、协议和产物兼容；
-- 把已完成的证据完整性修复从路线图待办移到 CHANGELOG；
-- 修复过期 TTL、旧 perf/内核版本、旧覆盖率和“所有五种模式已支持”的文档；
-- 为当前 Python 软件降级验收保留环境与限制说明，但不把单机结果泛化。
-
-验收：文档一致性检查、现有全套 Python/Rust/DEB 门禁不回退。
-
-### M1：转换契约和公共 Schema
-
-- 先固定每种 `perf script`/`perf sched`/`perf lock` 外部转换命令和允许字段；
-- 建立共同事件 IR 和三个版本化 Artifact；
-- 拒绝未知字段、非有限时间戳、负时长、逆序区间和超限基数；
-- 添加真实格式 fixture、合成边界 fixture、Golden 和 Schema 生成检查；
-- 所有诊断和原始预览有界。
-
-验收：同一冻结输入重复转换字节一致；错误行隔离但损失可见；权重/区间守恒失败关闭。
-
-### M2：`sched` 离线分析
-
-- 重建 switch-in/out 和 wakeup 配对；
-- 输出每线程运行与 runnable 延迟分布；
-- 处理迁移、抢占、trace 起止截断、PID/TID 复用和 lost events；
-- 提供 CLI/MCP 的分析、详情、分页、验证和诊断包接口。
-
-验收：至少覆盖单线程、多线程、迁移、抢占、缺失 wakeup、乱序、丢失事件和超限输入；
-没有完整配对时返回 `partial`，不输出伪精确延迟。
-
-### M3：`off_cpu` 离线分析
-
-- 在 M2 的统一调度 IR 上重建 off-CPU 区间；
-- 分离可证明的 sleeping/blocked 与 runnable 等待；
-- 聚合切出路径、唤醒者和任务状态；
-- 明确禁止从路径名称确认 I/O 或锁根因。
-
-验收：区间总量守恒；开头/结尾截断和未配对事件单独计数；跨任务数据不会通过详情或分页
-越界泄露。
-
-### M4：`lock` 离线分析
-
-- 固定支持的 perf 版本输出契约；
-- 建立 contention、等待分布、owner/waiter 和可选持锁区间；
-- 与 sched/off-CPU 证据通过 Artifact ID 关联，而不是把不同语义混成一个百分比；
-- 增加并发正确性、压力和 race 测试要求。
-
-验收：等待与持锁语义不能混用；丢失事件导致 `partial`；没有 owner 证据时不得猜 owner。
-
-### M5：`cap_perfmon` 实验采集评估
-
-先进行真实主机只读研究，再决定是否开放。必须证明：
-
-1. `-p <目标>` 和固定事件不会把其他 UID 的原始任务数据发布到组可读 spool；
-2. tracefs、perf_event_paranoid、LSM、内核和 perf 版本组合的最小权限已明确；
-3. `CAP_PERFMON` 足够时不增加 `CAP_SYS_ADMIN`；不足时本版本失败关闭，不偷偷扩大 unit；
-4. 采集仍绑定同 UID PID 和启动时间，不支持 system-wide；
-5. 原始产物在发布前经过目标范围、大小、事件和隐私检查；
-6. 事件丢失超过门槛时结果为 `partial` 或失败，不能标为完整。
-
-若通过，引入 policy v2 的显式实验段；旧 policy v1 继续支持 `stat/record`，升级不得自动迁移：
-
-```toml
-[collector]
-policy_version = 2
-allowed_modes = ["record", "stat"]
-
-[collector.experimental_trace]
-enabled = false
-allowed_modes = []
-max_duration_seconds = 10
-max_output_bytes = 67108864
-allow_other_task_metadata = false
+```bash
+sudo perflens-admin setup \
+  --feature-profile full_diagnostics \
+  --mode cap_perfmon \
+  --dry-run
 ```
 
-具体字段以实现后的 Schema 为准；这里是设计目标，不是当前可用配置。管理员必须生成候选、
-审查 diff、运行 `--dry-run` 后显式启用。默认仍为空列表。
+这些参数在 `0.2.0` 尚未实现；只有 `v0.3.0` 代码和测试完成后才可作为用户命令发布。
 
-### M6：Skill 证据路由和验证闭环
+### 3.3 权限实现自动推荐
 
-默认自动策略：
+功能配置之下仍有两个互斥的 Collector 权限模式：
+
+| 权限模式 | 推荐条件 | `cpu_only` | `full_diagnostics` |
+|---|---|---|---|
+| `cap_perfmon` | 主机策略允许专用 capability，真实短时预检通过 | Python Broker 执行 stat/record | Python Collector 按固定策略执行全部已验收模式 |
+| `paranoid3_helper` | 必须保留 Debian `perf_event_paranoid=3` | Broker → 现有 Rust Helper | 现有 Helper 负责 stat/record；独立 Trace Helper 负责高级模式 |
+
+向导根据实际主机检查给出推荐，但管理员仍可用 `--mode` 显式选择。PerfLens 不自动降低
+`perf_event_paranoid`。如果显式选择与主机事实冲突，dry-run 和正式部署都必须在写系统前
+拒绝。
+
+选择 `full_diagnostics` 必须确认 trace 的调用路径、线程元数据、磁盘和采集开销风险；
+选择 `paranoid3_helper` 还必须单独确认现有高权限 Helper 风险：
+
+```bash
+sudo perflens-admin setup \
+  --feature-profile full_diagnostics \
+  --mode paranoid3_helper \
+  --acknowledge-privileged-helper-risk \
+  --acknowledge-trace-risk
+```
+
+### 3.4 安装后的配置切换
+
+功能配置与权限模式分别切换：
+
+```bash
+sudo perflens-admin switch-profile full_diagnostics --dry-run
+sudo perflens-admin switch-profile full_diagnostics --acknowledge-trace-risk
+
+sudo perflens-admin switch-profile cpu_only --dry-run
+sudo perflens-admin switch-profile cpu_only
+```
+
+`switch-profile` 是 `v0.3.0` 计划接口，必须：
+
+1. 验证当前策略、受管 unit、目标配置和主机能力；
+2. 生成可审查的确定性差异和命令计划；
+3. 原子更新独立 trace 策略和服务；
+4. 完成认证健康检查；
+5. 失败时恢复原策略、unit 和服务；
+6. 从完整切回标准时停止 Trace Helper，但保留所有证据和管理员配置。
+
+现有 `switch-mode` 继续只切换 `cap_perfmon/paranoid3_helper`。在完整配置下切换权限模式时，
+同一次受管事务必须把对应的 Broker、Helper 和 Trace Helper 拓扑收敛到目标状态。
+
+从 `0.2.0` 升级不得自动创建 trace 策略、启动 Trace Helper 或扩大 allowed modes。管理员
+必须显式运行 `switch-profile full_diagnostics`。项目侧继续只需运行 `perflens init`；它
+安全读取已部署的权限模式和功能配置，为 Codex/Claude Code 生成一致的 MCP 配置。
+
+## 4. v0.3.0 Trace 架构与安全边界
+
+### 4.1 进程与数据流
 
 ```text
-1～2 秒 stat
-   ├─ CPU 密集且需要栈 → 5～10 秒 record
-   ├─ runnable/迁移候选 → sched（仅在已启用实验策略内）
-   ├─ 明确锁等待问题 → lock（仅在专用分析器稳定后）
-   └─ CPU 不高、墙钟长 → off_cpu（仅在已启用实验策略内）
+普通用户 Agent / Skill / MCP
+              │ typed plan，明确 PID/工作负载授权
+              ▼
+        非特权 Python Broker
+          ├─ cap_perfmon：固定 perf trace argv
+          └─ paranoid=3：私有 Trace Helper Socket
+                            │
+                            ▼
+                    独立 Rust Trace Helper
+                            │ 私有原始 perf.data
+                            ▼
+        固定 perf script 转换 → 规范化有界事件 → 确定性分析 Artifact
 ```
 
-Skill 只能在用户已批准的精确工作负载和管理员策略范围内选择证据。它不能自动增加 PID、
-命令、时长、事件、权限或采集模式；高级模式不可用时应报告缺失证据和导入方法。
+现有 Rust Helper 继续只接受 `Record/Stat`。新的 Trace Helper 必须拥有独立：
 
-优化仍需同工作负载、同环境、同实际事件来源、正确性测试和匹配 A/B。调度/锁证据改善
-不能自动等价为端到端延迟改善。
+- 二进制和 systemd unit；
+- 私有 Unix Socket 和内部服务组；
+- Rust 协议与 JSON Schema；
+- 管理员策略和固定私有 spool；
+- capability 审计、风险确认、升级、回滚和卸载流程。
 
-### M7：发布候选与降级
+Helper Socket 不得向普通用户开放。原始 trace 只进入私有 spool；公开给 MCP 的派生产物
+必须先经过目标范围、大小、事件、丢失和隐私检查。
 
-- `v0.3.0` 升级保留现有 policy、spool 和服务模式；
-- 新实验策略默认关闭，可以原子回滚到原 policy；
-- 新 Artifact 是新增 Schema，不原地改写旧 Analysis；
-- `paranoid3_helper` 升级前后协议仍只接受 `record/stat`；
-- 安装包不启用服务、不选择高级模式、不修改 sysctl；
-- 任何高级模式门禁未通过时，从发布范围删除该模式的实时采集，不延迟核心 CPU 修复发布。
+### 4.2 固定安全边界
 
-## 8. 为什么暂不扩大 `paranoid3_helper`
+- 只接受绑定 UID、PID/TID、进程启动时间、模式和过期时间的短期单次计划；
+- 不允许 `perf -a`、system-wide 目标、任意 tracepoint、任意 perf 参数或任意输出路径；
+- 不允许 workload 命令、环境变量、shell 或以 Helper 权限启动用户代码；
+- 每种模式使用固定事件和 argv 白名单，单次默认最多 10 秒、64 MiB、一个并发 worker；
+- 目标外任务元数据必须隔离或脱敏，不能写入普通用户可读 spool；
+- 事件丢失、未配对或截断超过分析门槛时返回 `partial` 或失败；
+- 新 Trace Helper 的 capability 不得超过经过审计的最小集合；不足时失败关闭，不能临时
+  加入不受限 root 或让 Python Broker 获得 `CAP_SYS_ADMIN`；
+- PerfLens 继续不直接解析 `perf.data` 二进制，由固定系统 perf Adapter 转换。
 
-当前 Helper 已在 root UID 和 `CAP_PERFMON`、`CAP_SYS_ADMIN`、`CAP_SYS_PTRACE` 的严格 systemd
-上限内运行。虽然协议很小，但 trace 模式会增加以下风险：
+## 5. v0.3.0 确定性分析合同
 
-- sched/lock 事件天然涉及目标以外的调度者、唤醒者或锁参与者；
-- tracepoint/tracefs 和不同内核、LSM、perf 版本的权限行为差异更大；
-- 原始证据可能暴露其他任务名称、PID、调用栈或内核地址；
-- 新 perf 子命令拥有不同 argv、生命周期和失败清理语义；
-- 当前 Rust 协议、Golden 和重放标记只证明 `stat/record` 边界。
+所有新 Artifact 都需要 `schema_version`、输入 SHA-256、转换器版本/路径/argv、采集身份、
+事件时钟和单位、丢失/乱序/重复/未配对数量、`quality_status`、允许/禁止结论、内容摘要、
+转换指纹和独立 verifier。
 
-把三个字符串加入 allowlist 会绕过独立协议设计和审计，不可接受。
+### 5.1 SchedulerAnalysisArtifact
 
-未来 Trace Helper 至少需要：
+至少输出每线程运行时间、runnable 等待、上下文切换、迁移、平均值、p50/p95/p99/最大值、
+样本数量和最严重延迟区间。缺失 wakeup/switch-in 配对时不得输出伪造延迟；低样本分位数
+必须标记不稳定。
 
-- 独立 systemd unit、服务用户、私有 Socket 和私有原始 spool；
-- 独立 Rust 协议和 capability 审计；
-- 只向 Broker 发布经过目标过滤和脱敏的派生产物；
-- 单独管理员风险确认、部署、升级、回滚和卸载命令；
-- cross-UID、其他任务元数据、PID 复用、重放、过期、超限、spool 逃逸和 worker 失败测试。
+### 5.2 OffCpuAnalysisArtifact
 
-这属于 `v0.4.0+` 候选，不是 `v0.3.0` 承诺。
+基于 switch-out、wakeup、switch-in 重建完整区间，并在证据允许时分离 blocked/sleeping
+时间与 runnable 时间。记录目标 TID、任务状态、切出调用栈、唤醒者和完整性。磁盘、网络、
+锁或定时器只能作为候选类别，不能仅凭函数名确认根因。
 
-## 9. 性能与资源预算
+### 5.3 LockAnalysisArtifact
 
-新解析器必须：
+聚合底层证据真实提供的竞争次数、等待分布、稳定匿名锁 ID、owner/waiter 和调用路径。
+持锁时间只在 acquire/release 可可靠配对时输出；没有 owner 证据时不得猜测。`v0.3.0`
+把 futex/off-CPU 关联标为用户态锁等待候选，不把它伪装成特定语言锁的完整视图。
 
-- 按事件流处理，不把完整 trace 一次性载入内存；
-- 继续服从输入字节、行长、逻辑事件、唯一任务、唯一锁、调用路径和输出页上限；
-- 对分位数算法说明是精确、有界近似还是因上限不可用；
-- 在高事件率、深栈、高 TID/锁基数、丢失/乱序输入上记录吞吐、p95 和峰值 RSS；
-- MCP 只返回有界页，完整原始数据保留为不可变 Artifact；
-- 不为通过 fixture 特判符号、PID、锁地址或事件顺序。
+## 6. v0.3.0 实施里程碑
 
-具体数值预算必须由可重现基准确定后写入 `performance-budget`，不能先凭感觉宣称性能足够。
+1. 冻结 `stat/record` 基线和现有策略兼容性。
+2. 固定 trace 转换命令、公共事件 IR、Schema、Golden 和 verifier。
+3. 完成 `sched` 分析、分页、诊断包和守恒测试。
+4. 在统一调度 IR 上完成 `off_cpu` 区间分析。
+5. 完成内核锁和 futex 等待候选分析，严格区分等待与持锁语义。
+6. 在 `cap_perfmon` 模式完成固定高级采集、隐私检查和真实主机验收。
+7. 定义私有协议并实现独立 Rust Trace Helper。
+8. 完成 `setup/switch-profile/status/accept-collector`、MCP 和 Skill 路由。
+9. 完成升级、回滚、卸载、DEB 非激活和真实 Debian 发布验收。
 
-## 10. 安全与质量发布门槛
-
-每个新模式至少需要：
-
-- 版本化 JSON Schema 和中英文语义文档；
-- 真实格式 fixture、Golden、畸形/超限/截断/丢失事件测试；
-- 输入、转换、Artifact 内容摘要和独立 verifier；
-- 未授权 peer、跨 UID、PID 复用、重放、过期、未知字段、任意路径/命令/事件拒绝测试；
-- spool 配额、失败清理、服务升级/回滚/卸载和包非激活测试；
-- Debian 真实 systemd 主机验收，并记录 kernel、perf、tracefs、LSM 和 capability；
-- Python lint、类型、完整测试和覆盖率门禁；
-- Rust 变更时的 fmt、clippy、test、audit、deny 和跨语言协议一致性；
-- 文档明确区分 `observed`、`candidate`、`confirmed` 和 `Verified Improvement`。
-
-只有分析器门禁通过，才能进入采集安全门；只有安全门和真实主机门通过，才能把某个高级
-模式从“原始实验入口”改为“实验支持”。默认正式支持需要至少一个版本周期的真实反馈。
-
-## 11. 推荐实施顺序
+Skill 的默认证据选择为：
 
 ```text
-M0 文档与 CPU 基线
-  → M1 共同转换/Schema
-  → M2 sched 离线分析
-  → M3 off_cpu 离线分析
-  → M4 lock 离线分析
-  → M5 cap_perfmon 单模式实验采集
-  → M6 Skill 路由与 A/B
-  → M7 发布、升级和回滚验收
+短时 stat
+   ├─ CPU 密集且需要栈 → record
+   ├─ runnable/迁移异常 → sched
+   ├─ CPU 不高但墙钟长 → off_cpu
+   └─ 明确竞争候选 → lock
 ```
 
-不应并行扩大 Helper 权限和发明三个分析器。先把证据语义做对，才能判断额外权限是否值得。
+即使安装了完整配置，也不能在一次请求中无差别运行所有采集。Skill 只能在用户已批准的
+精确工作负载和管理员策略内选择最小必要证据，不能自动扩大 PID、命令、时长或权限。
 
-## 12. 发布时对用户的准确表述
+## 7. v0.3.1 用户态锁 Adapter
 
-`v0.3.0` 在所有门禁完成前，只能承诺：
+### 7.1 “完整覆盖”的产品含义
 
-- `stat/record` 是正式 CPU 调优能力；
-- `sched/off_cpu` 导入分析是计划中的 beta，完成后按实际发布说明列出；
-- `lock` 的成熟度以最终验收为准；
-- `cap_perfmon` 高级采集默认关闭且可能从发布范围移除；
-- `paranoid3_helper` 仍只支持 `stat/record`；
-- 软件 PMU 降级不会产生 IPC、缓存或分支结论；
-- PerfLens 不是 heap profiler、I/O APM、GPU profiler 或分布式追踪系统。
+用户态锁不是做不到，而是不存在一个通用 perf 命令一次覆盖所有语言和实现。`v0.3.1`
+的“完整覆盖”指四类正式运行时 Adapter 都有能力检测、采集、规范化分析和质量说明，
+而不是声称任意自定义锁、lock-free 算法或不可观察快路径都能被看见。
 
-最终 Release Notes 必须从实际实现和测试结果生成，不能直接复制本文的计划条目。
+通用运行时锁合同至少包含：
+
+- runtime、backend、PID/TID、目标身份和稳定匿名锁 ID；
+- `wait_begin/wait_end`、`acquire/release`、`park/unpark` 或 sampled contention；
+- 等待者，以及仅在证据真实提供时记录的 owner；
+- 时间戳、等待/持有时长、调用栈、符号和源码；
+- 采样率、事件阈值、丢失/截断、快路径可见性和覆盖范围；
+- `exact`、`thresholded`、`sampled`、`cumulative` 语义；
+- allowed/forbidden conclusions、内容摘要、转换 manifest 和 verifier。
+
+抽样次数不得伪装成精确竞争次数，累计 profile 不得伪装成事件序列；缺少 acquire/release
+配对时不得声称精确持锁时间。
+
+### 7.2 C/C++ Native Adapter
+
+- 正式支持动态链接 glibc/pthread 的 mutex、rwlock 和 condition variable；
+- 对 PerfLens 启动的工作负载提供显式选择、以目标普通用户运行的插桩/拦截方案；
+- 支持导入已有 USDT/uprobe 证据，并记录库版本、符号和 ABI 能力；
+- 静态链接、内联、自定义原子锁、自旋锁和无竞争快路径必须报告 `partial/unsupported`；
+- 实时 eBPF/uprobe 若以后需要额外权限，使用独立策略和风险门，不并入现有 Helper。
+
+### 7.3 Java Adapter
+
+- 首选用户安装的 JDK Flight Recorder，正式兼容 JDK 17、21、25 LTS；
+- 使用版本受控的 JFR 配置分析 monitor enter/wait、thread park，以及运行时可用时的虚拟
+  线程事件；
+- 保留 JFR 阈值和事件缺失信息，未记录事件不能解释成“没有等待”；
+- async-profiler 是自动检测的可选增强后端，JVMTI 只提供受控导入接口；
+- PerfLens 不在核心 DEB 中捆绑 JDK、async-profiler 或自制通用 JVMTI Agent。
+
+### 7.4 Python Adapter
+
+- 正式支持 CPython 3.12/3.13 的 `threading.Lock`、`RLock`、`Condition` 和 `Semaphore`；
+- 分别建模 GIL、CPython 内部锁和应用层 threading 锁，三者不能互相推断；
+- CPython 3.13 free-threaded 构建单独识别，不输出传统 GIL 结论；
+- DTrace/SystemTap/USDT 作为可选导入后端，并按 CPython 构建与版本报告兼容性；
+- C 扩展内部锁、自定义原子锁和未经过 Adapter 的锁明确标记不可见或部分覆盖。
+
+### 7.5 Go Adapter
+
+- 接入 Go 官方 mutex profile 和 block profile；
+- 支持用户已有的本地 pprof 端点，或由应用显式配置的
+  `SetMutexProfileFraction/SetBlockProfileRate`；
+- 使用用户系统中的固定 `go tool pprof` Adapter，不在 PerfLens 内直接解析二进制 profile；
+- 保留采样率和累计语义，不虚构精确 owner、逐次等待或持锁区间；
+- channel、WaitGroup、Cond 和 runtime 内部锁只按官方 profile 实际提供的语义报告。
+
+### 7.6 外部工具、授权和项目体验
+
+JDK、Go、async-profiler、SystemTap 等是可选外部依赖。PerfLens 自动检测版本和能力，
+给出中文安装/启用说明，但不在核心两个 DEB 中隐式下载或捆绑。
+
+运行时 Adapter 尽量以目标普通用户执行。`LD_PRELOAD`、JVM 附加、JFR 启动、pprof 端点
+访问或 probe 部署都需要独立的运行时插桩/附加授权，不能因为用户说“优化项目”就自动
+扩大。计划中的项目级入口为：
+
+```bash
+perflens init --runtime-locks
+```
+
+通用 `lock` 证据先运行；只有语言识别、Adapter 能力、管理员策略和本次授权同时允许时，
+Skill 才升级到运行时专用证据。自定义锁可以通过版本化 NDJSON 导入合同接入，但这只是
+Adapter 接口，不建设新的 Agent 或插件框架。
+
+## 8. 安全、性能和发布门槛
+
+每个新增模式和 Adapter 至少需要：
+
+- 版本化 JSON Schema、中英文语义文档、真实 fixture、Golden 和严格未知字段拒绝；
+- 畸形、超限、截断、丢失、乱序、PID 复用、目标退出和工具替换测试；
+- 输入/转换/Artifact 哈希绑定、区间/权重守恒、质量一致性和独立 verifier；
+- 未授权 peer、跨 UID、任意路径/命令/事件、重放、过期和 spool 逃逸拒绝测试；
+- 采集、插桩和解析的吞吐、p95、峰值 RSS、磁盘和目标开销预算；
+- 精确事件用精确期望验收，抽样证据使用统计容差，不能混用；
+- deploy、switch-mode、switch-profile、upgrade、rollback、undeploy 和包非激活测试；
+- Python lint、类型、完整测试和覆盖率门禁；Rust fmt、clippy、test、audit、deny 和跨语言
+  协议一致性；
+- Debian 真实 systemd 主机，以及 C/C++、Java、Python、Go 真实运行时矩阵。
+
+只有分析门、安全门、兼容门和真实主机门全部通过，功能才能从“计划”改为“正式”。
+优化结论仍必须区分 `observed`、`candidate`、`confirmed` 和 `Verified Improvement`；只有
+正确性通过的匹配 A/B 才能称为已验证改进。
+
+## 9. 发布和兼容表述
+
+- 在 `v0.3.0` 完成前，当前发布仍只把 `stat/record` 声明为正式采集能力。
+- `v0.3.0` 只在全部门禁通过后发布 `full_diagnostics` 和 Trace Helper。
+- 任何一个高级模式未通过门禁时，不能用“完整诊断”名称掩盖缺失能力。
+- `v0.3.1` 的四类 Adapter 必须分别列出准确支持版本、后端、采样语义和不可见快路径。
+- 软件 PMU 降级继续禁止 IPC、硬件缓存和分支结论。
+- PerfLens 仍不是 heap profiler、I/O APM、GPU profiler 或分布式追踪系统。
+- Release Notes 必须从最终实现和测试结果生成，不能直接把本文计划当作已经完成的功能。
