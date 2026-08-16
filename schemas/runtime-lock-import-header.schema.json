@@ -1,0 +1,267 @@
+{
+  "$defs": {
+    "RuntimeClock": {
+      "additionalProperties": false,
+      "properties": {
+        "clock": {
+          "enum": [
+            "monotonic",
+            "jfr_ticks",
+            "profile_relative"
+          ],
+          "title": "Clock",
+          "type": "string"
+        },
+        "epoch_correlation_available": {
+          "default": false,
+          "title": "Epoch Correlation Available",
+          "type": "boolean"
+        },
+        "unit": {
+          "const": "nanoseconds",
+          "default": "nanoseconds",
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "clock"
+      ],
+      "title": "RuntimeClock",
+      "type": "object"
+    },
+    "RuntimeTargetIdentity": {
+      "additionalProperties": false,
+      "description": "PID identity bound at collection/import time.",
+      "properties": {
+        "observed_target_tids": {
+          "default": [],
+          "items": {
+            "type": "integer"
+          },
+          "title": "Observed Target Tids",
+          "type": "array"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        },
+        "target_start_time_ticks": {
+          "exclusiveMinimum": 0,
+          "title": "Target Start Time Ticks",
+          "type": "integer"
+        },
+        "target_uid": {
+          "minimum": 0,
+          "title": "Target Uid",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "target_pid",
+        "target_uid",
+        "target_start_time_ticks"
+      ],
+      "title": "RuntimeTargetIdentity",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "First record of the strict custom/runtime NDJSON import contract.\n\nThe header intentionally contains no path, command, environment, or raw lock\naddress.  The adapter computes ``RuntimeSourceManifest`` hashes after it has\nconsumed the complete immutable stream.",
+  "properties": {
+    "adapter_id": {
+      "pattern": "^[a-z][a-z0-9_.-]{1,63}$",
+      "title": "Adapter Id",
+      "type": "string"
+    },
+    "adapter_version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Adapter Version",
+      "type": "string"
+    },
+    "backend_id": {
+      "pattern": "^[a-z][a-z0-9_.-]{1,63}$",
+      "title": "Backend Id",
+      "type": "string"
+    },
+    "backend_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Backend Version",
+      "type": "string"
+    },
+    "block_profile_rate_ns": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Block Profile Rate Ns"
+    },
+    "clock": {
+      "$ref": "#/$defs/RuntimeClock"
+    },
+    "declared_event_count": {
+      "minimum": 0,
+      "title": "Declared Event Count",
+      "type": "integer"
+    },
+    "declared_lost_event_count": {
+      "minimum": 0,
+      "title": "Declared Lost Event Count",
+      "type": "integer"
+    },
+    "declared_truncated": {
+      "title": "Declared Truncated",
+      "type": "boolean"
+    },
+    "duration_threshold_ns": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Duration Threshold Ns"
+    },
+    "fast_path_visibility": {
+      "enum": [
+        "complete",
+        "partial",
+        "none",
+        "unknown"
+      ],
+      "title": "Fast Path Visibility",
+      "type": "string"
+    },
+    "hold_time_is_source_observed": {
+      "title": "Hold Time Is Source Observed",
+      "type": "boolean"
+    },
+    "measurement_semantics": {
+      "enum": [
+        "exact",
+        "thresholded",
+        "sampled",
+        "cumulative"
+      ],
+      "title": "Measurement Semantics",
+      "type": "string"
+    },
+    "owner_is_source_observed": {
+      "title": "Owner Is Source Observed",
+      "type": "boolean"
+    },
+    "record_type": {
+      "const": "runtime_lock_header",
+      "default": "runtime_lock_header",
+      "title": "Record Type",
+      "type": "string"
+    },
+    "runtime": {
+      "enum": [
+        "c_cpp",
+        "java",
+        "python",
+        "go",
+        "custom"
+      ],
+      "title": "Runtime",
+      "type": "string"
+    },
+    "runtime_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Runtime Version",
+      "type": "string"
+    },
+    "sampling_fraction": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sampling Fraction"
+    },
+    "sampling_period": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sampling Period"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "target": {
+      "$ref": "#/$defs/RuntimeTargetIdentity"
+    },
+    "visible_lock_kinds": {
+      "items": {
+        "enum": [
+          "mutex",
+          "recursive_mutex",
+          "rwlock_read",
+          "rwlock_write",
+          "condition",
+          "semaphore",
+          "park",
+          "gil",
+          "runtime_internal",
+          "channel",
+          "wait_group",
+          "custom",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "title": "Visible Lock Kinds",
+      "type": "array"
+    }
+  },
+  "required": [
+    "runtime",
+    "runtime_version",
+    "adapter_id",
+    "adapter_version",
+    "backend_id",
+    "backend_version",
+    "target",
+    "clock",
+    "measurement_semantics",
+    "visible_lock_kinds",
+    "fast_path_visibility",
+    "owner_is_source_observed",
+    "hold_time_is_source_observed",
+    "declared_event_count",
+    "declared_lost_event_count",
+    "declared_truncated"
+  ],
+  "title": "RuntimeLockImportHeader",
+  "type": "object"
+}

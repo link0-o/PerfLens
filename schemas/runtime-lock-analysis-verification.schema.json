@@ -1,0 +1,115 @@
+{
+  "$defs": {
+    "RuntimeLockVerificationCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "name": {
+          "pattern": "^[a-z][a-z0-9_]{1,63}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "skipped"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "status",
+        "detail"
+      ],
+      "title": "RuntimeLockVerificationCheck",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "checks": {
+      "items": {
+        "$ref": "#/$defs/RuntimeLockVerificationCheck"
+      },
+      "minItems": 1,
+      "title": "Checks",
+      "type": "array"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "runtime_lock_analysis_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Runtime Lock Analysis Content Sha256",
+      "type": "string"
+    },
+    "runtime_lock_analysis_id": {
+      "pattern": "^[a-z][a-z0-9-]*-[a-f0-9]{16,64}$",
+      "title": "Runtime Lock Analysis Id",
+      "type": "string"
+    },
+    "runtime_lock_evidence_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Runtime Lock Evidence Content Sha256",
+      "type": "string"
+    },
+    "runtime_lock_evidence_id": {
+      "pattern": "^[a-z][a-z0-9-]*-[a-f0-9]{16,64}$",
+      "title": "Runtime Lock Evidence Id",
+      "type": "string"
+    },
+    "runtime_lock_verification_id": {
+      "pattern": "^[a-z][a-z0-9-]*-[a-f0-9]{16,64}$",
+      "title": "Runtime Lock Verification Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "verification_status": {
+      "enum": [
+        "verified",
+        "partial",
+        "failed"
+      ],
+      "title": "Verification Status",
+      "type": "string"
+    },
+    "verifier_version": {
+      "const": "runtime-lock-verifier-v1",
+      "default": "runtime-lock-verifier-v1",
+      "title": "Verifier Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "runtime_lock_verification_id",
+    "runtime_lock_evidence_id",
+    "runtime_lock_evidence_content_sha256",
+    "runtime_lock_analysis_id",
+    "runtime_lock_analysis_content_sha256",
+    "created_at",
+    "verification_status",
+    "checks",
+    "content_sha256"
+  ],
+  "title": "RuntimeLockAnalysisVerificationArtifact",
+  "type": "object"
+}

@@ -1,0 +1,1537 @@
+{
+  "$defs": {
+    "RuntimeAcquireEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {
+          "pattern": "^runtime-event-[a-f0-9]{16,64}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_index": {
+          "minimum": 0,
+          "title": "Event Index",
+          "type": "integer"
+        },
+        "event_kind": {
+          "const": "acquire",
+          "default": "acquire",
+          "title": "Event Kind",
+          "type": "string"
+        },
+        "lock_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-lock-[a-f0-9]{20}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lock Id"
+        },
+        "lock_kind": {
+          "enum": [
+            "mutex",
+            "recursive_mutex",
+            "rwlock_read",
+            "rwlock_write",
+            "condition",
+            "semaphore",
+            "park",
+            "gil",
+            "runtime_internal",
+            "channel",
+            "wait_group",
+            "custom",
+            "unknown"
+          ],
+          "title": "Lock Kind",
+          "type": "string"
+        },
+        "measurement_semantics": {
+          "enum": [
+            "exact",
+            "thresholded",
+            "sampled",
+            "cumulative"
+          ],
+          "title": "Measurement Semantics",
+          "type": "string"
+        },
+        "stack_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-stack-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stack Id"
+        },
+        "target_tid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Tid",
+          "type": "integer"
+        },
+        "timestamp_ns": {
+          "minimum": 0,
+          "title": "Timestamp Ns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_index",
+        "timestamp_ns",
+        "target_tid",
+        "lock_kind",
+        "measurement_semantics"
+      ],
+      "title": "RuntimeAcquireEvent",
+      "type": "object"
+    },
+    "RuntimeClock": {
+      "additionalProperties": false,
+      "properties": {
+        "clock": {
+          "enum": [
+            "monotonic",
+            "jfr_ticks",
+            "profile_relative"
+          ],
+          "title": "Clock",
+          "type": "string"
+        },
+        "epoch_correlation_available": {
+          "default": false,
+          "title": "Epoch Correlation Available",
+          "type": "boolean"
+        },
+        "unit": {
+          "const": "nanoseconds",
+          "default": "nanoseconds",
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "clock"
+      ],
+      "title": "RuntimeClock",
+      "type": "object"
+    },
+    "RuntimeEvidenceQuality": {
+      "additionalProperties": false,
+      "properties": {
+        "cumulative_event_count": {
+          "minimum": 0,
+          "title": "Cumulative Event Count",
+          "type": "integer"
+        },
+        "diagnostic_count": {
+          "minimum": 0,
+          "title": "Diagnostic Count",
+          "type": "integer"
+        },
+        "diagnostics": {
+          "default": [],
+          "items": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Diagnostics",
+          "type": "array"
+        },
+        "diagnostics_truncated": {
+          "title": "Diagnostics Truncated",
+          "type": "boolean"
+        },
+        "duplicate_record_count": {
+          "minimum": 0,
+          "title": "Duplicate Record Count",
+          "type": "integer"
+        },
+        "emitted_event_count": {
+          "minimum": 0,
+          "title": "Emitted Event Count",
+          "type": "integer"
+        },
+        "exact_event_count": {
+          "minimum": 0,
+          "title": "Exact Event Count",
+          "type": "integer"
+        },
+        "filtered_outside_target_count": {
+          "minimum": 0,
+          "title": "Filtered Outside Target Count",
+          "type": "integer"
+        },
+        "input_record_count": {
+          "minimum": 0,
+          "title": "Input Record Count",
+          "type": "integer"
+        },
+        "limitations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "lost_event_count": {
+          "minimum": 0,
+          "title": "Lost Event Count",
+          "type": "integer"
+        },
+        "malformed_record_count": {
+          "minimum": 0,
+          "title": "Malformed Record Count",
+          "type": "integer"
+        },
+        "owner_observed_event_count": {
+          "minimum": 0,
+          "title": "Owner Observed Event Count",
+          "type": "integer"
+        },
+        "sampled_event_count": {
+          "minimum": 0,
+          "title": "Sampled Event Count",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "partial"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "thresholded_event_count": {
+          "minimum": 0,
+          "title": "Thresholded Event Count",
+          "type": "integer"
+        },
+        "truncated_event_count": {
+          "minimum": 0,
+          "title": "Truncated Event Count",
+          "type": "integer"
+        },
+        "unsupported_record_count": {
+          "minimum": 0,
+          "title": "Unsupported Record Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "status",
+        "input_record_count",
+        "emitted_event_count",
+        "filtered_outside_target_count",
+        "malformed_record_count",
+        "duplicate_record_count",
+        "unsupported_record_count",
+        "lost_event_count",
+        "truncated_event_count",
+        "exact_event_count",
+        "thresholded_event_count",
+        "sampled_event_count",
+        "cumulative_event_count",
+        "owner_observed_event_count",
+        "diagnostic_count",
+        "diagnostics_truncated"
+      ],
+      "title": "RuntimeEvidenceQuality",
+      "type": "object"
+    },
+    "RuntimeLockResourceLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_diagnostics": {
+          "default": 1000,
+          "exclusiveMinimum": 0,
+          "maximum": 10000,
+          "title": "Max Diagnostics",
+          "type": "integer"
+        },
+        "max_exported_locks": {
+          "default": 10000,
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "title": "Max Exported Locks",
+          "type": "integer"
+        },
+        "max_input_records": {
+          "default": 100000,
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "title": "Max Input Records",
+          "type": "integer"
+        },
+        "max_line_bytes": {
+          "default": 65536,
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Max Line Bytes",
+          "type": "integer"
+        },
+        "max_output_bytes": {
+          "default": 67108864,
+          "exclusiveMinimum": 0,
+          "maximum": 67108864,
+          "title": "Max Output Bytes",
+          "type": "integer"
+        },
+        "max_source_bytes": {
+          "default": 67108864,
+          "exclusiveMinimum": 0,
+          "maximum": 67108864,
+          "title": "Max Source Bytes",
+          "type": "integer"
+        },
+        "max_stack_depth": {
+          "default": 127,
+          "exclusiveMinimum": 0,
+          "maximum": 127,
+          "title": "Max Stack Depth",
+          "type": "integer"
+        },
+        "max_unique_locks": {
+          "default": 100000,
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "title": "Max Unique Locks",
+          "type": "integer"
+        },
+        "max_unique_stacks": {
+          "default": 100000,
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "title": "Max Unique Stacks",
+          "type": "integer"
+        },
+        "max_unique_target_tids": {
+          "default": 65536,
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Max Unique Target Tids",
+          "type": "integer"
+        }
+      },
+      "title": "RuntimeLockResourceLimits",
+      "type": "object"
+    },
+    "RuntimeParkEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {
+          "pattern": "^runtime-event-[a-f0-9]{16,64}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_index": {
+          "minimum": 0,
+          "title": "Event Index",
+          "type": "integer"
+        },
+        "event_kind": {
+          "const": "park",
+          "default": "park",
+          "title": "Event Kind",
+          "type": "string"
+        },
+        "lock_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-lock-[a-f0-9]{20}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lock Id"
+        },
+        "lock_kind": {
+          "enum": [
+            "mutex",
+            "recursive_mutex",
+            "rwlock_read",
+            "rwlock_write",
+            "condition",
+            "semaphore",
+            "park",
+            "gil",
+            "runtime_internal",
+            "channel",
+            "wait_group",
+            "custom",
+            "unknown"
+          ],
+          "title": "Lock Kind",
+          "type": "string"
+        },
+        "measurement_semantics": {
+          "enum": [
+            "exact",
+            "thresholded",
+            "sampled",
+            "cumulative"
+          ],
+          "title": "Measurement Semantics",
+          "type": "string"
+        },
+        "stack_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-stack-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stack Id"
+        },
+        "target_tid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Tid",
+          "type": "integer"
+        },
+        "timestamp_ns": {
+          "minimum": 0,
+          "title": "Timestamp Ns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_index",
+        "timestamp_ns",
+        "target_tid",
+        "lock_kind",
+        "measurement_semantics"
+      ],
+      "title": "RuntimeParkEvent",
+      "type": "object"
+    },
+    "RuntimeReleaseEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "acquire_event_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-event-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Acquire Event Id"
+        },
+        "event_id": {
+          "pattern": "^runtime-event-[a-f0-9]{16,64}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_index": {
+          "minimum": 0,
+          "title": "Event Index",
+          "type": "integer"
+        },
+        "event_kind": {
+          "const": "release",
+          "default": "release",
+          "title": "Event Kind",
+          "type": "string"
+        },
+        "hold_duration_ns": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hold Duration Ns"
+        },
+        "lock_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-lock-[a-f0-9]{20}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lock Id"
+        },
+        "lock_kind": {
+          "enum": [
+            "mutex",
+            "recursive_mutex",
+            "rwlock_read",
+            "rwlock_write",
+            "condition",
+            "semaphore",
+            "park",
+            "gil",
+            "runtime_internal",
+            "channel",
+            "wait_group",
+            "custom",
+            "unknown"
+          ],
+          "title": "Lock Kind",
+          "type": "string"
+        },
+        "measurement_semantics": {
+          "enum": [
+            "exact",
+            "thresholded",
+            "sampled",
+            "cumulative"
+          ],
+          "title": "Measurement Semantics",
+          "type": "string"
+        },
+        "stack_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-stack-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stack Id"
+        },
+        "target_tid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Tid",
+          "type": "integer"
+        },
+        "timestamp_ns": {
+          "minimum": 0,
+          "title": "Timestamp Ns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_index",
+        "timestamp_ns",
+        "target_tid",
+        "lock_kind",
+        "measurement_semantics"
+      ],
+      "title": "RuntimeReleaseEvent",
+      "type": "object"
+    },
+    "RuntimeSampledContentionEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "cumulative_wait_ns": {
+          "exclusiveMinimum": 0,
+          "title": "Cumulative Wait Ns",
+          "type": "integer"
+        },
+        "estimated_count": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Estimated Count"
+        },
+        "event_id": {
+          "pattern": "^runtime-event-[a-f0-9]{16,64}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_index": {
+          "minimum": 0,
+          "title": "Event Index",
+          "type": "integer"
+        },
+        "event_kind": {
+          "const": "sampled_contention",
+          "default": "sampled_contention",
+          "title": "Event Kind",
+          "type": "string"
+        },
+        "lock_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-lock-[a-f0-9]{20}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lock Id"
+        },
+        "lock_kind": {
+          "enum": [
+            "mutex",
+            "recursive_mutex",
+            "rwlock_read",
+            "rwlock_write",
+            "condition",
+            "semaphore",
+            "park",
+            "gil",
+            "runtime_internal",
+            "channel",
+            "wait_group",
+            "custom",
+            "unknown"
+          ],
+          "title": "Lock Kind",
+          "type": "string"
+        },
+        "measurement_semantics": {
+          "enum": [
+            "exact",
+            "thresholded",
+            "sampled",
+            "cumulative"
+          ],
+          "title": "Measurement Semantics",
+          "type": "string"
+        },
+        "observed_count": {
+          "exclusiveMinimum": 0,
+          "title": "Observed Count",
+          "type": "integer"
+        },
+        "stack_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-stack-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stack Id"
+        },
+        "target_tid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Tid",
+          "type": "integer"
+        },
+        "timestamp_ns": {
+          "minimum": 0,
+          "title": "Timestamp Ns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_index",
+        "timestamp_ns",
+        "target_tid",
+        "lock_kind",
+        "measurement_semantics",
+        "observed_count",
+        "cumulative_wait_ns"
+      ],
+      "title": "RuntimeSampledContentionEvent",
+      "type": "object"
+    },
+    "RuntimeSourceManifest": {
+      "additionalProperties": false,
+      "description": "Versioned identity and semantics of one normalized input source.",
+      "properties": {
+        "adapter_id": {
+          "pattern": "^[a-z][a-z0-9_.-]{1,63}$",
+          "title": "Adapter Id",
+          "type": "string"
+        },
+        "adapter_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Adapter Version",
+          "type": "string"
+        },
+        "backend_id": {
+          "pattern": "^[a-z][a-z0-9_.-]{1,63}$",
+          "title": "Backend Id",
+          "type": "string"
+        },
+        "backend_version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Backend Version",
+          "type": "string"
+        },
+        "block_profile_rate_ns": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Block Profile Rate Ns"
+        },
+        "clock": {
+          "$ref": "#/$defs/RuntimeClock"
+        },
+        "conversion_fingerprint": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Conversion Fingerprint",
+          "type": "string"
+        },
+        "duration_threshold_ns": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Threshold Ns"
+        },
+        "fast_path_visibility": {
+          "enum": [
+            "complete",
+            "partial",
+            "none",
+            "unknown"
+          ],
+          "title": "Fast Path Visibility",
+          "type": "string"
+        },
+        "hold_time_is_source_observed": {
+          "title": "Hold Time Is Source Observed",
+          "type": "boolean"
+        },
+        "measurement_semantics": {
+          "enum": [
+            "exact",
+            "thresholded",
+            "sampled",
+            "cumulative"
+          ],
+          "title": "Measurement Semantics",
+          "type": "string"
+        },
+        "owner_is_source_observed": {
+          "title": "Owner Is Source Observed",
+          "type": "boolean"
+        },
+        "runtime": {
+          "enum": [
+            "c_cpp",
+            "java",
+            "python",
+            "go",
+            "custom"
+          ],
+          "title": "Runtime",
+          "type": "string"
+        },
+        "sampling_fraction": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sampling Fraction"
+        },
+        "sampling_period": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sampling Period"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_bytes": {
+          "exclusiveMinimum": 0,
+          "title": "Source Bytes",
+          "type": "integer"
+        },
+        "source_format": {
+          "enum": [
+            "perflens_runtime_lock_ndjson_v1",
+            "jfr_json_v1",
+            "pprof_text_v1",
+            "native_interposer_ndjson_v1"
+          ],
+          "title": "Source Format",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "target_scope": {
+          "enum": [
+            "bound_pid",
+            "verified_import"
+          ],
+          "title": "Target Scope",
+          "type": "string"
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeToolIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "runtime",
+        "adapter_id",
+        "adapter_version",
+        "backend_id",
+        "backend_version",
+        "measurement_semantics",
+        "source_format",
+        "source_sha256",
+        "source_bytes",
+        "conversion_fingerprint",
+        "clock",
+        "fast_path_visibility",
+        "owner_is_source_observed",
+        "hold_time_is_source_observed",
+        "target_scope"
+      ],
+      "title": "RuntimeSourceManifest",
+      "type": "object"
+    },
+    "RuntimeStack": {
+      "additionalProperties": false,
+      "properties": {
+        "frames": {
+          "items": {
+            "$ref": "#/$defs/RuntimeStackFrame"
+          },
+          "minItems": 1,
+          "title": "Frames",
+          "type": "array"
+        },
+        "stack_id": {
+          "pattern": "^runtime-stack-[a-f0-9]{16,64}$",
+          "title": "Stack Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stack_id",
+        "frames"
+      ],
+      "title": "RuntimeStack",
+      "type": "object"
+    },
+    "RuntimeStackFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "is_runtime": {
+          "default": false,
+          "title": "Is Runtime",
+          "type": "boolean"
+        },
+        "is_unknown": {
+          "default": false,
+          "title": "Is Unknown",
+          "type": "boolean"
+        },
+        "module": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Module",
+          "type": "string"
+        },
+        "source_file": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source File"
+        },
+        "source_line": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Line"
+        },
+        "symbol": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Symbol",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "module"
+      ],
+      "title": "RuntimeStackFrame",
+      "type": "object"
+    },
+    "RuntimeTargetIdentity": {
+      "additionalProperties": false,
+      "description": "PID identity bound at collection/import time.",
+      "properties": {
+        "observed_target_tids": {
+          "default": [],
+          "items": {
+            "type": "integer"
+          },
+          "title": "Observed Target Tids",
+          "type": "array"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        },
+        "target_start_time_ticks": {
+          "exclusiveMinimum": 0,
+          "title": "Target Start Time Ticks",
+          "type": "integer"
+        },
+        "target_uid": {
+          "minimum": 0,
+          "title": "Target Uid",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "target_pid",
+        "target_uid",
+        "target_start_time_ticks"
+      ],
+      "title": "RuntimeTargetIdentity",
+      "type": "object"
+    },
+    "RuntimeToolIdentity": {
+      "additionalProperties": false,
+      "description": "Identity of one optional external tool discovered without executing a workload.",
+      "properties": {
+        "binary_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Binary Sha256"
+        },
+        "name": {
+          "pattern": "^[A-Za-z0-9_.+-]{1,64}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "status": {
+          "enum": [
+            "available",
+            "missing",
+            "unsupported",
+            "not_checked"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        }
+      },
+      "required": [
+        "name",
+        "status"
+      ],
+      "title": "RuntimeToolIdentity",
+      "type": "object"
+    },
+    "RuntimeUnparkEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {
+          "pattern": "^runtime-event-[a-f0-9]{16,64}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_index": {
+          "minimum": 0,
+          "title": "Event Index",
+          "type": "integer"
+        },
+        "event_kind": {
+          "const": "unpark",
+          "default": "unpark",
+          "title": "Event Kind",
+          "type": "string"
+        },
+        "lock_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-lock-[a-f0-9]{20}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lock Id"
+        },
+        "lock_kind": {
+          "enum": [
+            "mutex",
+            "recursive_mutex",
+            "rwlock_read",
+            "rwlock_write",
+            "condition",
+            "semaphore",
+            "park",
+            "gil",
+            "runtime_internal",
+            "channel",
+            "wait_group",
+            "custom",
+            "unknown"
+          ],
+          "title": "Lock Kind",
+          "type": "string"
+        },
+        "measurement_semantics": {
+          "enum": [
+            "exact",
+            "thresholded",
+            "sampled",
+            "cumulative"
+          ],
+          "title": "Measurement Semantics",
+          "type": "string"
+        },
+        "parked_target_tid": {
+          "exclusiveMinimum": 0,
+          "title": "Parked Target Tid",
+          "type": "integer"
+        },
+        "stack_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-stack-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stack Id"
+        },
+        "target_tid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Tid",
+          "type": "integer"
+        },
+        "timestamp_ns": {
+          "minimum": 0,
+          "title": "Timestamp Ns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_index",
+        "timestamp_ns",
+        "target_tid",
+        "lock_kind",
+        "measurement_semantics",
+        "parked_target_tid"
+      ],
+      "title": "RuntimeUnparkEvent",
+      "type": "object"
+    },
+    "RuntimeWaitBeginEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {
+          "pattern": "^runtime-event-[a-f0-9]{16,64}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_index": {
+          "minimum": 0,
+          "title": "Event Index",
+          "type": "integer"
+        },
+        "event_kind": {
+          "const": "wait_begin",
+          "default": "wait_begin",
+          "title": "Event Kind",
+          "type": "string"
+        },
+        "lock_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-lock-[a-f0-9]{20}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lock Id"
+        },
+        "lock_kind": {
+          "enum": [
+            "mutex",
+            "recursive_mutex",
+            "rwlock_read",
+            "rwlock_write",
+            "condition",
+            "semaphore",
+            "park",
+            "gil",
+            "runtime_internal",
+            "channel",
+            "wait_group",
+            "custom",
+            "unknown"
+          ],
+          "title": "Lock Kind",
+          "type": "string"
+        },
+        "measurement_semantics": {
+          "enum": [
+            "exact",
+            "thresholded",
+            "sampled",
+            "cumulative"
+          ],
+          "title": "Measurement Semantics",
+          "type": "string"
+        },
+        "owner_target_tid": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Target Tid"
+        },
+        "stack_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-stack-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stack Id"
+        },
+        "target_tid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Tid",
+          "type": "integer"
+        },
+        "timestamp_ns": {
+          "minimum": 0,
+          "title": "Timestamp Ns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_index",
+        "timestamp_ns",
+        "target_tid",
+        "lock_kind",
+        "measurement_semantics"
+      ],
+      "title": "RuntimeWaitBeginEvent",
+      "type": "object"
+    },
+    "RuntimeWaitEndEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_ns": {
+          "minimum": 0,
+          "title": "Duration Ns",
+          "type": "integer"
+        },
+        "event_id": {
+          "pattern": "^runtime-event-[a-f0-9]{16,64}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_index": {
+          "minimum": 0,
+          "title": "Event Index",
+          "type": "integer"
+        },
+        "event_kind": {
+          "const": "wait_end",
+          "default": "wait_end",
+          "title": "Event Kind",
+          "type": "string"
+        },
+        "lock_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-lock-[a-f0-9]{20}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lock Id"
+        },
+        "lock_kind": {
+          "enum": [
+            "mutex",
+            "recursive_mutex",
+            "rwlock_read",
+            "rwlock_write",
+            "condition",
+            "semaphore",
+            "park",
+            "gil",
+            "runtime_internal",
+            "channel",
+            "wait_group",
+            "custom",
+            "unknown"
+          ],
+          "title": "Lock Kind",
+          "type": "string"
+        },
+        "measurement_semantics": {
+          "enum": [
+            "exact",
+            "thresholded",
+            "sampled",
+            "cumulative"
+          ],
+          "title": "Measurement Semantics",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "acquired",
+            "notified",
+            "unparked",
+            "timed_out",
+            "interrupted",
+            "failed",
+            "unknown"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "owner_target_tid": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Target Tid"
+        },
+        "stack_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-stack-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stack Id"
+        },
+        "target_tid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Tid",
+          "type": "integer"
+        },
+        "timestamp_ns": {
+          "minimum": 0,
+          "title": "Timestamp Ns",
+          "type": "integer"
+        },
+        "wait_begin_event_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-event-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wait Begin Event Id"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_index",
+        "timestamp_ns",
+        "target_tid",
+        "lock_kind",
+        "measurement_semantics",
+        "duration_ns",
+        "outcome"
+      ],
+      "title": "RuntimeWaitEndEvent",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "allowed_conclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Conclusions",
+      "type": "array"
+    },
+    "content_bytes": {
+      "exclusiveMinimum": 0,
+      "title": "Content Bytes",
+      "type": "integer"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "events": {
+      "items": {
+        "discriminator": {
+          "mapping": {
+            "acquire": "#/$defs/RuntimeAcquireEvent",
+            "park": "#/$defs/RuntimeParkEvent",
+            "release": "#/$defs/RuntimeReleaseEvent",
+            "sampled_contention": "#/$defs/RuntimeSampledContentionEvent",
+            "unpark": "#/$defs/RuntimeUnparkEvent",
+            "wait_begin": "#/$defs/RuntimeWaitBeginEvent",
+            "wait_end": "#/$defs/RuntimeWaitEndEvent"
+          },
+          "propertyName": "event_kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/RuntimeWaitBeginEvent"
+          },
+          {
+            "$ref": "#/$defs/RuntimeWaitEndEvent"
+          },
+          {
+            "$ref": "#/$defs/RuntimeAcquireEvent"
+          },
+          {
+            "$ref": "#/$defs/RuntimeReleaseEvent"
+          },
+          {
+            "$ref": "#/$defs/RuntimeParkEvent"
+          },
+          {
+            "$ref": "#/$defs/RuntimeUnparkEvent"
+          },
+          {
+            "$ref": "#/$defs/RuntimeSampledContentionEvent"
+          }
+        ]
+      },
+      "title": "Events",
+      "type": "array"
+    },
+    "evidence_fingerprint": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Evidence Fingerprint",
+      "type": "string"
+    },
+    "forbidden_conclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Forbidden Conclusions",
+      "type": "array"
+    },
+    "limits": {
+      "$ref": "#/$defs/RuntimeLockResourceLimits"
+    },
+    "quality": {
+      "$ref": "#/$defs/RuntimeEvidenceQuality"
+    },
+    "runtime_lock_evidence_id": {
+      "pattern": "^[a-z][a-z0-9-]*-[a-f0-9]{16,64}$",
+      "title": "Runtime Lock Evidence Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/RuntimeSourceManifest"
+    },
+    "stacks": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RuntimeStack"
+      },
+      "title": "Stacks",
+      "type": "array"
+    },
+    "target": {
+      "$ref": "#/$defs/RuntimeTargetIdentity"
+    }
+  },
+  "required": [
+    "runtime_lock_evidence_id",
+    "created_at",
+    "target",
+    "source",
+    "limits",
+    "quality",
+    "events",
+    "allowed_conclusions",
+    "forbidden_conclusions",
+    "evidence_fingerprint",
+    "content_sha256",
+    "content_bytes"
+  ],
+  "title": "RuntimeLockEvidenceArtifact",
+  "type": "object"
+}

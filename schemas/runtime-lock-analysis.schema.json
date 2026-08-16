@@ -1,0 +1,387 @@
+{
+  "$defs": {
+    "RuntimeLockAggregate": {
+      "additionalProperties": false,
+      "properties": {
+        "cumulative_observation_count": {
+          "minimum": 0,
+          "title": "Cumulative Observation Count",
+          "type": "integer"
+        },
+        "exact_holds": {
+          "$ref": "#/$defs/RuntimeNanosecondDistribution"
+        },
+        "exact_waits": {
+          "$ref": "#/$defs/RuntimeNanosecondDistribution"
+        },
+        "lock_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-lock-[a-f0-9]{20}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Lock Id"
+        },
+        "lock_kind": {
+          "enum": [
+            "mutex",
+            "recursive_mutex",
+            "rwlock_read",
+            "rwlock_write",
+            "condition",
+            "semaphore",
+            "park",
+            "gil",
+            "runtime_internal",
+            "channel",
+            "wait_group",
+            "custom",
+            "unknown"
+          ],
+          "title": "Lock Kind",
+          "type": "string"
+        },
+        "observed_or_estimated_wait_ns": {
+          "minimum": 0,
+          "title": "Observed Or Estimated Wait Ns",
+          "type": "integer"
+        },
+        "owner_observed_count": {
+          "minimum": 0,
+          "title": "Owner Observed Count",
+          "type": "integer"
+        },
+        "sampled_observation_count": {
+          "minimum": 0,
+          "title": "Sampled Observation Count",
+          "type": "integer"
+        },
+        "thresholded_waits": {
+          "$ref": "#/$defs/RuntimeNanosecondDistribution"
+        },
+        "top_stack_ids": {
+          "default": [],
+          "items": {
+            "pattern": "^runtime-stack-[a-f0-9]{16,64}$",
+            "type": "string"
+          },
+          "title": "Top Stack Ids",
+          "type": "array"
+        },
+        "waiter_thread_count": {
+          "minimum": 0,
+          "title": "Waiter Thread Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "lock_id",
+        "lock_kind",
+        "exact_waits",
+        "thresholded_waits",
+        "sampled_observation_count",
+        "cumulative_observation_count",
+        "observed_or_estimated_wait_ns",
+        "exact_holds",
+        "waiter_thread_count",
+        "owner_observed_count"
+      ],
+      "title": "RuntimeLockAggregate",
+      "type": "object"
+    },
+    "RuntimeLockResourceLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_diagnostics": {
+          "default": 1000,
+          "exclusiveMinimum": 0,
+          "maximum": 10000,
+          "title": "Max Diagnostics",
+          "type": "integer"
+        },
+        "max_exported_locks": {
+          "default": 10000,
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "title": "Max Exported Locks",
+          "type": "integer"
+        },
+        "max_input_records": {
+          "default": 100000,
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "title": "Max Input Records",
+          "type": "integer"
+        },
+        "max_line_bytes": {
+          "default": 65536,
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Max Line Bytes",
+          "type": "integer"
+        },
+        "max_output_bytes": {
+          "default": 67108864,
+          "exclusiveMinimum": 0,
+          "maximum": 67108864,
+          "title": "Max Output Bytes",
+          "type": "integer"
+        },
+        "max_source_bytes": {
+          "default": 67108864,
+          "exclusiveMinimum": 0,
+          "maximum": 67108864,
+          "title": "Max Source Bytes",
+          "type": "integer"
+        },
+        "max_stack_depth": {
+          "default": 127,
+          "exclusiveMinimum": 0,
+          "maximum": 127,
+          "title": "Max Stack Depth",
+          "type": "integer"
+        },
+        "max_unique_locks": {
+          "default": 100000,
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "title": "Max Unique Locks",
+          "type": "integer"
+        },
+        "max_unique_stacks": {
+          "default": 100000,
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "title": "Max Unique Stacks",
+          "type": "integer"
+        },
+        "max_unique_target_tids": {
+          "default": 65536,
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Max Unique Target Tids",
+          "type": "integer"
+        }
+      },
+      "title": "RuntimeLockResourceLimits",
+      "type": "object"
+    },
+    "RuntimeNanosecondDistribution": {
+      "additionalProperties": false,
+      "properties": {
+        "maximum_ns": {
+          "minimum": 0,
+          "title": "Maximum Ns",
+          "type": "integer"
+        },
+        "mean_ns": {
+          "minimum": 0,
+          "title": "Mean Ns",
+          "type": "integer"
+        },
+        "minimum_ns": {
+          "minimum": 0,
+          "title": "Minimum Ns",
+          "type": "integer"
+        },
+        "p50_ns": {
+          "minimum": 0,
+          "title": "P50 Ns",
+          "type": "integer"
+        },
+        "p95_ns": {
+          "minimum": 0,
+          "title": "P95 Ns",
+          "type": "integer"
+        },
+        "p99_ns": {
+          "minimum": 0,
+          "title": "P99 Ns",
+          "type": "integer"
+        },
+        "sample_count": {
+          "minimum": 0,
+          "title": "Sample Count",
+          "type": "integer"
+        },
+        "total_ns": {
+          "minimum": 0,
+          "title": "Total Ns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sample_count",
+        "total_ns",
+        "minimum_ns",
+        "mean_ns",
+        "p50_ns",
+        "p95_ns",
+        "p99_ns",
+        "maximum_ns"
+      ],
+      "title": "RuntimeNanosecondDistribution",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "aggregates": {
+      "items": {
+        "$ref": "#/$defs/RuntimeLockAggregate"
+      },
+      "title": "Aggregates",
+      "type": "array"
+    },
+    "allowed_conclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Conclusions",
+      "type": "array"
+    },
+    "analysis_fingerprint": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Analysis Fingerprint",
+      "type": "string"
+    },
+    "content_bytes": {
+      "exclusiveMinimum": 0,
+      "title": "Content Bytes",
+      "type": "integer"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "forbidden_conclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Forbidden Conclusions",
+      "type": "array"
+    },
+    "limits": {
+      "$ref": "#/$defs/RuntimeLockResourceLimits"
+    },
+    "measurement_semantics": {
+      "enum": [
+        "exact",
+        "thresholded",
+        "sampled",
+        "cumulative"
+      ],
+      "title": "Measurement Semantics",
+      "type": "string"
+    },
+    "omitted_lock_count": {
+      "minimum": 0,
+      "title": "Omitted Lock Count",
+      "type": "integer"
+    },
+    "quality_status": {
+      "enum": [
+        "complete",
+        "partial"
+      ],
+      "title": "Quality Status",
+      "type": "string"
+    },
+    "runtime": {
+      "enum": [
+        "c_cpp",
+        "java",
+        "python",
+        "go",
+        "custom"
+      ],
+      "title": "Runtime",
+      "type": "string"
+    },
+    "runtime_lock_analysis_id": {
+      "pattern": "^[a-z][a-z0-9-]*-[a-f0-9]{16,64}$",
+      "title": "Runtime Lock Analysis Id",
+      "type": "string"
+    },
+    "runtime_lock_evidence_content_bytes": {
+      "exclusiveMinimum": 0,
+      "title": "Runtime Lock Evidence Content Bytes",
+      "type": "integer"
+    },
+    "runtime_lock_evidence_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Runtime Lock Evidence Content Sha256",
+      "type": "string"
+    },
+    "runtime_lock_evidence_id": {
+      "pattern": "^[a-z][a-z0-9-]*-[a-f0-9]{16,64}$",
+      "title": "Runtime Lock Evidence Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "total_cumulative_observation_count": {
+      "minimum": 0,
+      "title": "Total Cumulative Observation Count",
+      "type": "integer"
+    },
+    "total_exact_hold_count": {
+      "minimum": 0,
+      "title": "Total Exact Hold Count",
+      "type": "integer"
+    },
+    "total_exact_wait_count": {
+      "minimum": 0,
+      "title": "Total Exact Wait Count",
+      "type": "integer"
+    },
+    "total_sampled_observation_count": {
+      "minimum": 0,
+      "title": "Total Sampled Observation Count",
+      "type": "integer"
+    },
+    "total_thresholded_wait_count": {
+      "minimum": 0,
+      "title": "Total Thresholded Wait Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "runtime_lock_analysis_id",
+    "runtime_lock_evidence_id",
+    "runtime_lock_evidence_content_sha256",
+    "runtime_lock_evidence_content_bytes",
+    "created_at",
+    "runtime",
+    "measurement_semantics",
+    "quality_status",
+    "limits",
+    "aggregates",
+    "total_exact_wait_count",
+    "total_thresholded_wait_count",
+    "total_sampled_observation_count",
+    "total_cumulative_observation_count",
+    "total_exact_hold_count",
+    "omitted_lock_count",
+    "allowed_conclusions",
+    "forbidden_conclusions",
+    "analysis_fingerprint",
+    "content_sha256",
+    "content_bytes"
+  ],
+  "title": "RuntimeLockAnalysisArtifact",
+  "type": "object"
+}

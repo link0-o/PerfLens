@@ -58,6 +58,13 @@ from perflens.contracts.artifacts import (
     StackSample,
     VerificationCheck,
 )
+from perflens.contracts.runtime_locks import (
+    RuntimeAdapterCapabilityArtifact,
+    RuntimeLockAnalysisArtifact,
+    RuntimeLockAnalysisVerificationArtifact,
+    RuntimeLockEvidenceArtifact,
+    RuntimeLockImportHeader,
+)
 from perflens.contracts.trace import (
     LockAnalysisArtifact,
     OffCpuAnalysisArtifact,
@@ -129,6 +136,13 @@ def test_checked_in_json_schemas_match_contract_models() -> None:
         "off-cpu-analysis.schema.json": OffCpuAnalysisArtifact,
         "lock-analysis.schema.json": LockAnalysisArtifact,
         "trace-analysis-verification.schema.json": TraceAnalysisVerificationArtifact,
+        "runtime-adapter-capability.schema.json": RuntimeAdapterCapabilityArtifact,
+        "runtime-lock-evidence.schema.json": RuntimeLockEvidenceArtifact,
+        "runtime-lock-analysis.schema.json": RuntimeLockAnalysisArtifact,
+        "runtime-lock-analysis-verification.schema.json": (
+            RuntimeLockAnalysisVerificationArtifact
+        ),
+        "runtime-lock-import-header.schema.json": RuntimeLockImportHeader,
     }
 
     for filename, model in models.items():

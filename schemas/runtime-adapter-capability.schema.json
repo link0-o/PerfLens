@@ -1,0 +1,315 @@
+{
+  "$defs": {
+    "RuntimeToolIdentity": {
+      "additionalProperties": false,
+      "description": "Identity of one optional external tool discovered without executing a workload.",
+      "properties": {
+        "binary_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Binary Sha256"
+        },
+        "name": {
+          "pattern": "^[A-Za-z0-9_.+-]{1,64}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "status": {
+          "enum": [
+            "available",
+            "missing",
+            "unsupported",
+            "not_checked"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        }
+      },
+      "required": [
+        "name",
+        "status"
+      ],
+      "title": "RuntimeToolIdentity",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Read-only capability result for one runtime adapter/backend pair.",
+  "properties": {
+    "adapter_id": {
+      "pattern": "^[a-z][a-z0-9_.-]{1,63}$",
+      "title": "Adapter Id",
+      "type": "string"
+    },
+    "adapter_version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Adapter Version",
+      "type": "string"
+    },
+    "attach_required": {
+      "title": "Attach Required",
+      "type": "boolean"
+    },
+    "availability": {
+      "enum": [
+        "available",
+        "partial",
+        "unavailable",
+        "disabled"
+      ],
+      "title": "Availability",
+      "type": "string"
+    },
+    "backend_id": {
+      "pattern": "^[a-z][a-z0-9_.-]{1,63}$",
+      "title": "Backend Id",
+      "type": "string"
+    },
+    "capability_id": {
+      "pattern": "^[a-z][a-z0-9-]*-[a-f0-9]{16,64}$",
+      "title": "Capability Id",
+      "type": "string"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "fast_path_visibility": {
+      "enum": [
+        "complete",
+        "partial",
+        "none",
+        "unknown"
+      ],
+      "title": "Fast Path Visibility",
+      "type": "string"
+    },
+    "hold_time_visibility": {
+      "enum": [
+        "available",
+        "partial",
+        "unavailable",
+        "unknown"
+      ],
+      "title": "Hold Time Visibility",
+      "type": "string"
+    },
+    "launch_instrumentation_required": {
+      "title": "Launch Instrumentation Required",
+      "type": "boolean"
+    },
+    "limitations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "measurement_semantics": {
+      "default": [],
+      "items": {
+        "enum": [
+          "exact",
+          "thresholded",
+          "sampled",
+          "cumulative"
+        ],
+        "type": "string"
+      },
+      "title": "Measurement Semantics",
+      "type": "array"
+    },
+    "next_steps": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "owner_visibility": {
+      "enum": [
+        "available",
+        "partial",
+        "unavailable",
+        "unknown"
+      ],
+      "title": "Owner Visibility",
+      "type": "string"
+    },
+    "privileged_backend_required": {
+      "title": "Privileged Backend Required",
+      "type": "boolean"
+    },
+    "runtime": {
+      "enum": [
+        "c_cpp",
+        "java",
+        "python",
+        "go",
+        "custom"
+      ],
+      "title": "Runtime",
+      "type": "string"
+    },
+    "runtime_build": {
+      "anyOf": [
+        {
+          "maxLength": 512,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Build"
+    },
+    "runtime_name": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Runtime Name",
+      "type": "string"
+    },
+    "runtime_version": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Version"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "supported_event_kinds": {
+      "default": [],
+      "items": {
+        "enum": [
+          "wait_begin",
+          "wait_end",
+          "acquire",
+          "release",
+          "park",
+          "unpark",
+          "sampled_contention"
+        ],
+        "type": "string"
+      },
+      "title": "Supported Event Kinds",
+      "type": "array"
+    },
+    "supported_lock_kinds": {
+      "default": [],
+      "items": {
+        "enum": [
+          "mutex",
+          "recursive_mutex",
+          "rwlock_read",
+          "rwlock_write",
+          "condition",
+          "semaphore",
+          "park",
+          "gil",
+          "runtime_internal",
+          "channel",
+          "wait_group",
+          "custom",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "title": "Supported Lock Kinds",
+      "type": "array"
+    },
+    "tools": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RuntimeToolIdentity"
+      },
+      "title": "Tools",
+      "type": "array"
+    }
+  },
+  "required": [
+    "capability_id",
+    "created_at",
+    "runtime",
+    "runtime_name",
+    "adapter_id",
+    "adapter_version",
+    "backend_id",
+    "availability",
+    "fast_path_visibility",
+    "owner_visibility",
+    "hold_time_visibility",
+    "launch_instrumentation_required",
+    "attach_required",
+    "privileged_backend_required",
+    "content_sha256"
+  ],
+  "title": "RuntimeAdapterCapabilityArtifact",
+  "type": "object"
+}
