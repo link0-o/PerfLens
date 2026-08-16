@@ -69,7 +69,7 @@ from perflens.domain.errors import ErrorCode, PerfLensError
 
 _MAX_CONFIG_BYTES = 256 << 10
 _MAX_SERVICE_BYTES = 256 << 10
-_SUPPORTED_MODES = {"record", "stat", "sched", "lock", "off_cpu"}
+_SUPPORTED_MODES = {"record", "stat"}
 _MANAGED_SERVICE_MARKER = "# Managed by PerfLens."
 _HELPER_CAPABILITY_DIRECTIVES = ("CapabilityBoundingSet", "AmbientCapabilities")
 
@@ -723,6 +723,36 @@ def switch_collector_mode(
         require_root_owner=require_root,
         stage=stage,
     )
+    current_profile = load_feature_profile(
+        effective_layout.profile_path,
+        require_root_owner=require_root,
+        invoking_uid=invoking_uid(),
+        stage=stage,
+    )
+    trace_topology_missing = current_profile.feature_profile == "full_diagnostics" and (
+        _optional_managed_service(
+            effective_layout.trace_helper_service_path,
+            require_root_owner=require_root,
+            stage=stage,
+        )
+        is None
+        or _optional_managed_text(
+            effective_layout.trace_config_path,
+            marker=b"# PerfLens Trace policy template",
+            require_root_owner=require_root,
+            stage=stage,
+        )
+        is None
+    )
+    if trace_topology_missing:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            stage,
+            "full_diagnostics is missing its managed Trace service or policy",
+            suggested_actions=(
+                "Repair the feature profile before switching Collector privilege mode.",
+            ),
+        )
     previous_helper: _ManagedServiceSnapshot | None = None
     if (
         effective_layout.helper_service_path.exists()
@@ -755,6 +785,7 @@ def switch_collector_mode(
     warnings = [
         "Host perf/kernel policy is not changed.",
         "Both Collector spool directories and all retained evidence are preserved.",
+        f"The {current_profile.feature_profile} feature profile is preserved.",
     ]
     if stale_helper_repair:
         warnings.append(
@@ -803,10 +834,9 @@ def switch_collector_mode(
             spool_root=current_policy.spool_root,
             privilege_mode=target_mode,
         )
-        service_asset = (
-            "perflens-collector-helper.service"
-            if target_mode == "paranoid3_helper"
-            else "perflens-collector.service"
+        service_asset = _profile_broker_service_asset(
+            target_mode,
+            current_profile.feature_profile,
         )
         candidate_service = (staged / service_asset).read_bytes()
         candidate_helper: bytes | None = None
@@ -937,9 +967,10 @@ def switch_collector_mode(
                 expected_uid = (
                     identity[0] if identity is not None else pwd.getpwnam("perflens").pw_uid
                 )
-                _wait_for_mode_switch_socket(
+                _wait_for_profile_socket(
                     effective_layout.socket_path,
                     expected_service_uid=expected_uid,
+                    expected_profile=current_profile.feature_profile,
                 )
         except BaseException as exc:
             try:
@@ -950,6 +981,7 @@ def switch_collector_mode(
                     previous_service,
                     previous_helper,
                     current_mode=current_mode,
+                    current_profile=current_profile.feature_profile,
                     require_root_owner=require_root,
                     socket_waiter=socket_waiter,
                 )
@@ -1319,7 +1351,9 @@ def upgrade_collector(
     command_executor: CommandExecutor | None = None,
     socket_waiter: SocketWaiter | None = None,
     service_identity: tuple[int, int] | None = None,
+    trace_group_gid: int | None = None,
     acknowledge_privileged_helper_risk: bool = False,
+    acknowledge_trace_risk: bool = False,
     _admin_lock_held: bool = False,
 ) -> CollectorUpgradeArtifact:
     """Upgrade only a verified managed unit while preserving policy and evidence."""
@@ -1348,7 +1382,9 @@ def upgrade_collector(
                 command_executor=command_executor,
                 socket_waiter=socket_waiter,
                 service_identity=service_identity,
+                trace_group_gid=trace_group_gid,
                 acknowledge_privileged_helper_risk=acknowledge_privileged_helper_risk,
+                acknowledge_trace_risk=acknowledge_trace_risk,
                 _admin_lock_held=True,
             )
     source = load_collector_config(
@@ -1396,6 +1432,35 @@ def upgrade_collector(
         require_root_owner=require_root,
         stage=stage,
     )
+    profile = load_feature_profile(
+        effective_layout.profile_path,
+        require_root_owner=require_root,
+        invoking_uid=invoking_uid(),
+        stage=stage,
+    )
+    previous_trace_helper: _ManagedServiceSnapshot | None = None
+    previous_trace_policy: _ManagedTextSnapshot | None = None
+    if profile.feature_profile == "full_diagnostics":
+        previous_trace_helper = _optional_managed_service(
+            effective_layout.trace_helper_service_path,
+            require_root_owner=require_root,
+            stage=stage,
+        )
+        previous_trace_policy = _optional_managed_text(
+            effective_layout.trace_config_path,
+            marker=b"# PerfLens Trace policy template",
+            require_root_owner=require_root,
+            stage=stage,
+        )
+        if previous_trace_helper is None or previous_trace_policy is None:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                stage,
+                "full_diagnostics upgrade requires its managed Trace service and policy",
+                suggested_actions=(
+                    "Repair or switch the feature profile before upgrading.",
+                ),
+            )
     previous_helper: _ManagedServiceSnapshot | None = None
     identity = service_identity
     helper_exists = (
@@ -1409,7 +1474,10 @@ def upgrade_collector(
             stage=stage,
         )
     stale_helper_repair = policy.privilege_mode == "cap_perfmon" and previous_helper is not None
-    if policy.privilege_mode == "paranoid3_helper" and identity is None:
+    if (
+        policy.privilege_mode == "paranoid3_helper"
+        or profile.feature_profile == "full_diagnostics"
+    ) and identity is None:
         try:
             account = pwd.getpwnam("perflens")
         except KeyError as exc:
@@ -1433,12 +1501,15 @@ def upgrade_collector(
     commands.append(("/usr/bin/systemctl", "daemon-reload"))
     if policy.privilege_mode == "paranoid3_helper":
         commands.append(("/usr/bin/systemctl", "restart", "perflens-privileged-helper.service"))
+    if profile.feature_profile == "full_diagnostics":
+        commands.append(("/usr/bin/systemctl", "restart", "perflens-trace-helper.service"))
     commands.append(("/usr/bin/systemctl", "restart", "perflens-collector.service"))
     planned_commands = tuple(commands)
     warnings = [
         "Administrator policy and collected artifacts are preserved.",
         "Package installation must complete before this command is run.",
         "Host perf/kernel policy is not changed.",
+        f"The {profile.feature_profile} feature profile is preserved.",
     ]
     if stale_helper_repair:
         warnings.append(
@@ -1459,10 +1530,9 @@ def upgrade_collector(
             spool_root=policy.spool_root,
             privilege_mode=policy.privilege_mode,
         )
-        service_asset = (
-            "perflens-collector-helper.service"
-            if policy.privilege_mode == "paranoid3_helper"
-            else "perflens-collector.service"
+        service_asset = _profile_broker_service_asset(
+            policy.privilege_mode,
+            profile.feature_profile,
         )
         candidate = (staged / service_asset).read_bytes()
         if len(candidate) > _MAX_SERVICE_BYTES:
@@ -1486,6 +1556,37 @@ def upgrade_collector(
                     stage,
                     "Bundled Privileged Helper service exceeds its upgrade size limit",
                 )
+        trace_helper_candidate: bytes | None = None
+        if profile.feature_profile == "full_diagnostics":
+            if identity is None or previous_trace_policy is None:
+                raise AssertionError("full_diagnostics upgrade identity was not resolved")
+            resolved_trace_gid = trace_group_gid
+            if resolved_trace_gid is None:
+                try:
+                    resolved_trace_gid = grp.getgrnam("perflens-trace-internal").gr_gid
+                except KeyError as exc:
+                    raise PerfLensError(
+                        ErrorCode.EXTERNAL_TOOL_FAILED,
+                        stage,
+                        "Trace internal group does not exist",
+                        suggested_actions=(
+                            "Repair the full_diagnostics deployment before upgrading.",
+                        ),
+                    ) from exc
+            trace_helper_candidate = _render_trace_helper_service(
+                (staged / "perflens-trace-helper.service").read_text(encoding="utf-8"),
+                identity=identity,
+                allowed_uid=policy.allowed_uids[0],
+                artifact_gid=resolved_trace_gid,
+                policy_sha256=hashlib.sha256(previous_trace_policy.raw).hexdigest(),
+                stage=stage,
+            ).encode("utf-8")
+            if len(trace_helper_candidate) > _MAX_SERVICE_BYTES:
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    stage,
+                    "Bundled Trace Helper service exceeds its upgrade size limit",
+                )
         update_required = previous.raw != candidate
         helper_update_required = stale_helper_repair or (
             previous_helper is not None
@@ -1497,6 +1598,20 @@ def upgrade_collector(
             if previous_helper is not None and helper_candidate is not None
             else ()
         )
+        trace_helper_update_required = (
+            previous_trace_helper is not None
+            and trace_helper_candidate is not None
+            and previous_trace_helper.raw != trace_helper_candidate
+        )
+        trace_helper_capability_expansion = (
+            _helper_capability_expansion(
+                previous_trace_helper.raw,
+                trace_helper_candidate,
+                stage=stage,
+            )
+            if previous_trace_helper is not None and trace_helper_candidate is not None
+            else ()
+        )
         if helper_capability_expansion:
             expanded = ", ".join(helper_capability_expansion)
             warnings.append(
@@ -1506,6 +1621,16 @@ def upgrade_collector(
                 0,
                 "Review the capability change, then rerun upgrade with "
                 "--acknowledge-privileged-helper-risk.",
+            )
+        if trace_helper_capability_expansion:
+            expanded = ", ".join(trace_helper_capability_expansion)
+            warnings.append(
+                "The managed Trace Helper capability boundary will expand by: " + expanded
+            )
+            next_steps.insert(
+                0,
+                "Review the Trace capability change, then rerun upgrade with "
+                "--acknowledge-trace-risk.",
             )
         if dry_run:
             return _upgrade_result(
@@ -1522,6 +1647,14 @@ def upgrade_collector(
                 helper_update_required=helper_update_required,
                 helper_service_updated=False,
                 helper_capability_expansion=helper_capability_expansion,
+                feature_profile=profile.feature_profile,
+                previous_trace_helper=(
+                    previous_trace_helper.raw if previous_trace_helper is not None else None
+                ),
+                trace_helper_candidate=trace_helper_candidate,
+                trace_helper_update_required=trace_helper_update_required,
+                trace_helper_service_updated=False,
+                trace_helper_capability_expansion=trace_helper_capability_expansion,
                 commands=planned_commands,
                 warnings=tuple(warnings),
                 next_steps=tuple(next_steps),
@@ -1536,6 +1669,18 @@ def upgrade_collector(
                 suggested_actions=(
                     "Review perflens-admin upgrade --dry-run, then rerun with "
                     "--acknowledge-privileged-helper-risk.",
+                ),
+            )
+        if trace_helper_capability_expansion and not acknowledge_trace_risk:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "Collector upgrade would expand the Trace Helper capability boundary",
+                recoverable=True,
+                details={"added_capabilities": trace_helper_capability_expansion},
+                suggested_actions=(
+                    "Review perflens-admin upgrade --dry-run, then rerun with "
+                    "--acknowledge-trace-risk.",
                 ),
             )
         if require_root and os.geteuid() != 0:
@@ -1561,6 +1706,7 @@ def upgrade_collector(
                 ) from exc
         service_updated = False
         helper_service_updated = False
+        trace_helper_service_updated = False
         helper_removed = False
         helper_stopped = False
         executed_command_prefix = 0
@@ -1594,6 +1740,23 @@ def upgrade_collector(
                     updated_services.append(
                         (effective_layout.helper_service_path, previous_helper, helper_candidate)
                     )
+            if trace_helper_update_required:
+                if previous_trace_helper is None or trace_helper_candidate is None:
+                    raise AssertionError("Trace Helper update lost its managed unit snapshot")
+                _replace_verified_managed_service(
+                    effective_layout.trace_helper_service_path,
+                    previous_trace_helper,
+                    trace_helper_candidate,
+                    stage=stage,
+                )
+                trace_helper_service_updated = True
+                updated_services.append(
+                    (
+                        effective_layout.trace_helper_service_path,
+                        previous_trace_helper,
+                        trace_helper_candidate,
+                    )
+                )
             if update_required:
                 _replace_verified_managed_service(
                     effective_layout.service_path,
@@ -1607,10 +1770,16 @@ def upgrade_collector(
                 executor(planned)
             if socket_waiter is not None:
                 socket_waiter(effective_layout.socket_path)
-            else:
+            elif profile.feature_profile == "cpu_only":
                 _wait_for_upgrade_socket(
                     effective_layout.socket_path,
                     expected_service_uid=expected_service_uid,
+                )
+            else:
+                _wait_for_profile_socket(
+                    effective_layout.socket_path,
+                    expected_service_uid=cast(int, expected_service_uid),
+                    expected_profile=profile.feature_profile,
                 )
         except BaseException as exc:
             rollback_errors: list[str] = []
@@ -1657,6 +1826,14 @@ def upgrade_collector(
                                 "perflens-privileged-helper.service",
                             )
                         )
+                    if profile.feature_profile == "full_diagnostics":
+                        rollback_commands.append(
+                            (
+                                "/usr/bin/systemctl",
+                                "restart",
+                                "perflens-trace-helper.service",
+                            )
+                        )
                     rollback_commands.append(
                         ("/usr/bin/systemctl", "restart", "perflens-collector.service")
                     )
@@ -1678,7 +1855,11 @@ def upgrade_collector(
             raise
 
     return _upgrade_result(
-        "upgraded" if update_required or helper_update_required else "restarted",
+        (
+            "upgraded"
+            if update_required or helper_update_required or trace_helper_update_required
+            else "restarted"
+        ),
         deployed_config,
         effective_layout,
         command,
@@ -1691,6 +1872,14 @@ def upgrade_collector(
         helper_update_required=helper_update_required,
         helper_service_updated=helper_service_updated,
         helper_capability_expansion=helper_capability_expansion,
+        feature_profile=profile.feature_profile,
+        previous_trace_helper=(
+            previous_trace_helper.raw if previous_trace_helper is not None else None
+        ),
+        trace_helper_candidate=trace_helper_candidate,
+        trace_helper_update_required=trace_helper_update_required,
+        trace_helper_service_updated=trace_helper_service_updated,
+        trace_helper_capability_expansion=trace_helper_capability_expansion,
         commands=planned_commands,
         warnings=tuple(warnings),
         next_steps=tuple(next_steps),
@@ -1988,11 +2177,22 @@ def undeploy_collector(
             )
     service = effective_layout.service_path
     helper_service = effective_layout.helper_service_path
+    trace_service = effective_layout.trace_helper_service_path
     helper_present = helper_service.exists() or helper_service.is_symlink()
+    trace_present = trace_service.exists() or trace_service.is_symlink()
     service_present = service.exists() or service.is_symlink()
     commands: list[tuple[str, ...]] = []
     if service_present:
         commands.append(("/usr/bin/systemctl", "disable", "--now", "perflens-collector.service"))
+    if trace_present:
+        commands.append(
+            (
+                "/usr/bin/systemctl",
+                "disable",
+                "--now",
+                "perflens-trace-helper.service",
+            )
+        )
     if helper_present:
         commands.append(
             (
@@ -2012,12 +2212,19 @@ def undeploy_collector(
         f"Review and remove {effective_layout.config_path} only if its policy is no longer needed.",
         f"Review {effective_layout.state_directory} before deleting any performance artifacts.",
     )
-    if not service.exists() and not service.is_symlink() and not helper_present:
+    if (
+        not service.exists()
+        and not service.is_symlink()
+        and not helper_present
+        and not trace_present
+    ):
         return _undeployment_result("already_absent", effective_layout, (), warnings, next_steps)
     if service_present:
         _verify_managed_service(service, require_root_owner=require_root)
     if helper_present:
         _verify_managed_service(helper_service, require_root_owner=require_root)
+    if trace_present:
+        _verify_managed_service(trace_service, require_root_owner=require_root)
     if dry_run:
         return _undeployment_result(
             "dry_run", effective_layout, planned_commands, warnings, next_steps
@@ -2037,6 +2244,8 @@ def undeploy_collector(
         _unlink_verified_managed_service(service, require_root_owner=require_root)
     if helper_present:
         _unlink_verified_managed_service(helper_service, require_root_owner=require_root)
+    if trace_present:
+        _unlink_verified_managed_service(trace_service, require_root_owner=require_root)
     executor(planned_commands[-1])
     return _undeployment_result("removed", effective_layout, planned_commands, warnings, next_steps)
 
@@ -2785,6 +2994,7 @@ def _rollback_mode_switch(
     previous_helper: _ManagedServiceSnapshot | None,
     *,
     current_mode: Literal["cap_perfmon", "paranoid3_helper"],
+    current_profile: FeatureProfile,
     require_root_owner: bool,
     socket_waiter: SocketWaiter | None,
 ) -> None:
@@ -2848,9 +3058,10 @@ def _rollback_mode_switch(
     if socket_waiter is not None:
         socket_waiter(layout.socket_path)
     else:
-        _wait_for_mode_switch_socket(
+        _wait_for_profile_socket(
             layout.socket_path,
             expected_service_uid=pwd.getpwnam("perflens").pw_uid,
+            expected_profile=current_profile,
         )
 
 
@@ -3589,24 +3800,6 @@ def _wait_for_policy_update_socket(
         ) from exc
 
 
-def _wait_for_mode_switch_socket(
-    path: Path,
-    *,
-    expected_service_uid: int | None = None,
-) -> None:
-    try:
-        _wait_for_socket(path, expected_service_uid=expected_service_uid)
-    except PerfLensError as exc:
-        raise PerfLensError(
-            exc.code,
-            "collector_mode_switch",
-            exc.message,
-            recoverable=exc.recoverable,
-            details=exc.details,
-            suggested_actions=exc.suggested_actions,
-        ) from exc
-
-
 def _wait_for_profile_socket(
     path: Path,
     *,
@@ -3696,6 +3889,12 @@ def _upgrade_result(
     helper_update_required: bool,
     helper_service_updated: bool,
     helper_capability_expansion: tuple[str, ...],
+    feature_profile: FeatureProfile,
+    previous_trace_helper: bytes | None,
+    trace_helper_candidate: bytes | None,
+    trace_helper_update_required: bool,
+    trace_helper_service_updated: bool,
+    trace_helper_capability_expansion: tuple[str, ...],
     commands: tuple[tuple[str, ...], ...],
     warnings: tuple[str, ...],
     next_steps: tuple[str, ...],
@@ -3710,6 +3909,7 @@ def _upgrade_result(
         candidate_service_sha256=hashlib.sha256(candidate).hexdigest(),
         service_update_required=update_required,
         service_updated=service_updated,
+        feature_profile=feature_profile,
         helper_service_path=(
             str(layout.helper_service_path) if previous_helper is not None else None
         ),
@@ -3722,6 +3922,24 @@ def _upgrade_result(
         helper_service_update_required=helper_update_required,
         helper_service_updated=helper_service_updated,
         helper_capability_expansion=helper_capability_expansion,
+        trace_helper_service_path=(
+            str(layout.trace_helper_service_path)
+            if previous_trace_helper is not None
+            else None
+        ),
+        previous_trace_helper_service_sha256=(
+            hashlib.sha256(previous_trace_helper).hexdigest()
+            if previous_trace_helper is not None
+            else None
+        ),
+        candidate_trace_helper_service_sha256=(
+            hashlib.sha256(trace_helper_candidate).hexdigest()
+            if trace_helper_candidate is not None
+            else None
+        ),
+        trace_helper_service_update_required=trace_helper_update_required,
+        trace_helper_service_updated=trace_helper_service_updated,
+        trace_helper_capability_expansion=trace_helper_capability_expansion,
         planned_commands=commands,
         warnings=warnings,
         next_steps=next_steps,

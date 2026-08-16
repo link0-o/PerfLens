@@ -361,6 +361,13 @@ def upgrade_command(
             ),
         ),
     ] = False,
+    acknowledge_trace_risk: Annotated[
+        bool,
+        typer.Option(
+            "--acknowledge-trace-risk",
+            help="确认升级将扩大独立 Trace Helper 的 capability 边界。",
+        ),
+    ] = False,
 ) -> None:
     """安全升级并重启 Collector, 同时保留策略和采集产物。"""
     try:
@@ -368,6 +375,7 @@ def upgrade_command(
             dry_run=dry_run,
             collector_command=collector_command,
             acknowledge_privileged_helper_risk=acknowledge_privileged_helper_risk,
+            acknowledge_trace_risk=acknowledge_trace_risk,
         )
     except PerfLensError as exc:
         _fail(exc)
@@ -589,6 +597,8 @@ def _render_setup_chinese(artifact: CollectorSetupArtifact) -> None:
             ]
             if artifact.selected_mode == "paranoid3_helper":
                 command.append("--acknowledge-privileged-helper-risk")
+            if artifact.selected_feature_profile == "full_diagnostics":
+                command.append("--acknowledge-trace-risk")
             typer.echo(f"- 确认计划后正式执行: {shlex.join(command)}")
         for step in artifact.next_steps:
             typer.echo(f"- {_chinese_admin_guidance(step)}")

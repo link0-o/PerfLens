@@ -19,6 +19,19 @@
       "title": "Candidate Service Sha256",
       "type": "string"
     },
+    "candidate_trace_helper_service_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate Trace Helper Service Sha256"
+    },
     "collector_command": {
       "title": "Collector Command",
       "type": "string"
@@ -31,6 +44,15 @@
       "default": true,
       "title": "Config Preserved",
       "type": "boolean"
+    },
+    "feature_profile": {
+      "default": "cpu_only",
+      "enum": [
+        "cpu_only",
+        "full_diagnostics"
+      ],
+      "title": "Feature Profile",
+      "type": "string"
     },
     "helper_capability_expansion": {
       "default": [],
@@ -102,6 +124,19 @@
       "title": "Previous Service Sha256",
       "type": "string"
     },
+    "previous_trace_helper_service_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Previous Trace Helper Service Sha256"
+    },
     "schema_version": {
       "const": "1.0",
       "default": "1.0",
@@ -133,6 +168,36 @@
       ],
       "title": "Status",
       "type": "string"
+    },
+    "trace_helper_capability_expansion": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Trace Helper Capability Expansion",
+      "type": "array"
+    },
+    "trace_helper_service_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Trace Helper Service Path"
+    },
+    "trace_helper_service_update_required": {
+      "default": false,
+      "title": "Trace Helper Service Update Required",
+      "type": "boolean"
+    },
+    "trace_helper_service_updated": {
+      "default": false,
+      "title": "Trace Helper Service Updated",
+      "type": "boolean"
     },
     "warnings": {
       "default": [],

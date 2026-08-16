@@ -1958,6 +1958,12 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
         "collector_service_user_missing": "专用 perflens 服务用户不存在; 无法验证 Collector 身份。",
         "collector_health_unreachable": "Collector Socket 存在; 但服务无法连接或没有响应。",
         "collector_health_rejected": "Collector 身份/权限/协议响应未通过安全校验。",
+        "collector_feature_profile_mismatch": (
+            "项目请求的功能配置与当前 Collector 功能配置不一致; 请更新项目配置。"
+        ),
+        "collector_trace_backend_unavailable": (
+            "Collector 声明完整诊断, 但未开放全部 sched/off_cpu/lock 模式。"
+        ),
         "host_collection_conditional": "本机普通用户 perf 权限仍需真实验收。",
         "host_collection_blocked": "本机普通用户 perf 权限诊断为受阻; Collector 权限需另行验收。",
     }

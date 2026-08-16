@@ -85,13 +85,25 @@ def inspect_runtime_status(
         )
     capabilities = inspect_collection_capabilities(perf_path)
     host_status = _host_collection_status(capabilities)
-    feature_profile = (
+    requested_feature_profile = (
         setup_artifact.collector_feature_profile
         if setup_artifact is not None
         else "cpu_only"
     )
+    feature_profile = (
+        health.artifact.feature_profile
+        if health.artifact is not None
+        else requested_feature_profile
+    )
+    trace_modes_ready = health.artifact is not None and {
+        "sched",
+        "off_cpu",
+        "lock",
+    }.issubset(health.artifact.allowed_modes)
     trace_backend_status: Literal["not_checked", "available", "unavailable"] = (
-        "unavailable" if feature_profile == "full_diagnostics" else "not_checked"
+        ("available" if trace_modes_ready else "unavailable")
+        if feature_profile == "full_diagnostics"
+        else "not_checked"
     )
 
     issues = list(setup_issues)
@@ -107,6 +119,13 @@ def inspect_runtime_status(
         issues.append(f"collector_group_{group_status}")
     if health.issue is not None:
         issues.append(health.issue)
+    if (
+        health.artifact is not None
+        and health.artifact.feature_profile != requested_feature_profile
+    ):
+        issues.append("collector_feature_profile_mismatch")
+    if feature_profile == "full_diagnostics" and trace_backend_status != "available":
+        issues.append("collector_trace_backend_unavailable")
     if host_status != "available":
         issues.append(f"host_collection_{host_status}")
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import socket
 import sys
 from pathlib import Path
@@ -377,6 +378,49 @@ def test_runtime_status_distinguishes_collector_access_and_verification(
         assert artifact.next_steps == (
             "Run perflens accept-collector --authorize-host-acceptance.",
         )
+
+
+def test_runtime_status_uses_authenticated_full_diagnostics_health(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _prepare_automatic_setup(tmp_path)
+    setup_path = tmp_path / "perflens-setup/setup.json"
+    setup_payload = json.loads(setup_path.read_text(encoding="utf-8"))
+    setup_payload["collector_feature_profile"] = "full_diagnostics"
+    setup_path.write_text(json.dumps(setup_payload), encoding="utf-8")
+    health = CollectorHealthArtifact(
+        perflens_version="test",
+        policy_version=1,
+        service_pid=123,
+        service_uid=456,
+        peer_uid=789,
+        allowed_modes=("stat", "record", "sched", "off_cpu", "lock"),
+        spool_root="/var/lib/perflens",
+        feature_profile="full_diagnostics",
+    )
+
+    class ReportedBrokerClient:
+        def __init__(self, _path: Path, *, timeout_seconds: float) -> None:
+            assert timeout_seconds == 0.5
+
+        def health(self, *, expected_service_uid: int | None) -> CollectorHealthArtifact:
+            assert expected_service_uid == 456
+            return health
+
+    def ready_socket(_path: Path) -> str:
+        return "ready"
+
+    monkeypatch.setattr("perflens.distribution.status._inspect_socket", ready_socket)
+    monkeypatch.setattr("perflens.distribution.status._collector_group_status", lambda: "member")
+    monkeypatch.setattr("perflens.distribution.status._collector_service_uid", lambda: 456)
+    monkeypatch.setattr("perflens.distribution.status.CollectorBrokerClient", ReportedBrokerClient)
+
+    artifact = inspect_runtime_status(tmp_path, perf_path=Path("/bin/true"))
+
+    assert artifact.feature_profile == "full_diagnostics"
+    assert artifact.trace_backend_status == "available"
+    assert "collector_trace_backend_unavailable" not in artifact.issues
 
 
 def test_runtime_status_rejects_stale_socket_as_unreachable(

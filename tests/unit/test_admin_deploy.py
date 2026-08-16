@@ -232,6 +232,7 @@ def test_admin_cli_help_is_chinese_first_and_keeps_stable_commands() -> None:
     assert upgrade_help.exit_code == 0, upgrade_help.output
     assert "--acknowledge-privileged-helper-risk" in upgrade_help.output
     assert "--acknowledge-cap-sys-admin-risk" in upgrade_help.output
+    assert "--acknowledge-trace-risk" in upgrade_help.output
 
     setup_help = runner.invoke(app, ["setup", "--help"])
     assert setup_help.exit_code == 0, setup_help.output
@@ -921,6 +922,78 @@ def test_admin_switch_mode_both_directions_and_preserves_evidence(tmp_path: Path
     assert stat.S_IMODE(layout.config_path.stat().st_mode) == 0o600
     assert evidence.read_bytes() == b"evidence"
 
+
+def test_admin_switch_mode_preserves_full_diagnostics_topology(tmp_path: Path) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_switchable_policy(config)
+    identity = (os.geteuid(), os.getegid())
+    capability = TraceBackendCapability(
+        status="available",
+        target_filter_before_userspace=True,
+        supported_modes=("sched", "off_cpu", "lock"),
+        reason="packaged target-filtered backend is available",
+    )
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+    )
+    switch_collector_profile(
+        "full_diagnostics",
+        config_path=layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        trace_group_gid=os.getegid(),
+        trace_backend_capability=capability,
+        acknowledge_trace_risk=True,
+    )
+    trace_unit_before = layout.trace_helper_service_path.read_bytes()
+    trace_policy_before = layout.trace_config_path.read_bytes()
+
+    helper = switch_collector_mode(
+        "paranoid3_helper",
+        config_path=layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        perf_event_paranoid=3,
+        acknowledge_privileged_helper_risk=True,
+    )
+    assert helper.status == "switched"
+    helper_broker = layout.service_path.read_text(encoding="utf-8")
+    assert "perflens-privileged-helper.service perflens-trace-helper.service" in helper_broker
+    assert "--trace-policy /etc/perflens/trace.toml" in helper_broker
+    assert layout.trace_helper_service_path.read_bytes() == trace_unit_before
+    assert layout.trace_config_path.read_bytes() == trace_policy_before
+
+    cap = switch_collector_mode(
+        "cap_perfmon",
+        config_path=layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        perf_event_paranoid=2,
+    )
+    assert cap.status == "switched"
+    cap_broker = layout.service_path.read_text(encoding="utf-8")
+    assert "Requires=perflens-trace-helper.service" in cap_broker
+    assert "perflens-privileged-helper.service" not in cap_broker
+    assert layout.trace_helper_service_path.read_bytes() == trace_unit_before
+    assert layout.trace_config_path.read_bytes() == trace_policy_before
 
 def test_admin_switch_mode_rolls_back_policy_and_units_after_health_failure(
     tmp_path: Path,
@@ -1822,8 +1895,14 @@ def test_admin_upgrade_replaces_only_managed_unit_and_cli_is_versioned(
         dry_run: bool = False,
         collector_command: Path | None = None,
         acknowledge_privileged_helper_risk: bool = False,
+        acknowledge_trace_risk: bool = False,
     ) -> CollectorUpgradeArtifact:
-        del dry_run, collector_command, acknowledge_privileged_helper_risk
+        del (
+            dry_run,
+            collector_command,
+            acknowledge_privileged_helper_risk,
+            acknowledge_trace_risk,
+        )
         return upgraded
 
     monkeypatch.setattr("perflens.admin.app.upgrade_collector", fake_upgrade)
@@ -1917,6 +1996,87 @@ def test_admin_upgrade_updates_broker_and_helper_units_together(tmp_path: Path) 
     helper_text = layout.helper_service_path.read_text(encoding="utf-8")
     assert "# old helper" not in helper_text
     assert f"--perf-path {_perf}" in helper_text
+
+
+def test_admin_upgrade_preserves_and_updates_full_diagnostics_topology(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    identity = (os.geteuid(), os.getegid())
+    capability = TraceBackendCapability(
+        status="available",
+        target_filter_before_userspace=True,
+        supported_modes=("sched", "off_cpu", "lock"),
+        reason="packaged target-filtered backend is available",
+    )
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+    )
+    switch_collector_profile(
+        "full_diagnostics",
+        config_path=layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        trace_group_gid=os.getegid(),
+        trace_backend_capability=capability,
+        acknowledge_trace_risk=True,
+    )
+    with layout.service_path.open("a", encoding="utf-8") as broker:
+        broker.write("# old full broker\n")
+    with layout.trace_helper_service_path.open("a", encoding="utf-8") as helper:
+        helper.write("# old trace helper\n")
+
+    preview = upgrade_collector(
+        layout.config_path,
+        dry_run=True,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        service_identity=identity,
+        trace_group_gid=os.getegid(),
+    )
+    assert preview.feature_profile == "full_diagnostics"
+    assert preview.service_update_required
+    assert preview.trace_helper_service_update_required
+    assert preview.trace_helper_service_path == str(layout.trace_helper_service_path)
+    assert preview.previous_trace_helper_service_sha256 is not None
+    assert preview.candidate_trace_helper_service_sha256 is not None
+
+    commands: list[tuple[str, ...]] = []
+    upgraded = upgrade_collector(
+        layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=commands.append,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        trace_group_gid=os.getegid(),
+    )
+    assert upgraded.status == "upgraded"
+    assert upgraded.trace_helper_service_updated
+    assert "# old full broker" not in layout.service_path.read_text(encoding="utf-8")
+    assert "# old trace helper" not in layout.trace_helper_service_path.read_text(
+        encoding="utf-8"
+    )
+    assert "--trace-policy /etc/perflens/trace.toml" in layout.service_path.read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "/usr/bin/systemctl",
+        "restart",
+        "perflens-trace-helper.service",
+    ) in commands
 
 
 def test_admin_upgrade_requires_ack_before_expanding_helper_capabilities(tmp_path: Path) -> None:
@@ -2181,6 +2341,23 @@ def test_admin_policy_update_dry_run_and_unchanged_are_read_only(
     assert unchanged.status == "unchanged"
     assert unchanged.previous_policy_sha256 == unchanged.candidate_policy_sha256
     assert layout.config_path.read_bytes() == before
+
+    widened = tmp_path / "widened.toml"
+    widened.write_text(
+        candidate.read_text(encoding="utf-8").replace(
+            'allowed_modes = ["record", "stat"]',
+            'allowed_modes = ["record", "stat", "sched"]',
+        ),
+        encoding="utf-8",
+    )
+    widened.chmod(0o600)
+    with pytest.raises(PerfLensError, match="violates fixed paths or bounded policy"):
+        update_collector_policy(
+            widened,
+            dry_run=True,
+            layout=layout,
+            require_root=False,
+        )
 
     def fake_update(
         _config: Path,
@@ -2497,6 +2674,68 @@ def test_admin_undeploy_handles_a_helper_only_partial_state(tmp_path: Path) -> N
     assert removed.status == "removed"
     assert not layout.helper_service_path.exists()
     assert commands == list(dry_run.planned_commands)
+
+
+def test_admin_undeploy_removes_trace_unit_but_preserves_profile_policy_and_evidence(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    identity = (os.geteuid(), os.getegid())
+    capability = TraceBackendCapability(
+        status="available",
+        target_filter_before_userspace=True,
+        supported_modes=("sched", "off_cpu", "lock"),
+        reason="packaged target-filtered backend is available",
+    )
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+    )
+    switch_collector_profile(
+        "full_diagnostics",
+        config_path=layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        trace_group_gid=os.getegid(),
+        trace_backend_capability=capability,
+        acknowledge_trace_risk=True,
+    )
+    trace_evidence = layout.trace_helper_state_directory / "retained.raw"
+    trace_evidence.parent.mkdir(parents=True)
+    trace_evidence.write_bytes(b"private trace evidence")
+    commands: list[tuple[str, ...]] = []
+
+    removed = undeploy_collector(
+        layout=layout,
+        require_root=False,
+        command_executor=commands.append,
+    )
+
+    assert removed.status == "removed"
+    assert not layout.service_path.exists()
+    assert not layout.trace_helper_service_path.exists()
+    assert layout.config_path.exists()
+    assert layout.profile_path.exists()
+    assert layout.trace_config_path.exists()
+    assert trace_evidence.read_bytes() == b"private trace evidence"
+    assert commands[:2] == [
+        ("/usr/bin/systemctl", "disable", "--now", "perflens-collector.service"),
+        (
+            "/usr/bin/systemctl",
+            "disable",
+            "--now",
+            "perflens-trace-helper.service",
+        ),
+    ]
 
 
 def test_admin_undeploy_rejects_unmanaged_and_symlink_units(tmp_path: Path) -> None:
