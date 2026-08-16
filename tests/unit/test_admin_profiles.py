@@ -178,14 +178,15 @@ def test_cpu_profile_is_idempotent_and_capability_claims_fail_closed(tmp_path: P
         supported_modes=("sched", "off_cpu", "lock"),
         reason="host acceptance passed",
     )
-    topology_blocked = _plan(
+    topology_ready = _plan(
         tmp_path,
         "full_diagnostics",
         capability=available,
     )
-    assert topology_blocked.status == "blocked"
-    assert topology_blocked.trace_backend_status == "available"
-    assert "transactional service topology" in " ".join(topology_blocked.warnings)
+    assert topology_ready.status == "dry_run"
+    assert topology_ready.trace_backend_status == "available"
+    assert topology_ready.target_filter_before_userspace
+    assert require_actionable_profile_switch(topology_ready) is topology_ready
 
     with pytest.raises(ValueError, match="all target-filtered modes"):
         TraceBackendCapability(

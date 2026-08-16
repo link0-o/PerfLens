@@ -52,14 +52,17 @@ def install_collector_assets(
     allowed_uids: tuple[int, ...] = (1000,),
     collector_command: Path = Path("/usr/bin/perflens-collector"),
     perf_path: Path = Path("/usr/bin/perf"),
+    spool_root: Path = Path("/var/lib/perflens"),
     privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon",
 ) -> Path:
     """Copy service templates to a new staging directory; never install or elevate."""
-    rendered_uids, rendered_collector, rendered_perf, rendered_helper_perf = _deployment_values(
-        allowed_uids,
-        collector_command,
-        perf_path,
-    )
+    (
+        rendered_uids,
+        rendered_collector,
+        rendered_perf,
+        rendered_helper_perf,
+        rendered_spool,
+    ) = _deployment_values(allowed_uids, collector_command, perf_path, spool_root)
     if privilege_mode not in {"cap_perfmon", "paranoid3_helper"}:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
@@ -95,6 +98,12 @@ def install_collector_assets(
             data = source.joinpath(source_name).read_bytes()
             if source_name == "collector.example.toml":
                 text = data.decode("utf-8")
+                text = _replace_exact(
+                    text,
+                    'spool_root = "/var/lib/perflens"',
+                    f"spool_root = {rendered_spool}",
+                    source_name,
+                )
                 text = _replace_exact(
                     text,
                     "allowed_uids = [1000]",
@@ -195,7 +204,8 @@ def _deployment_values(
     allowed_uids: tuple[int, ...],
     collector_command: Path,
     perf_path: Path,
-) -> tuple[str, str, str, str]:
+    spool_root: Path,
+) -> tuple[str, str, str, str, str]:
     unique_uids = tuple(sorted(set(allowed_uids)))
     if len(unique_uids) != 1 or any(uid < 0 for uid in unique_uids):
         raise PerfLensError(
@@ -205,6 +215,7 @@ def _deployment_values(
         )
     collector_text = str(collector_command.expanduser())
     perf_text = str(perf_path.expanduser())
+    spool_text = str(spool_root.expanduser())
     if not systemd_safe_absolute_path(collector_text):
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
@@ -217,11 +228,18 @@ def _deployment_values(
             "collector_assets",
             "perf executable must use a systemd-safe absolute path",
         )
+    if not Path(spool_text).is_absolute() or "\0" in spool_text:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "collector_assets",
+            "Collector spool must use an absolute path",
+        )
     return (
         json.dumps(list(unique_uids), separators=(",", ":")),
         collector_text,
         json.dumps(perf_text),
         perf_text,
+        json.dumps(spool_text),
     )
 
 

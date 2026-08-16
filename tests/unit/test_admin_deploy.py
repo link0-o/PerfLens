@@ -28,6 +28,7 @@ from perflens.admin.deploy import (
     update_collector_policy,
     upgrade_collector,
 )
+from perflens.admin.profile import TraceBackendCapability
 from perflens.collector_broker.state import replay_marker_name
 from perflens.contracts.artifacts import (
     CollectorDeploymentArtifact,
@@ -57,6 +58,15 @@ def _deployment_inputs(tmp_path: Path) -> tuple[Path, Path, Path, CollectorSyste
         helper_service_path=tmp_path / "system/etc/systemd/perflens-privileged-helper.service",
         helper_state_directory=tmp_path / "system/var/lib/perflens-helper",
         helper_socket_path=tmp_path / "system/run/perflens-helper/helper.sock",
+        profile_path=tmp_path / "system/etc/perflens/profile.toml",
+        trace_config_path=tmp_path / "system/etc/perflens/trace.toml",
+        trace_helper_service_path=(
+            tmp_path / "system/etc/systemd/perflens-trace-helper.service"
+        ),
+        trace_helper_state_directory=tmp_path / "system/var/lib/perflens-trace-helper",
+        trace_helper_socket_path=(
+            tmp_path / "system/run/perflens-trace-helper/helper.sock"
+        ),
         admin_lock_path=tmp_path / "perflens-admin.lock",
     )
     config = tmp_path / "collector.toml"
@@ -421,6 +431,225 @@ def test_admin_setup_and_switch_profile_fail_closed_without_trace_backend(
     )
     assert unchanged.status == "unchanged"
     assert not unchanged.profile_update_required
+
+
+def test_admin_setup_can_preview_and_activate_full_diagnostics(
+    tmp_path: Path,
+) -> None:
+    _config, perf, collector, layout = _deployment_inputs(tmp_path)
+    identity = (os.geteuid(), os.getegid())
+    capability = TraceBackendCapability(
+        status="available",
+        target_filter_before_userspace=True,
+        supported_modes=("sched", "off_cpu", "lock"),
+        reason="packaged target-filtered backend is available",
+    )
+
+    preview = setup_collector(
+        "cap_perfmon",
+        feature_profile="full_diagnostics",
+        dry_run=True,
+        layout=layout,
+        collector_command=collector,
+        perf_path=perf,
+        require_root=False,
+        perf_event_paranoid=2,
+        trace_backend_capability=capability,
+    )
+    assert preview.status == "dry_run"
+    assert preview.trace_backend_status == "available"
+    assert any(
+        command[-1] == "perflens-trace-helper.service"
+        for command in preview.planned_commands
+    )
+    assert not layout.config_path.exists()
+
+    deployed = setup_collector(
+        "cap_perfmon",
+        feature_profile="full_diagnostics",
+        layout=layout,
+        collector_command=collector,
+        perf_path=perf,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        perf_event_paranoid=2,
+        acknowledge_trace_risk=True,
+        trace_backend_capability=capability,
+        trace_group_gid=os.getegid(),
+    )
+    assert deployed.status == "deployed"
+    assert deployed.selected_feature_profile == "full_diagnostics"
+    assert deployed.trace_backend_status == "available"
+    assert 'feature_profile = "full_diagnostics"' in layout.profile_path.read_text(
+        encoding="utf-8"
+    )
+    assert layout.trace_helper_service_path.is_file()
+
+
+def test_admin_switch_profile_installs_and_removes_trace_topology_transactionally(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    identity = (os.geteuid(), os.getegid())
+    capability = TraceBackendCapability(
+        status="available",
+        target_filter_before_userspace=True,
+        supported_modes=("sched", "off_cpu", "lock"),
+        reason="packaged target-filtered backend is available",
+    )
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+    )
+
+    preview = switch_collector_profile(
+        "full_diagnostics",
+        config_path=layout.config_path,
+        dry_run=True,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        trace_backend_capability=capability,
+    )
+    assert preview.status == "dry_run"
+    assert preview.profile_update_required
+    assert preview.planned_commands
+    assert not layout.profile_path.exists()
+
+    commands: list[tuple[str, ...]] = []
+    with pytest.raises(PerfLensError, match="risk acknowledgement"):
+        switch_collector_profile(
+            "full_diagnostics",
+            config_path=layout.config_path,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+            command_executor=commands.append,
+            socket_waiter=lambda _path: None,
+            service_identity=identity,
+            trace_group_gid=os.getegid(),
+            trace_backend_capability=capability,
+        )
+    assert commands == []
+    assert not layout.profile_path.exists()
+
+    switched = switch_collector_profile(
+        "full_diagnostics",
+        config_path=layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=commands.append,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        trace_group_gid=os.getegid(),
+        trace_backend_capability=capability,
+        acknowledge_trace_risk=True,
+    )
+    assert switched.status == "switched"
+    assert 'feature_profile = "full_diagnostics"' in layout.profile_path.read_text(
+        encoding="utf-8"
+    )
+    assert layout.trace_config_path.is_file()
+    trace_unit = layout.trace_helper_service_path.read_text(encoding="utf-8")
+    assert "@PERFLENS_" not in trace_unit
+    assert "CAP_BPF CAP_PERFMON" in trace_unit
+    assert "--trace-policy /etc/perflens/trace.toml" in layout.service_path.read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "/usr/bin/systemctl",
+        "enable",
+        "--now",
+        "perflens-trace-helper.service",
+    ) in commands
+
+    commands.clear()
+    restored = switch_collector_profile(
+        "cpu_only",
+        config_path=layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=commands.append,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        trace_backend_capability=capability,
+    )
+    assert restored.status == "switched"
+    assert 'feature_profile = "cpu_only"' in layout.profile_path.read_text(encoding="utf-8")
+    assert not layout.trace_helper_service_path.exists()
+    assert layout.trace_config_path.is_file()
+    assert "--trace-policy" not in layout.service_path.read_text(encoding="utf-8")
+    disable = (
+        "/usr/bin/systemctl",
+        "disable",
+        "--now",
+        "perflens-trace-helper.service",
+    )
+    assert disable in commands
+    assert commands.index(disable) < commands.index(
+        ("/usr/bin/systemctl", "daemon-reload")
+    )
+
+
+def test_admin_switch_profile_rolls_back_all_managed_files_after_health_failure(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    identity = (os.geteuid(), os.getegid())
+    capability = TraceBackendCapability(
+        status="available",
+        target_filter_before_userspace=True,
+        supported_modes=("sched", "off_cpu", "lock"),
+        reason="packaged target-filtered backend is available",
+    )
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+    )
+    service_before = layout.service_path.read_bytes()
+    checks = 0
+
+    def fail_first_health(_path: Path) -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 1:
+            raise PerfLensError(ErrorCode.EXTERNAL_TOOL_FAILED, "test", "health failed")
+
+    with pytest.raises(PerfLensError, match="health failed") as failed:
+        switch_collector_profile(
+            "full_diagnostics",
+            config_path=layout.config_path,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+            command_executor=lambda _command: None,
+            socket_waiter=fail_first_health,
+            service_identity=identity,
+            trace_group_gid=os.getegid(),
+            trace_backend_capability=capability,
+            acknowledge_trace_risk=True,
+        )
+
+    assert failed.value.details["rollback_performed"] is True
+    assert checks == 2
+    assert layout.service_path.read_bytes() == service_before
+    assert not layout.profile_path.exists()
+    assert not layout.trace_config_path.exists()
+    assert not layout.trace_helper_service_path.exists()
 
 
 def test_admin_setup_rejects_an_existing_deployment_with_lifecycle_guidance(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import grp
 import hashlib
 import math
 import os
@@ -24,8 +25,10 @@ from perflens import __version__
 from perflens.admin.profile import (
     FeatureProfile,
     TraceBackendCapability,
+    inspect_packaged_trace_backend,
     load_feature_profile,
     plan_feature_profile_switch,
+    render_feature_profile,
     require_actionable_profile_switch,
 )
 from perflens.artifacts.filesystem import write_text_atomic
@@ -82,6 +85,7 @@ class CollectorSystemLayout:
     helper_state_directory: Path = Path("/var/lib/perflens-helper")
     helper_socket_path: Path = Path("/run/perflens-helper/helper.sock")
     profile_path: Path = Path("/etc/perflens/profile.toml")
+    trace_config_path: Path = Path("/etc/perflens/trace.toml")
     trace_helper_service_path: Path = Path(
         "/etc/systemd/system/perflens-trace-helper.service"
     )
@@ -113,6 +117,12 @@ class CollectorConfigSource:
 
 @dataclass(frozen=True, slots=True)
 class _ManagedServiceSnapshot:
+    metadata: os.stat_result
+    raw: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _ManagedTextSnapshot:
     metadata: os.stat_result
     raw: bytes
 
@@ -309,6 +319,7 @@ def deploy_collector(
                 allowed_uids=policy.allowed_uids,
                 collector_command=command,
                 perf_path=policy.perf_path,
+                spool_root=policy.spool_root,
             )
             executor((commands[0][0], str(staged / "perflens.sysusers")))
             if identity is None:
@@ -422,6 +433,7 @@ def setup_collector(
     acknowledge_privileged_helper_risk: bool = False,
     acknowledge_trace_risk: bool = False,
     trace_backend_capability: TraceBackendCapability | None = None,
+    trace_group_gid: int | None = None,
 ) -> CollectorSetupArtifact:
     """Generate the bounded default policy and explicitly deploy one selected mode."""
     if mode == "analysis_only":
@@ -446,6 +458,7 @@ def setup_collector(
                 "Use perflens-admin update-policy for reviewed policy-only changes.",
             ),
         )
+    trace_plan: CollectorProfileSwitchArtifact | None = None
     if feature_profile == "full_diagnostics":
         current = load_feature_profile(
             effective_layout.profile_path,
@@ -453,7 +466,12 @@ def setup_collector(
             invoking_uid=invoking_uid(),
             stage="collector_setup",
         )
-        plan = plan_feature_profile_switch(
+        observed_capability = trace_backend_capability
+        if observed_capability is None:
+            observed_capability = inspect_packaged_trace_backend(
+                require_root_owner=require_root,
+            )
+        trace_plan = plan_feature_profile_switch(
             feature_profile,
             current=current,
             privilege_mode=mode,
@@ -461,23 +479,24 @@ def setup_collector(
             trace_helper_service_path=effective_layout.trace_helper_service_path,
             trace_socket_path=effective_layout.trace_helper_socket_path,
             trace_private_spool=effective_layout.trace_helper_state_directory,
-            capability=trace_backend_capability,
+            capability=observed_capability,
             dry_run=dry_run,
         )
-        blocked = CollectorSetupArtifact(
-            perflens_version=__version__,
-            status="blocked",
-            selected_mode=mode,
-            selected_feature_profile=feature_profile,
-            trace_backend_status=plan.trace_backend_status,
-            config_path=str(effective_layout.config_path),
-            service_path=str(effective_layout.service_path),
-            warnings=plan.warnings,
-            next_steps=plan.next_steps,
-        )
-        if dry_run:
-            return blocked
-        if not acknowledge_trace_risk:
+        if trace_plan.status == "blocked":
+            blocked = CollectorSetupArtifact(
+                perflens_version=__version__,
+                status="blocked",
+                selected_mode=mode,
+                selected_feature_profile=feature_profile,
+                trace_backend_status=trace_plan.trace_backend_status,
+                config_path=str(effective_layout.config_path),
+                service_path=str(effective_layout.service_path),
+                warnings=trace_plan.warnings,
+                next_steps=trace_plan.next_steps,
+            )
+            if dry_run:
+                return blocked
+        if not dry_run and not acknowledge_trace_risk:
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,
                 "collector_setup",
@@ -488,17 +507,8 @@ def setup_collector(
                     "Review setup --dry-run, then add --acknowledge-trace-risk.",
                 ),
             )
-        raise PerfLensError(
-            ErrorCode.UNSUPPORTED_FORMAT,
-            "collector_setup",
-            "full_diagnostics is not safely deployable on this build/host",
-            recoverable=True,
-            details={
-                "trace_backend_status": plan.trace_backend_status,
-                "target_filter_before_userspace": plan.target_filter_before_userspace,
-            },
-            suggested_actions=plan.next_steps,
-        )
+        if trace_plan.status == "blocked":
+            require_actionable_profile_switch(trace_plan)
     selected_uid = invoking_uid() if allowed_uid is None else allowed_uid
     if selected_uid <= 0:
         raise PerfLensError(
@@ -555,6 +565,7 @@ def setup_collector(
             allowed_uids=(selected_uid,),
             collector_command=command,
             perf_path=perf_path,
+            spool_root=effective_layout.state_directory,
             privilege_mode=mode,
         )
         deployment = deploy_collector(
@@ -568,19 +579,64 @@ def setup_collector(
             service_identity=service_identity,
             acknowledge_privileged_helper_risk=acknowledge_privileged_helper_risk,
         )
+    profile_switch: CollectorProfileSwitchArtifact | None = None
+    if feature_profile == "full_diagnostics" and not dry_run:
+        assert trace_plan is not None
+        try:
+            profile_switch = switch_collector_profile(
+                "full_diagnostics",
+                config_path=effective_layout.config_path,
+                layout=effective_layout,
+                collector_command=command,
+                require_root=require_root,
+                command_executor=command_executor,
+                socket_waiter=socket_waiter,
+                service_identity=service_identity,
+                trace_group_gid=trace_group_gid,
+                trace_backend_capability=trace_backend_capability
+                or inspect_packaged_trace_backend(require_root_owner=require_root),
+                acknowledge_trace_risk=True,
+            )
+        except PerfLensError as exc:
+            raise PerfLensError(
+                exc.code,
+                "collector_setup",
+                "full_diagnostics setup failed; the safe cpu_only deployment was restored",
+                recoverable=True,
+                details={**exc.details, "cpu_only_fallback_active": True},
+                suggested_actions=(
+                    *exc.suggested_actions,
+                    "Inspect the Trace service and retry with perflens-admin switch-profile "
+                    "full_diagnostics.",
+                ),
+            ) from exc
+    trace_status = (
+        trace_plan.trace_backend_status if trace_plan is not None else "not_checked"
+    )
+    planned_commands = deployment.planned_commands
+    warnings = deployment.warnings
+    next_steps = deployment.next_steps
+    if trace_plan is not None:
+        planned_commands = (*planned_commands, *_profile_switch_commands(feature_profile))
+        warnings = (*warnings, *trace_plan.warnings)
+        next_steps = (*next_steps, *trace_plan.next_steps)
+    if profile_switch is not None:
+        planned_commands = (*deployment.planned_commands, *profile_switch.planned_commands)
+        warnings = (*deployment.warnings, *profile_switch.warnings)
+        next_steps = (*deployment.next_steps, *profile_switch.next_steps)
     return CollectorSetupArtifact(
         perflens_version=__version__,
         status=deployment.status,
         selected_mode=deployment.privilege_mode,
         selected_feature_profile=feature_profile,
-        trace_backend_status="not_checked",
+        trace_backend_status=trace_status,
         config_path=deployment.config_path,
         service_path=deployment.service_path,
         collector_command=deployment.collector_command,
         allowed_uids=deployment.allowed_uids,
-        planned_commands=deployment.planned_commands,
-        warnings=deployment.warnings,
-        next_steps=deployment.next_steps,
+        planned_commands=planned_commands,
+        warnings=warnings,
+        next_steps=next_steps,
     )
 
 
@@ -744,6 +800,7 @@ def switch_collector_mode(
             allowed_uids=current_policy.allowed_uids,
             collector_command=command,
             perf_path=current_policy.perf_path,
+            spool_root=current_policy.spool_root,
             privilege_mode=target_mode,
         )
         service_asset = (
@@ -944,13 +1001,48 @@ def switch_collector_profile(
     config_path: Path = Path("/etc/perflens/collector.toml"),
     dry_run: bool = False,
     layout: CollectorSystemLayout | None = None,
+    collector_command: Path | None = None,
     require_root: bool = True,
+    command_executor: CommandExecutor | None = None,
+    socket_waiter: SocketWaiter | None = None,
+    service_identity: tuple[int, int] | None = None,
+    trace_group_gid: int | None = None,
     trace_backend_capability: TraceBackendCapability | None = None,
     acknowledge_trace_risk: bool = False,
+    _admin_lock_held: bool = False,
 ) -> CollectorProfileSwitchArtifact:
-    """Plan a feature-profile transition and fail closed before any system mutation."""
+    """Transactionally switch the feature profile without changing privilege mode."""
     stage = "collector_profile_switch"
     effective_layout = layout or CollectorSystemLayout()
+    if not dry_run and not _admin_lock_held:
+        if require_root and os.geteuid() != 0:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "Collector profile switch must be started explicitly by an administrator",
+                recoverable=True,
+                suggested_actions=("Run sudo perflens-admin switch-profile <profile>.",),
+            )
+        with _collector_admin_lock(
+            effective_layout,
+            stage=stage,
+            require_root_owner=require_root,
+        ):
+            return switch_collector_profile(
+                target_profile,
+                config_path=config_path,
+                dry_run=dry_run,
+                layout=effective_layout,
+                collector_command=collector_command,
+                require_root=require_root,
+                command_executor=command_executor,
+                socket_waiter=socket_waiter,
+                service_identity=service_identity,
+                trace_group_gid=trace_group_gid,
+                trace_backend_capability=trace_backend_capability,
+                acknowledge_trace_risk=acknowledge_trace_risk,
+                _admin_lock_held=True,
+            )
     source = load_collector_config(
         config_path,
         stage=stage,
@@ -988,6 +1080,11 @@ def switch_collector_profile(
         invoking_uid=invoking_uid(),
         stage=stage,
     )
+    observed_capability = trace_backend_capability
+    if observed_capability is None:
+        observed_capability = inspect_packaged_trace_backend(
+            require_root_owner=require_root,
+        )
     artifact = plan_feature_profile_switch(
         target_profile,
         current=current,
@@ -996,10 +1093,19 @@ def switch_collector_profile(
         trace_helper_service_path=effective_layout.trace_helper_service_path,
         trace_socket_path=effective_layout.trace_helper_socket_path,
         trace_private_spool=effective_layout.trace_helper_state_directory,
-        capability=trace_backend_capability,
+        capability=observed_capability,
         dry_run=dry_run,
     )
-    if dry_run or artifact.status == "unchanged":
+    commands = _profile_switch_commands(target_profile)
+    if artifact.status == "dry_run":
+        artifact = artifact.model_copy(update={"planned_commands": commands})
+    if artifact.status == "blocked":
+        if dry_run:
+            return artifact
+        return require_actionable_profile_switch(artifact)
+    if artifact.status == "unchanged":
+        return artifact
+    if dry_run:
         return artifact
     if target_profile == "full_diagnostics" and not acknowledge_trace_risk:
         raise PerfLensError(
@@ -1011,9 +1117,196 @@ def switch_collector_profile(
                 "Review switch-profile --dry-run, then add --acknowledge-trace-risk.",
             ),
         )
-    # Until the independently reviewed multi-service transaction is implemented, all actual
-    # profile changes remain blocked. This deliberately cannot write profile.toml or a unit.
-    return require_actionable_profile_switch(artifact)
+    if require_root and os.geteuid() != 0:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Collector profile switch must be started explicitly by an administrator",
+            recoverable=True,
+        )
+    command = _collector_command(
+        collector_command,
+        require_root_owner=require_root,
+        stage=stage,
+    )
+    identity = service_identity
+    if identity is None:
+        try:
+            account = pwd.getpwnam("perflens")
+        except KeyError as exc:
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_FAILED,
+                stage,
+                "Dedicated perflens service account does not exist",
+            ) from exc
+        identity = (account.pw_uid, account.pw_gid)
+    executor = command_executor or _run_admin_profile_switch_command
+    previous_service = _verify_managed_service(
+        effective_layout.service_path,
+        require_root_owner=require_root,
+        stage=stage,
+    )
+    previous_trace_service = _optional_managed_service(
+        effective_layout.trace_helper_service_path,
+        require_root_owner=require_root,
+        stage=stage,
+    )
+    previous_profile = _optional_managed_text(
+        effective_layout.profile_path,
+        marker=b"# Managed by PerfLens.",
+        require_root_owner=require_root,
+        stage=stage,
+    )
+    previous_trace_policy = _optional_managed_text(
+        effective_layout.trace_config_path,
+        marker=b"# PerfLens Trace policy template",
+        require_root_owner=require_root,
+        stage=stage,
+    )
+    with tempfile.TemporaryDirectory(prefix="perflens-admin-profile-") as temporary:
+        staged = install_collector_assets(
+            Path(temporary) / "assets",
+            allowed_uids=policy.allowed_uids,
+            collector_command=command,
+            perf_path=policy.perf_path,
+            spool_root=policy.spool_root,
+            privilege_mode=policy.privilege_mode,
+        )
+        service_asset = _profile_broker_service_asset(
+            policy.privilege_mode,
+            target_profile,
+        )
+        candidate_service = (staged / service_asset).read_bytes()
+        candidate_profile = render_feature_profile(target_profile).encode("utf-8")
+        candidate_trace_policy = (staged / "trace.toml").read_bytes()
+        if len(candidate_trace_policy) > _MAX_CONFIG_BYTES:
+            raise PerfLensError(
+                ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                stage,
+                "Trace policy exceeds the bounded configuration limit",
+            )
+        resolved_trace_gid = trace_group_gid
+        if target_profile == "full_diagnostics" and resolved_trace_gid is None:
+            executor(("/usr/bin/systemd-sysusers", str(staged / "perflens.sysusers")))
+            try:
+                resolved_trace_gid = grp.getgrnam("perflens-trace-internal").gr_gid
+            except KeyError as exc:
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    stage,
+                    "systemd-sysusers did not create the Trace internal group",
+                ) from exc
+        candidate_trace_service: bytes | None = None
+        if target_profile == "full_diagnostics":
+            assert resolved_trace_gid is not None
+            candidate_trace_service = _render_trace_helper_service(
+                (staged / "perflens-trace-helper.service").read_text(encoding="utf-8"),
+                identity=identity,
+                allowed_uid=policy.allowed_uids[0],
+                artifact_gid=resolved_trace_gid,
+                policy_sha256=hashlib.sha256(candidate_trace_policy).hexdigest(),
+                stage=stage,
+            ).encode("utf-8")
+        try:
+            executor(("/usr/bin/systemctl", "stop", "perflens-collector.service"))
+            command_offset = 0
+            if target_profile == "cpu_only" and previous_trace_service is not None:
+                # Stop and disable the loaded unit before removing its managed unit file.
+                executor(commands[0])
+                command_offset = 1
+            _replace_verified_managed_service(
+                effective_layout.service_path,
+                previous_service,
+                candidate_service,
+                stage=stage,
+            )
+            _replace_or_install_managed_text(
+                effective_layout.profile_path,
+                previous_profile,
+                candidate_profile,
+                mode=0o644,
+                stage=stage,
+            )
+            if target_profile == "full_diagnostics":
+                _replace_or_install_managed_text(
+                    effective_layout.trace_config_path,
+                    previous_trace_policy,
+                    candidate_trace_policy,
+                    mode=0o644,
+                    stage=stage,
+                )
+                assert candidate_trace_service is not None
+                _replace_or_install_service(
+                    effective_layout.trace_helper_service_path,
+                    previous_trace_service,
+                    candidate_trace_service,
+                    stage=stage,
+                )
+            elif previous_trace_service is not None:
+                _unlink_verified_managed_service(
+                    effective_layout.trace_helper_service_path,
+                    require_root_owner=require_root,
+                )
+            for planned in commands[command_offset:]:
+                if planned[0] == "/usr/bin/systemd-sysusers":
+                    continue
+                executor(planned)
+            if socket_waiter is not None:
+                socket_waiter(effective_layout.socket_path)
+            else:
+                _wait_for_profile_socket(
+                    effective_layout.socket_path,
+                    expected_service_uid=identity[0],
+                    expected_profile=target_profile,
+                )
+        except BaseException as exc:
+            try:
+                _rollback_profile_switch(
+                    executor,
+                    effective_layout,
+                    previous_service=previous_service,
+                    previous_trace_service=previous_trace_service,
+                    previous_profile=previous_profile,
+                    previous_trace_policy=previous_trace_policy,
+                    previous_profile_name=current.feature_profile,
+                    require_root_owner=require_root,
+                    socket_waiter=socket_waiter,
+                    expected_service_uid=identity[0],
+                )
+            except BaseException as rollback_exc:
+                raise PerfLensError(
+                    ErrorCode.OUTPUT_WRITE_FAILED,
+                    stage,
+                    "Collector profile switch failed and rollback did not complete",
+                    recoverable=True,
+                    details={"rollback_error": type(rollback_exc).__name__},
+                ) from exc
+            if isinstance(exc, PerfLensError):
+                raise PerfLensError(
+                    exc.code,
+                    exc.stage,
+                    exc.message,
+                    recoverable=exc.recoverable,
+                    retryable=exc.retryable,
+                    details={**exc.details, "rollback_performed": True},
+                    suggested_actions=exc.suggested_actions,
+                ) from exc
+            raise PerfLensError(
+                ErrorCode.INTERNAL_ERROR,
+                stage,
+                "Collector profile switch failed after restoring the previous profile",
+                recoverable=True,
+                details={"rollback_performed": True},
+            ) from exc
+    return artifact.model_copy(
+        update={
+            "status": "switched",
+            "warnings": (
+                *artifact.warnings,
+                "Trace raw/public evidence and administrator policy were preserved.",
+            ),
+        }
+    )
 
 
 def upgrade_collector(
@@ -1163,6 +1456,7 @@ def upgrade_collector(
             allowed_uids=policy.allowed_uids,
             collector_command=command,
             perf_path=policy.perf_path,
+            spool_root=policy.spool_root,
             privilege_mode=policy.privilege_mode,
         )
         service_asset = (
@@ -2632,6 +2926,323 @@ def _render_helper_service(
     return rendered
 
 
+def _render_trace_helper_service(
+    text: str,
+    *,
+    identity: tuple[int, int],
+    allowed_uid: int,
+    artifact_gid: int,
+    policy_sha256: str,
+    stage: str,
+) -> str:
+    rendered = text
+    replacements = (
+        ("@PERFLENS_BROKER_UID@", str(identity[0]), 1),
+        ("@PERFLENS_ALLOWED_UID@", str(allowed_uid), 1),
+        ("@PERFLENS_TRACE_ARTIFACT_GID@", str(artifact_gid), 1),
+        ("@PERFLENS_TRACE_POLICY_SHA256@", policy_sha256, 1),
+        # The same reviewed ceiling is deliberately used for BoundingSet and Ambient.
+        ("@PERFLENS_TRACE_CAPABILITIES@", "CAP_BPF CAP_PERFMON", 2),
+    )
+    for marker, value, expected_count in replacements:
+        count = rendered.count(marker)
+        if marker == "@PERFLENS_ALLOWED_UID@" and count == 0:
+            # install_collector_assets already renders this field.
+            continue
+        if count != expected_count:
+            raise PerfLensError(
+                ErrorCode.INTERNAL_ERROR,
+                stage,
+                "Trace Helper unit contains a missing or ambiguous deployment marker",
+            )
+        rendered = rendered.replace(marker, value)
+    if "@PERFLENS_" in rendered:
+        raise PerfLensError(
+            ErrorCode.INTERNAL_ERROR,
+            stage,
+            "Trace Helper unit contains an unresolved deployment marker",
+        )
+    return rendered
+
+
+def _profile_broker_service_asset(
+    privilege_mode: Literal["cap_perfmon", "paranoid3_helper"],
+    profile: FeatureProfile,
+) -> str:
+    if profile == "full_diagnostics":
+        return (
+            "perflens-collector-helper-trace.service"
+            if privilege_mode == "paranoid3_helper"
+            else "perflens-collector-trace.service"
+        )
+    return (
+        "perflens-collector-helper.service"
+        if privilege_mode == "paranoid3_helper"
+        else "perflens-collector.service"
+    )
+
+
+def _profile_switch_commands(
+    target_profile: FeatureProfile,
+) -> tuple[tuple[str, ...], ...]:
+    if target_profile == "full_diagnostics":
+        return (
+            (
+                "/usr/bin/systemd-sysusers",
+                "/usr/share/perflens/collector/perflens.sysusers",
+            ),
+            ("/usr/bin/systemctl", "daemon-reload"),
+            (
+                "/usr/bin/systemctl",
+                "enable",
+                "--now",
+                "perflens-trace-helper.service",
+            ),
+            (
+                "/usr/bin/systemctl",
+                "enable",
+                "--now",
+                "perflens-collector.service",
+            ),
+        )
+    return (
+        (
+            "/usr/bin/systemctl",
+            "disable",
+            "--now",
+            "perflens-trace-helper.service",
+        ),
+        ("/usr/bin/systemctl", "daemon-reload"),
+        (
+            "/usr/bin/systemctl",
+            "enable",
+            "--now",
+            "perflens-collector.service",
+        ),
+    )
+
+
+def _optional_managed_service(
+    path: Path,
+    *,
+    require_root_owner: bool,
+    stage: str,
+) -> _ManagedServiceSnapshot | None:
+    if not os.path.lexists(path):
+        return None
+    return _verify_managed_service(path, require_root_owner=require_root_owner, stage=stage)
+
+
+def _optional_managed_text(
+    path: Path,
+    *,
+    marker: bytes,
+    require_root_owner: bool,
+    stage: str,
+) -> _ManagedTextSnapshot | None:
+    if not os.path.lexists(path):
+        return None
+    if not path.is_absolute() or path.is_symlink():
+        raise PerfLensError(ErrorCode.PATH_SAFETY_VIOLATION, stage, "Managed file path is unsafe")
+    descriptor = -1
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        metadata = os.fstat(descriptor)
+        raw = os.read(descriptor, _MAX_CONFIG_BYTES + 1)
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Managed file cannot be inspected safely",
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    owners = {0} if require_root_owner else {0, os.geteuid()}
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid not in owners
+        or metadata.st_mode & 0o022
+        or len(raw) > _MAX_CONFIG_BYTES
+        or not raw.startswith(marker)
+    ):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Managed file identity, permissions, or marker are unsafe",
+        )
+    return _ManagedTextSnapshot(metadata=metadata, raw=raw)
+
+
+def _replace_or_install_managed_text(
+    path: Path,
+    previous: _ManagedTextSnapshot | None,
+    replacement: bytes,
+    *,
+    mode: int,
+    stage: str,
+) -> None:
+    if previous is not None:
+        current = path.stat(follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != (
+            previous.metadata.st_dev,
+            previous.metadata.st_ino,
+        ):
+            raise PerfLensError(ErrorCode.PATH_SAFETY_VIOLATION, stage, "Managed file changed")
+    elif os.path.lexists(path):
+        raise PerfLensError(ErrorCode.PATH_SAFETY_VIOLATION, stage, "Managed file appeared")
+    try:
+        write_text_atomic(
+            replacement.decode("utf-8"),
+            path,
+            max_output_bytes=_MAX_CONFIG_BYTES,
+        )
+        os.chmod(path, mode)
+    except UnicodeDecodeError as exc:
+        raise PerfLensError(ErrorCode.INTERNAL_ERROR, stage, "Managed text is not UTF-8") from exc
+
+
+def _replace_or_install_service(
+    path: Path,
+    previous: _ManagedServiceSnapshot | None,
+    replacement: bytes,
+    *,
+    stage: str,
+) -> None:
+    if previous is None:
+        _install_new_or_identical_text(replacement.decode("utf-8"), path, mode=0o644)
+    else:
+        _replace_verified_managed_service(path, previous, replacement, stage=stage)
+
+
+def _restore_managed_service(
+    path: Path,
+    previous: _ManagedServiceSnapshot | None,
+    *,
+    require_root_owner: bool,
+    stage: str,
+) -> None:
+    current = _optional_managed_service(
+        path,
+        require_root_owner=require_root_owner,
+        stage=stage,
+    )
+    if previous is None:
+        if current is not None:
+            _unlink_verified_managed_service(path, require_root_owner=require_root_owner)
+        return
+    if current is None:
+        _install_new_or_identical_text(previous.raw.decode("utf-8"), path, mode=0o644)
+    else:
+        _replace_verified_managed_service(path, current, previous.raw, stage=stage)
+
+
+def _restore_managed_text(
+    path: Path,
+    previous: _ManagedTextSnapshot | None,
+    *,
+    marker: bytes,
+    require_root_owner: bool,
+    stage: str,
+) -> None:
+    current = _optional_managed_text(
+        path,
+        marker=marker,
+        require_root_owner=require_root_owner,
+        stage=stage,
+    )
+    if previous is None:
+        if current is not None:
+            path.unlink()
+        return
+    _replace_or_install_managed_text(
+        path,
+        current,
+        previous.raw,
+        mode=stat.S_IMODE(previous.metadata.st_mode),
+        stage=stage,
+    )
+
+
+def _rollback_profile_switch(
+    executor: CommandExecutor,
+    layout: CollectorSystemLayout,
+    *,
+    previous_service: _ManagedServiceSnapshot,
+    previous_trace_service: _ManagedServiceSnapshot | None,
+    previous_profile: _ManagedTextSnapshot | None,
+    previous_trace_policy: _ManagedTextSnapshot | None,
+    previous_profile_name: FeatureProfile,
+    require_root_owner: bool,
+    socket_waiter: SocketWaiter | None,
+    expected_service_uid: int,
+) -> None:
+    stage = "collector_profile_rollback"
+    with suppress(BaseException):
+        executor(("/usr/bin/systemctl", "stop", "perflens-collector.service"))
+    with suppress(BaseException):
+        executor(
+            (
+                "/usr/bin/systemctl",
+                "disable",
+                "--now",
+                "perflens-trace-helper.service",
+            )
+        )
+    _restore_managed_service(
+        layout.service_path,
+        previous_service,
+        require_root_owner=require_root_owner,
+        stage=stage,
+    )
+    _restore_managed_service(
+        layout.trace_helper_service_path,
+        previous_trace_service,
+        require_root_owner=require_root_owner,
+        stage=stage,
+    )
+    _restore_managed_text(
+        layout.profile_path,
+        previous_profile,
+        marker=b"# Managed by PerfLens.",
+        require_root_owner=require_root_owner,
+        stage=stage,
+    )
+    _restore_managed_text(
+        layout.trace_config_path,
+        previous_trace_policy,
+        marker=b"# PerfLens Trace policy template",
+        require_root_owner=require_root_owner,
+        stage=stage,
+    )
+    executor(("/usr/bin/systemctl", "daemon-reload"))
+    if previous_profile_name == "full_diagnostics":
+        executor(
+            (
+                "/usr/bin/systemctl",
+                "enable",
+                "--now",
+                "perflens-trace-helper.service",
+            )
+        )
+    executor(
+        (
+            "/usr/bin/systemctl",
+            "enable",
+            "--now",
+            "perflens-collector.service",
+        )
+    )
+    if socket_waiter is not None:
+        socket_waiter(layout.socket_path)
+    else:
+        _wait_for_profile_socket(
+            layout.socket_path,
+            expected_service_uid=expected_service_uid,
+            expected_profile=previous_profile_name,
+        )
+
+
 def _prepare_system_directories(
     layout: CollectorSystemLayout,
     identity: tuple[int, int],
@@ -2854,6 +3465,7 @@ def _run_admin_command(
         "collector_upgrade",
         "collector_policy_update",
         "collector_mode_switch",
+        "collector_profile_switch",
     ] = "collector_deploy",
 ) -> None:
     executable = Path(command[0])
@@ -2910,6 +3522,10 @@ def _run_admin_policy_update_command(command: tuple[str, ...]) -> None:
 
 def _run_admin_mode_switch_command(command: tuple[str, ...]) -> None:
     _run_admin_command(command, stage="collector_mode_switch")
+
+
+def _run_admin_profile_switch_command(command: tuple[str, ...]) -> None:
+    _run_admin_command(command, stage="collector_profile_switch")
 
 
 def _wait_for_socket(path: Path, *, expected_service_uid: int | None = None) -> None:
@@ -2989,6 +3605,43 @@ def _wait_for_mode_switch_socket(
             details=exc.details,
             suggested_actions=exc.suggested_actions,
         ) from exc
+
+
+def _wait_for_profile_socket(
+    path: Path,
+    *,
+    expected_service_uid: int,
+    expected_profile: FeatureProfile,
+) -> None:
+    deadline = time.monotonic() + 5.0
+    last_error = "Collector socket has not appeared"
+    expected_modes = (
+        {"record", "stat", "sched", "off_cpu", "lock"}
+        if expected_profile == "full_diagnostics"
+        else {"record", "stat"}
+    )
+    while time.monotonic() < deadline:
+        try:
+            health = CollectorBrokerClient(path, timeout_seconds=0.5).health(
+                expected_service_uid=expected_service_uid
+            )
+            if (
+                health.status == "ready"
+                and health.feature_profile == expected_profile
+                and set(health.allowed_modes) == expected_modes
+            ):
+                return
+            last_error = "Collector health profile or modes do not match the transaction"
+        except (PerfLensError, ValueError) as exc:
+            last_error = str(exc)[:512]
+        time.sleep(0.05)
+    raise PerfLensError(
+        ErrorCode.EXTERNAL_TOOL_FAILED,
+        "collector_profile_switch",
+        "Collector did not pass the authenticated feature-profile health check",
+        recoverable=True,
+        details={"last_error": last_error, "expected_profile": expected_profile},
+    )
 
 
 def invoking_uid() -> int:

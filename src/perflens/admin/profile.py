@@ -22,6 +22,8 @@ _MAX_PROFILE_BYTES = 64 << 10
 _PROFILE_SCHEMA_VERSION = 1
 _TRACE_BACKEND = "target_filtered_kernel_v1"
 _TRACE_MODES = ("sched", "off_cpu", "lock")
+_TRACE_HELPER_BINARY = Path("/usr/lib/perflens/perflens-trace-helper")
+_VMLINUX_BTF = Path("/sys/kernel/btf/vmlinux")
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +66,58 @@ def unavailable_trace_backend_capability() -> TraceBackendCapability:
         reason=(
             "The packaged target-filtered kernel Trace backend has not passed authenticated "
             "external-waker, switch-in, dynamic-thread, loss, and privacy acceptance."
+        ),
+    )
+
+
+def inspect_packaged_trace_backend(
+    *,
+    helper_binary: Path = _TRACE_HELPER_BINARY,
+    vmlinux_btf: Path = _VMLINUX_BTF,
+    require_root_owner: bool = True,
+) -> TraceBackendCapability:
+    """Check immutable package/BTF prerequisites without loading BPF or changing the host."""
+    try:
+        helper = helper_binary.resolve(strict=True)
+        helper_metadata = helper_binary.stat(follow_symlinks=False)
+        btf = vmlinux_btf.resolve(strict=True)
+        btf_metadata = vmlinux_btf.stat(follow_symlinks=False)
+    except OSError:
+        return TraceBackendCapability(
+            status="unavailable",
+            target_filter_before_userspace=False,
+            supported_modes=(),
+            reason="The packaged Trace Helper or kernel BTF prerequisite is unavailable.",
+        )
+    trusted_owners = {0} if require_root_owner else {0, os.geteuid()}
+    helper_safe = (
+        helper == helper_binary
+        and stat.S_ISREG(helper_metadata.st_mode)
+        and helper_metadata.st_uid in trusted_owners
+        and helper_metadata.st_mode & 0o022 == 0
+        and helper_metadata.st_mode & 0o111 != 0
+    )
+    btf_safe = (
+        btf == vmlinux_btf
+        and stat.S_ISREG(btf_metadata.st_mode)
+        and btf_metadata.st_uid == 0
+        and btf_metadata.st_mode & 0o022 == 0
+        and os.access(btf, os.R_OK)
+    )
+    if not helper_safe or not btf_safe:
+        return TraceBackendCapability(
+            status="unavailable",
+            target_filter_before_userspace=False,
+            supported_modes=(),
+            reason="The Trace Helper or kernel BTF identity is not trusted and readable.",
+        )
+    return TraceBackendCapability(
+        status="available",
+        target_filter_before_userspace=True,
+        supported_modes=("sched", "off_cpu", "lock"),
+        reason=(
+            "The immutable packaged target-filtered backend and kernel BTF prerequisites are "
+            "available; service health and real collection still require post-deploy acceptance."
         ),
     )
 
@@ -182,19 +236,18 @@ def plan_feature_profile_switch(
         status = "unchanged"
         next_steps.append("No feature-profile change is required.")
     else:
-        # This milestone deliberately has no mutation path. Reaching this branch would mean a
-        # future backend capability was injected without the reviewed multi-service transaction.
-        status = "blocked"
-        warnings.append(
-            "The Trace backend capability exists, but the transactional service topology is not "
-            "available in this build."
-        )
-        next_steps.append(
-            "Do not edit allowed_modes or the profile file manually; install a build with the "
-            "reviewed switch transaction."
-        )
+        status = "dry_run"
+        if target_profile == "full_diagnostics":
+            next_steps.append(
+                "After switching, run an authorized short sched/off-CPU/lock acceptance before "
+                "relying on full diagnostics."
+            )
+        else:
+            next_steps.append(
+                "The Trace service will be disabled while retained evidence and policy remain."
+            )
 
-    del dry_run  # The current milestone has no safe mutating transition to preview yet.
+    del dry_run
     return CollectorProfileSwitchArtifact(
         perflens_version=__version__,
         status=status,
