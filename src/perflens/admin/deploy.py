@@ -1237,6 +1237,7 @@ def switch_collector_profile(
                 allowed_uid=policy.allowed_uids[0],
                 artifact_gid=resolved_trace_gid,
                 policy_sha256=hashlib.sha256(candidate_trace_policy).hexdigest(),
+                privilege_mode=policy.privilege_mode,
                 stage=stage,
             ).encode("utf-8")
         try:
@@ -1579,6 +1580,7 @@ def upgrade_collector(
                 allowed_uid=policy.allowed_uids[0],
                 artifact_gid=resolved_trace_gid,
                 policy_sha256=hashlib.sha256(previous_trace_policy.raw).hexdigest(),
+                privilege_mode=policy.privilege_mode,
                 stage=stage,
             ).encode("utf-8")
             if len(trace_helper_candidate) > _MAX_SERVICE_BYTES:
@@ -2952,6 +2954,15 @@ def _read_perf_event_paranoid(
     return value
 
 
+def inspect_perf_event_paranoid(
+    path: Path = Path("/proc/sys/kernel/perf_event_paranoid"),
+    *,
+    stage: str = "collector_setup_recommendation",
+) -> int:
+    """Read the host policy for setup guidance without changing it."""
+    return _read_perf_event_paranoid(path, stage=stage)
+
+
 def _mode_switch_result(
     status: Literal["blocked", "dry_run", "unchanged", "switched"],
     source: CollectorConfigSource,
@@ -3144,16 +3155,22 @@ def _render_trace_helper_service(
     allowed_uid: int,
     artifact_gid: int,
     policy_sha256: str,
+    privilege_mode: Literal["cap_perfmon", "paranoid3_helper"],
     stage: str,
 ) -> str:
     rendered = text
+    capabilities = (
+        "CAP_BPF CAP_PERFMON CAP_SYS_ADMIN"
+        if privilege_mode == "paranoid3_helper"
+        else "CAP_BPF CAP_PERFMON"
+    )
     replacements = (
         ("@PERFLENS_BROKER_UID@", str(identity[0]), 1),
         ("@PERFLENS_ALLOWED_UID@", str(allowed_uid), 1),
         ("@PERFLENS_TRACE_ARTIFACT_GID@", str(artifact_gid), 1),
         ("@PERFLENS_TRACE_POLICY_SHA256@", policy_sha256, 1),
         # The same reviewed ceiling is deliberately used for BoundingSet and Ambient.
-        ("@PERFLENS_TRACE_CAPABILITIES@", "CAP_BPF CAP_PERFMON", 2),
+        ("@PERFLENS_TRACE_CAPABILITIES@", capabilities, 2),
     )
     for marker, value, expected_count in replacements:
         count = rendered.count(marker)

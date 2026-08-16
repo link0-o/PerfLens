@@ -42,20 +42,25 @@ int perflens_sched_switch(struct trace_event_raw_sched_switch___perflens *contex
 {
     __u32 previous_tid = (__u32)BPF_CORE_READ(context, prev_pid);
     __u32 next_tid = (__u32)BPF_CORE_READ(context, next_pid);
-    bool previous_target = perflens_is_target_tid(previous_tid);
-    bool next_target = perflens_is_target_tid(next_tid);
     long previous_state;
 
-    if (!previous_target && !next_target)
-        return 0;
-    previous_state = BPF_CORE_READ(context, prev_state);
-    if (previous_target && next_target) {
-        perflens_emit(PERFLENS_SCHED_SWITCH_BOTH, previous_tid, next_tid, 0, 0,
-                      previous_state);
-    } else if (previous_target) {
+    /*
+     * Keep map lookup results in separate control-flow branches.  Clang may
+     * otherwise lower a boolean OR of two map-value-or-null results to a
+     * pointer bitwise OR, which the kernel BPF verifier correctly rejects.
+     */
+    if (perflens_is_target_tid(previous_tid)) {
+        previous_state = BPF_CORE_READ(context, prev_state);
+        if (perflens_is_target_tid(next_tid)) {
+            perflens_emit(PERFLENS_SCHED_SWITCH_BOTH, previous_tid, next_tid, 0, 0,
+                          previous_state);
+            return 0;
+        }
         perflens_emit(PERFLENS_SCHED_SWITCH_OUT, previous_tid, 0,
                       PERFLENS_RELATED_EXTERNAL_REDACTED, 0, previous_state);
-    } else {
+        return 0;
+    }
+    if (perflens_is_target_tid(next_tid)) {
         perflens_emit(PERFLENS_SCHED_SWITCH_IN, next_tid, 0,
                       PERFLENS_RELATED_EXTERNAL_REDACTED, 0, 0);
     }

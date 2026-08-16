@@ -65,13 +65,13 @@ where
         .mode(0o600)
         .open(&temporary)?;
     let key = random_lock_identity_key()?;
-    ready_notifier()?;
     let capture = match backend::capture(
         plan.mode,
         &plan.target,
         Duration::from_millis(plan.duration_milliseconds),
         plan.max_output_bytes,
         &key,
+        ready_notifier,
     ) {
         Ok(capture) => capture,
         Err(error) => {

@@ -42,6 +42,24 @@ from perflens.contracts.artifacts import (
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 
+def _available_trace_backend(**_kwargs: object) -> TraceBackendCapability:
+    return TraceBackendCapability(
+        status="available",
+        target_filter_before_userspace=True,
+        supported_modes=("sched", "off_cpu", "lock"),
+        reason="test fixture",
+    )
+
+
+def _unavailable_trace_backend(**_kwargs: object) -> TraceBackendCapability:
+    return TraceBackendCapability(
+        status="unavailable",
+        target_filter_before_userspace=False,
+        supported_modes=(),
+        reason="test fixture",
+    )
+
+
 def _deployment_inputs(tmp_path: Path) -> tuple[Path, Path, Path, CollectorSystemLayout]:
     perf = tmp_path / "perf"
     perf.write_text(f"#!{sys.executable}\nraise SystemExit(0)\n", encoding="utf-8")
@@ -347,6 +365,12 @@ def test_admin_setup_and_switch_profile_fail_closed_without_trace_backend(
     tmp_path: Path,
 ) -> None:
     config, perf, collector, layout = _deployment_inputs(tmp_path)
+    unavailable_capability = TraceBackendCapability(
+        status="unavailable",
+        target_filter_before_userspace=False,
+        supported_modes=(),
+        reason="test host has no packaged target-filtered backend",
+    )
 
     blocked_setup = setup_collector(
         "cap_perfmon",
@@ -357,6 +381,7 @@ def test_admin_setup_and_switch_profile_fail_closed_without_trace_backend(
         perf_path=perf,
         require_root=False,
         perf_event_paranoid=2,
+        trace_backend_capability=unavailable_capability,
     )
     assert blocked_setup.status == "blocked"
     assert blocked_setup.selected_feature_profile == "full_diagnostics"
@@ -372,6 +397,7 @@ def test_admin_setup_and_switch_profile_fail_closed_without_trace_backend(
             perf_path=perf,
             require_root=False,
             perf_event_paranoid=2,
+            trace_backend_capability=unavailable_capability,
         )
     assert not layout.config_directory.exists()
     with pytest.raises(PerfLensError) as setup_unavailable:
@@ -384,6 +410,7 @@ def test_admin_setup_and_switch_profile_fail_closed_without_trace_backend(
             require_root=False,
             perf_event_paranoid=2,
             acknowledge_trace_risk=True,
+            trace_backend_capability=unavailable_capability,
         )
     assert setup_unavailable.value.code is ErrorCode.UNSUPPORTED_FORMAT
 
@@ -405,6 +432,7 @@ def test_admin_setup_and_switch_profile_fail_closed_without_trace_backend(
         dry_run=True,
         layout=layout,
         require_root=False,
+        trace_backend_capability=unavailable_capability,
     )
     assert blocked_switch.status == "blocked"
     assert blocked_switch.current_profile == "cpu_only"
@@ -418,6 +446,7 @@ def test_admin_setup_and_switch_profile_fail_closed_without_trace_backend(
             layout=layout,
             require_root=False,
             acknowledge_trace_risk=True,
+            trace_backend_capability=unavailable_capability,
         )
     assert unavailable.value.code is ErrorCode.UNSUPPORTED_FORMAT
     assert layout.config_path.read_bytes() == policy_before
@@ -601,6 +630,50 @@ def test_admin_switch_profile_installs_and_removes_trace_topology_transactionall
     )
 
 
+def test_admin_switch_profile_bounds_paranoid3_trace_helper_with_sys_admin(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_paranoid3(config)
+    identity = (os.geteuid(), os.getegid())
+    capability = TraceBackendCapability(
+        status="available",
+        target_filter_before_userspace=True,
+        supported_modes=("sched", "off_cpu", "lock"),
+        reason="packaged target-filtered backend is available",
+    )
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        acknowledge_privileged_helper_risk=True,
+    )
+
+    switch_collector_profile(
+        "full_diagnostics",
+        config_path=layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        trace_group_gid=os.getegid(),
+        trace_backend_capability=capability,
+        acknowledge_trace_risk=True,
+    )
+
+    trace_unit = layout.trace_helper_service_path.read_text(encoding="utf-8")
+    expected = "CAP_BPF CAP_PERFMON CAP_SYS_ADMIN"
+    assert f"CapabilityBoundingSet={expected}" in trace_unit
+    assert f"AmbientCapabilities={expected}" in trace_unit
+    assert "CAP_SYS_PTRACE" not in trace_unit
+
+
 def test_admin_switch_profile_rolls_back_all_managed_files_after_health_failure(
     tmp_path: Path,
 ) -> None:
@@ -702,10 +775,27 @@ def test_admin_setup_cli_interactive_analysis_only(
         return result_artifact
 
     monkeypatch.setattr("perflens.admin.app.setup_collector", fake_setup)
+    monkeypatch.setattr(
+        "perflens.admin.app.inspect_packaged_trace_backend",
+        _unavailable_trace_backend,
+    )
+
+    def unreadable_policy() -> int:
+        raise PerfLensError(
+            ErrorCode.EXTERNAL_TOOL_FAILED,
+            "collector_setup_recommendation",
+            "test fixture",
+        )
+
+    monkeypatch.setattr(
+        "perflens.admin.app.inspect_perf_event_paranoid",
+        unreadable_policy,
+    )
     result = CliRunner().invoke(app, ["setup"], input="2\n3\n")
 
     assert result.exit_code == 0, result.output
     assert "仅分析模式" in result.output
+    assert "无法预读 perf_event_paranoid" in result.output
 
 
 def test_admin_setup_cli_confirms_helper_and_renders_full_result(
@@ -736,6 +826,11 @@ def test_admin_setup_cli_confirms_helper_and_renders_full_result(
         return artifact
 
     monkeypatch.setattr("perflens.admin.app.setup_collector", fake_setup)
+    monkeypatch.setattr(
+        "perflens.admin.app.inspect_packaged_trace_backend",
+        _unavailable_trace_backend,
+    )
+    monkeypatch.setattr("perflens.admin.app.inspect_perf_event_paranoid", lambda: 3)
     result = CliRunner().invoke(app, ["setup"], input="2\n2\ny\n")
 
     assert result.exit_code == 0, result.output
@@ -745,6 +840,76 @@ def test_admin_setup_cli_confirms_helper_and_renders_full_result(
     assert "Rust Helper 以 root 服务运行" in result.output
     assert "以普通用户运行 perflens accept-collector" in result.output
     assert "The Rust Helper runs" not in result.output
+
+
+def test_admin_setup_cli_recommends_full_helper_on_compatible_level_three_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = CollectorSetupArtifact(
+        perflens_version="0.3.0",
+        status="deployed",
+        selected_mode="paranoid3_helper",
+        selected_feature_profile="full_diagnostics",
+        config_path="/etc/perflens/collector.toml",
+        service_path="/etc/systemd/system/perflens-collector.service",
+        collector_command="/usr/bin/perflens-collector",
+        allowed_uids=(1000,),
+    )
+
+    def fake_setup(mode: str, **kwargs: object) -> CollectorSetupArtifact:
+        assert mode == "paranoid3_helper"
+        assert kwargs["feature_profile"] == "full_diagnostics"
+        assert kwargs["acknowledge_privileged_helper_risk"] is True
+        assert kwargs["acknowledge_trace_risk"] is True
+        return artifact
+
+    monkeypatch.setattr("perflens.admin.app.setup_collector", fake_setup)
+    monkeypatch.setattr(
+        "perflens.admin.app.inspect_packaged_trace_backend",
+        _available_trace_backend,
+    )
+    monkeypatch.setattr("perflens.admin.app.inspect_perf_event_paranoid", lambda: 3)
+
+    result = CliRunner().invoke(app, ["setup"], input="\n\ny\ny\n")
+
+    assert result.exit_code == 0, result.output
+    assert "本机 Trace 前置条件可用, 功能推荐" in result.output
+    assert "检测到 perf_event_paranoid=3" in result.output
+    assert "paranoid3_helper (本机兼容推荐" in result.output
+
+
+def test_admin_setup_cli_recommends_cpu_cap_when_trace_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = CollectorSetupArtifact(
+        perflens_version="0.3.0",
+        status="deployed",
+        selected_mode="cap_perfmon",
+        selected_feature_profile="cpu_only",
+        config_path="/etc/perflens/collector.toml",
+        service_path="/etc/systemd/system/perflens-collector.service",
+        collector_command="/usr/bin/perflens-collector",
+        allowed_uids=(1000,),
+    )
+
+    def fake_setup(mode: str, **kwargs: object) -> CollectorSetupArtifact:
+        assert mode == "cap_perfmon"
+        assert kwargs["feature_profile"] == "cpu_only"
+        return artifact
+
+    monkeypatch.setattr("perflens.admin.app.setup_collector", fake_setup)
+    monkeypatch.setattr(
+        "perflens.admin.app.inspect_packaged_trace_backend",
+        _unavailable_trace_backend,
+    )
+    monkeypatch.setattr("perflens.admin.app.inspect_perf_event_paranoid", lambda: 2)
+
+    result = CliRunner().invoke(app, ["setup"], input="\n\n")
+
+    assert result.exit_code == 0, result.output
+    assert "完整性能诊断 (本机 Trace 前置条件当前不可用)" in result.output
+    assert "标准 CPU 调优 (本机兼容推荐" in result.output
+    assert "cap_perfmon (本机推荐, 权限更小)" in result.output
 
 
 def test_admin_setup_cli_dry_run_renders_exact_helper_command_and_json(
@@ -2770,6 +2935,11 @@ def test_admin_undeploy_cli_emits_versioned_result(
         helper_service_path=tmp_path / "systemd/perflens-privileged-helper.service",
         helper_state_directory=tmp_path / "var/lib/perflens-helper",
         helper_socket_path=tmp_path / "run/perflens-helper/helper.sock",
+        profile_path=tmp_path / "etc/perflens/profile.toml",
+        trace_config_path=tmp_path / "etc/perflens/trace.toml",
+        trace_helper_service_path=tmp_path / "systemd/perflens-trace-helper.service",
+        trace_helper_state_directory=tmp_path / "var/lib/perflens-trace-helper",
+        trace_helper_socket_path=tmp_path / "run/perflens-trace-helper/helper.sock",
         admin_lock_path=tmp_path / "perflens-admin.lock",
     )
     artifact = undeploy_collector(layout=layout, require_root=False)

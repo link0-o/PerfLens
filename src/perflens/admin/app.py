@@ -12,6 +12,7 @@ from perflens import __version__
 from perflens.admin.deploy import (
     deploy_collector,
     inspect_collector_spool,
+    inspect_perf_event_paranoid,
     setup_collector,
     switch_collector_mode,
     switch_collector_profile,
@@ -19,6 +20,7 @@ from perflens.admin.deploy import (
     update_collector_policy,
     upgrade_collector,
 )
+from perflens.admin.profile import inspect_packaged_trace_backend
 from perflens.admin.spool import (
     archive_collector_spool,
     prune_archived_collector_spool,
@@ -176,10 +178,20 @@ def setup_command(
     """首次选择并部署 Collector; 也可以明确选择仅分析。"""
     selected_profile = feature_profile
     if selected_profile is None and mode is None:
+        trace_capability = inspect_packaged_trace_backend(require_root_owner=True)
         typer.echo("请选择 PerfLens 功能配置:")
-        typer.echo("1. 完整性能诊断 (主机通过全部安全验收时推荐)")
-        typer.echo("2. 标准 CPU 调优 (当前安全兼容项: stat + record)")
-        profile_choice = typer.prompt("请输入 1 或 2", default="2")
+        if trace_capability.status == "available":
+            typer.echo(
+                "1. 完整性能诊断 "
+                "(本机 Trace 前置条件可用, 功能推荐; 部署后仍需真实验收)"
+            )
+            typer.echo("2. 标准 CPU 调优 (stat + record, 采集与权限面更小)")
+            profile_default = "1"
+        else:
+            typer.echo("1. 完整性能诊断 (本机 Trace 前置条件当前不可用)")
+            typer.echo("2. 标准 CPU 调优 (本机兼容推荐: stat + record)")
+            profile_default = "2"
+        profile_choice = typer.prompt("请输入 1 或 2", default=profile_default)
         profiles = {"1": "full_diagnostics", "2": "cpu_only"}
         if profile_choice not in profiles:
             _fail(PerfLensError(ErrorCode.INVALID_INPUT, "collector_setup", "未知的功能配置"))
@@ -192,11 +204,22 @@ def setup_command(
     selected = mode
     interactive = selected is None
     if selected is None:
+        paranoid_value = _inspect_setup_paranoid_value()
         typer.echo("请选择 PerfLens Collector 部署方式:")
-        typer.echo("1. cap_perfmon (推荐, 权限更小)")
-        typer.echo("2. paranoid3_helper (保留 paranoid=3, 风险更高)")
+        if paranoid_value is not None:
+            typer.echo(f"检测到 perf_event_paranoid={paranoid_value}; PerfLens 不会修改该值。")
+        if paranoid_value is not None and paranoid_value > 2:
+            typer.echo(
+                "1. cap_perfmon (权限更小, 但当前主机策略会阻止; 需管理员另行审查内核策略)"
+            )
+            typer.echo("2. paranoid3_helper (本机兼容推荐, 保持 paranoid=3, 风险更高)")
+            mode_default = "2"
+        else:
+            typer.echo("1. cap_perfmon (本机推荐, 权限更小)")
+            typer.echo("2. paranoid3_helper (通常不需要, 风险更高)")
+            mode_default = "1"
         typer.echo("3. 仅分析已有证据 (不部署 Collector)")
-        choice = typer.prompt("请输入 1、2 或 3", default="1")
+        choice = typer.prompt("请输入 1、2 或 3", default=mode_default)
         choices = {"1": "cap_perfmon", "2": "paranoid3_helper", "3": "analysis_only"}
         if choice not in choices:
             _fail(PerfLensError(ErrorCode.INVALID_INPUT, "collector_setup", "未知的向导选项"))
@@ -245,6 +268,14 @@ def setup_command(
         typer.echo(result.model_dump_json(indent=2))
         return
     _render_setup_chinese(result)
+
+
+def _inspect_setup_paranoid_value() -> int | None:
+    try:
+        return inspect_perf_event_paranoid()
+    except PerfLensError:
+        typer.echo("无法预读 perf_event_paranoid; 将在部署预检中再次验证。")
+        return None
 
 
 @app.command("switch-profile")

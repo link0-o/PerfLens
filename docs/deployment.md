@@ -32,11 +32,16 @@ The wizard first presents two primary feature profiles:
 2. `cpu_only`: the current stable `stat` and `record` with a smaller evidence and privilege
    surface.
 
-Full diagnostics is recommended only after tracefs, perf, kernel-event, privilege, and real short
-probe prerequisites all pass. Otherwise it is marked unavailable and CPU-only is recommended; a
-partial deployment cannot use the full-profile name. The wizard then recommends `cap_perfmon` or
-`paranoid3_helper` from host facts. Feature profile answers what may be collected, while privilege
-mode answers which bounded process holds privilege.
+The wizard first performs read-only checks of the packaged Trace Helper, kernel BTF, and
+`perf_event_paranoid`; it neither loads BPF nor changes the host. When the Trace prerequisites are
+available, `full_diagnostics` is the default feature recommendation, with an explicit reminder
+that real short acceptance is still required after deployment. Otherwise full diagnostics is
+marked unavailable and `cpu_only` becomes the default; a partial deployment cannot use the full
+name. At `perf_event_paranoid <= 2`, the privilege menu defaults to the smaller `cap_perfmon`
+boundary. Above level 2 it marks that path blocked and defaults to the host-compatible
+`paranoid3_helper` without changing the kernel policy. An unreadable policy is reported and
+rechecked during deployment preflight. Feature profile answers what may be collected, while
+privilege mode answers which bounded process holds privilege.
 
 The non-interactive preflight is:
 
@@ -52,6 +57,12 @@ The level-3 path additionally requires both `--acknowledge-privileged-helper-ris
 `--acknowledge-trace-risk`. The existing Rust Helper remains limited to `stat/record`; a separate
 Trace Helper handles the advanced modes. These interfaces exist in the v0.3.0 source tree but not
 in `0.2.0` packages; production users must wait for the full CI, DEB, and real-host release gates.
+
+The Trace Helper capability set is fixed by privilege mode: `CAP_BPF CAP_PERFMON` for
+`cap_perfmon`, and `CAP_BPF CAP_PERFMON CAP_SYS_ADMIN` for `paranoid3_helper` because Debian level
+3 rejects tracepoint `perf_event_open` before the ordinary `CAP_PERFMON` path. `CAP_SYS_ADMIN` is
+granted only to the separately acknowledged Trace Helper, never to the Python Broker, MCP, Skill,
+or Agent.
 
 The post-install profile lifecycle is transactional:
 
@@ -270,6 +281,8 @@ They install offline and do not activate the service. Future RPM installers must
 preserve the same boundaries: preserve administrator configuration, avoid
 silently changing sysctl, and never grant `CAP_SYS_ADMIN` by default. Host-level
 Collector plus a controlled Unix socket is preferred over a privileged container.
+Only an explicit, risk-acknowledged `paranoid3_helper + full_diagnostics` selection adds the
+bounded capability to the separate Trace Helper unit; it is not a package-install default.
 Package completion may direct the administrator to `sudo perflens-admin setup`, but maintainer
 scripts must never make that choice. Existing deployments remain CPU-only across the planned
 profile migration unless an administrator explicitly opts in.

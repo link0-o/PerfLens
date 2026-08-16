@@ -129,6 +129,7 @@ pub fn capture(
     duration: Duration,
     max_output_bytes: u64,
     lock_identity_key: &[u8; 32],
+    ready_notifier: &mut dyn FnMut() -> io::Result<()>,
 ) -> io::Result<CaptureOutput> {
     let object_bytes = match mode {
         TraceMode::Sched | TraceMode::OffCpu => SCHED_BPF_OBJECT,
@@ -163,17 +164,32 @@ pub fn capture(
     };
     let mut ring = object.ring_buffer(&mut callback)?;
     let start = monotonic_nanoseconds()?;
-    let deadline = Instant::now() + duration;
+    let duration_nanoseconds = u64::try_from(duration.as_nanos())
+        .map_err(|_error| invalid_data("trace duration exceeds the monotonic clock range"))?;
+    let finish = start
+        .checked_add(duration_nanoseconds)
+        .ok_or_else(|| invalid_data("trace observation window overflowed"))?;
+    let deadline = Instant::now()
+        .checked_add(duration)
+        .ok_or_else(|| invalid_data("trace deadline overflowed"))?;
+
+    // Notify the unprivileged broker only after every fixed BPF program and the ring buffer are
+    // ready.  The measurement boundary is established immediately before notification so an
+    // authorized workload cannot run before the target-filtered backend is observing it.
+    ready_notifier()?;
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
         let timeout = i32::try_from(remaining.as_millis().clamp(1, 100)).unwrap_or(100);
         ring.poll(timeout)?;
     }
-    let finish = monotonic_nanoseconds()?;
+    // Drain records already committed at the boundary.  Records produced after the fixed finish
+    // may be returned by this poll, so they are filtered below using their kernel timestamps.
+    ring.poll(0)?;
     drop(ring);
     drop(links);
     assert_target_identity(target)?;
 
+    retain_events_in_window(&mut callback.events, start, finish);
     callback
         .events
         .sort_unstable_by_key(|event| (event.timestamp_ns, event.sequence));
@@ -192,6 +208,10 @@ pub fn capture(
         started_at_monotonic_nanoseconds: start,
         finished_at_monotonic_nanoseconds: finish,
     })
+}
+
+fn retain_events_in_window(events: &mut Vec<RawEvent>, start: u64, finish: u64) {
+    events.retain(|event| event.timestamp_ns >= start && event.timestamp_ns <= finish);
 }
 
 fn normalize_event(
@@ -704,7 +724,7 @@ mod ffi {
 
 #[cfg(test)]
 mod tests {
-    use super::{RawEvent, normalize_event, private_lock_id};
+    use super::{RawEvent, normalize_event, private_lock_id, retain_events_in_window};
 
     fn raw(kind: u32) -> RawEvent {
         RawEvent {
@@ -747,5 +767,27 @@ mod tests {
     #[test]
     fn rejects_unknown_kernel_event_kind() {
         assert!(normalize_event(raw(999), 0, &[1; 32]).is_err());
+    }
+
+    #[test]
+    fn retains_only_events_inside_the_fixed_observation_window() {
+        let mut events = [99_u64, 100, 150, 200, 201]
+            .into_iter()
+            .map(|timestamp_ns| {
+                let mut event = raw(1);
+                event.timestamp_ns = timestamp_ns;
+                event
+            })
+            .collect::<Vec<_>>();
+
+        retain_events_in_window(&mut events, 100, 200);
+
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.timestamp_ns)
+                .collect::<Vec<_>>(),
+            vec![100, 150, 200]
+        );
     }
 }

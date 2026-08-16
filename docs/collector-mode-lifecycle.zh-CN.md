@@ -83,13 +83,16 @@ DEB 安装继续保持非交互和非激活，只在安装完成摘要中提示�
    stat + record；权限范围更小
 ```
 
-完整配置只有在 tracefs、perf、内核事件、权限和真实短时预检全部通过时才显示为推荐。
-任一前置条件不足时，向导必须把完整配置标为当前不可用并推荐 `cpu_only`，不得以
-`full_diagnostics` 名义静默部署部分功能。`analysis_only` 保留为高级自动化值和失败回退，
-不作为第三个主要功能配置。
+向导先执行不加载 BPF、不写系统的只读检查。包内 Trace Helper 与内核 BTF 前置条件可用
+时，完整配置显示为默认功能推荐项，同时明确提示部署后仍需真实短时验收；前置条件不足时，
+向导必须把完整配置标为当前不可用并默认推荐 `cpu_only`，不得以 `full_diagnostics` 名义
+静默部署部分功能。`analysis_only` 保留为第三个部署选择和失败回退，但不作为第三个功能
+配置。
 
-选择功能配置后，向导根据主机事实推荐 `cap_perfmon` 或 `paranoid3_helper`。管理员仍可
-显式指定模式，但冲突选择必须在写系统前拒绝。非交互接口为：
+选择功能配置后，向导读取 `perf_event_paranoid`：值不大于 2 时默认推荐权限更小的
+`cap_perfmon`；值大于 2 时明确标记该路径受阻并默认推荐主机兼容的
+`paranoid3_helper`，但绝不修改该值。管理员仍可显式指定模式，但冲突选择必须在写系统前
+拒绝；无法预读内核策略时由部署预检再次验证。非交互接口为：
 
 ```bash
 sudo perflens-admin setup \
@@ -108,6 +111,12 @@ sudo perflens-admin setup \
 实现还需要现有 Helper 风险确认。现有 Rust Helper 继续只接受 `stat/record`，高级模式
 交给拥有独立 unit、Socket、协议、策略和 spool 的 Trace Helper。PerfLens 仍不修改
 `perf_event_paranoid`，也不让 Agent、Skill、MCP 或 Python Broker 以 root 运行。
+
+独立 Trace Helper 的 capability 随权限模式固定渲染：`cap_perfmon` 使用
+`CAP_BPF CAP_PERFMON`；Debian level 3 会提前拒绝 tracepoint `perf_event_open`，所以
+`paranoid3_helper` 使用 `CAP_BPF CAP_PERFMON CAP_SYS_ADMIN`。后一项只存在于管理员明确
+确认 `--acknowledge-trace-risk` 后创建的独立 Trace Helper unit，不会进入现有 Helper、
+Python Broker、MCP、Skill 或 Agent。
 
 两个权限模式的完整配置都使用该独立 Trace Helper 和包内固定 eBPF。后端在内核中先按
 授权 TGID/TID 过滤，再把 target-only NDJSON 写入私有 spool；它不使用 stock `perf -p`

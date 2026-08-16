@@ -44,14 +44,17 @@ Feature profiles are independent from the two privilege modes:
 
 DEB installation remains non-interactive and inactive and only directs the administrator to
 `sudo perflens-admin setup`. The wizard shows these two primary profiles first. It retains
-`analysis_only` as an advanced automation/fallback value, not a third feature profile. Missing
-tracefs, perf, kernel-event, privilege, or real-probe prerequisites mark full diagnostics
-unavailable and make CPU-only the recommendation; a partial feature set must not be deployed under
-the full name.
+`analysis_only` as a third deployment/fallback choice, not a third feature profile. A read-only
+packaged-Helper and kernel-BTF check makes full diagnostics the default feature recommendation
+when its static prerequisites are available, while clearly requiring real short acceptance after
+deployment. Missing prerequisites mark it unavailable and default to CPU-only; a partial feature
+set must not be deployed under the full name.
 
-After profile selection, the wizard recommends `cap_perfmon` or `paranoid3_helper` from observed
-host facts. An explicit incompatible choice is rejected before writes, and PerfLens never changes
-`perf_event_paranoid`. The automation interface is:
+After profile selection, the wizard reads `perf_event_paranoid`. At level 2 or below it defaults to
+the smaller `cap_perfmon` boundary. Above level 2 it marks that path blocked and defaults to the
+host-compatible `paranoid3_helper`, without changing the value. An unreadable policy is reported
+and rechecked during deployment preflight. An explicit incompatible choice is rejected before
+writes. The automation interface is:
 
 ```bash
 sudo perflens-admin setup \
@@ -70,6 +73,12 @@ Full diagnostics requires explicit trace privacy/data/overhead acknowledgement. 
 also requires the existing Helper acknowledgement. The current Rust Helper stays limited to
 `stat/record`; a separate Trace Helper owns its own unit, private socket, protocol, policy, raw
 spool, lifecycle, and risk review.
+
+The Trace Helper capability set is rendered from the selected privilege mode. `cap_perfmon` uses
+`CAP_BPF CAP_PERFMON`. Because Debian level 3 rejects tracepoint `perf_event_open` before the
+ordinary `CAP_PERFMON` path, `paranoid3_helper` uses the systemd-bounded set
+`CAP_BPF CAP_PERFMON CAP_SYS_ADMIN`. The latter exists only in the separately acknowledged Trace
+Helper unit; it is never granted to the current Helper, Python Broker, MCP, Skill, or Agent.
 
 Full diagnostics in both privilege modes uses that separate Trace Helper and packaged fixed eBPF.
 It filters the authorized TGID/TIDs in kernel before writing target-only NDJSON to the private

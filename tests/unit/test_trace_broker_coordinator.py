@@ -97,7 +97,10 @@ class _FakeTraceHelper:
             lost_event_count=0,
             truncated=False,
             started_at_monotonic_nanoseconds=1_000,
-            finished_at_monotonic_nanoseconds=2_000,
+            # A real ring-buffer poll can finish just beyond the requested one-second window.
+            # The public evidence limit is the independently enforced policy ceiling (10s), not
+            # ceil(requested duration), so bounded teardown time must not invalidate the trace.
+            finished_at_monotonic_nanoseconds=1_000_001_001,
         )
 
 
@@ -189,6 +192,7 @@ def test_trace_coordinator_publishes_only_verified_public_evidence(tmp_path: Pat
     assert evidence.source.output_format == "target_filtered_trace_ndjson"
     assert evidence.source.capture.foreign_metadata_before_userspace is False
     assert evidence.target.observed_target_tids == (plan.target_pid,)
+    assert evidence.limits.max_duration_seconds == 10
 
 
 def test_trace_client_rejects_public_evidence_digest_tampering(tmp_path: Path) -> None:

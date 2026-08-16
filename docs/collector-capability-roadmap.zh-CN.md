@@ -135,8 +135,8 @@ sudo perflens-admin setup \
 
 | 权限模式 | 推荐条件 | `cpu_only` | `full_diagnostics` |
 |---|---|---|---|
-| `cap_perfmon` | 主机策略允许专用 capability，真实短时预检通过 | Python Broker 执行 stat/record | Broker + 独立 Trace Helper；Trace Helper 只获得审计后的 Trace capability |
-| `paranoid3_helper` | 必须保留 Debian `perf_event_paranoid=3` | Broker → 现有 Rust Helper | 现有 Helper 负责 stat/record；独立 Trace Helper 负责高级模式 |
+| `cap_perfmon` | 主机策略允许专用 capability，真实短时预检通过 | Python Broker 执行 stat/record | Broker + 独立 Trace Helper；Trace Helper 限定为 `CAP_BPF CAP_PERFMON` |
+| `paranoid3_helper` | 必须保留 Debian `perf_event_paranoid=3` | Broker → 现有 Rust Helper | 现有 Helper 负责 stat/record；独立 Trace Helper 限定为 `CAP_BPF CAP_PERFMON CAP_SYS_ADMIN` |
 
 向导根据实际主机检查给出推荐，但管理员仍可用 `--mode` 显式选择。PerfLens 不自动降低
 `perf_event_paranoid`。如果显式选择与主机事实冲突，dry-run 和正式部署都必须在写系统前
@@ -152,6 +152,12 @@ sudo perflens-admin setup \
   --acknowledge-privileged-helper-risk \
   --acknowledge-trace-risk
 ```
+
+Debian level 3 会在常规 `CAP_PERFMON` 判断前拒绝 tracepoint 的 `perf_event_open`，因此只有
+`paranoid3_helper + full_diagnostics` 的独立 Trace Helper 额外获得受 systemd BoundingSet
+和 AmbientCapabilities 限定的 `CAP_SYS_ADMIN`。该 capability 不会授予 Python Broker、
+MCP、Skill 或 Agent；`cap_perfmon` 路径也不会获得它。管理员的两个风险确认分别覆盖现有
+stat/record Helper 和新增 Trace Helper，PerfLens 仍不修改 sysctl。
 
 ### 3.4 安装后的配置切换
 
@@ -223,8 +229,10 @@ stock `perf record -p PID` 无法完整观察外部唤醒者和目标 switch-in�
 - 每种模式使用固定事件和 argv 白名单，单次默认最多 10 秒、64 MiB、一个并发 worker；
 - 目标外任务元数据必须隔离或脱敏，不能写入普通用户可读 spool；
 - 事件丢失、未配对或截断超过分析门槛时返回 `partial` 或失败；
-- 新 Trace Helper 的 capability 不得超过经过审计的最小集合；不足时失败关闭，不能临时
-  加入不受限 root 或让 Python Broker 获得 `CAP_SYS_ADMIN`；
+- 新 Trace Helper 的 capability 不得超过经过审计的模式化集合：`cap_perfmon` 使用
+  `CAP_BPF CAP_PERFMON`，`paranoid3_helper` 因 Debian level 3 的 tracepoint 拒绝使用
+  `CAP_BPF CAP_PERFMON CAP_SYS_ADMIN`；不足时失败关闭，不能加入不受限 root，也不能让
+  Python Broker 获得 `CAP_SYS_ADMIN`；
 - Trace 路径不产生或公开 `perf.data`；record Profile 仍由固定系统 perf Adapter 转换，
   PerfLens 不直接解析其二进制格式。
 

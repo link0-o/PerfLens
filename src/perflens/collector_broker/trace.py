@@ -172,7 +172,10 @@ class TraceCollectionCoordinator:
             uid=plan.target_uid,
             start_time_ticks=plan.target_start_time_ticks,
         )
-        limits = _public_limits(plan)
+        limits = _public_limits(
+            plan,
+            policy_max_duration_seconds=self._policy.max_duration_seconds,
+        )
         adapter = FixedKernelTraceNdjsonAdapter(
             target=target,
             observed_target_tids=result.observed_target_tids,
@@ -341,9 +344,18 @@ def _trace_plan_id(plan: CollectionPlanArtifact) -> str:
     return f"trace-plan-{digest[:20]}"
 
 
-def _public_limits(plan: CollectionPlanArtifact) -> TraceResourceLimits:
+def _public_limits(
+    plan: CollectionPlanArtifact,
+    *,
+    policy_max_duration_seconds: int,
+) -> TraceResourceLimits:
     return TraceResourceLimits(
-        max_duration_seconds=min(10, math.ceil(plan.duration_seconds)),
+        # This field records the independently enforced policy ceiling, not the requested
+        # measurement duration. Kernel polling and service scheduling can add a small amount of
+        # bounded teardown time to the monotonic observation window without extending the typed
+        # collection request. Using ceil(plan.duration_seconds) here incorrectly rejects such a
+        # valid trace, especially for the one-second host acceptance probe.
+        max_duration_seconds=policy_max_duration_seconds,
         max_input_bytes=plan.max_output_bytes,
         max_output_bytes=plan.max_output_bytes,
     )

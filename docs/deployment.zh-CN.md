@@ -48,10 +48,13 @@ sudo perflens-admin setup
    `off_cpu`、`lock`；
 2. `cpu_only`（标准 CPU 调优）：只开放当前正式的 `stat`、`record`，权限和证据面更小。
 
-完整配置只有在 tracefs、perf、内核事件、权限和真实短时预检全部通过时才显示为推荐；
-否则向导将它标为当前不可用并推荐 `cpu_only`，不能静默少装一部分能力。随后向导根据
-主机事实推荐 `cap_perfmon` 或 `paranoid3_helper`。功能配置决定“采集什么”，权限模式
-决定“谁持有什么权限”，两者不能混为一谈。
+向导先只读检查包内 Trace Helper、内核 BTF 和 `perf_event_paranoid`，不加载 BPF，也不
+修改主机。Trace 前置条件可用时，`full_diagnostics` 是默认的功能推荐项，但菜单明确提示
+部署后仍须运行真实短时验收；前置条件不足时则标为当前不可用并默认推荐 `cpu_only`，不能
+静默少装一部分能力。`perf_event_paranoid <= 2` 时权限菜单默认推荐更小权限的
+`cap_perfmon`；值大于 2 时会把它标为当前受阻，并默认推荐保持现有内核策略的
+`paranoid3_helper`。功能配置决定“采集什么”，权限模式决定“谁持有什么权限”，两者不能
+混为一谈。若向导无法读取内核策略，它会明确说明将在部署预检中再次验证。
 
 非交互预检为：
 
@@ -67,6 +70,11 @@ sudo perflens-admin setup \
 `--acknowledge-trace-risk`。现有 Rust Helper 保持只处理 `stat/record`，高级模式由独立
 Trace Helper 处理。这些接口已在 v0.3.0 源码实现，但当前 `0.2.0` 安装包不能运行；正式
 用户仍需等待 v0.3.0 的完整 CI、DEB 和真实主机发布门禁。
+
+Trace Helper 的 capability 按权限模式固定：`cap_perfmon` 为 `CAP_BPF CAP_PERFMON`；
+`paranoid3_helper` 因 Debian level 3 会提前拒绝 tracepoint `perf_event_open`，使用
+`CAP_BPF CAP_PERFMON CAP_SYS_ADMIN`。该 `CAP_SYS_ADMIN` 只在管理员明确选择完整诊断并
+确认 Trace 风险后授予独立 Trace Helper，不会授予 Python Broker、MCP、Skill 或 Agent。
 
 安装后可通过 `switch-profile` 在两个配置之间事务化切换：
 
@@ -383,6 +391,8 @@ cat /proc/sys/kernel/perf_event_paranoid
 Debian 的 `perf_event_paranoid=3` 可能在 CAP_PERFMON 正常检查前拒绝采集。管理员需要根据主机威胁模型决定是否调到兼容专用 Collector 的等级，并通过真实短时采集确认。
 
 PerfLens 安装和运行时不会自动修改 sysctl、文件 capability 或 systemd 状态。不要为了省事让 MCP/Agent 以 root 运行，也不要默认给 Collector `CAP_SYS_ADMIN`。
+只有管理员明确选择 `paranoid3_helper + full_diagnostics` 并确认风险时，安装向导才会在
+独立 Trace Helper 的 systemd unit 中加入受限的 `CAP_SYS_ADMIN`；这不是默认授权。
 
 ## 真实 Collector 一键验收
 

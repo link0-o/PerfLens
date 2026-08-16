@@ -105,8 +105,8 @@ packages. It remains a source/local-build validation interface until the release
 
 | Privilege mode | Recommended host | `cpu_only` | `full_diagnostics` |
 |---|---|---|---|
-| `cap_perfmon` | dedicated capability works in a real short probe | Python Broker runs stat/record | Broker plus separate Trace Helper with audited Trace capabilities |
-| `paranoid3_helper` | Debian level 3 must remain | current Helper runs stat/record | current Helper plus a separate Trace Helper |
+| `cap_perfmon` | dedicated capability works in a real short probe | Python Broker runs stat/record | Broker plus a separate Trace Helper bounded to `CAP_BPF CAP_PERFMON` |
+| `paranoid3_helper` | Debian level 3 must remain | current Helper runs stat/record | current Helper plus a separate Trace Helper bounded to `CAP_BPF CAP_PERFMON CAP_SYS_ADMIN` |
 
 The wizard recommends from observed host facts while retaining explicit `--mode` selection. It
 never changes `perf_event_paranoid`; an incompatible explicit choice is rejected before writes.
@@ -120,6 +120,13 @@ sudo perflens-admin setup \
   --acknowledge-privileged-helper-risk \
   --acknowledge-trace-risk
 ```
+
+Debian level 3 rejects tracepoint `perf_event_open` before the ordinary `CAP_PERFMON` path. Only
+the independent Trace Helper in `paranoid3_helper + full_diagnostics` therefore receives
+`CAP_SYS_ADMIN`, bounded together with `CAP_BPF CAP_PERFMON` by systemd. The Python Broker, MCP,
+Skill, and Agent receive none of those capabilities, and the `cap_perfmon` Trace path does not
+receive `CAP_SYS_ADMIN`. The two acknowledgements cover the existing stat/record Helper and the
+new Trace Helper separately; PerfLens still never edits sysctl.
 
 ### 3.4 Post-install profile switching
 
@@ -179,8 +186,9 @@ Fixed constraints include:
 - fixed mode/event allowlists, at most 10 seconds, 64 MiB, and one concurrent worker by default;
 - isolation or redaction of other-task metadata;
 - `partial` or failure for excessive loss, unpaired records, or truncation;
-- no capability expansion beyond the independently audited minimum; failure is preferred to an
-  unrestricted root service or `CAP_SYS_ADMIN` on the Python Broker;
+- no capability expansion beyond the audited mode-specific set: `CAP_BPF CAP_PERFMON` for
+  `cap_perfmon`, and `CAP_BPF CAP_PERFMON CAP_SYS_ADMIN` for the Debian-level-3 Trace Helper;
+  failure is preferred to an unrestricted root service or `CAP_SYS_ADMIN` on the Python Broker;
 - no `perf.data` in the Trace path; record profiles still use an external-tool adapter rather than
   direct binary parsing.
 
