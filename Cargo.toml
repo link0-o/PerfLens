@@ -1,5 +1,8 @@
 [workspace]
-members = ["rust/perflens-privileged-helper"]
+members = [
+    "rust/perflens-privileged-helper",
+    "rust/perflens-trace-helper",
+]
 resolver = "2"
 
 [workspace.package]

@@ -1,0 +1,349 @@
+{
+  "$defs": {
+    "TraceHelperCollectionReadyResult": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "collection_ready",
+          "title": "Kind",
+          "type": "string"
+        },
+        "plan_id": {
+          "pattern": "^trace-plan-[a-f0-9]{20}$",
+          "title": "Plan Id",
+          "type": "string"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "plan_id",
+        "target_pid"
+      ],
+      "title": "TraceHelperCollectionReadyResult",
+      "type": "object"
+    },
+    "TraceHelperCollectionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_name": {
+          "pattern": "^trace-plan-[a-f0-9]{20}\\.trace\\.ndjson$",
+          "title": "Artifact Name",
+          "type": "string"
+        },
+        "capture_backend": {
+          "const": "target_filtered_kernel_v1",
+          "title": "Capture Backend",
+          "type": "string"
+        },
+        "event_count": {
+          "exclusiveMinimum": 0,
+          "title": "Event Count",
+          "type": "integer"
+        },
+        "finished_at_monotonic_nanoseconds": {
+          "minimum": 0,
+          "title": "Finished At Monotonic Nanoseconds",
+          "type": "integer"
+        },
+        "kind": {
+          "const": "collection",
+          "title": "Kind",
+          "type": "string"
+        },
+        "lost_event_count": {
+          "minimum": 0,
+          "title": "Lost Event Count",
+          "type": "integer"
+        },
+        "mode": {
+          "enum": [
+            "sched",
+            "off_cpu",
+            "lock"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "observed_target_tids": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 65536,
+          "minItems": 1,
+          "title": "Observed Target Tids",
+          "type": "array"
+        },
+        "output_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 67108864,
+          "title": "Output Bytes",
+          "type": "integer"
+        },
+        "output_format": {
+          "const": "target_filtered_trace_ndjson",
+          "title": "Output Format",
+          "type": "string"
+        },
+        "output_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Output Sha256",
+          "type": "string"
+        },
+        "plan_id": {
+          "pattern": "^trace-plan-[a-f0-9]{20}$",
+          "title": "Plan Id",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "started_at_monotonic_nanoseconds": {
+          "minimum": 0,
+          "title": "Started At Monotonic Nanoseconds",
+          "type": "integer"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        },
+        "target_start_time_ticks": {
+          "exclusiveMinimum": 0,
+          "title": "Target Start Time Ticks",
+          "type": "integer"
+        },
+        "truncated": {
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "plan_id",
+        "mode",
+        "target_pid",
+        "target_start_time_ticks",
+        "artifact_name",
+        "output_bytes",
+        "output_sha256",
+        "output_format",
+        "capture_backend",
+        "policy_sha256",
+        "observed_target_tids",
+        "event_count",
+        "lost_event_count",
+        "truncated",
+        "started_at_monotonic_nanoseconds",
+        "finished_at_monotonic_nanoseconds"
+      ],
+      "title": "TraceHelperCollectionResult",
+      "type": "object"
+    },
+    "TraceHelperErrorBody": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "recoverable": {
+          "title": "Recoverable",
+          "type": "boolean"
+        },
+        "stage": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Stage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "stage",
+        "message",
+        "recoverable"
+      ],
+      "title": "TraceHelperErrorBody",
+      "type": "object"
+    },
+    "TraceHelperHealthResult": {
+      "additionalProperties": false,
+      "properties": {
+        "capture_backend": {
+          "const": "target_filtered_kernel_v1",
+          "title": "Capture Backend",
+          "type": "string"
+        },
+        "capture_backend_status": {
+          "enum": [
+            "available",
+            "unavailable"
+          ],
+          "title": "Capture Backend Status",
+          "type": "string"
+        },
+        "helper_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Helper Pid",
+          "type": "integer"
+        },
+        "helper_uid": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "title": "Helper Uid",
+          "type": "integer"
+        },
+        "helper_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Helper Version",
+          "type": "string"
+        },
+        "kind": {
+          "const": "health",
+          "title": "Kind",
+          "type": "string"
+        },
+        "max_concurrent_collections": {
+          "const": 1,
+          "title": "Max Concurrent Collections",
+          "type": "integer"
+        },
+        "max_duration_milliseconds": {
+          "const": 10000,
+          "title": "Max Duration Milliseconds",
+          "type": "integer"
+        },
+        "max_output_bytes": {
+          "const": 67108864,
+          "title": "Max Output Bytes",
+          "type": "integer"
+        },
+        "policy_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "ready": {
+          "const": true,
+          "title": "Ready",
+          "type": "boolean"
+        },
+        "supported_modes": {
+          "items": {
+            "enum": [
+              "sched",
+              "off_cpu",
+              "lock"
+            ],
+            "type": "string"
+          },
+          "maxItems": 3,
+          "title": "Supported Modes",
+          "type": "array"
+        },
+        "target_filter_before_userspace": {
+          "title": "Target Filter Before Userspace",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "helper_version",
+        "helper_pid",
+        "helper_uid",
+        "ready",
+        "capture_backend",
+        "capture_backend_status",
+        "supported_modes",
+        "policy_sha256",
+        "max_duration_milliseconds",
+        "max_output_bytes",
+        "max_concurrent_collections",
+        "target_filter_before_userspace"
+      ],
+      "title": "TraceHelperHealthResult",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TraceHelperErrorBody"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "ok": {
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "request_id": {
+      "pattern": "^(unknown|request-[a-f0-9]{16,64})$",
+      "title": "Request Id",
+      "type": "string"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "collection": "#/$defs/TraceHelperCollectionResult",
+              "collection_ready": "#/$defs/TraceHelperCollectionReadyResult",
+              "health": "#/$defs/TraceHelperHealthResult"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TraceHelperHealthResult"
+            },
+            {
+              "$ref": "#/$defs/TraceHelperCollectionReadyResult"
+            },
+            {
+              "$ref": "#/$defs/TraceHelperCollectionResult"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Result"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "request_id",
+    "ok"
+  ],
+  "title": "TraceHelperResponse",
+  "type": "object"
+}

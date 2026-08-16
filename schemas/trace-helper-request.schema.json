@@ -1,0 +1,167 @@
+{
+  "$defs": {
+    "TraceHelperCollectPidRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "caller_uid": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "title": "Caller Uid",
+          "type": "integer"
+        },
+        "duration_milliseconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 10000,
+          "title": "Duration Milliseconds",
+          "type": "integer"
+        },
+        "expected_capture_backend": {
+          "const": "target_filtered_kernel_v1",
+          "title": "Expected Capture Backend",
+          "type": "string"
+        },
+        "expected_policy_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Expected Policy Sha256",
+          "type": "string"
+        },
+        "expires_at_unix_milliseconds": {
+          "exclusiveMinimum": 0,
+          "title": "Expires At Unix Milliseconds",
+          "type": "integer"
+        },
+        "max_output_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 67108864,
+          "title": "Max Output Bytes",
+          "type": "integer"
+        },
+        "mode": {
+          "enum": [
+            "sched",
+            "off_cpu",
+            "lock"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "operation": {
+          "const": "collect_pid",
+          "default": "collect_pid",
+          "title": "Operation",
+          "type": "string"
+        },
+        "plan_id": {
+          "pattern": "^trace-plan-[a-f0-9]{20}$",
+          "title": "Plan Id",
+          "type": "string"
+        },
+        "report_ready": {
+          "title": "Report Ready",
+          "type": "boolean"
+        },
+        "request_id": {
+          "pattern": "^request-[a-f0-9]{16,64}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/TraceHelperTarget"
+        }
+      },
+      "required": [
+        "request_id",
+        "plan_id",
+        "caller_uid",
+        "target",
+        "mode",
+        "duration_milliseconds",
+        "max_output_bytes",
+        "expires_at_unix_milliseconds",
+        "expected_policy_sha256",
+        "expected_capture_backend",
+        "report_ready"
+      ],
+      "title": "TraceHelperCollectPidRequest",
+      "type": "object"
+    },
+    "TraceHelperHealthRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "const": "health",
+          "default": "health",
+          "title": "Operation",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^request-[a-f0-9]{16,64}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id"
+      ],
+      "title": "TraceHelperHealthRequest",
+      "type": "object"
+    },
+    "TraceHelperTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "pid": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "start_time_ticks": {
+          "exclusiveMinimum": 0,
+          "maximum": 18446744073709551615,
+          "title": "Start Time Ticks",
+          "type": "integer"
+        },
+        "uid": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "title": "Uid",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pid",
+        "uid",
+        "start_time_ticks"
+      ],
+      "title": "TraceHelperTarget",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "collect_pid": "#/$defs/TraceHelperCollectPidRequest",
+      "health": "#/$defs/TraceHelperHealthRequest"
+    },
+    "propertyName": "operation"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/TraceHelperHealthRequest"
+    },
+    {
+      "$ref": "#/$defs/TraceHelperCollectPidRequest"
+    }
+  ]
+}

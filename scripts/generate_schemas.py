@@ -69,6 +69,10 @@ from perflens.contracts.trace import (
     TraceEvidenceArtifact,
 )
 from perflens.privileged_helper.protocol import helper_request_schema, helper_response_schema
+from perflens.trace_helper.protocol import (
+    trace_helper_request_schema,
+    trace_helper_response_schema,
+)
 
 MODELS = {
     "analysis.schema.json": AnalysisArtifact,
@@ -148,6 +152,14 @@ def main() -> None:
     )
     (root / "privileged-helper-response.schema.json").write_text(
         json.dumps(helper_response_schema(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (root / "trace-helper-request.schema.json").write_text(
+        json.dumps(trace_helper_request_schema(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (root / "trace-helper-response.schema.json").write_text(
+        json.dumps(trace_helper_response_schema(), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
