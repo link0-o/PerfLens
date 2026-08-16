@@ -43,6 +43,12 @@ separate executions and require their own explicit authorization.
 
 For manual command collection, state the exact target executable, arguments, collection mode, limits, and output before collection. For automatic PID collection, inspect capabilities, create a plan, verify `policy_status=allowed`, and execute that exact plan without substitution.
 
-Use `record` for on-CPU stacks, `stat` for typed counters, `sched` for scheduler data, `lock` for lock events, and `off_cpu` for sched-switch stack evidence. off-CPU interpretation still requires workload-aware post-processing and must not be described as blocked-time proof by itself.
+Use supported `record` for on-CPU stacks and `stat` for typed counters. The current
+`cap_perfmon` Broker contains disabled raw `sched`, `lock`, and `off_cpu` experiments, but there
+are no dedicated deterministic analyzers for scheduler delay, lock wait/hold, or paired off-CPU
+duration; `paranoid3_helper` rejects those modes. Do not select them automatically or describe the
+generic on-CPU analyzer as an advanced trace analyzer. Until a mode-specific workflow passes its
+release gates, report the missing evidence boundary or analyze a user-provided export only within
+the fields it actually preserves.
 
 If kernel policy rejects local collection, use the configured Broker only when its policy already permits the target. Otherwise report the limitation and continue with existing evidence or user-generated exports. Do not start, install, reconfigure, or elevate the Broker automatically.

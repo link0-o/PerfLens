@@ -42,7 +42,9 @@ The current release formally supports Milestones 0 through 9:
 - a repository Performance Analysis Skill for evidence-constrained Agent workflows.
 - profile and repeated-benchmark comparison with environment comparability checks;
 - pyperf, Google Benchmark, and hyperfine JSON normalization;
-- default-off, explicitly authorized perf record/stat/sched/lock/off-CPU collection.
+- default-off, explicitly authorized `stat`/`record` collection, with disabled
+  raw experimental `sched`/`lock`/`off_cpu` entry points in the `cap_perfmon`
+  Broker.
 
 It does **not** include an AI/LLM API, Web UI, source-code patch tool, benchmark
 runner, or custom agent framework.
@@ -119,6 +121,9 @@ Domain failures are Chinese-first for people. Automation should use the global
 `PERFLENS_JSON_ERRORS=1` to preserve the versioned JSON error artifact.
 `perflens doctor` follows the same human-first principle: add `--json` for its
 versioned capability artifact or `--output <new-file.json>` to save it safely.
+Its five-mode output diagnoses local permission prerequisites; it is not a
+stability claim for the three raw trace experiments or proof that the separate
+Collector succeeded.
 
 After administrator deployment and a fresh login, verify the Collector without
 finding a PID:
@@ -278,9 +283,12 @@ perflens collect-profile \
   --authorization I_EXPLICITLY_AUTHORIZE_TARGET_PROFILING
 ```
 
-Modes are `record`, `stat`, `sched`, `lock`, and `off_cpu`. `stat` uses an
-independent typed metric adapter and derives IPC when cycles and instructions
-are available. PID attachment requires `--pid`, a bounded duration,
+`record` and `stat` are the supported modes; `stat` uses an independent typed
+metric adapter and derives IPC when cycles and instructions are available.
+The public CLI and `cap_perfmon` Broker also expose raw `sched`, `lock`, and
+`off_cpu` experiments, but generated policy disables them and PerfLens does not
+yet provide their dedicated deterministic analyzers. The
+`paranoid3_helper` rejects those modes. PID attachment requires `--pid`, a bounded duration,
 `--authorize-pid-attach`, and the separate phrase
 `I_EXPLICITLY_AUTHORIZE_PID_ATTACH`. PerfLens never invokes sudo or changes
 kernel policy. See [MCP server and Skill setup](docs/mcp-and-skill.md) for the
@@ -466,8 +474,10 @@ Chinese version.
 - A hotspot is an observation, not a confirmed root cause.
 - `perf.data` portability remains dependent on the installed `perf` version and
   access to matching DSOs/symbols; preserved unknown frames make gaps explicit.
-- Active collection depends on kernel perf permissions. On the development
-  host, `perf_event_paranoid=3` rejects unprivileged sampling; PerfLens returns
-  a bounded structured error and leaves no collection output.
-- `off_cpu` mode records `sched:sched_switch` stack evidence; workload-aware
-  post-processing is still required before making blocked-time claims.
+- Active collection depends on kernel perf permissions. An ordinary process is
+  blocked by `perf_event_paranoid=3`; an installed Collector may still pass its
+  separate host acceptance, including an explicitly reported software fallback.
+- `sched`, `lock`, and `off_cpu` are disabled raw experiments in the
+  `cap_perfmon` Broker, not stable analysis modes. PerfLens does not yet produce
+  scheduler-delay, lock wait/hold, owner/waiter, or paired off-CPU duration
+  artifacts from them; the `paranoid3_helper` rejects them.

@@ -70,5 +70,5 @@ reports `false`.
 `deploy --config` remains the advanced reviewed-policy path. `update-policy` changes bounded fields within the current mode; `upgrade` refreshes managed service files; neither command switches privilege mode.
 
 Privilege mode describes deployment and security boundaries, not maturity of every performance
-collection mode. See the [Collector capability and expansion roadmap](collector-capability-roadmap.md)
-for the current assessment, repair backlog, and staged `sched/lock/off_cpu` acceptance gates.
+collection mode. See the [Collector capability expansion roadmap](collector-capability-roadmap.md)
+for the audited current state and staged `sched/lock/off_cpu` acceptance gates.

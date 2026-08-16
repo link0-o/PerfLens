@@ -170,7 +170,7 @@ their own explicit authorization.
 | `READ_ONLY` | hotspot/path lookup, classification pages, artifact pages, source context | Only configured artifact IDs and allowed-root paths are accepted. |
 | `WRITES_ARTIFACTS` | profile analysis, diagnosis bundle | Disabled unless `--allow-writes`; writes only beneath the artifact root. |
 | `PROCESS_EXECUTION` | perf.data conversion and source symbolization | Disabled unless `--allow-process-execution`; executable selection remains allowlisted and bounded. |
-| `ACTIVE_COLLECTION` | `collect_profile` record/stat/sched/lock/off-CPU modes | Requires writes, process execution, active-collection startup gate, exact per-call authorization, bounded output, and a new output path. PID attachment has two additional gates. |
+| `ACTIVE_COLLECTION` | Supported `record`/`stat`; disabled raw `sched`/`lock`/`off_cpu` experiments in `cap_perfmon` | Requires writes, process execution, active-collection startup gate, exact per-call authorization, bounded output, and a new output path. PID attachment has two additional gates. Raw trace experiments are not selected automatically and the `paranoid3_helper` rejects them. |
 | `AUTOMATIC_COLLECTION` | Execute a short-lived PID-bound plan through the Collector | Requires explicit MCP startup gates and an independent Collector policy. |
 | `PROJECT_EXECUTION` | Launch one confirmed project executable and collect its new PID | Also requires automatic collection, `--allow-project-execution`, exact per-call authorization, and project path checks. |
 
@@ -188,7 +188,7 @@ Tool annotations are client hints. The authorization checks above are independen
 8. `read_artifact_page` for large output
 9. `analyze_benchmark`, `compare_profiles`, and `compare_benchmarks` for A/B work
 
-`collect_profile` is intentionally outside the default sequence. Use it only after the user approves the exact target and the [Skill safety rules](../.agents/skills/perflens/references/active-collection-safety.md) have been applied.
+`collect_profile` is intentionally outside the default sequence. Use it only after the user approves the exact target and the [Skill safety rules](../.agents/skills/perflens/references/active-collection-safety.md) have been applied. The stable automatic sequence is `stat → record`; a request for “deep analysis” does not authorize or activate the raw trace experiments.
 
 For policy-approved live PIDs, use `inspect_collection_capabilities`,
 `plan_automatic_collection`, `execute_collection_plan`, and `analyze_collection`.

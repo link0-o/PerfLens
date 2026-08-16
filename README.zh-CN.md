@@ -344,7 +344,10 @@ perflens collect-profile \
   --authorization I_EXPLICITLY_AUTHORIZE_TARGET_PROFILING
 ```
 
-支持 `record`、`stat`、`sched`、`lock` 和 `off_cpu` 模式。附加到已有 PID 还需要独立开关、有限时长以及授权短语 `I_EXPLICITLY_AUTHORIZE_PID_ATTACH`。
+当前正式支持 `record` 和 `stat`。公共 CLI 与 `cap_perfmon` Broker 还保留默认关闭的
+`sched`、`lock`、`off_cpu` 原始实验入口，但它们尚无专用确定性分析器，生成策略默认
+不开放；`paranoid3_helper` 会拒绝这三种模式。附加到已有 PID 还需要独立开关、有限
+时长以及授权短语 `I_EXPLICITLY_AUTHORIZE_PID_ATTACH`。
 
 PerfLens 永远不会自行执行 sudo、修改内核策略或降低主机安全限制。若系统的
 `perf_event_paranoid`、容器策略或能力设置不允许任何采样，应由系统管理员提供经过
@@ -353,7 +356,8 @@ PerfLens 永远不会自行执行 sudo、修改内核策略或降低主机安全
 
 ## 权限和安全边界
 
-运行 `perflens doctor` 可以用中文在不采样、不附加 PID 的情况下检查当前五种采集模式；
+运行 `perflens doctor` 可以用中文在不采样、不附加 PID 的情况下检查五种模式的本地权限
+前置条件；这不是三种原始 trace 实验的成熟度声明，也不证明独立 Collector 已成功采集。
 机器读取使用 `perflens doctor --json`。Agent 自动采集使用短期、单次、绑定 PID 所有者和
 启动时间的计划，并由 Unix Socket Collector 再次检查调用 UID、目标、模式、单次资源
 上限、spool 累计配额和磁盘空闲余量。达到存储边界时只拒绝新采集，不自动删除旧证据。
@@ -426,8 +430,11 @@ uv run pip-audit
 - Profile 百分比表示事件权重，不是墙钟时间。
 - 热点是直接观察结果，不等于已确认根因。
 - `perf.data` 能否迁移分析取决于本机 `perf` 版本和匹配的 DSO/调试符号。
-- 主动采样取决于 Linux 内核权限；权限不足时 PerfLens 会返回有界的结构化错误。
-- `off_cpu` 只采集 `sched:sched_switch` 栈证据，仍需结合工作负载才能判断阻塞时间。
+- 主动采样取决于 Linux 内核权限；普通进程在 `perf_event_paranoid=3` 下受阻，不代表
+  已部署 Collector 必然受阻，仍应以真实短时验收和 Collection 的实际事件来源为准。
+- `sched`、`lock`、`off_cpu` 是 `cap_perfmon` Broker 中默认关闭的原始实验入口，不是
+  稳定分析模式；当前不能输出调度延迟、锁等待/持有、owner/waiter 或配对后的 off-CPU
+  时长产物，`paranoid3_helper` 也会拒绝这些模式。
 
 更多中文资料：
 
@@ -442,7 +449,7 @@ uv run pip-audit
 - [自研与依赖复用决策](docs/dependency-decisions.zh-CN.md)
 - [MCP 与 Skill 使用指南](docs/mcp-and-skill.zh-CN.md)
 - [自动采集与 Collector Broker](docs/automatic-collection.zh-CN.md)
-- [Collector 能力评估、修复清单与扩展路线](docs/collector-capability-roadmap.zh-CN.md)
+- [采集能力扩展路线图](docs/collector-capability-roadmap.zh-CN.md)
 - [Perf 原始证据到 Agent 数据的可信链路](docs/evidence-pipeline.zh-CN.md)
 - [产品部署、验收、升级与卸载](docs/deployment.zh-CN.md)
 - [安全策略](SECURITY.zh-CN.md)

@@ -253,11 +253,14 @@ on-CPU 热点，但不得用软件结果推断 IPC、硬件缓存或分支未命
 | `READ_ONLY` | 热点、路径、分类结果、产物分页和源码上下文 | 只接受已配置的 artifact ID 和 allowed-root 内路径 |
 | `WRITES_ARTIFACTS` | 分析 Profile、生成诊断包 | 需要 `--allow-writes`，只能写 artifact root |
 | `PROCESS_EXECUTION` | 转换 perf.data、执行源码符号化程序 | 需要 `--allow-process-execution`，命令、输出和时长有边界 |
-| `ACTIVE_COLLECTION` | record/stat/sched/lock/off-CPU 采样 | 需要多个启动开关、逐次精确授权和全新输出路径；已有 PID 另需附加开关 |
+| `ACTIVE_COLLECTION` | 正式 `record`/`stat`；`cap_perfmon` 中默认关闭的原始 `sched`/`lock`/`off_cpu` 实验 | 需要多个启动开关、逐次精确授权和全新输出路径；已有 PID 另需附加开关；Skill 不自动选择原始实验模式，`paranoid3_helper` 会拒绝它们 |
 | `AUTOMATIC_COLLECTION` | 执行短期、单次、PID 绑定计划 | MCP 分类授权与 Collector 独立策略必须同时允许 |
 | `PROJECT_EXECUTION` | 启动一个已确认的项目可执行文件并采集其新 PID | 还需要自动采集、`--allow-project-execution`、逐次执行授权和项目路径边界 |
 
 客户端显示的工具注解只是提示；真正的权限检查始终在 PerfLens MCP Server 内执行。
+
+当前稳定自动顺序是 `stat → record`。“深度分析”或“深度优化”只会让 Skill 在已授权、
+已稳定的能力中逐步取证，不会自动扩大到实验性 trace 模式或新的权限边界。
 
 ## 主动采样的额外授权
 

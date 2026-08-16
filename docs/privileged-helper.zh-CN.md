@@ -27,6 +27,10 @@ Rust Helper 通过经过审查的 systemd 单元获得 Debian 等级 3 所需能
 `--acknowledge-privileged-helper-risk` 明确确认风险。切换是带健康检查和失败回滚的事务，
 不会删除任一 spool。完整操作见[《Collector 权限模式选择与切换》](collector-mode-lifecycle.zh-CN.md)。
 
+当前私有协议枚举只有 `Record` 和 `Stat`。Helper 与 Python 策略都会拒绝 `sched`、
+`lock`、`off_cpu`；选择 `paranoid3_helper` 并不会启用这些模式。未来若增加 trace 权限，
+必须使用单独审查的边界，见[《采集能力扩展路线图》](collector-capability-roadmap.zh-CN.md)。
+
 经过审查的 unit 把 Helper 上限固定为 `CAP_PERFMON`、`CAP_SYS_ADMIN` 和
 `CAP_SYS_PTRACE`。`CAP_SYS_PTRACE` 是 `perf record` 读取已授权目标进程映射、生成可用采样
 元数据所需；只通过 stat 计数不能证明 record 可用。它不会绕过类型化 owner-PID 计划，

@@ -2,96 +2,90 @@
 
 简体中文 | [English](release-readiness.md)
 
-本文把最终实现与项目 Definition of Done 对应起来。表中的本地验证更新到 2026-08-05；工作流配置本身不等于远程 GitHub Actions 已经成功运行。
+本文是 2026-08-15 对 0.2.0 修复线的验证快照，不是永久不变的宣传页。下一次正式发布
+必须重新执行[《发布流程》](releasing.zh-CN.md)中的全部门禁；工作流存在不等于对应远程
+GitHub Actions 已经成功。
 
-## 功能范围
+## 当前可发布范围
 
-里程碑 0～10 已实现：
+当前稳定闭环包括：
 
 - folded、`perf script` 和经系统 perf 转换的 `perf.data` 分析；
-- 精确 Self/Inclusive 热点和调用路径；
-- ELF/调试信息检查与源码符号化 Provider；
-- 只产生候选结论的证据规则和 JSON/Markdown 报告；
-- 带类型、分页和权限控制的 MCP Server；
-- PerfLens Performance Analysis Skill；
-- Profile/Benchmark 比较及常见 Benchmark JSON Adapter；
-- 默认关闭、必须明确授权的主动采集。
-- 通过独立 Collector Broker 执行的、策略约束的自动 PID 采集。
-- 带版本的 Collector 策略，以及不执行采集、不修改系统的运行就绪状态报告。
+- 带守恒与来源绑定的热点、调用路径、源码归因和 JSON/Markdown 证据；
+- Profile/Benchmark 比较，以及同工作负载、同事件来源、保持正确性的 A/B 验证；
+- 带类型、分页、权限开关和证据完整性校验的 MCP Server；
+- Codex/Claude Code 项目 Skill；
+- 默认关闭、明确授权、只接受 PID 的 Collector 自动采集；
+- `cap_perfmon` 与可选 `paranoid3_helper` 两种部署模式；
+- 正式支持的 `stat`、`record`，以及硬件 PMU 不可用时可审计的软件事件降级；
+- Collector 部署、升级、策略更新、撤销、spool 检查、归档和显式清理。
 
-项目仍然明确不包含：LLM API、自研 Agent 循环、Web UI、自动修改源码、Benchmark 执行器、生产监控、直接解析 `perf.data` 二进制以及面向特定应用的规则。
+`sched`、`lock`、`off_cpu` **不在当前稳定发布声明中**。它们只在 `cap_perfmon`
+Broker 中保留默认关闭的原始实验入口，没有专用确定性分析器；`paranoid3_helper` 明确
+拒绝它们。下一功能版本候选为 `v0.3.0`，范围与门禁见
+[采集能力扩展路线图](collector-capability-roadmap.zh-CN.md)。
 
-## 质量门禁
+项目仍然不包含：LLM API、自研 Agent 循环、Web UI、任意源码自动修改、通用 Benchmark
+执行平台、生产 APM、直接解析 `perf.data` 二进制、内存泄漏分析、GPU 分析、分布式链路
+追踪以及面向某个应用的专用规则。
 
-| 检查项 | 命令或证据 | 当前结果 |
+## 最近一次本地门禁快照
+
+| 检查项 | 命令或证据 | 2026-08-15 快照 |
 |---|---|---|
 | 代码规范 | `ruff check .` | 通过 |
 | 严格类型 | `pyright` | 0 错误、0 警告 |
-| Python 3.12 | 隔离环境 `pytest -q`，Python 3.12.13 | 310 通过 |
-| Python 3.13 | 隔离环境 `pytest -q` | 378 通过 |
-| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.09%，通过 |
-| Skill | Skill 结构和打包测试 | 通过 |
-| Schema | 已提交 Schema 与 Contract 生成结果相等 | 通过 |
-| 依赖锁 | `uv export --locked` | 通过 |
-| 漏洞扫描 | 对完全锁定运行依赖执行 `pip-audit` | 未发现已知漏洞 |
-| SBOM | uv CycloneDX 1.5 导出 | 通过 |
-| 工作流供应链 | Action 不可变固定 + 只读构建 + 隔离发布任务回归 | 通过 |
-| wheel/sdist | 同一提交时间戳下独立构建两次、逐字节比较并隔离安装 | 可复现，全部通过 |
-| Release 来源证明 | 隔离且固定提交的 `actions/attest` → SLSA Provenance → 发布门禁 | 配置与回归测试通过；仍需首次远程标签运行验证 |
-| SHA-256 | wheel、sdist、两个 DEB、Skill、SBOM | 六项全部通过 |
-| Collector 健康协议 | 双向内核 peer 凭据 → 只读 `health` → 版本化就绪结果 | 授权、错误服务 UID、拒绝、遗留 Socket、部署等待和普通用户状态路径通过 |
-| 部署验收命令 | `accept-collector` → 内置负载 → 授权 stat 计划 → 至少一个实测指标 | 中文/JSON/文件输出及无实测指标拒绝路径通过可执行 perf Test Double 验证 |
-| Collector 存储边界 | 累计字节/文件数/空闲余量 → 启动 perf 前预留 | 三类拒绝及 Unix Socket 端到端通过 |
-| Collector 存储检查 | `spool-status` → 直接普通文件 → 配额/磁盘余量 | 中文摘要、版本化 JSON 和异常项拒绝通过 |
-| Collector 证据生命周期 | 托管文件选择 → ZIP manifest/哈希 → 独立只读归档/原文件验证 → 显式授权清理 | 默认不删除、root 归档、篡改/身份变化/未知项目拒绝路径通过 |
-| Collector 用户隔离 | 单实例单 UID；策略/资产/部署拒绝多 UID | 拒绝路径和组可读边界已验证 |
-| 项目工作负载 | 普通用户启动 → 内部 PID → Broker → 清理 | 可执行 perf Test Double 端到端通过 |
-| 管理员部署 | 严格 TOML → 内置资产 → 固定命令 → Socket | 中文预检/成功摘要、显式 JSON、回滚和拒绝路径通过 |
-| 管理员升级 | 固定已部署策略 → unit 哈希比较 → 安全替换/重启 → 失败恢复 | 保留策略/证据、同版重启、更新、恢复和拒绝路径通过 |
-| 策略安全更新 | 独立候选 → 严格验证 → 原子替换/重启/健康检查 → 失败恢复 | UID/spool 固定、注释保留、只读预检和拒绝路径通过 |
-| 管理员撤销部署 | 托管标记/所有者/权限 → 固定停用 → inode 复核 → 删除 unit | 保留数据和拒绝路径通过 |
-| 原生 DEB | Debian 13 主包与 Collector 拆包 | 本机提取入口/配置冒烟和逐字节重复构建通过；CI 还强制执行安装后布局自动识别、精确状态命令和部署预检 |
-| 性能 | 可复现 small/medium/large folded 语料 | 已记录基线 |
+| Python 完整测试 | `pytest -q`（当前开发环境） | 554 通过 |
+| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.48%，通过 |
+| Python CI 矩阵 | `.github/workflows/ci.yml` | 配置 Python 3.12、3.13；发布时以对应远程运行结果为准 |
+| Rust 格式/静态检查 | 固定工具链 `cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings` | 通过 |
+| Rust 测试 | `cargo test --locked` | 25 个库测试和 2 个二进制测试通过 |
+| Schema/协议 | 已提交 Schema、跨语言有效/无效 golden、未知字段拒绝 | 通过 |
+| Skill | 结构、打包和工作流安全测试 | 通过 |
+| wheel/sdist | 重复构建、逐字节比较、隔离安装 | 通过 |
+| 原生 DEB | Debian 13 主包/Collector 拆包、重复构建、提取/安装冒烟 | 通过 |
+| 依赖与供应链 | 锁文件、许可证/漏洞检查、SBOM、Action 固定、发布来源证明配置 | 通过本地门禁；远程证明需由标签工作流产生 |
 
-覆盖率目前只比 85% 门槛高少量余量。后续新增代码应优先补齐安全错误分支测试，而不是降低门槛。
+这些数字属于一次快照。测试增加后，文档不应继续复制旧数量；发布记录应保存实际命令、
+提交 SHA、Python/Rust 版本和完整日志。覆盖率门槛仍是 85%，不得为了新增功能而降低。
 
-## 兼容性证据
+## Collector 与真实主机证据
 
-- Linux：Debian 13、x86_64；
-- Python：3.12.13 和 3.13；
-- perf：本机 6.12.90，只读语法和 Provider 流程通过；
-- GNU addr2line：针对 PIE、共享库、Strip 和独立调试文件夹具验证；
-- LLVM symbolizer：本机未安装，JSON 协议和长驻进程生命周期通过 Test Double 验证；
-- MCP：使用官方 Python SDK 2.x 完成客户端/服务端端到端测试。
+自动化测试覆盖真实 Unix Socket、对等身份、PID 复用/跨 UID/重放/过期拒绝、固定 spool、
+容量配额、产物哈希与权限、部署/升级/回滚/撤销，以及 Python/Rust 私有协议的拒绝路径。
+成功和失败的 perf 路径使用受控可执行 Test Double，避免把 CI 主机权限误当成产品能力。
 
-完整兼容范围见[《PerfLens 兼容范围》](compatibility.zh-CN.md)。遇到跨主机
-`perf.data` 时，仍可能需要匹配的 perf、DSO、Build ID、调试文件和挂载命名空间数据。
+此外，Debian 13 人工验收已经证明：
 
-## 安全验证
+- `paranoid3_helper` 与非特权 Broker 可以完成认证握手；
+- 在 VMware 硬件 PMU 没有产生可用计数时，可以完成软件 `stat`；
+- `cpu-clock record` 和调用栈采样可以完成；
+- Collection 会报告 `actual_event_source=software`、降级原因与 IPC/cache/branch 限制；
+- 原始证据哈希、Collection、分析输入、转换清单、热点/调用路径权重守恒可以验证。
 
-- 路径穿越和符号链接逃逸会被拒绝；
-- 输入 Profile 不会被覆盖；
-- 外部工具不经过 shell，启动、超时、输出洪泛和写入失败均有稳定错误；
-- 超长单行、增长中的文件、Benchmark/产物读取和源码上下文保持有界；
-- 非有限 Benchmark 与 perf-stat 数值会被拒绝；
-- 大批量符号地址分组发送，避免标准输入/输出管道死锁；
-- 主动采集默认关闭，PID 附加具有额外独立权限门。
-- 自动计划绑定 PID 所有者和启动时间，短期且单次；Collector 验证 Unix 对等 UID、独立策略和固定 spool，并在启动 perf 前执行累计字节、文件数和磁盘空闲余量配额。
-- 旧证据只通过管理员 archive-then-prune 流程处理；清理前验证 root 管理归档、ZIP
-  manifest、归档成员哈希及源设备号/inode/大小/mtime/属主/权限/哈希，并要求独立授权。
-- 项目可执行程序始终由普通用户启动，Collector 只收到 PID 计划；管理员部署配置按
-  不跟随符号链接的单次快照读取，系统命令使用固定绝对路径白名单。
+这只证明该主机和该短时工作负载。它不证明硬件 PMU、其他内核/虚拟机/LSM、其他 PID
+或实验 trace 模式一定可用。每台主机仍要由普通授权用户运行：
 
-## 结论边界
+```bash
+perflens accept-collector --authorize-host-acceptance
+```
 
-- 规则匹配不是已确认根因；
-- Profile 百分比变化不是绝对耗时变化；
-- Benchmark 只有在环境和工作负载可比、保持正确性并重复验证后，才能支持更强结论；
-- off-CPU 采集只提供 `sched:sched_switch` 栈证据，尚不能单独确认带持续时间的阻塞等待。
+## 安全与解释门禁
 
-## 发布操作
+- 不经过 shell；用户路径必须规范化并拒绝符号链接逃逸；源 Profile 永不覆盖；
+- MCP、Skill、Agent 和 Python Broker 不运行 sudo，也不持有 Helper 权限；
+- 用户工作负载始终由普通用户启动，Collector/Helper 只接收短期、单次、同 UID 的 PID 计划；
+- `paranoid3_helper` 只执行固定 root 所有 perf 路径，只允许 `stat`、`record`；
+- 原始输入、转换结果、最终分析和 Agent 可见分页必须保持来源绑定与哈希一致；
+- 解析警告、未知帧、丢失事件、截断和未解析权重必须保留，不能伪装成零；
+- 规则匹配不是根因，Profile 百分比不是绝对耗时，软件事件不能支持 IPC/cache/branch 结论；
+- 只有匹配工作负载、相同事件来源、正确性通过并重复测量的 A/B，才能称为已验证改进。
 
-正式发布前仍需执行[《发布流程》](releasing.zh-CN.md)中的版本同步、CHANGELOG、完整测试、构建、SBOM、校验和和标签步骤。
+## 标签与下一版本
 
-已经发布的版本标签不应移动或覆盖。当前候选版本是 `v0.2.0`；提交并推送
-发布提交后，应创建新的 `v0.2.0` 标签。
+源代码当前仍使用 `0.2.0`。本路线图把下一次有新采集/分析能力的功能发布规划为
+`v0.3.0`；在实现并通过路线图门禁之前不要提前改包版本或创建标签。
+
+已经对外发布的标签应保持不可变。即使确认旧标签/Release 从未提供给用户，删除并重建也
+只能作为单独审查的仓库恢复操作；[发布流程](releasing.zh-CN.md)不把覆盖标签作为正常
+步骤，默认做法仍是修复后发布新版本。

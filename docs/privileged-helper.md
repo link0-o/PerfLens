@@ -27,6 +27,12 @@ Use `sudo perflens-admin setup` for first selection. Existing deployments use
 the transaction health-checks the target and rolls back on failure without deleting either
 spool. See the [Collector privilege-mode lifecycle](collector-mode-lifecycle.md).
 
+The current private protocol enum contains only `Record` and `Stat`. The
+Helper and Python policy reject `sched`, `lock`, and `off_cpu`; those modes are
+not enabled by selecting `paranoid3_helper`. Any future trace privilege belongs
+to a separately reviewed boundary, as described in the
+[collector capability roadmap](collector-capability-roadmap.md).
+
 The reviewed unit bounds the Helper to `CAP_PERFMON`, `CAP_SYS_ADMIN`, and
 `CAP_SYS_PTRACE`. `CAP_SYS_PTRACE` is required by `perf record` to inspect the
 already-authorized target's mappings and synthesize usable sampling metadata; a

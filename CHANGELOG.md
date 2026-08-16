@@ -9,6 +9,14 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - A checked-in JSON Schema for the public Collector acceptance artifact, covered by the same
   deterministic schema-generation check as the other public contracts.
 
+### Changed
+
+- Documentation and the bundled Skill now distinguish supported `stat`/`record` collection from
+  disabled raw `sched`/`lock`/`off_cpu` experiments. The next feature-release roadmap requires
+  mode-specific offline analyzers, privacy checks, bounded conversion contracts, and real-host
+  acceptance before any `cap_perfmon` policy expansion; `paranoid3_helper` remains `stat`/`record`
+  only. No runtime privilege or default policy was expanded by this documentation change.
+
 ### Fixed
 
 - The raw-evidence projection now fails closed end to end: immutable Collection snapshots are
@@ -471,9 +479,11 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - Milestone 8 deterministic Profile and Benchmark comparison, environment
   comparability checks, practical-impact thresholds, Markdown diffs, and
   pyperf/Google Benchmark/hyperfine adapters.
-- Milestone 9 default-off active perf record/stat/sched/lock/off-CPU collection
-  with server and per-call authorization, a separate PID-attachment gate,
-  bounded outputs, immutable publication, and typed perf-stat metrics.
+- Milestone 9 default-off active perf `record`/`stat` collection plus raw
+  `sched`/`lock`/`off_cpu` command entry points, with server and per-call
+  authorization, a separate PID-attachment gate, bounded outputs, immutable
+  publication, and typed perf-stat metrics. The raw trace entry points did not
+  constitute mode-specific deterministic analysis support.
 - Installable wheel and source distributions with CLI and MCP entry points.
 - A bundled, non-overwriting project Skill installer and safe Codex MCP
   configuration renderer.

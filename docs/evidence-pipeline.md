@@ -195,22 +195,24 @@ Language-specific behavior belongs in adapters while the IR and evidence gate re
 temporal symbol sidecars are frozen. Missing inline/debug information for Go, Rust, or C++ lowers
 the evidence boundary.
 
-## Delivery order
+## Completed delivery order for the repaired 0.2.0 line
 
-1. P0: Frame/annotation precedence, cross-language regression tests, warnings imply `partial`.
-2. P0: EvidenceQuality on every Agent-facing profile tool.
-3. P1: conversion provenance/hash and independent `verify-analysis`.
-4. P1: bounded raw variants and normalization merge visibility.
-5. P1: Skill, documentation, schemas, and goldens.
-6. P2: compressed transcript plus Build-ID/JIT sidecars and a real perf-version matrix.
+The P0/P1 items below are implemented. P2 remains optional follow-up work:
+
+1. Completed P0: Frame/annotation precedence, cross-language regression tests, warnings imply `partial`.
+2. Completed P0: EvidenceQuality on every Agent-facing profile tool.
+3. Completed P1: conversion provenance/hash and independent `verify-analysis`.
+4. Completed P1: bounded raw variants and normalization merge visibility.
+5. Completed P1: Skill, documentation, schemas, and goldens.
+6. Remaining P2: compressed transcript plus Build-ID/JIT sidecars and a real perf-version matrix.
 
 P2 does not block the P0/P1 contract, but without a retained transcript/sidecar PerfLens must not
 claim that JIT symbolization from `perf.data` is perfectly replayable across hosts or time.
 
 ## Current v0.2.0 compatibility note
 
-The project is still converging the first usable v0.2.0. Analysis JSON produced by earlier local or
-temporary v0.2.0 builds lacks `content_sha256`, Collection provenance, and the complete
-EvidenceQuality contract. The current build refuses to pass those old Analysis files to an Agent.
+The repaired 0.2.0 line implements the P0/P1 integrity contract. Analysis JSON produced by earlier
+local, withdrawn, or temporary 0.2.0 builds may lack `content_sha256`, Collection provenance, and
+the complete EvidenceQuality contract. The current build refuses to pass those old Analysis files to an Agent.
 Keep the original folded, perf-script, or perf.data evidence and re-analyze it; the raw Collection
 does not need to be deleted. Do not fabricate missing fields to bypass verification.

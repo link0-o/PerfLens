@@ -210,21 +210,23 @@ Collector 会在发布产物前验证正式结果；`auto` 模式可在剩余授
 在没有冻结转换文本、符号 sidecar 和时间语义前必须标为实验性；Go/Rust/C++ 缺少内联或
 调试信息时必须降低证据等级。
 
-## 实施顺序
+## 0.2.0 修复线已完成的实施顺序
 
-- P0：修复 Frame/注释优先级；补跨语言回归；让警告影响 `partial`；
-- P0：加入 EvidenceQuality，并在所有 Agent 热点接口强制返回；
-- P1：加入转换来源清单、转换哈希和独立 `verify-analysis`；
-- P1：公开有界原始符号变体与规范化合并统计；
-- P1：更新 Skill、中文文档、JSON Schema 和 Golden；
-- P2：持久化压缩转换文本、Build-ID/JIT sidecar，并增加真实 perf 版本矩阵。
+下面的 P0/P1 已经完成，P2 仍是可选后续工作：
+
+- 已完成 P0：修复 Frame/注释优先级；补跨语言回归；让警告影响 `partial`；
+- 已完成 P0：加入 EvidenceQuality，并在所有 Agent 热点接口强制返回；
+- 已完成 P1：加入转换来源清单、转换哈希和独立 `verify-analysis`；
+- 已完成 P1：公开有界原始符号变体与规范化合并统计；
+- 已完成 P1：更新 Skill、中文文档、JSON Schema 和 Golden；
+- 待完成 P2：持久化压缩转换文本、Build-ID/JIT sidecar，并增加真实 perf 版本矩阵。
 
 P2 不阻塞 P0/P1 上线，但 `perf.data` 未持久化转换文本/sidecar 时不得宣称 JIT 证据可以
 跨主机、跨时间完全重放。
 
 ## 当前 v0.2.0 兼容说明
 
-本项目仍在收敛首个可用的 v0.2.0。较早的本地/临时 v0.2.0 构建生成的 Analysis JSON
+修复后的 0.2.0 已实现 P0/P1 完整性契约。较早的本地、已撤回或临时 0.2.0 构建生成的 Analysis JSON
 没有 `content_sha256`、Collection 来源和完整 EvidenceQuality，新构建会拒绝把它继续交给
 Agent。请保留原始 folded、perf-script 或 perf.data，并用新版本重新分析；原始 Collection
 和采集证据不需要因此删除。不要手工伪造缺失字段来绕过验证。

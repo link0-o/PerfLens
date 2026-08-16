@@ -10,6 +10,20 @@ user grant → Skill → optional ordinary-user launch → PID-bound MCP plan �
 
 The optional `perflens-collector` is a Unix-socket broker. It authenticates peers with `SO_PEERCRED`, accepts only typed PID plans, revalidates PID owner/start time, enforces an independent root-owned policy, and writes only to a fixed spool. Plans have a bounded lifetime, and the running Broker rejects replay of the same plan. It also rejects a `perf` executable that is both non-root-owned and writable by the service account. It never accepts a shell command, arbitrary executable, environment, output path, or system-wide target.
 
+## Current mode maturity
+
+The supported, default automatic workflow is `stat` followed by `record` when
+sampling is justified. Plans expire after 120 seconds by default. Public types
+and the `cap_perfmon` Broker also contain raw `sched`, `lock`, and `off_cpu`
+entry points, but those modes are experimental, disabled by the generated
+policy, and do not yet have mode-specific deterministic analyzers. The
+`paranoid3_helper` protocol and Rust Helper intentionally reject them.
+
+The Skill therefore does not select those raw trace modes merely because a
+request says “deep analysis” or “deep optimization.” See the
+[collector capability roadmap](collector-capability-roadmap.md) for the
+planned analysis artifacts, privacy checks, and release gates.
+
 Authentication is bidirectional for health and collection requests. The client
 pins safe socket metadata, matches the kernel peer UID to the socket owner,
 requires an exact request-ID response, and confirms that returned collection
@@ -87,6 +101,11 @@ Do not run the MCP
 server, Agent, or Python Broker as root.
 
 For automatic MCP collection, enable all explicit server gates, configure `--collector-socket`, include the collector spool as an `--allowed-root`, and bound modes/duration/frequency. See the [Chinese guide](automatic-collection.zh-CN.md) for the complete configuration and safety model.
+
+The generic `perf.data` path is an on-CPU analyzer. It must not be presented as
+a scheduler-delay, lock-wait, or paired off-CPU interval analyzer. Until those
+dedicated analyzers land, raw advanced-mode evidence cannot support precise
+runnable-wait, lock hold/wait, owner/waiter, or blocking-duration claims.
 
 The automatic workflow is:
 

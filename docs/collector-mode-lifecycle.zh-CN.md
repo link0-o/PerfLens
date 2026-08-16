@@ -136,9 +136,9 @@ Helper；`upgrade` 也会完成同样的收敛。修复失败会恢复原文件�
 
 ## 验收条件
 
-权限模式只说明部署和安全边界，不代表所有性能采集模式已经成熟。当前能力评价、已确认
-修复项以及 `sched/lock/off_cpu` 的分阶段扩展门槛见
-[《Collector 能力评估、修复清单与扩展路线》](collector-capability-roadmap.zh-CN.md)。
+权限模式只说明部署和安全边界，不代表所有性能采集模式已经成熟。当前事实基线与
+`sched/lock/off_cpu` 的分阶段扩展门槛见
+[《采集能力扩展路线图》](collector-capability-roadmap.zh-CN.md)。
 
 - 首次向导的三种选择均有 CLI 测试；非交互环境可以用 `--mode`。
 - `perflens init` 能识别两种安全的已部署策略；不安全策略、显式冲突和无策略回退均有测试。
@@ -146,4 +146,5 @@ Helper；`upgrade` 也会完成同样的收敛。修复失败会恢复原文件�
 - 残留 Helper 收敛、固定配置 root 所有权、管理员事务锁和回滚状态均有拒绝或恢复测试。
 - 切换不得遗失管理员的其余策略字段，不得删除两个 spool。
 - `paranoid3_helper` 仍通过 Rust Helper 独立校验协议、PID、事件、时限、频率、输出和固定 spool。
-- Python lint、类型检查、完整测试、覆盖率门槛，Rust fmt/clippy/test，以及 DEB smoke test 全部通过后，才可提交或重新发布 `v0.2.0`。
+- Python lint、类型检查、完整测试、覆盖率门槛，Rust fmt/clippy/test，以及 DEB smoke test
+  全部通过后，才可发布下一版本；新能力按 `v0.3.0` 路线图验收，不能移动已经公开的标签。

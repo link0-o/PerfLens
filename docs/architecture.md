@@ -23,6 +23,14 @@ ordinary users, Agents, MCP, and the Skill from calling it directly. See the
 [privileged Helper design](privileged-helper.md). Package installation does not enable this mode;
 an administrator must explicitly select it, acknowledge the risk, and run real acceptance.
 
+The generated policy and `paranoid3_helper` protocol support only `stat` and
+`record`. The public Python types and `cap_perfmon` Broker retain disabled raw
+`sched`, `lock`, and `off_cpu` entry points, but the generic on-CPU analyzer is
+not a scheduler/lock/off-CPU analyzer. The next-version design deliberately
+builds deterministic offline analyzers and privacy gates before considering any
+runtime policy expansion. See the
+[collector capability roadmap](collector-capability-roadmap.md).
+
 The domain layer uses frozen/slotted records, integer Frame IDs, and standard
 library protocols. It imports neither Pydantic nor Typer. Format adapters own
 streaming parsing and frame tables. The `perf.data` adapter delegates only to

@@ -22,6 +22,12 @@ Symbol Provider                ─→ 已验证的源码定位
 连接。详细约束见[《高权限 Helper 设计》](privileged-helper.zh-CN.md)。软件安装本身不会
 自动启用等级 3 Helper；管理员仍需显式选择、确认风险并完成真实短时验收。
 
+生成策略和 `paranoid3_helper` 协议当前只支持 `stat`、`record`。公共 Python 类型与
+`cap_perfmon` Broker 保留默认关闭的 `sched`、`lock`、`off_cpu` 原始入口，但通用
+on-CPU 分析器不是调度/锁/off-CPU 专用分析器。下一版本会先完成离线确定性分析和隐私
+门禁，再决定是否扩大运行时策略，详见
+[《采集能力扩展路线图》](collector-capability-roadmap.zh-CN.md)。
+
 ## Core 与边界层
 
 领域层使用冻结且带 `slots` 的轻量记录、整数 Frame ID 和标准库 Protocol。它不导入 Pydantic 或 Typer，因此 Profile 解析和聚合热路径不会依赖 CLI 或边界验证框架。

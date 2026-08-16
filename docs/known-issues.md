@@ -5,6 +5,22 @@
 This document records reproduced issues and their bounded workarounds, including
 resolved issues. Do not weaken deployment safety checks to work around them.
 
+## KI-2026-08-15: advanced trace entry points were easy to mistake for stable analyzers (open)
+
+- Scope: public mode types and the `cap_perfmon` Python Broker can construct raw `sched`, `lock`,
+  and `off_cpu` perf evidence, while old documentation grouped all five modes together.
+- Actual boundary: generated policy enables only `record` and `stat`; `paranoid3_helper` rejects
+  the other three. There is no typed scheduler-delay, lock wait/hold and owner/waiter, or paired
+  off-CPU interval artifact. The generic `perf.data` analyzer is on-CPU analysis and cannot fill
+  that gap.
+- Risk: enabling a raw mode may expose metadata about non-target tasks, produce kernel/perf-version
+  dependent evidence, or tempt an Agent to infer precise waiting time that was never reconstructed.
+- Current handling: documentation and Skill selection now classify these entry points as disabled
+  experiments. Ordinary “deep analysis/optimization” stays on the supported `stat → record` path.
+- Planned resolution: implement and validate offline deterministic analyzers first, then consider
+  at most one default-off `cap_perfmon` experiment after privacy and real-host gates. Do not expand
+  the current privileged Helper; see the [capability roadmap](collector-capability-roadmap.md).
+
 ## KI-2026-08-15: raw perf evidence lacked end-to-end Agent projection replay (resolved)
 
 - Risk: a correct raw-file SHA-256 alone does not prove that later typed metrics, hotspots, paths,

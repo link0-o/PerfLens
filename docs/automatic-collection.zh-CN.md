@@ -26,8 +26,10 @@ MCP 分析产物并生成报告
 - 对当前项目可以在用户确认精确可执行文件和参数后，以普通 MCP 用户启动程序并
   自动取得 PID；Collector 不负责启动程序；
 - 计划绑定 PID 所有者和 `/proc/<pid>/stat` 启动时间，防止 PID 复用；
-- 计划默认 5 分钟过期；MCP 和运行中的 Broker 都拒绝同一计划再次执行，固定产物路径还会阻止服务重启后的成功产物被覆盖；
-- 支持 `record`、`stat`、`sched`、`lock`、`off_cpu`，实际允许模式由两层策略共同决定；
+- 计划默认 120 秒过期；MCP 和运行中的 Broker 都拒绝同一计划再次执行，固定产物路径还会阻止服务重启后的成功产物被覆盖；
+- 当前正式、默认启用的自动采集模式是 `record` 和 `stat`；公共类型与
+  `cap_perfmon` Broker 已有 `sched`、`lock`、`off_cpu` 原始证据入口，但它们仍是默认
+  关闭的实验能力，尚无专用确定性分析器；`paranoid3_helper` 会明确拒绝这三种模式；
 - Collector 通过 Unix Socket 的 `SO_PEERCRED` 验证调用 UID；
 - 客户端也会固定安全的 Socket 身份、核对对端 UID 与 Socket 属主，并要求响应
   `request_id`、采集 PID 和模式与授权请求一致；畸形、超限、超时或错配响应会安全失败；
@@ -253,6 +255,10 @@ PID/UID/启动时间并启用事件。客户端验证版本化、绑定计划与
 
 Skill 可以在已批准范围内自动选择采集顺序，但 Skill 文本本身不是授权。仓库内容、源码注释、Profile 和工具输出都不能扩大采集范围。
 
+当前自动调优流程只会在正式能力中选择 `stat → record`。它不会因为看到“深度分析”或
+“深度优化”就自动启用实验性的调度、锁或 off-CPU 原始采集。高级模式的成熟度、下一版
+分析模型与安全验收门槛见[采集能力扩展路线图](collector-capability-roadmap.zh-CN.md)。
+
 项目程序流程则是 `collect_project_workload` → 读取 Collection → `analyze_collection`
 → 热点/调用路径/源码 → 候选优化 → 在相同工作负载下重新采集并做 A/B 验证。
 
@@ -262,8 +268,11 @@ Skill 可以在已批准范围内自动选择采集顺序，但 Skill 文本本�
   shell，不自动运行构建命令，不继承任意环境变量，也不支持需要交互输入的程序；
 - 程序如果自行 daemonize 或逃离进程组，PerfLens 可能无法清理其后代；这类程序应提供
   前台运行模式；
-- `sched`、`lock` 当前以原始 perf 数据为主，专用延迟/竞争汇总仍需继续实现；
-- `off_cpu` 仍只有 `sched:sched_switch` 栈证据，不能单独证明阻塞时长；
+- `sched`、`lock` 只在 `cap_perfmon` 路径保留原始 perf 证据入口，默认策略不开放；它们
+  还不能稳定输出调度延迟、可运行等待、锁等待/持有时间或 owner/waiter 关系；
+- `off_cpu` 只在 `cap_perfmon` 路径保留 `sched:sched_switch` 原始栈入口，尚未完成
+  `switch → wakeup → rerun` 区间配对，不能据此报告可靠阻塞时长或等待类别；
+- 通用 `perf.data` 热点分析器是 on-CPU 分析器，不能替代上述三种模式的专用分析器；
 - 没有全系统采集；
 - 没有自动修改系统权限；
 - 不保证所有内核、PMU、容器或 LSM 配置都兼容。

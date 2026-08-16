@@ -90,7 +90,13 @@ Read [active-collection-safety.md](references/active-collection-safety.md) befor
 When the user identifies a live PID and the MCP server has an administrator-approved automatic collection policy:
 
 1. Call `inspect_collection_capabilities`; preserve blocked/conditional modes as evidence.
-2. Start with the least intrusive discriminating mode: `stat`, then `record`; use `sched`, `lock`, or `off_cpu` only when the question requires that evidence.
+2. Start with the least intrusive supported mode: `stat`, then `record`. In the current release,
+   `sched`, `lock`, and `off_cpu` are disabled raw experiments in the `cap_perfmon` Broker, lack
+   mode-specific deterministic analyzers, and are rejected by `paranoid3_helper`. Do not select
+   them automatically for ordinary analysis or optimization, including requests phrased as “deep.”
+   Report the missing evidence boundary instead. A future mode-specific workflow may use one only
+   when the administrator explicitly enabled that exact mode, the user authorized that exact
+   experiment, and its dedicated analyzer is available.
 3. Call `plan_automatic_collection` with the exact PID, short duration, bounded frequency and output size. Do not execute a denied plan or alter the target to make it pass.
 4. Call `execute_collection_plan` only if the MCP host's active-tool approval and server policy permit it. The plan is PID-incarnation-bound, short-lived, and single-use.
 5. For `stat`, interpret the typed metrics already stored in the collection artifact. For perf-data modes, call `analyze_collection`, then continue the default evidence workflow.

@@ -24,7 +24,13 @@ archive. A release contains:
 
 ## Validate locally
 
+The commands below use the planned next version as an example. Set
+`perflens_release_version` to the exact version already written in both source
+files before running them.
+
 ```bash
+perflens_release_version=0.3.0
+perflens_release_tag="v${perflens_release_version}"
 uv sync --all-groups --frozen
 uv run ruff check .
 uv run pyright
@@ -44,19 +50,19 @@ uv run python scripts/build_deb.py \
 uv run python tests/deb_package_smoke.py --directory dist
 
 uv run --isolated --no-project \
-  --with dist/perflens-0.2.0-py3-none-any.whl \
+  --with "dist/perflens-${perflens_release_version}-py3-none-any.whl" \
   tests/package_smoke.py
 uv run --isolated --no-project \
-  --with dist/perflens-0.2.0.tar.gz \
+  --with "dist/perflens-${perflens_release_version}.tar.gz" \
   tests/package_smoke.py
 
 uv export --locked --no-dev --no-emit-project \
   --preview-features sbom-export \
   --format cyclonedx1.5 \
   --output-file dist/sbom.cdx.json
-uv run python scripts/prepare_release.py --tag v0.2.0
+uv run python scripts/prepare_release.py --tag "$perflens_release_tag"
 uv run python scripts/render_release_notes.py \
-  --tag v0.2.0 \
+  --tag "$perflens_release_tag" \
   --output /tmp/perflens-release-notes.md
 sha256sum --check dist/SHA256SUMS
 ```
@@ -76,8 +82,9 @@ Create and push an annotated version tag only after the release commit is on
 `main`:
 
 ```bash
-git tag -a v0.2.0 -m "PerfLens v0.2.0"
-git push origin v0.2.0
+perflens_release_tag=v0.3.0
+git tag -a "$perflens_release_tag" -m "PerfLens ${perflens_release_tag}"
+git push origin "$perflens_release_tag"
 ```
 
 `.github/workflows/release.yml` checks that the tag matches the package
@@ -110,7 +117,8 @@ publisher runs only after attestation succeeds. After publication, spot-check
 at least one asset:
 
 ```bash
-gh attestation verify ./dist/perflens-0.2.0-py3-none-any.whl \
+perflens_release_version=0.3.0
+gh attestation verify "./dist/perflens-${perflens_release_version}-py3-none-any.whl" \
   --repo link0-o/PerfLens \
   --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -123,9 +131,10 @@ before enabling automated publication. Publish only the Python distributions,
 not the Skill archive or SBOM:
 
 ```bash
+perflens_release_version=0.3.0
 uv publish \
-  dist/perflens-0.2.0-py3-none-any.whl \
-  dist/perflens-0.2.0.tar.gz
+  "dist/perflens-${perflens_release_version}-py3-none-any.whl" \
+  "dist/perflens-${perflens_release_version}.tar.gz"
 ```
 
 PyPI versions are immutable. If a release is wrong, fix it in a new version
