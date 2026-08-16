@@ -14,10 +14,16 @@ from mcp_types import ToolAnnotations
 
 from perflens import __version__
 from perflens.application.analyze import analyze_folded, analyze_perf_data, analyze_perf_script
+from perflens.application.analyze_trace import build_trace_analysis
 from perflens.application.evidence import build_collection_evidence_provenance
 from perflens.application.symbols import get_source_context as resolve_source_context
 from perflens.application.symbols import resolve_source as resolve_module_source
+from perflens.application.trace_evidence import canonical_trace_json_sha256
 from perflens.application.verify_analysis import verify_analysis_artifact
+from perflens.application.verify_trace import (
+    require_usable_trace_analysis,
+    verify_trace_analysis_artifact,
+)
 from perflens.benchmarks.adapters import load_benchmark
 from perflens.classification.engine import build_diagnosis_bundle as create_diagnosis
 from perflens.collection.capabilities import inspect_collection_capabilities
@@ -52,6 +58,12 @@ from perflens.contracts.artifacts import (
     HotspotPage,
     SourceContextArtifact,
     SourceResolutionArtifact,
+)
+from perflens.contracts.trace import (
+    LockAnalysisArtifact,
+    OffCpuAnalysisArtifact,
+    SchedulerAnalysisArtifact,
+    TraceAnalysisVerificationArtifact,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.storage import ArtifactStore, PathPolicy
@@ -326,7 +338,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
 
     @server.tool(
         name="analyze_collection",
-        description="Analyze a stored record/sched/lock/off-CPU collection artifact.",
+        description="Analyze a stored CPU record collection artifact.",
         annotations=WRITES_ARTIFACTS,
         meta={"perflens/permission": "PROCESS_EXECUTION"},
         structured_output=True,
@@ -334,6 +346,20 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     async def analyze_collection(collection_id: str) -> ArtifactReference:
         _require_process_execution(config)
         collection = store.load_collection(collection_id)
+        if collection.mode in {"sched", "lock", "off_cpu"}:
+            raise PerfLensError(
+                ErrorCode.UNSUPPORTED_FORMAT,
+                "trace_evidence",
+                (
+                    "Raw trace collections cannot use the on-CPU profile analyzer; "
+                    "a verified target-scoped TraceEvidence artifact is required"
+                ),
+                recoverable=True,
+                suggested_actions=(
+                    "Use the dedicated Trace adapter and analyze_trace_evidence workflow.",
+                    "Do not expose the private raw trace spool to the MCP process.",
+                ),
+            )
         if collection.output_format != "perf_data":
             raise PerfLensError(
                 ErrorCode.UNSUPPORTED_FORMAT,
@@ -363,6 +389,58 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             },
             evidence_quality=analysis.evidence_quality,
         )
+
+    @server.tool(
+        name="analyze_trace_evidence",
+        description=(
+            "Deterministically analyze a stored, normalized sched/off-CPU/lock TraceEvidence "
+            "artifact and verify it before Agent use."
+        ),
+        annotations=WRITES_ARTIFACTS,
+        meta={"perflens/permission": "WRITES_ARTIFACTS"},
+        structured_output=True,
+    )
+    async def analyze_trace_evidence(trace_evidence_id: str) -> ArtifactReference:
+        evidence = store.load_trace_evidence(trace_evidence_id)
+        analysis = build_trace_analysis(evidence)
+        verification = verify_trace_analysis_artifact(analysis, evidence)
+        require_usable_trace_analysis(verification)
+        analysis_id, artifact_type = _trace_analysis_identity(analysis)
+        store.save(analysis, analysis_id, artifact_type)
+        summary: dict[str, str | int | float | bool | None] = {
+            "mode": analysis.mode,
+            "status": analysis.status,
+            "quality_status": analysis.quality.quality_status,
+            "trace_evidence_id": analysis.trace_evidence_id,
+            "artifact_content_sha256": analysis.content_sha256,
+            "verification_status": verification.verification_status,
+            "observed_event_count": analysis.event_accounting.observed_event_count,
+            "unpaired_event_count": analysis.event_accounting.unpaired.total_count,
+            "limitation_count": len(analysis.quality.limitations),
+        }
+        summary["summary_sha256"] = canonical_trace_json_sha256(summary)
+        return ArtifactReference(
+            artifact_id=analysis_id,
+            artifact_type=artifact_type,
+            uri=store.uri(analysis_id, artifact_type),
+            summary=summary,
+        )
+
+    @server.tool(
+        name="verify_trace_analysis",
+        description=(
+            "Replay and verify a stored sched/off-CPU/lock analysis before Agent "
+            "interpretation."
+        ),
+        annotations=READ_ONLY,
+        meta={"perflens/permission": "READ_ONLY"},
+        structured_output=True,
+    )
+    async def verify_trace_analysis(
+        analysis_id: str,
+    ) -> TraceAnalysisVerificationArtifact:
+        analysis, evidence, _ = store.load_trace_analysis(analysis_id)
+        return verify_trace_analysis_artifact(analysis, evidence)
 
     @server.tool(
         name="analyze_profile",
@@ -604,6 +682,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "diagnosis",
             "profile-comparison",
             "project-run",
+            "trace-evidence",
+            "scheduler-analysis",
+            "off-cpu-analysis",
+            "lock-analysis",
         ],
         offset: int = 0,
         limit: int = 65_536,
@@ -820,6 +902,16 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         )
 
     return server
+
+
+def _trace_analysis_identity(
+    analysis: SchedulerAnalysisArtifact | OffCpuAnalysisArtifact | LockAnalysisArtifact,
+) -> tuple[str, str]:
+    if isinstance(analysis, SchedulerAnalysisArtifact):
+        return analysis.scheduler_analysis_id, "scheduler-analysis"
+    if isinstance(analysis, OffCpuAnalysisArtifact):
+        return analysis.off_cpu_analysis_id, "off-cpu-analysis"
+    return analysis.lock_analysis_id, "lock-analysis"
 
 
 def _detect_source_type(path: Path) -> Literal["folded", "perf_script", "perf_data"]:

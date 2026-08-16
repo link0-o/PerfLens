@@ -8,9 +8,11 @@ from pathlib import Path
 from typing import Annotated, Literal, NoReturn
 
 import typer
+from pydantic import TypeAdapter, ValidationError
 
 from perflens import __version__
 from perflens.application.analyze import analyze_folded, analyze_perf_data, analyze_perf_script
+from perflens.application.analyze_trace import build_trace_analysis
 from perflens.application.compare import (
     compare_analysis_files,
     compare_benchmark_files,
@@ -18,7 +20,12 @@ from perflens.application.compare import (
 )
 from perflens.application.diagnose import classify_analysis, load_analysis, report_analysis
 from perflens.application.symbols import get_source_context, inspect_elf, resolve_source
+from perflens.application.trace_evidence import validate_trace_evidence_invariants
 from perflens.application.verify_analysis import verify_analysis_artifact
+from perflens.application.verify_trace import (
+    require_usable_trace_analysis,
+    verify_trace_analysis_artifact,
+)
 from perflens.artifacts.filesystem import (
     write_json_atomic,
     write_json_new_atomic,
@@ -48,6 +55,12 @@ from perflens.contracts.artifacts import (
     ProjectDetachmentArtifact,
     RuntimeStatusArtifact,
 )
+from perflens.contracts.trace import (
+    LockAnalysisArtifact,
+    OffCpuAnalysisArtifact,
+    SchedulerAnalysisArtifact,
+    TraceEvidenceArtifact,
+)
 from perflens.distribution.acceptance import accept_collector
 from perflens.distribution.claude import render_claude_config
 from perflens.distribution.codex import render_codex_config
@@ -66,7 +79,18 @@ from perflens.error_presentation import (
     render_error_chinese,
 )
 from perflens.reporting.diff import render_benchmark_comparison, render_profile_comparison
-from perflens.security.paths import validate_new_output_file, validate_output_file
+from perflens.security.paths import (
+    validate_input_file,
+    validate_new_output_file,
+    validate_output_file,
+)
+
+type TraceAnalysisArtifact = (
+    SchedulerAnalysisArtifact | OffCpuAnalysisArtifact | LockAnalysisArtifact
+)
+_TRACE_ANALYSIS_ADAPTER: TypeAdapter[TraceAnalysisArtifact] = TypeAdapter(
+    SchedulerAnalysisArtifact | OffCpuAnalysisArtifact | LockAnalysisArtifact
+)
 
 app = typer.Typer(
     name="perflens",
@@ -1199,6 +1223,103 @@ def verify_analysis_command(
     typer.echo(str(safe_output))
 
 
+@app.command("analyze-trace-evidence")
+def analyze_trace_evidence_command(
+    input_path: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            exists=False,
+            dir_okay=False,
+            help="已规范化并完成哈希绑定的 TraceEvidence JSON。",
+        ),
+    ],
+    output_path: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="确定性 Trace Analysis JSON。"),
+    ],
+    max_input_bytes: Annotated[
+        int,
+        typer.Option(min=1, help="TraceEvidence JSON 允许的最大字节数。"),
+    ] = 128 << 20,
+) -> None:
+    """分析已脱敏的 sched、off-CPU 或 lock TraceEvidence。"""
+    try:
+        payload, safe_input = _read_bounded_json(
+            input_path,
+            max_input_bytes=max_input_bytes,
+            artifact_label="TraceEvidence",
+        )
+        try:
+            evidence = TraceEvidenceArtifact.model_validate_json(payload)
+        except ValidationError as exc:
+            raise _invalid_trace_json("TraceEvidence", exc) from exc
+        validate_trace_evidence_invariants(evidence)
+        analysis = build_trace_analysis(evidence)
+        verification = verify_trace_analysis_artifact(analysis, evidence)
+        require_usable_trace_analysis(verification)
+        safe_output = validate_output_file(output_path, input_path=safe_input)
+        write_json_atomic(
+            analysis,
+            safe_output,
+            max_output_bytes=evidence.limits.max_output_bytes,
+        )
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(str(safe_output))
+
+
+@app.command("verify-trace-analysis")
+def verify_trace_analysis_command(
+    analysis_path: Annotated[
+        Path,
+        typer.Option("--analysis", exists=False, dir_okay=False, help="Trace Analysis JSON。"),
+    ],
+    evidence_path: Annotated[
+        Path,
+        typer.Option("--evidence", exists=False, dir_okay=False, help="源 TraceEvidence JSON。"),
+    ],
+    output_path: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="独立验证结果 JSON。"),
+    ],
+    max_input_bytes: Annotated[
+        int,
+        typer.Option(min=1, help="单个输入 JSON 允许的最大字节数。"),
+    ] = 128 << 20,
+) -> None:
+    """重放并验证 Trace Analysis. 公开 CLI 不读取私有原始 spool。"""
+    try:
+        evidence_payload, safe_evidence = _read_bounded_json(
+            evidence_path,
+            max_input_bytes=max_input_bytes,
+            artifact_label="TraceEvidence",
+        )
+        analysis_payload, _ = _read_bounded_json(
+            analysis_path,
+            max_input_bytes=max_input_bytes,
+            artifact_label="Trace Analysis",
+        )
+        try:
+            evidence = TraceEvidenceArtifact.model_validate_json(evidence_payload)
+            analysis = _TRACE_ANALYSIS_ADAPTER.validate_json(analysis_payload)
+        except ValidationError as exc:
+            raise _invalid_trace_json("Trace Analysis or TraceEvidence", exc) from exc
+        validate_trace_evidence_invariants(evidence)
+        verification = verify_trace_analysis_artifact(analysis, evidence)
+        safe_output = validate_output_file(output_path, input_path=safe_evidence)
+        safe_output = validate_output_file(safe_output, input_path=analysis_path)
+        write_json_atomic(
+            verification,
+            safe_output,
+            max_output_bytes=evidence.limits.max_output_bytes,
+        )
+        require_usable_trace_analysis(verification)
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(str(safe_output))
+
+
 @app.command("inspect-elf")
 def inspect_elf_command(
     input_path: Annotated[
@@ -2109,6 +2230,46 @@ def _availability_chinese(status: str) -> str:
         "unavailable": "不可用",
         "unknown": "未验证",
     }.get(status, status)
+
+
+def _read_bounded_json(
+    path: Path,
+    *,
+    max_input_bytes: int,
+    artifact_label: str,
+) -> tuple[bytes, Path]:
+    safe_path = validate_input_file(path)
+    try:
+        size = safe_path.stat().st_size
+        with safe_path.open("rb") as handle:
+            payload = handle.read(max_input_bytes + 1)
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "artifact",
+            f"{artifact_label} cannot be read",
+            details={"path": str(safe_path)},
+        ) from exc
+    if size > max_input_bytes or len(payload) > max_input_bytes:
+        raise PerfLensError(
+            ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+            "artifact",
+            f"{artifact_label} exceeds max_input_bytes",
+            details={
+                "actual_bytes": max(size, len(payload)),
+                "max_input_bytes": max_input_bytes,
+            },
+        )
+    return payload, safe_path
+
+
+def _invalid_trace_json(label: str, error: ValidationError) -> PerfLensError:
+    return PerfLensError(
+        ErrorCode.INVALID_INPUT,
+        "artifact",
+        f"Input is not a valid PerfLens {label} artifact",
+        details={"validation_errors": error.error_count()},
+    )
 
 
 def _fail(error: PerfLensError) -> NoReturn:

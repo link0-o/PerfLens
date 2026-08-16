@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 import pytest
+from tests.support.trace import make_scheduler_trace_evidence
 from typer.testing import CliRunner
 
 from perflens import __version__
@@ -493,6 +494,71 @@ def test_cli_verifies_analysis_and_rejects_tampered_agent_fields(tmp_path: Path)
     assert rejected.exit_code == 3
     assert "PROFILE_PARSE_FAILED" in rejected.stderr
     assert not rejected_path.exists()
+
+
+def test_cli_analyzes_and_replays_normalized_trace_evidence(tmp_path: Path) -> None:
+    evidence = make_scheduler_trace_evidence()
+    evidence_path = tmp_path / "trace-evidence.json"
+    analysis_path = tmp_path / "scheduler-analysis.json"
+    verification_path = tmp_path / "trace-verification.json"
+    write_json_atomic(evidence, evidence_path, max_output_bytes=1 << 20)
+
+    analyzed = runner.invoke(
+        app,
+        [
+            "analyze-trace-evidence",
+            "--input",
+            str(evidence_path),
+            "--output",
+            str(analysis_path),
+        ],
+    )
+    assert analyzed.exit_code == 0, analyzed.output
+    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    assert analysis["mode"] == "sched"
+    assert analysis["trace_evidence_id"] == evidence.trace_evidence_id
+    assert "output_path" not in analysis
+
+    verified = runner.invoke(
+        app,
+        [
+            "verify-trace-analysis",
+            "--analysis",
+            str(analysis_path),
+            "--evidence",
+            str(evidence_path),
+            "--output",
+            str(verification_path),
+        ],
+    )
+    assert verified.exit_code == 0, verified.output
+    verification = json.loads(verification_path.read_text(encoding="utf-8"))
+    assert verification["verification_status"] == "partial"
+    assert {
+        check["name"]
+        for check in verification["checks"]
+        if check["status"] == "skipped"
+    } == {"raw_evidence_identity"}
+
+    analysis["analysis_fingerprint"] = "f" * 64
+    analysis_path.write_text(json.dumps(analysis), encoding="utf-8")
+    failed_path = tmp_path / "failed-trace-verification.json"
+    rejected = runner.invoke(
+        app,
+        [
+            "verify-trace-analysis",
+            "--analysis",
+            str(analysis_path),
+            "--evidence",
+            str(evidence_path),
+            "--output",
+            str(failed_path),
+        ],
+    )
+    assert rejected.exit_code == 3
+    assert failed_path.exists()
+    failed = json.loads(failed_path.read_text(encoding="utf-8"))
+    assert failed["verification_status"] == "failed"
 
 
 def test_cli_status_is_chinese_first_and_can_write_json(tmp_path: Path) -> None:

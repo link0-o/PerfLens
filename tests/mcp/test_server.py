@@ -10,9 +10,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from mcp.client import Client
+from tests.support.trace import make_scheduler_trace_evidence
 
 from perflens.collection.collector import ACTIVE_COLLECTION_AUTHORIZATION
 from perflens.mcp.server import ServerConfig, create_server
+from perflens.mcp.storage import ArtifactStore, PathPolicy
 
 
 def _structured(result: Any) -> dict[str, Any]:
@@ -50,6 +52,8 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "execute_collection_plan",
                 "collect_project_workload",
                 "analyze_collection",
+                "analyze_trace_evidence",
+                "verify_trace_analysis",
             }
             for tool in tools.values():
                 assert tool.input_schema["type"] == "object"
@@ -85,6 +89,70 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             ]
             assert project_authorization["const"] == "I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION"
             assert tools["analyze_collection"].meta == {"perflens/permission": "PROCESS_EXECUTION"}
+            assert tools["analyze_trace_evidence"].meta == {
+                "perflens/permission": "WRITES_ARTIFACTS"
+            }
+            assert tools["verify_trace_analysis"].meta == {
+                "perflens/permission": "READ_ONLY"
+            }
+
+    asyncio.run(exercise())
+
+
+def test_trace_evidence_is_analyzed_verified_and_paged_without_a_raw_path(
+    tmp_path: Path,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    store = ArtifactStore(
+        artifact_root,
+        PathPolicy((tmp_path,)),
+        allow_writes=True,
+    )
+    evidence = make_scheduler_trace_evidence()
+    store.save(evidence, evidence.trace_evidence_id, "trace-evidence")
+    server = create_server(
+        ServerConfig((tmp_path,), artifact_root, allow_writes=True)
+    )
+
+    async def exercise() -> None:
+        async with Client(server, raise_exceptions=True) as client:
+            analyzed = _structured(
+                await client.call_tool(
+                    "analyze_trace_evidence",
+                    {"trace_evidence_id": evidence.trace_evidence_id},
+                )
+            )
+            assert analyzed["artifact_type"] == "scheduler-analysis"
+            summary = cast(dict[str, Any], analyzed["summary"])
+            assert summary["artifact_content_sha256"]
+            assert summary["summary_sha256"]
+            assert summary["verification_status"] == "partial"
+            analysis_id = cast(str, analyzed["artifact_id"])
+
+            verification = _structured(
+                await client.call_tool(
+                    "verify_trace_analysis",
+                    {"analysis_id": analysis_id},
+                )
+            )
+            assert verification["verification_status"] == "partial"
+            assert all(
+                check["status"] != "failed"
+                for check in cast(list[dict[str, Any]], verification["checks"])
+            )
+
+            page = _structured(
+                await client.call_tool(
+                    "read_artifact_page",
+                    {
+                        "artifact_id": analysis_id,
+                        "artifact_type": "scheduler-analysis",
+                    },
+                )
+            )
+            assert '"scheduler_analysis_id"' in cast(str, page["text"])
+            assert "private scheduler trace" not in cast(str, page["text"])
+            assert "/var/lib/perflens-trace" not in cast(str, page["text"])
 
     asyncio.run(exercise())
 
@@ -401,7 +469,7 @@ def test_analyze_collection_binds_collection_hash_and_quality_context(tmp_path: 
         "    print('perf version collection-test')\n"
         "elif args and args[0] == 'script':\n"
         "    print('app 9/9 [000] 1.0: 11 cycles: 400010 leaf (/app) /src/app.c:7')\n"
-        "elif args and args[0] == 'record':\n"
+        "elif 'record' in args:\n"
         "    pathlib.Path(args[args.index('-o') + 1]).write_bytes(b'PERFILE2')\n"
         "else:\n"
         "    raise SystemExit(2)\n",
@@ -444,6 +512,27 @@ def test_analyze_collection_binds_collection_hash_and_quality_context(tmp_path: 
             quality = cast(dict[str, Any], analyzed["evidence_quality"])
             assert quality["source_collection_id"] == collection_id
             assert quality["input_sha256"] == hashlib.sha256(b"PERFILE2").hexdigest()
+
+            trace_collected_result = await client.call_tool(
+                "collect_profile",
+                {
+                    "output_path": str(tmp_path / "trace.data"),
+                    "authorization": ACTIVE_COLLECTION_AUTHORIZATION,
+                    "executable": str(target),
+                    "mode": "sched",
+                },
+            )
+            assert not trace_collected_result.is_error
+            trace_collection_id = cast(
+                str,
+                _structured(trace_collected_result)["artifact_id"],
+            )
+            wrong_analyzer = await client.call_tool(
+                "analyze_collection",
+                {"collection_id": trace_collection_id},
+            )
+            assert wrong_analyzer.is_error
+            assert "TraceEvidence" in str(wrong_analyzer.content)
 
             profile.write_bytes(b"PERFILE3")
             rejected = await client.call_tool(

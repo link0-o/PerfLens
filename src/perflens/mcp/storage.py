@@ -14,7 +14,12 @@ from perflens.application.evidence import (
     compute_diagnosis_content_sha256,
     verify_collection_artifact,
 )
+from perflens.application.trace_evidence import validate_trace_evidence_invariants
 from perflens.application.verify_analysis import verify_analysis_artifact
+from perflens.application.verify_trace import (
+    require_usable_trace_analysis,
+    verify_trace_analysis_artifact,
+)
 from perflens.artifacts.filesystem import serialize_json, write_json_new_atomic
 from perflens.contracts.artifacts import (
     AnalysisArtifact,
@@ -25,11 +30,30 @@ from perflens.contracts.artifacts import (
     ProfileComparison,
     ProjectRunArtifact,
 )
+from perflens.contracts.trace import (
+    LockAnalysisArtifact,
+    OffCpuAnalysisArtifact,
+    SchedulerAnalysisArtifact,
+    TraceAnalysisVerificationArtifact,
+    TraceEvidenceArtifact,
+)
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.security.paths import validate_new_output_file
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 ModelT = TypeVar("ModelT", bound=BaseModel)
+type TraceAnalysisArtifact = (
+    SchedulerAnalysisArtifact | OffCpuAnalysisArtifact | LockAnalysisArtifact
+)
+
+_TRACE_ANALYSIS_TYPES: dict[
+    str,
+    tuple[type[TraceAnalysisArtifact], str],
+] = {
+    "scheduler-analysis": (SchedulerAnalysisArtifact, "scheduler_analysis_id"),
+    "off-cpu-analysis": (OffCpuAnalysisArtifact, "off_cpu_analysis_id"),
+    "lock-analysis": (LockAnalysisArtifact, "lock_analysis_id"),
+}
 
 
 class PathPolicy:
@@ -177,6 +201,36 @@ class ArtifactStore:
         verify_collection_artifact(collection, max_output_bytes=self.max_artifact_bytes)
         return collection
 
+    def load_trace_evidence(self, trace_evidence_id: str) -> TraceEvidenceArtifact:
+        evidence = self._load(trace_evidence_id, "trace-evidence", TraceEvidenceArtifact)
+        self._require_embedded_id(
+            evidence.trace_evidence_id,
+            trace_evidence_id,
+            "trace-evidence",
+        )
+        validate_trace_evidence_invariants(evidence)
+        return evidence
+
+    def load_trace_analysis(
+        self,
+        analysis_id: str,
+    ) -> tuple[
+        TraceAnalysisArtifact,
+        TraceEvidenceArtifact,
+        TraceAnalysisVerificationArtifact,
+    ]:
+        artifact_type, model, id_attribute = self._trace_analysis_type(analysis_id)
+        analysis = self._load(analysis_id, artifact_type, model)
+        self._require_embedded_id(
+            getattr(analysis, id_attribute),
+            analysis_id,
+            artifact_type,
+        )
+        evidence = self.load_trace_evidence(analysis.trace_evidence_id)
+        verification = verify_trace_analysis_artifact(analysis, evidence)
+        require_usable_trace_analysis(verification)
+        return analysis, evidence, verification
+
     def read_page(
         self,
         artifact_id: str,
@@ -201,6 +255,10 @@ class ArtifactStore:
             "diagnosis",
             "profile-comparison",
             "project-run",
+            "trace-evidence",
+            "scheduler-analysis",
+            "off-cpu-analysis",
+            "lock-analysis",
         }:
             # Validate and page the exact same immutable byte snapshot. Performing
             # a typed load followed by a second open would leave a replacement
@@ -249,6 +307,27 @@ class ArtifactStore:
             self.policy.input_file(collection.output_path)
             verify_collection_artifact(collection, max_output_bytes=self.max_artifact_bytes)
             return
+        if artifact_type == "trace-evidence":
+            evidence = TraceEvidenceArtifact.model_validate_json(payload)
+            self._require_embedded_id(
+                evidence.trace_evidence_id,
+                artifact_id,
+                artifact_type,
+            )
+            validate_trace_evidence_invariants(evidence)
+            return
+        if artifact_type in _TRACE_ANALYSIS_TYPES:
+            model, id_attribute = _TRACE_ANALYSIS_TYPES[artifact_type]
+            analysis = model.model_validate_json(payload)
+            self._require_embedded_id(
+                getattr(analysis, id_attribute),
+                artifact_id,
+                artifact_type,
+            )
+            evidence = self.load_trace_evidence(analysis.trace_evidence_id)
+            verification = verify_trace_analysis_artifact(analysis, evidence)
+            require_usable_trace_analysis(verification)
+            return
         if artifact_type == "diagnosis":
             diagnosis = DiagnosisBundle.model_validate_json(payload)
             expected_analysis_id = artifact_id.removeprefix("diagnosis-")
@@ -276,6 +355,20 @@ class ArtifactStore:
         else:
             raise self._identity_error(artifact_id, artifact_type)
         self._require_embedded_id(embedded_id, artifact_id, artifact_type)
+
+    @staticmethod
+    def _trace_analysis_type(
+        analysis_id: str,
+    ) -> tuple[str, type[TraceAnalysisArtifact], str]:
+        for artifact_type, (model, id_attribute) in _TRACE_ANALYSIS_TYPES.items():
+            if analysis_id.startswith(f"{artifact_type}-"):
+                return artifact_type, model, id_attribute
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "artifact",
+            "Trace analysis identifier has an unsupported type prefix",
+            details={"analysis_id": analysis_id},
+        )
 
     @staticmethod
     def _verify_diagnosis(diagnosis: DiagnosisBundle, analysis: AnalysisArtifact) -> None:

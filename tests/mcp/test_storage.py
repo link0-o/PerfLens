@@ -6,9 +6,14 @@ from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
+from tests.support.trace import make_scheduler_trace_evidence
 
 from perflens.application.analyze import analyze_folded
+from perflens.application.analyze_trace import build_trace_analysis
+from perflens.application.verify_trace import compute_trace_analysis_content_sha256
+from perflens.artifacts.filesystem import serialize_json
 from perflens.classification.engine import build_diagnosis_bundle
+from perflens.contracts.trace import SchedulerAnalysisArtifact
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.storage import ArtifactStore, PathPolicy
 
@@ -172,3 +177,51 @@ def test_corrupt_diagnosis_is_not_silently_reported_as_missing(tmp_path: Path) -
 
     with pytest.raises(PerfLensError, match="does not match"):
         store.load_diagnosis(analysis.analysis_id)
+
+
+def test_trace_storage_replays_analysis_and_rejects_semantic_tampering(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "artifacts"
+    store = ArtifactStore(root, PathPolicy((tmp_path,)), allow_writes=True)
+    evidence = make_scheduler_trace_evidence()
+    analysis = build_trace_analysis(evidence)
+    assert isinstance(analysis, SchedulerAnalysisArtifact)
+    store.save(evidence, evidence.trace_evidence_id, "trace-evidence")
+    analysis_path = store.save(
+        analysis,
+        analysis.scheduler_analysis_id,
+        "scheduler-analysis",
+    )
+
+    loaded, loaded_evidence, verification = store.load_trace_analysis(
+        analysis.scheduler_analysis_id
+    )
+    assert loaded == analysis
+    assert loaded_evidence == evidence
+    assert verification.verification_status == "partial"
+    page, _, _ = store.read_page(
+        evidence.trace_evidence_id,
+        "trace-evidence",
+        offset=0,
+        limit=65_536,
+    )
+    assert '"trace_evidence_id"' in page
+    assert "private scheduler trace" not in page
+
+    forged = analysis.model_copy(update={"analysis_fingerprint": "f" * 64})
+    forged = forged.model_copy(
+        update={"content_sha256": compute_trace_analysis_content_sha256(forged)}
+    )
+    analysis_path.write_bytes(serialize_json(forged))
+    analysis_path.chmod(0o600)
+
+    with pytest.raises(PerfLensError, match="failed deterministic verification"):
+        store.load_trace_analysis(analysis.scheduler_analysis_id)
+    with pytest.raises(PerfLensError, match="failed deterministic verification"):
+        store.read_page(
+            analysis.scheduler_analysis_id,
+            "scheduler-analysis",
+            offset=0,
+            limit=65_536,
+        )
