@@ -176,6 +176,22 @@ target identity, event clock and units, loss/order/duplicate/unpaired counts, `q
 allowed and forbidden conclusions, content digest, conversion fingerprint, and an independent
 verifier.
 
+`v0.3.0` fixes these public artifact names. Renaming or changing field semantics requires a Schema
+migration rather than same-version MCP guessing:
+
+- **TraceEvidenceArtifact:** target-filtered, normalized, bounded trace events and source manifest.
+- **SchedulerAnalysisArtifact:** runtime intervals and runnable-delay analysis.
+- **OffCpuAnalysisArtifact:** blocked/sleeping, wakeup, and resumed-runtime intervals.
+- **LockAnalysisArtifact:** kernel locks and generic futex/user-wait candidates.
+- **TraceAnalysisVerificationArtifact:** independent input identity, event-count, interval
+  conservation, quality, and Agent-visible-content verification.
+
+TraceEvidenceArtifact references the immutable raw artifact by SHA-256, size, collection ID,
+target identity, and fixed converter manifest and carries the canonical NDJSON SHA-256. It neither
+embeds nor re-encodes `perf.data`. Conversion writes a new temporary output and publishes it
+atomically only after complete validation; bounded raw diagnostics are retained on parser failure,
+and the source profile is never overwritten.
+
 - **SchedulerAnalysisArtifact:** per-thread runtime, runnable delay, switches, migrations, mean,
   p50/p95/p99/max, sample count, and worst intervals. Missing wakeup/switch-in pairs never produce
   fabricated latency.
@@ -186,6 +202,11 @@ verifier.
   owner/waiter, and call paths actually supplied by evidence. Hold time requires reliable
   acquire/release pairing. Futex/off-CPU correlation is a user-lock wait candidate in `v0.3.0`, not
   a complete language-runtime lock view.
+
+TraceAnalysisVerificationArtifact reports `passed/failed/skipped` for raw identity, converter
+manifest, target scope, event counts, time intervals, aggregate conservation, loss/truncation
+consistency, and Agent-visible digest. Any safety or conservation failure prevents the MCP from
+publishing that analysis as usable evidence.
 
 ## 6. `v0.3.0` milestones
 
@@ -214,31 +235,63 @@ collection/import, normalized deterministic analysis, and explicit quality bound
 mean that arbitrary custom locks, lock-free algorithms, inlined paths, or invisible fast paths are
 observable.
 
-The common contract distinguishes exact events, thresholded events, sampled contention, and
-cumulative profiles. It carries runtime/backend, target identity, opaque lock ID, waiter and only
-evidence-supplied owner, timestamps/durations, stacks/source, sampling rate/threshold, loss,
-truncation, fast-path visibility, coverage scope, allowed/forbidden conclusions, content digest,
-converter manifest, and verifier. Sample counts are never presented as exact event counts, and
-hold time is unavailable without reliable acquire/release pairing.
+`v0.3.1` fixes these public artifacts:
+
+- **RuntimeAdapterCapabilityArtifact:** runtime/version, adapter/backend version, availability,
+  supported locks/events, required external tools, launch-instrumentation/attach/privilege needs,
+  fast-path visibility, and limitations.
+- **RuntimeLockEvidenceArtifact:** target identity, source manifest, normalized events,
+  sampling/threshold configuration, loss/truncation counters, and input hashes.
+- **RuntimeLockAnalysisArtifact:** evidence-qualified aggregation by lock, thread, call path, and
+  wait type.
+- **RuntimeLockAnalysisVerificationArtifact:** independent input, converter, event-count,
+  wait/hold conservation, aggregate, and Agent-visible-content verification.
+
+Normalized events use strict enums:
+
+```text
+event_kind = wait_begin | wait_end | acquire | release |
+             park | unpark | sampled_contention
+measurement_semantics = exact | thresholded | sampled | cumulative
+```
+
+Common fields include runtime/backend, PID/TID and process-start identity, `lock_kind`, an
+artifact-scoped opaque `lock_id`, waiter and only evidence-supplied owner, `timestamp_ns`, optional
+`duration_ns`, `stack_id`, symbol/source, sampling period or fraction, threshold, loss/truncation,
+fast-path visibility, coverage scope, allowed/forbidden conclusions, and converter manifest.
+
+Lock IDs are assigned deterministically by first canonical appearance within one artifact, expose
+no raw address, and cannot be correlated across artifacts. Sample counts are never exact event
+counts, cumulative profiles are not event streams, and hold time is unavailable without reliable
+acquire/release pairing. Strict readers reject unknown fields, oversized frames, invalid or
+mismatched PIDs, negative/reversed time, duplicate event IDs, non-finite weights, unknown enums,
+excessive lock/TID/stack cardinality, and non-conserving aggregates.
 
 ### 7.2 Native C/C++
 
 - Formally support dynamically linked glibc/pthread mutex, rwlock, and condition-variable paths.
 - Offer explicit launch-time instrumentation/interposition that runs as the target ordinary user.
 - Import existing USDT/uprobe evidence while recording library version, symbol, and ABI capability.
-- Mark static linkage, inlined/custom atomics, spin locks, and uncontended fast paths
-  `partial/unsupported` when they are not observable.
-- Any future live eBPF/uprobe privilege uses a separate policy and risk gate, not either existing
-  Helper.
+- Mark static linkage, inlined/custom atomics, spin locks, uncontended fast paths, missing symbols,
+  unknown ABIs, and incompatible wrappers `partial/unsupported` when they are not observable.
+- Live eBPF/uprobe remains disabled and belongs to neither existing Helper nor the Trace Helper. If
+  acceptance proves new privilege necessary, it receives a separate service, policy, socket,
+  removal flow, and administrator risk acknowledgement.
 
 ### 7.3 Java
 
 - Prefer a user-installed JDK Flight Recorder and support JDK 17, 21, and 25 LTS.
-- Use versioned JFR settings for monitor enter/wait, thread park, and available virtual-thread
-  events; preserve thresholds and missing-event semantics.
+- Use fixed, PerfLens-versioned JFR settings for `jdk.JavaMonitorEnter`, `jdk.JavaMonitorWait`, and
+  `jdk.ThreadPark`, plus virtual-thread events discovered from the actual runtime.
+- Preserve enablement and duration threshold per event. Default templates may omit events below a
+  threshold, so absence is not proof of no wait; lowering thresholds must disclose extra overhead.
 - Detect async-profiler as an optional enhanced backend; expose JVMTI only as a controlled import
   interface.
 - Do not bundle a JDK, async-profiler, or a general custom JVMTI agent in the core DEBs.
+
+Event names and threshold semantics follow the
+[Oracle JFR performance guide](https://docs.oracle.com/en/java/javase/17/troubleshoot/troubleshoot-performance-issues-using-jfr.html),
+while startup capability discovery still verifies the current JDK event metadata.
 
 ### 7.4 Python
 
@@ -248,25 +301,58 @@ hold time is unavailable without reliable acquire/release pairing.
 - Treat DTrace/SystemTap/USDT as optional import backends with build/version capability reporting.
 - Mark C-extension, custom atomic, and uninstrumented locks invisible or partial.
 
+Probe names and arguments are implementation details. The adapter records the interpreter build,
+version, and actual probe inventory and does not assume cross-version compatibility; see the
+[CPython DTrace/SystemTap instrumentation guide](https://docs.python.org/3.13/howto/instrumentation.html).
+
 ### 7.5 Go
 
 - Adapt the official mutex and block profiles from an existing local pprof endpoint or an
   application that explicitly configures `SetMutexProfileFraction/SetBlockProfileRate`.
 - Use the user's fixed `go tool pprof` as the adapter rather than directly parsing the binary
   profile format.
-- Preserve sampling and cumulative semantics; never invent exact owners or per-event wait/hold
-  intervals.
+- A mutex profile attributes approximate cumulative blocked time at the end-of-critical-section or
+  unlock stack and uses event-based sampling; it is not an exact contention log.
+- A block profile attributes cumulative time at the location that blocked and uses time-based
+  sampling; it does not provide a complete owner relationship.
 - Report channels, WaitGroups, Conds, and runtime-internal locks only to the extent represented by
-  the official profile.
+  the official profile, without inventing exact owners or per-event wait/hold intervals.
+
+The canonical semantics are the official [Go runtime](https://pkg.go.dev/runtime) and
+[Go runtime/pprof](https://pkg.go.dev/runtime/pprof) documentation. Artifacts retain the actual
+`SetMutexProfileFraction` and `SetBlockProfileRate` values and never merge those sampling models.
+
+### 7.6 External tools, authorization, and custom import
 
 JDK, Go, async-profiler, and SystemTap remain optional external dependencies. PerfLens detects
 versions and gives Chinese setup guidance but neither downloads nor bundles them into the two core
-DEBs. Runtime instrumentation or attachment (`LD_PRELOAD`, JVM/JFR attachment, pprof access, or
-probe deployment) always needs a separate explicit authorization and runs as the target ordinary
-user whenever possible. The planned project opt-in is `perflens init --runtime-locks`.
+DEBs. Every runtime adapter is disabled by default. JFR, pprof, and ordinary launch-time
+instrumentation must run as the target ordinary user, never root. `LD_PRELOAD`, JVM/JFR attachment,
+pprof access, or probe deployment always needs a separate explicit authorization. Privileged
+eBPF/uprobe is an independent, default-off administrator boundary and cannot widen the MCP, Skill,
+Python Broker, current stat/record Helper, or `v0.3.0` Trace Helper. The planned project opt-in is
+`perflens init --runtime-locks`.
 
-Custom locks may use a versioned NDJSON import contract. This remains an adapter boundary, not a
-new Agent or plugin framework.
+Custom locks may use a versioned NDJSON import contract. A strict header declares source/version,
+adapter version, target identity, timestamp clock/unit, measurement semantics, visible lock and
+fast paths, sampling/threshold settings, lost events, and whether owner/hold time is genuinely
+available before normalized events are accepted. Unknown fields, duplicate headers, oversized
+frames, invalid/mismatched PIDs, reversed time, undeclared semantics, non-conserving aggregates,
+and fabricated owner capability are rejected before artifact publication. This remains an adapter
+boundary, not a new Agent or plugin framework.
+
+### 7.7 `v0.3.1` implementation commit order
+
+Implementation is split into independent, reviewable, reversible commits:
+
+1. Public artifact Schemas, capability discovery, quality model, NDJSON contract, and verifier.
+2. Native pthread adapter, ABI capability detection, and ordinary-user instrumentation.
+3. Java JFR adapter, fixed settings, and optional async-profiler/JVMTI import interface.
+4. CPython adapter, GIL/internal/threading layers, and free-threaded capability discovery.
+5. Go mutex/block pprof adapter with both sampling models.
+6. CLI/MCP/Skill selection, unified reports, paging, and diagnosis bundles.
+7. Security denials, instrumentation overhead, compatibility matrix, and four real runtimes.
+8. Bilingual release docs, both-DEB upgrade/removal smoke tests, and the `v0.3.1` release gate.
 
 ## 8. Acceptance and release wording
 
@@ -276,9 +362,26 @@ hash and conservation verification, cross-UID/replay/path/command/spool-escape d
 overhead budgets, exact-versus-statistical acceptance, complete deployment lifecycle tests, Python
 and Rust quality gates, a real Debian systemd matrix, and real C/C++/Java/Python/Go workloads.
 
+The runtime-lock matrix covers uncontended, low-contention, high-contention, recursive, read/write,
+and condition-variable waits, plus target exit, PID reuse, missing symbols, lost events, and an
+unavailable adapter. Exact backends use exact event/interval expectations; thresholded, sampled,
+and cumulative backends use declared statistical tolerances, and “not sampled” never means “no
+contention.” Each backend measures target overhead when disabled, enabled but idle, and under high
+contention; exceeding budget produces a warning or fails closed.
+
+Where perf privilege is needed, dedicated `CAP_PERFMON` is preferred over broad `CAP_SYS_ADMIN`, as
+recommended by the [Linux perf security guide](https://www.kernel.org/doc/html/latest/admin-guide/perf-security.html).
+Any additional capability needs evidence from the corresponding isolated service's real denial
+and acceptance path.
+
 Until those gates pass, the shipped release continues to advertise only `stat/record` as stable.
 `v0.3.0` may advertise `full_diagnostics` only if every included mode is complete. `v0.3.1` must
 publish an exact runtime/backend/version/sampling/fast-path support matrix. Software fallback still
 forbids IPC/cache/branch claims, and PerfLens remains outside heap profiling, request-level I/O APM,
 GPU profiling, and distributed tracing. Release notes must be generated from the final
 implementation and test evidence, not copied from this roadmap.
+
+`v0.3.1` is stable only after all four adapters, the shared verifier, security denial paths, the
+real-runtime matrix, and installation, upgrade, rollback, and removal tests for both DEBs pass. If
+one adapter is missing, the release claim is narrowed or the version is delayed; it cannot retain
+the “four formal runtime families” wording.

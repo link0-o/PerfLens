@@ -223,6 +223,20 @@ Helper Socket 不得向普通用户开放。原始 trace 只进入私有 spool�
 事件时钟和单位、丢失/乱序/重复/未配对数量、`quality_status`、允许/禁止结论、内容摘要、
 转换指纹和独立 verifier。
 
+`v0.3.0` 固定以下公共产物名称；以后改名或改变字段语义必须走 Schema 迁移，不能让 MCP
+在同一 `schema_version` 下猜测不同结构：
+
+- `TraceEvidenceArtifact`：经过目标过滤、规范化和有界化的 trace 事件及来源 manifest；
+- `SchedulerAnalysisArtifact`：运行区间和 runnable 延迟分析；
+- `OffCpuAnalysisArtifact`：blocked/sleeping、wakeup 和重新运行区间分析；
+- `LockAnalysisArtifact`：内核锁及通用 futex/用户态等待候选；
+- `TraceAnalysisVerificationArtifact`：独立重算哈希、事件数量、区间守恒和质量结论。
+
+`TraceEvidenceArtifact` 不嵌入或重新编码 `perf.data`，只引用不可变原始产物的 SHA-256、
+大小、采集 ID、目标身份和固定转换 manifest，并保存规范化 NDJSON 的 SHA-256。转换器
+输出必须先写入新临时文件、完整验证后原子发布；任何解析失败都保留有界原始诊断，不能
+覆盖源 Profile。
+
 ### 5.1 SchedulerAnalysisArtifact
 
 至少输出每线程运行时间、runnable 等待、上下文切换、迁移、平均值、p50/p95/p99/最大值、
@@ -240,6 +254,10 @@ Helper Socket 不得向普通用户开放。原始 trace 只进入私有 spool�
 聚合底层证据真实提供的竞争次数、等待分布、稳定匿名锁 ID、owner/waiter 和调用路径。
 持锁时间只在 acquire/release 可可靠配对时输出；没有 owner 证据时不得猜测。`v0.3.0`
 把 futex/off-CPU 关联标为用户态锁等待候选，不把它伪装成特定语言锁的完整视图。
+
+`TraceAnalysisVerificationArtifact` 至少逐项返回 `passed/failed/skipped`：原始证据身份、
+转换 manifest、目标范围、事件计数、时间区间、分析聚合守恒、丢失/截断一致性和 Agent
+可见内容摘要。任一安全或守恒项目失败时，MCP 不得把分析交给 Agent 作为可用证据。
 
 ## 6. v0.3.0 实施里程碑
 
@@ -274,35 +292,59 @@ Skill 的默认证据选择为：
 的“完整覆盖”指四类正式运行时 Adapter 都有能力检测、采集、规范化分析和质量说明，
 而不是声称任意自定义锁、lock-free 算法或不可观察快路径都能被看见。
 
-通用运行时锁合同至少包含：
+`v0.3.1` 固定以下公共产物名称：
 
-- runtime、backend、PID/TID、目标身份和稳定匿名锁 ID；
-- `wait_begin/wait_end`、`acquire/release`、`park/unpark` 或 sampled contention；
-- 等待者，以及仅在证据真实提供时记录的 owner；
-- 时间戳、等待/持有时长、调用栈、符号和源码；
-- 采样率、事件阈值、丢失/截断、快路径可见性和覆盖范围；
-- `exact`、`thresholded`、`sampled`、`cumulative` 语义；
-- allowed/forbidden conclusions、内容摘要、转换 manifest 和 verifier。
+- `RuntimeAdapterCapabilityArtifact`：运行时、版本、Adapter/后端版本、可用状态、支持的
+  锁和事件、所需外部工具、是否需要启动插桩/附加/特权、快路径可见性和限制；
+- `RuntimeLockEvidenceArtifact`：目标身份、来源 manifest、规范化事件、采样/阈值配置、
+  丢失/截断计数和输入哈希；
+- `RuntimeLockAnalysisArtifact`：按锁、线程、调用路径和等待类型聚合的结果及证据质量；
+- `RuntimeLockAnalysisVerificationArtifact`：独立复核输入身份、转换 manifest、事件数量、
+  等待/持有守恒、聚合和 Agent 可见内容摘要。
 
-抽样次数不得伪装成精确竞争次数，累计 profile 不得伪装成事件序列；缺少 acquire/release
-配对时不得声称精确持锁时间。
+每条规范化事件使用严格枚举：
+
+```text
+event_kind = wait_begin | wait_end | acquire | release |
+             park | unpark | sampled_contention
+measurement_semantics = exact | thresholded | sampled | cumulative
+```
+
+公共字段至少包括 runtime、backend、PID/TID、目标进程启动身份、`lock_kind`、artifact 内
+稳定匿名 `lock_id`、waiter、仅在来源真实提供时出现的 owner、`timestamp_ns`、可选
+`duration_ns`、`stack_id`、符号/源码、采样率或周期、事件阈值、丢失/截断、快路径
+可见性、覆盖范围、allowed/forbidden conclusions 和转换 manifest。
+
+`lock_id` 按同一 Artifact 中第一次出现的规范顺序生成，不公开原始地址，也不允许跨
+Artifact 推断为同一把锁。抽样次数不得伪装成精确竞争次数，累计 profile 不得伪装成
+事件序列；缺少 acquire/release 配对时不得声称精确持锁时间。严格解析器必须拒绝未知
+字段、越界帧、非法/不匹配 PID、负数或逆序时间、重复事件 ID、非有限权重、未知枚举、
+超限锁/TID/调用栈基数和不守恒聚合。
 
 ### 7.2 C/C++ Native Adapter
 
 - 正式支持动态链接 glibc/pthread 的 mutex、rwlock 和 condition variable；
 - 对 PerfLens 启动的工作负载提供显式选择、以目标普通用户运行的插桩/拦截方案；
 - 支持导入已有 USDT/uprobe 证据，并记录库版本、符号和 ABI 能力；
-- 静态链接、内联、自定义原子锁、自旋锁和无竞争快路径必须报告 `partial/unsupported`；
-- 实时 eBPF/uprobe 若以后需要额外权限，使用独立策略和风险门，不并入现有 Helper。
+- 静态链接、内联、自定义原子锁、自旋锁、无竞争快路径、无符号/未知 ABI 和不兼容包装器
+  必须报告 `partial/unsupported`；
+- 实时 eBPF/uprobe 默认关闭，也不并入现有 Helper 或 Trace Helper；如果验收证明必须使用
+  新权限，则另建服务、策略、Socket、卸载流程和管理员风险确认。
 
 ### 7.3 Java Adapter
 
 - 首选用户安装的 JDK Flight Recorder，正式兼容 JDK 17、21、25 LTS；
-- 使用版本受控的 JFR 配置分析 monitor enter/wait、thread park，以及运行时可用时的虚拟
-  线程事件；
-- 保留 JFR 阈值和事件缺失信息，未记录事件不能解释成“没有等待”；
+- 使用随 PerfLens 版本管理的固定 JFR 配置，至少分析 `jdk.JavaMonitorEnter`、
+  `jdk.JavaMonitorWait`、`jdk.ThreadPark`，并通过能力发现选择运行时实际存在的虚拟线程
+  相关事件；
+- 保留每种事件的启用状态和时长阈值。JFR 默认模板可能只记录超过阈值的事件，因此未记录
+  事件不能解释成“没有等待”，降低阈值还必须同时披露额外开销；
 - async-profiler 是自动检测的可选增强后端，JVMTI 只提供受控导入接口；
 - PerfLens 不在核心 DEB 中捆绑 JDK、async-profiler 或自制通用 JVMTI Agent。
+
+事件名称和阈值语义以
+[Oracle JFR 性能诊断文档](https://docs.oracle.com/en/java/javase/17/troubleshoot/troubleshoot-performance-issues-using-jfr.html)
+为基线；Adapter 启动时仍必须从当前 JDK 的事件元数据确认，不能只按版本号猜测。
 
 ### 7.4 Python Adapter
 
@@ -312,31 +354,64 @@ Skill 的默认证据选择为：
 - DTrace/SystemTap/USDT 作为可选导入后端，并按 CPython 构建与版本报告兼容性；
 - C 扩展内部锁、自定义原子锁和未经过 Adapter 的锁明确标记不可见或部分覆盖。
 
+CPython 探针名称和参数属于实现细节，Adapter 必须记录解释器构建、版本和实际探针清单，
+不能假设跨版本兼容。参考
+[CPython DTrace/SystemTap 插桩文档](https://docs.python.org/zh-cn/3.13/howto/instrumentation.html)。
+
 ### 7.5 Go Adapter
 
 - 接入 Go 官方 mutex profile 和 block profile；
 - 支持用户已有的本地 pprof 端点，或由应用显式配置的
   `SetMutexProfileFraction/SetBlockProfileRate`；
 - 使用用户系统中的固定 `go tool pprof` Adapter，不在 PerfLens 内直接解析二进制 profile；
-- 保留采样率和累计语义，不虚构精确 owner、逐次等待或持锁区间；
-- channel、WaitGroup、Cond 和 runtime 内部锁只按官方 profile 实际提供的语义报告。
+- mutex profile 在导致竞争的临界区结束/解锁调用栈上报告近似累计阻塞时间，并受事件
+  采样率控制；它不是每次竞争的精确日志；
+- block profile 在实际发生阻塞的位置报告累计阻塞时间，并受基于阻塞时间的采样率控制；
+  它不自动提供完整 owner 关系；
+- channel、WaitGroup、Cond 和 runtime 内部锁只按官方 profile 实际提供的语义报告，
+  不虚构精确 owner、逐次等待或持锁区间。
+
+规范语义以 [Go runtime](https://pkg.go.dev/runtime) 和
+[Go runtime/pprof](https://pkg.go.dev/runtime/pprof) 官方文档为准；Artifact 必须保留
+`SetMutexProfileFraction` 与 `SetBlockProfileRate` 的实际值，不能把两种采样机制合并。
 
 ### 7.6 外部工具、授权和项目体验
 
 JDK、Go、async-profiler、SystemTap 等是可选外部依赖。PerfLens 自动检测版本和能力，
 给出中文安装/启用说明，但不在核心两个 DEB 中隐式下载或捆绑。
 
-运行时 Adapter 尽量以目标普通用户执行。`LD_PRELOAD`、JVM 附加、JFR 启动、pprof 端点
-访问或 probe 部署都需要独立的运行时插桩/附加授权，不能因为用户说“优化项目”就自动
-扩大。计划中的项目级入口为：
+所有运行时 Adapter 默认关闭。JFR、pprof 和普通启动插桩必须以目标普通用户身份运行，
+不得使用 root。`LD_PRELOAD`、JVM 附加、JFR 启动、pprof 端点访问或 probe 部署都需要
+独立的运行时插桩/附加授权，不能因为用户说“优化项目”就自动扩大。需要 eBPF/uprobe
+特权的后端属于独立、默认关闭的管理员风险边界，不能扩大 MCP、Skill、Python Broker、
+现有 stat/record Helper 或 v0.3.0 Trace Helper。计划中的项目级入口为：
 
 ```bash
 perflens init --runtime-locks
 ```
 
 通用 `lock` 证据先运行；只有语言识别、Adapter 能力、管理员策略和本次授权同时允许时，
-Skill 才升级到运行时专用证据。自定义锁可以通过版本化 NDJSON 导入合同接入，但这只是
-Adapter 接口，不建设新的 Agent 或插件框架。
+Skill 才升级到运行时专用证据。
+
+自定义锁可以通过版本化 NDJSON 导入合同接入，但这只是 Adapter 接口，不建设新的 Agent
+或插件框架。每个导入流先提供严格 header，声明数据来源/版本、Adapter 版本、目标身份、
+时间戳时钟和单位、`measurement_semantics`、可见锁/快路径、采样/阈值配置、丢失事件，
+以及 owner/持锁时间是否真实可得；随后才允许规范化事件。未知字段、重复 header、越界
+帧、非法或不匹配 PID、逆序时间、未声明语义、事件/聚合不守恒和伪造 owner 能力必须在
+发布 Artifact 前拒绝。
+
+### 7.7 v0.3.1 实施提交顺序
+
+后续实现拆成以下独立、可回滚提交，不把四个运行时和公共 Schema 混入一个大提交：
+
+1. 公共产物 Schema、能力发现、质量模型、NDJSON 合同和 verifier；
+2. C/C++ pthread Adapter、ABI 能力检测和目标普通用户插桩；
+3. Java JFR Adapter、固定配置及可选 async-profiler/JVMTI 导入接口；
+4. CPython Adapter、GIL/内部锁/threading 分层和 free-threaded 能力检测；
+5. Go mutex/block pprof Adapter及两类采样语义；
+6. CLI、MCP、Skill 自动选择、统一报告和分页/诊断包；
+7. 安全拒绝路径、插桩开销、兼容矩阵和四类真实运行时验收；
+8. 中英文发布文档、两个 DEB 的升级/卸载 smoke test 和 `v0.3.1` 发布门。
 
 ## 8. 安全、性能和发布门槛
 
@@ -353,9 +428,23 @@ Adapter 接口，不建设新的 Agent 或插件框架。
   协议一致性；
 - Debian 真实 systemd 主机，以及 C/C++、Java、Python、Go 真实运行时矩阵。
 
+运行时锁矩阵必须至少覆盖无竞争、低竞争、高竞争、递归锁、读写锁、条件变量等待、目标
+退出、PID 复用、符号缺失、事件丢失和 Adapter 不可用。精确后端按精确事件数/区间验收；
+阈值、抽样和累计后端使用声明过的统计容差，测试不得把“没有被采样”当成“没有竞争”。
+每个后端都要测量关闭、启用但空闲和高竞争三种情况下的目标开销，超过预算必须警告或
+失败关闭。
+
+需要 perf 特权时优先使用专门的 `CAP_PERFMON`；Linux 官方不建议用宽泛的
+`CAP_SYS_ADMIN` 替代。任何额外 capability 必须由对应独立服务的真实拒绝日志和验收证明，
+详见 [Linux perf 安全文档](https://www.kernel.org/doc/html/latest/admin-guide/perf-security.html)。
+
 只有分析门、安全门、兼容门和真实主机门全部通过，功能才能从“计划”改为“正式”。
 优化结论仍必须区分 `observed`、`candidate`、`confirmed` 和 `Verified Improvement`；只有
 正确性通过的匹配 A/B 才能称为已验证改进。
+
+`v0.3.1` 只有在四类 Adapter、统一 verifier、安全拒绝路径、真实运行时矩阵，以及两个
+DEB 的安装、升级、回滚和卸载测试全部通过后才能标记稳定。缺少任一 Adapter 时必须缩小
+发布声明或推迟版本，不能仍使用“四类正式覆盖”的名称。
 
 ## 9. 发布和兼容表述
 
