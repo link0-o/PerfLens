@@ -477,6 +477,11 @@ def test_setup_auto_detects_deployed_helper_and_update_resynchronizes_spool(
         "detect_deployed_collector_privilege_mode",
         lambda: "paranoid3_helper",
     )
+    monkeypatch.setattr(
+        onboarding,
+        "detect_deployed_collector_feature_profile",
+        lambda: "full_diagnostics",
+    )
 
     artifact = run_project_setup(
         project,
@@ -486,6 +491,7 @@ def test_setup_auto_detects_deployed_helper_and_update_resynchronizes_spool(
     )
 
     assert artifact.collector_privilege_mode == "paranoid3_helper"
+    assert artifact.collector_feature_profile == "full_diagnostics"
     assert '"/var/lib/perflens-helper"' in (project / ".codex/config.toml").read_text(
         encoding="utf-8"
     )
@@ -494,6 +500,11 @@ def test_setup_auto_detects_deployed_helper_and_update_resynchronizes_spool(
         onboarding,
         "detect_deployed_collector_privilege_mode",
         lambda: "cap_perfmon",
+    )
+    monkeypatch.setattr(
+        onboarding,
+        "detect_deployed_collector_feature_profile",
+        lambda: "cpu_only",
     )
     updated = run_project_setup(
         project,
@@ -504,6 +515,7 @@ def test_setup_auto_detects_deployed_helper_and_update_resynchronizes_spool(
     )
 
     assert updated.collector_privilege_mode == "cap_perfmon"
+    assert updated.collector_feature_profile == "cpu_only"
     assert '"/var/lib/perflens"' in (project / ".codex/config.toml").read_text(encoding="utf-8")
     assert '"/var/lib/perflens-helper"' not in (project / ".codex/config.toml").read_text(
         encoding="utf-8"
@@ -532,6 +544,18 @@ def test_setup_rejects_explicit_mode_conflicting_with_deployed_policy(
             mcp_command=Path(sys.executable),
             perf_path=Path("/bin/true"),
         )
+
+
+def test_feature_profile_detection_returns_none_without_deployed_collector(
+    tmp_path: Path,
+) -> None:
+    assert (
+        onboarding.detect_deployed_collector_feature_profile(
+            tmp_path / "profile.toml",
+            collector_config_path=tmp_path / "missing-collector.toml",
+        )
+        is None
+    )
 
 
 def test_deployed_mode_detection_reuses_strict_policy_validation(

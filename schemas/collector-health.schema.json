@@ -8,6 +8,15 @@
       "title": "Allowed Modes",
       "type": "array"
     },
+    "feature_profile": {
+      "default": "cpu_only",
+      "enum": [
+        "cpu_only",
+        "full_diagnostics"
+      ],
+      "title": "Feature Profile",
+      "type": "string"
+    },
     "peer_uid": {
       "minimum": 0,
       "title": "Peer Uid",

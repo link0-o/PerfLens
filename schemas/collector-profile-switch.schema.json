@@ -1,0 +1,162 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "current_profile": {
+      "enum": [
+        "cpu_only",
+        "full_diagnostics"
+      ],
+      "title": "Current Profile",
+      "type": "string"
+    },
+    "next_steps": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "planned_commands": {
+      "default": [],
+      "items": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "title": "Planned Commands",
+      "type": "array"
+    },
+    "privilege_mode": {
+      "enum": [
+        "cap_perfmon",
+        "paranoid3_helper"
+      ],
+      "title": "Privilege Mode",
+      "type": "string"
+    },
+    "profile_path": {
+      "title": "Profile Path",
+      "type": "string"
+    },
+    "profile_source": {
+      "enum": [
+        "implicit_v0_2_compatibility",
+        "managed"
+      ],
+      "title": "Profile Source",
+      "type": "string"
+    },
+    "profile_update_required": {
+      "title": "Profile Update Required",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "state_preserved": {
+      "default": true,
+      "title": "State Preserved",
+      "type": "boolean"
+    },
+    "status": {
+      "enum": [
+        "blocked",
+        "dry_run",
+        "unchanged",
+        "switched"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "supported_trace_modes": {
+      "default": [],
+      "items": {
+        "enum": [
+          "sched",
+          "off_cpu",
+          "lock"
+        ],
+        "type": "string"
+      },
+      "title": "Supported Trace Modes",
+      "type": "array"
+    },
+    "target_filter_before_userspace": {
+      "title": "Target Filter Before Userspace",
+      "type": "boolean"
+    },
+    "target_profile": {
+      "enum": [
+        "cpu_only",
+        "full_diagnostics"
+      ],
+      "title": "Target Profile",
+      "type": "string"
+    },
+    "trace_backend": {
+      "const": "target_filtered_kernel_v1",
+      "title": "Trace Backend",
+      "type": "string"
+    },
+    "trace_backend_status": {
+      "enum": [
+        "available",
+        "unavailable"
+      ],
+      "title": "Trace Backend Status",
+      "type": "string"
+    },
+    "trace_helper_service_path": {
+      "title": "Trace Helper Service Path",
+      "type": "string"
+    },
+    "trace_private_spool": {
+      "title": "Trace Private Spool",
+      "type": "string"
+    },
+    "trace_risk_acknowledgement_required": {
+      "title": "Trace Risk Acknowledgement Required",
+      "type": "boolean"
+    },
+    "trace_socket_path": {
+      "title": "Trace Socket Path",
+      "type": "string"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "status",
+    "current_profile",
+    "target_profile",
+    "profile_source",
+    "privilege_mode",
+    "profile_path",
+    "trace_helper_service_path",
+    "trace_socket_path",
+    "trace_private_spool",
+    "trace_backend",
+    "trace_backend_status",
+    "target_filter_before_userspace",
+    "trace_risk_acknowledgement_required",
+    "profile_update_required"
+  ],
+  "title": "CollectorProfileSwitchArtifact",
+  "type": "object"
+}

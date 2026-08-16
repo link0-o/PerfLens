@@ -736,6 +736,7 @@ class CollectorHealthArtifact(ContractModel):
     allowed_modes: tuple[str, ...]
     spool_root: str
     privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon"
+    feature_profile: Literal["cpu_only", "full_diagnostics"] = "cpu_only"
 
 
 class CollectorDeploymentArtifact(ContractModel):
@@ -748,6 +749,7 @@ class CollectorDeploymentArtifact(ContractModel):
     collector_command: str
     allowed_uids: tuple[int, ...]
     privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon"
+    feature_profile: Literal["cpu_only", "full_diagnostics"] = "cpu_only"
     planned_commands: tuple[tuple[str, ...], ...]
     warnings: tuple[str, ...] = ()
     next_steps: tuple[str, ...] = ()
@@ -758,6 +760,8 @@ class CollectorSetupArtifact(ContractModel):
     perflens_version: str
     status: Literal["analysis_only", "blocked", "dry_run", "deployed"]
     selected_mode: Literal["cap_perfmon", "paranoid3_helper"] | None = None
+    selected_feature_profile: Literal["cpu_only", "full_diagnostics"] = "cpu_only"
+    trace_backend_status: Literal["not_checked", "available", "unavailable"] = "not_checked"
     config_path: str | None = None
     service_path: str | None = None
     collector_command: str | None = None
@@ -785,6 +789,48 @@ class CollectorModeSwitchArtifact(ContractModel):
     state_preserved: bool = True
     warnings: tuple[str, ...] = ()
     next_steps: tuple[str, ...] = ()
+
+
+class CollectorProfileSwitchArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    status: Literal["blocked", "dry_run", "unchanged", "switched"]
+    current_profile: Literal["cpu_only", "full_diagnostics"]
+    target_profile: Literal["cpu_only", "full_diagnostics"]
+    profile_source: Literal["implicit_v0_2_compatibility", "managed"]
+    privilege_mode: Literal["cap_perfmon", "paranoid3_helper"]
+    profile_path: str
+    trace_helper_service_path: str
+    trace_socket_path: str
+    trace_private_spool: str
+    trace_backend: Literal["target_filtered_kernel_v1"]
+    trace_backend_status: Literal["available", "unavailable"]
+    target_filter_before_userspace: bool
+    supported_trace_modes: tuple[Literal["sched", "off_cpu", "lock"], ...] = ()
+    trace_risk_acknowledgement_required: bool
+    profile_update_required: bool
+    planned_commands: tuple[tuple[str, ...], ...] = ()
+    state_preserved: bool = True
+    warnings: tuple[str, ...] = ()
+    next_steps: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_trace_backend_claims(self) -> CollectorProfileSwitchArtifact:
+        if self.trace_backend_status == "available":
+            if (
+                set(self.supported_trace_modes) != {"sched", "off_cpu", "lock"}
+                or not self.target_filter_before_userspace
+            ):
+                raise ValueError("Available full diagnostics require all target-filtered modes")
+        elif self.supported_trace_modes or self.target_filter_before_userspace:
+            raise ValueError("Unavailable Trace backend cannot claim trace capabilities")
+        if (
+            self.status == "switched"
+            and self.target_profile == "full_diagnostics"
+            and self.trace_backend_status != "available"
+        ):
+            raise ValueError("Full diagnostics cannot activate an unavailable backend")
+        return self
 
 
 class CollectorUpgradeArtifact(ContractModel):
@@ -978,6 +1024,8 @@ class RuntimeStatusArtifact(ContractModel):
     collector_policy_version: int | None = Field(default=None, gt=0)
     collector_allowed_modes: tuple[str, ...] = ()
     collector_spool_root: str | None = None
+    feature_profile: Literal["cpu_only", "full_diagnostics"] = "cpu_only"
+    trace_backend_status: Literal["not_checked", "available", "unavailable"] = "not_checked"
     capability_id: str
     host_collection_status: Literal["available", "conditional", "blocked"]
     automatic_collection_status: Literal[
@@ -1013,6 +1061,7 @@ class SetupArtifact(ContractModel):
     collector_assets_path: str | None = None
     automatic_collection_enabled: bool = False
     collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon"
+    collector_feature_profile: Literal["cpu_only", "full_diagnostics"] = "cpu_only"
     collection_status: Literal["available", "conditional", "blocked"]
     blocked_modes: tuple[str, ...] = ()
     generated_files: tuple[str, ...]

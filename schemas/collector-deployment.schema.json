@@ -20,6 +20,15 @@
       "title": "Config Source",
       "type": "string"
     },
+    "feature_profile": {
+      "default": "cpu_only",
+      "enum": [
+        "cpu_only",
+        "full_diagnostics"
+      ],
+      "title": "Feature Profile",
+      "type": "string"
+    },
     "next_steps": {
       "default": [],
       "items": {

@@ -85,6 +85,14 @@ def inspect_runtime_status(
         )
     capabilities = inspect_collection_capabilities(perf_path)
     host_status = _host_collection_status(capabilities)
+    feature_profile = (
+        setup_artifact.collector_feature_profile
+        if setup_artifact is not None
+        else "cpu_only"
+    )
+    trace_backend_status: Literal["not_checked", "available", "unavailable"] = (
+        "unavailable" if feature_profile == "full_diagnostics" else "not_checked"
+    )
 
     issues = list(setup_issues)
     if skill_status != "ready":
@@ -137,6 +145,8 @@ def inspect_runtime_status(
             (",".join(health.artifact.allowed_modes) if health.artifact is not None else ""),
             health.artifact.spool_root if health.artifact is not None else "",
             capabilities.capability_id,
+            feature_profile,
+            trace_backend_status,
         )
     )
     return RuntimeStatusArtifact(
@@ -168,6 +178,8 @@ def inspect_runtime_status(
             health.artifact.allowed_modes if health.artifact is not None else ()
         ),
         collector_spool_root=(health.artifact.spool_root if health.artifact is not None else None),
+        feature_profile=feature_profile,
+        trace_backend_status=trace_backend_status,
         capability_id=capabilities.capability_id,
         host_collection_status=host_status,
         automatic_collection_status=automatic_status,

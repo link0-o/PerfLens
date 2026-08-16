@@ -139,6 +139,15 @@
       "default": null,
       "title": "Collector Spool Root"
     },
+    "feature_profile": {
+      "default": "cpu_only",
+      "enum": [
+        "cpu_only",
+        "full_diagnostics"
+      ],
+      "title": "Feature Profile",
+      "type": "string"
+    },
     "host_collection_status": {
       "enum": [
         "available",
@@ -212,6 +221,16 @@
     "status_id": {
       "pattern": "^status-[a-f0-9]{16}$",
       "title": "Status Id",
+      "type": "string"
+    },
+    "trace_backend_status": {
+      "default": "not_checked",
+      "enum": [
+        "not_checked",
+        "available",
+        "unavailable"
+      ],
+      "title": "Trace Backend Status",
       "type": "string"
     }
   },

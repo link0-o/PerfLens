@@ -47,6 +47,7 @@ _WHEEL_COLLECTOR_COMMAND = Path("/opt/perflens/bin/perflens-collector")
 _COLLECTOR_SPOOL_ROOT = Path("/var/lib/perflens")
 _HELPER_SPOOL_ROOT = Path("/var/lib/perflens-helper")
 _DEPLOYED_COLLECTOR_CONFIG = Path("/etc/perflens/collector.toml")
+_DEPLOYED_FEATURE_PROFILE = Path("/etc/perflens/profile.toml")
 
 
 def run_project_setup(
@@ -89,6 +90,15 @@ def run_project_setup(
         previous=(
             previous_artifact.collector_privilege_mode if previous_artifact is not None else None
         ),
+    )
+    deployed_feature_profile = detect_deployed_collector_feature_profile()
+    collector_feature_profile: Literal["cpu_only", "full_diagnostics"] = (
+        deployed_feature_profile
+        or (
+            previous_artifact.collector_feature_profile
+            if previous_artifact is not None
+            else "cpu_only"
+        )
     )
     selected_collector_command = (
         _collector_command_for_setup(collector_command)
@@ -359,6 +369,7 @@ def run_project_setup(
             ),
             automatic_collection_enabled=automatic_collection,
             collector_privilege_mode=collector_privilege_mode,
+            collector_feature_profile=collector_feature_profile,
             collection_status=collection_status,
             blocked_modes=blocked_modes,
             generated_files=tuple(str(path) for path in generated),
@@ -451,6 +462,24 @@ def detect_deployed_collector_privilege_mode(
         stage="setup_host_detection",
     )
     return policy.privilege_mode
+
+
+def detect_deployed_collector_feature_profile(
+    profile_path: Path = _DEPLOYED_FEATURE_PROFILE,
+    *,
+    collector_config_path: Path = _DEPLOYED_COLLECTOR_CONFIG,
+) -> Literal["cpu_only", "full_diagnostics"] | None:
+    """Map a deployed v0.2 host to cpu_only without creating or modifying a file."""
+    if not os.path.lexists(collector_config_path):
+        return None
+    from perflens.admin.profile import load_feature_profile
+
+    snapshot = load_feature_profile(
+        profile_path,
+        require_root_owner=True,
+        stage="setup_host_profile_detection",
+    )
+    return snapshot.feature_profile
 
 
 def _select_collector_privilege_mode(

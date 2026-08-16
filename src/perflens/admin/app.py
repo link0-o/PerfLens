@@ -14,6 +14,7 @@ from perflens.admin.deploy import (
     inspect_collector_spool,
     setup_collector,
     switch_collector_mode,
+    switch_collector_profile,
     undeploy_collector,
     update_collector_policy,
     upgrade_collector,
@@ -26,6 +27,7 @@ from perflens.admin.spool import (
 from perflens.contracts.artifacts import (
     CollectorDeploymentArtifact,
     CollectorModeSwitchArtifact,
+    CollectorProfileSwitchArtifact,
     CollectorSetupArtifact,
     CollectorSpoolArchiveVerificationArtifact,
     CollectorSpoolStatusArtifact,
@@ -121,6 +123,13 @@ def deploy_command(
 
 @app.command("setup")
 def setup_command(
+    feature_profile: Annotated[
+        Literal["cpu_only", "full_diagnostics"] | None,
+        typer.Option(
+            "--feature-profile",
+            help="功能配置: cpu_only 或 full_diagnostics; 与权限模式相互独立。",
+        ),
+    ] = None,
     mode: Annotated[
         Literal["analysis_only", "cap_perfmon", "paranoid3_helper"] | None,
         typer.Option(
@@ -152,12 +161,34 @@ def setup_command(
             help="确认 paranoid=3 Helper 的 root 与 capability 风险。",
         ),
     ] = False,
+    acknowledge_trace_risk: Annotated[
+        bool,
+        typer.Option(
+            "--acknowledge-trace-risk",
+            help="确认完整诊断会扩大 trace 元数据、内核探针、磁盘与采集开销边界。",
+        ),
+    ] = False,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="输出完整的版本化 JSON 结果。"),
     ] = False,
 ) -> None:
     """首次选择并部署 Collector; 也可以明确选择仅分析。"""
+    selected_profile = feature_profile
+    if selected_profile is None and mode is None:
+        typer.echo("请选择 PerfLens 功能配置:")
+        typer.echo("1. 完整性能诊断 (主机通过全部安全验收时推荐)")
+        typer.echo("2. 标准 CPU 调优 (当前安全兼容项: stat + record)")
+        profile_choice = typer.prompt("请输入 1 或 2", default="2")
+        profiles = {"1": "full_diagnostics", "2": "cpu_only"}
+        if profile_choice not in profiles:
+            _fail(PerfLensError(ErrorCode.INVALID_INPUT, "collector_setup", "未知的功能配置"))
+        selected_profile = cast(
+            Literal["cpu_only", "full_diagnostics"],
+            profiles[profile_choice],
+        )
+    elif selected_profile is None:
+        selected_profile = "cpu_only"
     selected = mode
     interactive = selected is None
     if selected is None:
@@ -185,14 +216,28 @@ def setup_command(
         if not acknowledged:
             raise typer.Abort()
         acknowledge_privileged_helper_risk = True
+    if (
+        interactive
+        and selected_profile == "full_diagnostics"
+        and not dry_run
+        and not acknowledge_trace_risk
+    ):
+        acknowledged = typer.confirm(
+            "完整诊断会扩大 trace 元数据、内核探针、磁盘与采集开销边界; 确认继续?"
+        )
+        if not acknowledged:
+            raise typer.Abort()
+        acknowledge_trace_risk = True
     try:
         result = setup_collector(
             selected,
+            feature_profile=selected_profile,
             dry_run=dry_run,
             collector_command=collector_command,
             perf_path=perf_path,
             allowed_uid=allowed_uid,
             acknowledge_privileged_helper_risk=acknowledge_privileged_helper_risk,
+            acknowledge_trace_risk=acknowledge_trace_risk,
         )
     except PerfLensError as exc:
         _fail(exc)
@@ -200,6 +245,43 @@ def setup_command(
         typer.echo(result.model_dump_json(indent=2))
         return
     _render_setup_chinese(result)
+
+
+@app.command("switch-profile")
+def switch_profile_command(
+    target_profile: Annotated[
+        Literal["cpu_only", "full_diagnostics"],
+        typer.Argument(help="要切换到的功能配置; 与 Collector 权限模式相互独立。"),
+    ],
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="只检查主机能力与事务前置条件; 不修改系统。"),
+    ] = False,
+    acknowledge_trace_risk: Annotated[
+        bool,
+        typer.Option(
+            "--acknowledge-trace-risk",
+            help="确认完整诊断的 trace 元数据、内核探针、磁盘和采集开销风险。",
+        ),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="输出完整的版本化 JSON 结果。"),
+    ] = False,
+) -> None:
+    """事务化切换采集功能配置; 当前缺少安全 Trace 后端时失败关闭。"""
+    try:
+        result = switch_collector_profile(
+            target_profile,
+            dry_run=dry_run,
+            acknowledge_trace_risk=acknowledge_trace_risk,
+        )
+    except PerfLensError as exc:
+        _fail(exc)
+    if json_output:
+        typer.echo(result.model_dump_json(indent=2))
+        return
+    _render_profile_switch_chinese(result)
 
 
 @app.command("switch-mode")
@@ -476,10 +558,15 @@ def _render_setup_chinese(artifact: CollectorSetupArtifact) -> None:
             "deployed": "部署完成",
         }[artifact.status]
         typer.echo(f"状态: {status}")
+        typer.echo(f"选择的功能配置: {artifact.selected_feature_profile}")
         typer.echo(f"选择的权限模式: {artifact.selected_mode}")
         typer.echo(f"系统策略位置: {artifact.config_path}")
-        typer.echo(f"Collector 程序: {artifact.collector_command}")
-        typer.echo("授权普通用户 UID: " + ", ".join(str(uid) for uid in artifact.allowed_uids))
+        if artifact.collector_command is not None:
+            typer.echo(f"Collector 程序: {artifact.collector_command}")
+        if artifact.allowed_uids:
+            typer.echo(
+                "授权普通用户 UID: " + ", ".join(str(uid) for uid in artifact.allowed_uids)
+            )
     if artifact.planned_commands:
         typer.echo("固定系统命令计划:")
         for index, command in enumerate(artifact.planned_commands, start=1):
@@ -491,10 +578,50 @@ def _render_setup_chinese(artifact: CollectorSetupArtifact) -> None:
     if artifact.next_steps:
         typer.echo("下一步:")
         if artifact.status == "dry_run" and artifact.selected_mode is not None:
-            command = ["sudo", "perflens-admin", "setup", "--mode", artifact.selected_mode]
+            command = [
+                "sudo",
+                "perflens-admin",
+                "setup",
+                "--feature-profile",
+                artifact.selected_feature_profile,
+                "--mode",
+                artifact.selected_mode,
+            ]
             if artifact.selected_mode == "paranoid3_helper":
                 command.append("--acknowledge-privileged-helper-risk")
             typer.echo(f"- 确认计划后正式执行: {shlex.join(command)}")
+        for step in artifact.next_steps:
+            typer.echo(f"- {_chinese_admin_guidance(step)}")
+
+
+def _render_profile_switch_chinese(artifact: CollectorProfileSwitchArtifact) -> None:
+    labels = {
+        "blocked": "目标功能配置当前不可安全部署; 尚未修改系统",
+        "dry_run": "预检通过; 尚未修改系统",
+        "unchanged": "目标功能配置已经生效; 无需修改",
+        "switched": "功能配置切换完成; Trace 健康与隐私验收通过",
+    }
+    typer.echo("PerfLens Collector 功能配置切换")
+    typer.echo(f"状态: {labels[artifact.status]}")
+    typer.echo(f"当前功能配置: {artifact.current_profile}")
+    typer.echo(f"目标功能配置: {artifact.target_profile}")
+    typer.echo(f"权限模式 (保持不变): {artifact.privilege_mode}")
+    typer.echo(f"Trace 后端: {artifact.trace_backend_status}")
+    typer.echo(
+        "内核侧目标过滤: "
+        + ("已通过" if artifact.target_filter_before_userspace else "未通过/不可用")
+    )
+    typer.echo("证据目录: 保留, 不迁移、不删除")
+    if artifact.planned_commands:
+        typer.echo("事务命令计划:")
+        for index, command in enumerate(artifact.planned_commands, start=1):
+            typer.echo(f"{index}. {shlex.join(command)}")
+    if artifact.warnings:
+        typer.echo("安全边界与提示:")
+        for warning in artifact.warnings:
+            typer.echo(f"- {_chinese_admin_guidance(warning)}")
+    if artifact.next_steps:
+        typer.echo("下一步:")
         for step in artifact.next_steps:
             typer.echo(f"- {_chinese_admin_guidance(step)}")
 

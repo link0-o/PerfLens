@@ -62,6 +62,15 @@
       "title": "Schema Version",
       "type": "string"
     },
+    "selected_feature_profile": {
+      "default": "cpu_only",
+      "enum": [
+        "cpu_only",
+        "full_diagnostics"
+      ],
+      "title": "Selected Feature Profile",
+      "type": "string"
+    },
     "selected_mode": {
       "anyOf": [
         {
@@ -98,6 +107,16 @@
         "deployed"
       ],
       "title": "Status",
+      "type": "string"
+    },
+    "trace_backend_status": {
+      "default": "not_checked",
+      "enum": [
+        "not_checked",
+        "available",
+        "unavailable"
+      ],
+      "title": "Trace Backend Status",
       "type": "string"
     },
     "warnings": {

@@ -5,9 +5,11 @@ import os
 import socket
 import threading
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+import perflens.trace_helper.client as trace_client
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.trace_helper.client import TraceHelperClient
 from perflens.trace_helper.protocol import (
@@ -274,6 +276,54 @@ def test_trace_helper_client_rejects_unsafe_socket_and_constructor(
             expected_helper_uid=os.geteuid(),
             timeout_seconds=16,
         )
+
+
+class _ChunkConnection:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+
+    def recv(self, size: int) -> bytes:
+        if not self._chunks:
+            return b""
+        chunk = self._chunks.pop(0)
+        assert len(chunk) <= size
+        return chunk
+
+
+def test_trace_helper_frame_reader_rejects_malformed_and_oversized_frames() -> None:
+    with pytest.raises(PerfLensError) as malformed:
+        trace_client._read_frame(  # pyright: ignore[reportPrivateUsage]
+            cast(socket.socket, _ChunkConnection([b'{"ok":true}'])),
+            bytearray(),
+        )
+    assert malformed.value.code is ErrorCode.INTERNAL_ERROR
+
+    oversized_chunks = [b"x" * (16 << 10) for _ in range(4)] + [b"x"]
+    with pytest.raises(PerfLensError) as oversized:
+        trace_client._read_frame(  # pyright: ignore[reportPrivateUsage]
+            cast(socket.socket, _ChunkConnection(oversized_chunks)),
+            bytearray(),
+        )
+    assert oversized.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+
+
+def test_trace_helper_unknown_error_code_is_safely_normalized() -> None:
+    response = TraceHelperResponse(
+        request_id="request-0123456789abcdef",
+        ok=False,
+        error=TraceHelperErrorBody(
+            code="FUTURE_UNKNOWN_CODE",
+            stage="trace_backend",
+            message="bounded failure",
+            recoverable=False,
+        ),
+    )
+    error = trace_client._response_error(  # pyright: ignore[reportPrivateUsage]
+        response,
+        "fallback",
+    )
+    assert error.code is ErrorCode.INTERNAL_ERROR
+    assert error.stage == "trace_backend"
 
 
 def _listener(tmp_path: Path) -> tuple[Path, socket.socket]:

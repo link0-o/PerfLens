@@ -138,6 +138,15 @@
       "default": null,
       "title": "Collector Assets Path"
     },
+    "collector_feature_profile": {
+      "default": "cpu_only",
+      "enum": [
+        "cpu_only",
+        "full_diagnostics"
+      ],
+      "title": "Collector Feature Profile",
+      "type": "string"
+    },
     "collector_privilege_mode": {
       "default": "cap_perfmon",
       "enum": [

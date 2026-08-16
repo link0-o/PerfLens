@@ -453,6 +453,7 @@ def init_command(
         typer.echo(f"Claude Code Skill: {artifact.claude_skill_path}")
         typer.echo(f"Claude Code MCP: {artifact.claude_project_config_path}")
     typer.echo(f"Collector 权限模式: {artifact.collector_privilege_mode}")
+    typer.echo(f"Collector 功能配置: {artifact.collector_feature_profile}")
     typer.echo(f"自动采集: {'已启用 (仍需每次工作负载授权)' if automatic_collection else '未启用'}")
     typer.echo(f"中文下一步: {Path(artifact.output_directory) / '下一步.zh-CN.md'}")
 
@@ -1969,6 +1970,9 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
     typer.echo(f"Collector Socket: {socket_labels[artifact.collector_socket_status]}")
     typer.echo(f"perflens 用户组: {group_labels[artifact.collector_group_status]}")
     typer.echo(f"Collector 健康握手: {health_labels[artifact.collector_health_status]}")
+    typer.echo(f"Collector 功能配置: {artifact.feature_profile}")
+    if artifact.feature_profile == "full_diagnostics":
+        typer.echo(f"Trace 后端状态: {artifact.trace_backend_status}")
     if artifact.collector_health_status == "ready":
         typer.echo(
             f"Collector 服务身份: PID {artifact.collector_service_pid}, "

@@ -23,6 +23,7 @@ from perflens.admin.deploy import (
     load_collector_config,
     setup_collector,
     switch_collector_mode,
+    switch_collector_profile,
     undeploy_collector,
     update_collector_policy,
     upgrade_collector,
@@ -226,11 +227,18 @@ def test_admin_cli_help_is_chinese_first_and_keeps_stable_commands() -> None:
     assert setup_help.exit_code == 0, setup_help.output
     assert "首次选择并部署 Collector" in setup_help.output
     assert "analysis_only" in setup_help.output
+    assert "--feature-profile" in setup_help.output
+    assert "--acknowledge-trace-risk" in setup_help.output
 
     switch_help = runner.invoke(app, ["switch-mode", "--help"])
     assert switch_help.exit_code == 0, switch_help.output
     assert "事务化切换 Collector 模式" in switch_help.output
     assert "--acknowledge-privileged-helper-risk" in switch_help.output
+
+    profile_help = runner.invoke(app, ["switch-profile", "--help"])
+    assert profile_help.exit_code == 0, profile_help.output
+    assert "事务化切换采集功能配置" in profile_help.output
+    assert "--acknowledge-trace-risk" in profile_help.output
 
 
 def test_admin_setup_supports_analysis_only_and_generates_selected_policy(
@@ -296,6 +304,22 @@ def test_admin_setup_blocks_cap_perfmon_on_paranoid_three_without_mutation(
     assert blocked.status == "blocked"
     assert blocked.planned_commands == ()
     assert not layout.config_directory.exists()
+
+
+def test_admin_setup_rejects_root_as_the_authorized_project_user(tmp_path: Path) -> None:
+    _config, perf, collector, layout = _deployment_inputs(tmp_path)
+    with pytest.raises(PerfLensError, match="ordinary non-root user UID") as rejected:
+        setup_collector(
+            "cap_perfmon",
+            layout=layout,
+            collector_command=collector,
+            perf_path=perf,
+            allowed_uid=0,
+            require_root=False,
+            perf_event_paranoid=2,
+        )
+    assert rejected.value.code is ErrorCode.INVALID_INPUT
+    assert not layout.config_directory.exists()
     with pytest.raises(PerfLensError, match="greater than 2"):
         setup_collector(
             "cap_perfmon",
@@ -306,6 +330,97 @@ def test_admin_setup_blocks_cap_perfmon_on_paranoid_three_without_mutation(
             perf_event_paranoid=3,
         )
     assert not layout.config_directory.exists()
+
+
+def test_admin_setup_and_switch_profile_fail_closed_without_trace_backend(
+    tmp_path: Path,
+) -> None:
+    config, perf, collector, layout = _deployment_inputs(tmp_path)
+
+    blocked_setup = setup_collector(
+        "cap_perfmon",
+        feature_profile="full_diagnostics",
+        dry_run=True,
+        layout=layout,
+        collector_command=collector,
+        perf_path=perf,
+        require_root=False,
+        perf_event_paranoid=2,
+    )
+    assert blocked_setup.status == "blocked"
+    assert blocked_setup.selected_feature_profile == "full_diagnostics"
+    assert blocked_setup.trace_backend_status == "unavailable"
+    assert not layout.config_directory.exists()
+
+    with pytest.raises(PerfLensError, match="risk acknowledgement"):
+        setup_collector(
+            "cap_perfmon",
+            feature_profile="full_diagnostics",
+            layout=layout,
+            collector_command=collector,
+            perf_path=perf,
+            require_root=False,
+            perf_event_paranoid=2,
+        )
+    assert not layout.config_directory.exists()
+    with pytest.raises(PerfLensError) as setup_unavailable:
+        setup_collector(
+            "cap_perfmon",
+            feature_profile="full_diagnostics",
+            layout=layout,
+            collector_command=collector,
+            perf_path=perf,
+            require_root=False,
+            perf_event_paranoid=2,
+            acknowledge_trace_risk=True,
+        )
+    assert setup_unavailable.value.code is ErrorCode.UNSUPPORTED_FORMAT
+
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+    )
+    policy_before = layout.config_path.read_bytes()
+    service_before = layout.service_path.read_bytes()
+
+    blocked_switch = switch_collector_profile(
+        "full_diagnostics",
+        config_path=layout.config_path,
+        dry_run=True,
+        layout=layout,
+        require_root=False,
+    )
+    assert blocked_switch.status == "blocked"
+    assert blocked_switch.current_profile == "cpu_only"
+    assert blocked_switch.profile_source == "implicit_v0_2_compatibility"
+    assert not layout.profile_path.exists()
+
+    with pytest.raises(PerfLensError) as unavailable:
+        switch_collector_profile(
+            "full_diagnostics",
+            config_path=layout.config_path,
+            layout=layout,
+            require_root=False,
+            acknowledge_trace_risk=True,
+        )
+    assert unavailable.value.code is ErrorCode.UNSUPPORTED_FORMAT
+    assert layout.config_path.read_bytes() == policy_before
+    assert layout.service_path.read_bytes() == service_before
+    assert not layout.profile_path.exists()
+
+    unchanged = switch_collector_profile(
+        "cpu_only",
+        config_path=layout.config_path,
+        layout=layout,
+        require_root=False,
+    )
+    assert unchanged.status == "unchanged"
+    assert not unchanged.profile_update_required
 
 
 def test_admin_setup_rejects_an_existing_deployment_with_lifecycle_guidance(
@@ -357,7 +472,7 @@ def test_admin_setup_cli_interactive_analysis_only(
         return result_artifact
 
     monkeypatch.setattr("perflens.admin.app.setup_collector", fake_setup)
-    result = CliRunner().invoke(app, ["setup"], input="3\n")
+    result = CliRunner().invoke(app, ["setup"], input="2\n3\n")
 
     assert result.exit_code == 0, result.output
     assert "仅分析模式" in result.output
@@ -391,7 +506,7 @@ def test_admin_setup_cli_confirms_helper_and_renders_full_result(
         return artifact
 
     monkeypatch.setattr("perflens.admin.app.setup_collector", fake_setup)
-    result = CliRunner().invoke(app, ["setup"], input="2\ny\n")
+    result = CliRunner().invoke(app, ["setup"], input="2\n2\ny\n")
 
     assert result.exit_code == 0, result.output
     assert "选择的权限模式: paranoid3_helper" in result.output
@@ -432,7 +547,8 @@ def test_admin_setup_cli_dry_run_renders_exact_helper_command_and_json(
 
     assert summary.exit_code == 0, summary.output
     assert (
-        "sudo perflens-admin setup --mode paranoid3_helper --acknowledge-privileged-helper-risk"
+        "sudo perflens-admin setup --feature-profile cpu_only --mode paranoid3_helper "
+        "--acknowledge-privileged-helper-risk"
     ) in summary.output
     assert machine.exit_code == 0, machine.output
     assert '"schema_version": "1.0"' in machine.output
@@ -442,7 +558,7 @@ def test_admin_setup_cli_rejects_unknown_interactive_choice() -> None:
     result = CliRunner().invoke(app, ["setup"], input="9\n")
 
     assert result.exit_code != 0
-    assert "未知的向导选项" in result.output
+    assert "未知的功能配置" in result.output
 
 
 def test_admin_switch_mode_cli_renders_dry_run_and_json(

@@ -21,6 +21,13 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from perflens import __version__
+from perflens.admin.profile import (
+    FeatureProfile,
+    TraceBackendCapability,
+    load_feature_profile,
+    plan_feature_profile_switch,
+    require_actionable_profile_switch,
+)
 from perflens.artifacts.filesystem import write_text_atomic
 from perflens.collection.collector import (
     DEFAULT_MAX_OUTPUT_BYTES,
@@ -48,6 +55,7 @@ from perflens.contracts.artifacts import (
     CollectorDeploymentArtifact,
     CollectorModeSwitchArtifact,
     CollectorPolicyUpdateArtifact,
+    CollectorProfileSwitchArtifact,
     CollectorSetupArtifact,
     CollectorSpoolStatusArtifact,
     CollectorUndeploymentArtifact,
@@ -73,6 +81,12 @@ class CollectorSystemLayout:
     helper_service_path: Path = Path("/etc/systemd/system/perflens-privileged-helper.service")
     helper_state_directory: Path = Path("/var/lib/perflens-helper")
     helper_socket_path: Path = Path("/run/perflens-helper/helper.sock")
+    profile_path: Path = Path("/etc/perflens/profile.toml")
+    trace_helper_service_path: Path = Path(
+        "/etc/systemd/system/perflens-trace-helper.service"
+    )
+    trace_helper_state_directory: Path = Path("/var/lib/perflens-trace-helper")
+    trace_helper_socket_path: Path = Path("/run/perflens-trace-helper/helper.sock")
     admin_lock_path: Path = Path("/run/lock/perflens-admin.lock")
 
 
@@ -394,6 +408,7 @@ def deploy_collector(
 def setup_collector(
     mode: Literal["analysis_only", "cap_perfmon", "paranoid3_helper"],
     *,
+    feature_profile: FeatureProfile = "cpu_only",
     dry_run: bool = False,
     layout: CollectorSystemLayout | None = None,
     collector_command: Path | None = None,
@@ -405,12 +420,15 @@ def setup_collector(
     service_identity: tuple[int, int] | None = None,
     perf_event_paranoid: int | None = None,
     acknowledge_privileged_helper_risk: bool = False,
+    acknowledge_trace_risk: bool = False,
+    trace_backend_capability: TraceBackendCapability | None = None,
 ) -> CollectorSetupArtifact:
     """Generate the bounded default policy and explicitly deploy one selected mode."""
     if mode == "analysis_only":
         return CollectorSetupArtifact(
             perflens_version=__version__,
             status="analysis_only",
+            selected_feature_profile=feature_profile,
             warnings=("No Collector service, capability, sysctl, or system file was changed.",),
             next_steps=("Run perflens init inside each project that should analyze evidence.",),
         )
@@ -427,6 +445,59 @@ def setup_collector(
                 "Use perflens-admin upgrade after installing a newer package.",
                 "Use perflens-admin update-policy for reviewed policy-only changes.",
             ),
+        )
+    if feature_profile == "full_diagnostics":
+        current = load_feature_profile(
+            effective_layout.profile_path,
+            require_root_owner=require_root,
+            invoking_uid=invoking_uid(),
+            stage="collector_setup",
+        )
+        plan = plan_feature_profile_switch(
+            feature_profile,
+            current=current,
+            privilege_mode=mode,
+            profile_path=effective_layout.profile_path,
+            trace_helper_service_path=effective_layout.trace_helper_service_path,
+            trace_socket_path=effective_layout.trace_helper_socket_path,
+            trace_private_spool=effective_layout.trace_helper_state_directory,
+            capability=trace_backend_capability,
+            dry_run=dry_run,
+        )
+        blocked = CollectorSetupArtifact(
+            perflens_version=__version__,
+            status="blocked",
+            selected_mode=mode,
+            selected_feature_profile=feature_profile,
+            trace_backend_status=plan.trace_backend_status,
+            config_path=str(effective_layout.config_path),
+            service_path=str(effective_layout.service_path),
+            warnings=plan.warnings,
+            next_steps=plan.next_steps,
+        )
+        if dry_run:
+            return blocked
+        if not acknowledge_trace_risk:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "collector_setup",
+                "full_diagnostics requires explicit Trace metadata and privilege risk "
+                "acknowledgement",
+                recoverable=True,
+                suggested_actions=(
+                    "Review setup --dry-run, then add --acknowledge-trace-risk.",
+                ),
+            )
+        raise PerfLensError(
+            ErrorCode.UNSUPPORTED_FORMAT,
+            "collector_setup",
+            "full_diagnostics is not safely deployable on this build/host",
+            recoverable=True,
+            details={
+                "trace_backend_status": plan.trace_backend_status,
+                "target_filter_before_userspace": plan.target_filter_before_userspace,
+            },
+            suggested_actions=plan.next_steps,
         )
     selected_uid = invoking_uid() if allowed_uid is None else allowed_uid
     if selected_uid <= 0:
@@ -461,6 +532,8 @@ def setup_collector(
                 perflens_version=__version__,
                 status="blocked",
                 selected_mode=mode,
+                selected_feature_profile=feature_profile,
+                trace_backend_status="not_checked",
                 config_path=str(effective_layout.config_path),
                 service_path=str(effective_layout.service_path),
                 collector_command=str(command),
@@ -499,6 +572,8 @@ def setup_collector(
         perflens_version=__version__,
         status=deployment.status,
         selected_mode=deployment.privilege_mode,
+        selected_feature_profile=feature_profile,
+        trace_backend_status="not_checked",
         config_path=deployment.config_path,
         service_path=deployment.service_path,
         collector_command=deployment.collector_command,
@@ -861,6 +936,84 @@ def switch_collector_mode(
             ) from exc
     final_status = "repaired" if stale_helper_repair else "switched"
     return result.model_copy(update={"status": final_status})
+
+
+def switch_collector_profile(
+    target_profile: FeatureProfile,
+    *,
+    config_path: Path = Path("/etc/perflens/collector.toml"),
+    dry_run: bool = False,
+    layout: CollectorSystemLayout | None = None,
+    require_root: bool = True,
+    trace_backend_capability: TraceBackendCapability | None = None,
+    acknowledge_trace_risk: bool = False,
+) -> CollectorProfileSwitchArtifact:
+    """Plan a feature-profile transition and fail closed before any system mutation."""
+    stage = "collector_profile_switch"
+    effective_layout = layout or CollectorSystemLayout()
+    source = load_collector_config(
+        config_path,
+        stage=stage,
+        require_root_owner=require_root,
+    )
+    try:
+        deployed_config = effective_layout.config_path.resolve(strict=True)
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            stage,
+            "Deployed Collector policy cannot be resolved",
+            suggested_actions=("Run perflens-admin setup before switching profiles.",),
+        ) from exc
+    if source.path != deployed_config:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Collector profile switch must use the fixed deployed policy",
+        )
+    policy = parse_collector_deployment_policy(
+        source.raw_text,
+        expected_spool=effective_layout.state_directory,
+        require_root_owned_tools=require_root,
+        stage=stage,
+    )
+    _verify_managed_service(
+        effective_layout.service_path,
+        require_root_owner=require_root,
+        stage=stage,
+    )
+    current = load_feature_profile(
+        effective_layout.profile_path,
+        require_root_owner=require_root,
+        invoking_uid=invoking_uid(),
+        stage=stage,
+    )
+    artifact = plan_feature_profile_switch(
+        target_profile,
+        current=current,
+        privilege_mode=policy.privilege_mode,
+        profile_path=effective_layout.profile_path,
+        trace_helper_service_path=effective_layout.trace_helper_service_path,
+        trace_socket_path=effective_layout.trace_helper_socket_path,
+        trace_private_spool=effective_layout.trace_helper_state_directory,
+        capability=trace_backend_capability,
+        dry_run=dry_run,
+    )
+    if dry_run or artifact.status == "unchanged":
+        return artifact
+    if target_profile == "full_diagnostics" and not acknowledge_trace_risk:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "full_diagnostics requires explicit Trace metadata and privilege risk acknowledgement",
+            recoverable=True,
+            suggested_actions=(
+                "Review switch-profile --dry-run, then add --acknowledge-trace-risk.",
+            ),
+        )
+    # Until the independently reviewed multi-service transaction is implemented, all actual
+    # profile changes remain blocked. This deliberately cannot write profile.toml or a unit.
+    return require_actionable_profile_switch(artifact)
 
 
 def upgrade_collector(
