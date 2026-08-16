@@ -1,4 +1,86 @@
 {
+  "$defs": {
+    "CollectorTraceModeAcceptance": {
+      "additionalProperties": false,
+      "description": "One advanced mode proven through capture, analysis, and replay verification.",
+      "properties": {
+        "analysis_id": {
+          "title": "Analysis Id",
+          "type": "string"
+        },
+        "analysis_status": {
+          "enum": [
+            "complete",
+            "partial"
+          ],
+          "title": "Analysis Status",
+          "type": "string"
+        },
+        "emitted_event_count": {
+          "exclusiveMinimum": 0,
+          "title": "Emitted Event Count",
+          "type": "integer"
+        },
+        "evidence_status": {
+          "enum": [
+            "complete",
+            "partial"
+          ],
+          "title": "Evidence Status",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "sched",
+            "off_cpu",
+            "lock"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "status": {
+          "const": "passed",
+          "default": "passed",
+          "title": "Status",
+          "type": "string"
+        },
+        "trace_evidence_id": {
+          "title": "Trace Evidence Id",
+          "type": "string"
+        },
+        "verification_id": {
+          "title": "Verification Id",
+          "type": "string"
+        },
+        "verification_status": {
+          "enum": [
+            "verified",
+            "partial"
+          ],
+          "title": "Verification Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "trace_evidence_id",
+        "evidence_status",
+        "emitted_event_count",
+        "analysis_id",
+        "analysis_status",
+        "verification_id",
+        "verification_status"
+      ],
+      "title": "CollectorTraceModeAcceptance",
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "acceptance_id": {
@@ -8,6 +90,15 @@
     },
     "collection_id": {
       "title": "Collection Id",
+      "type": "string"
+    },
+    "feature_profile": {
+      "default": "cpu_only",
+      "enum": [
+        "cpu_only",
+        "full_diagnostics"
+      ],
+      "title": "Feature Profile",
       "type": "string"
     },
     "finished_at": {
@@ -148,6 +239,23 @@
       "minimum": 0,
       "title": "Target Uid",
       "type": "integer"
+    },
+    "trace_backend_status": {
+      "default": "not_requested",
+      "enum": [
+        "not_requested",
+        "available"
+      ],
+      "title": "Trace Backend Status",
+      "type": "string"
+    },
+    "trace_modes": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CollectorTraceModeAcceptance"
+      },
+      "title": "Trace Modes",
+      "type": "array"
     },
     "warnings": {
       "default": [],

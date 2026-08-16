@@ -334,7 +334,7 @@ def init_command(
         list[str] | None,
         typer.Option(
             "--automatic-mode",
-            help="允许的自动采集模式; 可重复传入, 默认 stat 和 record。",
+            help="允许的自动采集模式; 可重复传入, 默认跟随已部署功能配置。",
         ),
     ] = None,
     automatic_max_duration_seconds: Annotated[
@@ -431,7 +431,7 @@ def init_command(
             prepare_collector=prepare_collector,
             automatic_collection=automatic_collection,
             allow_pid_attach=allow_existing_pid_attach,
-            automatic_modes=tuple(automatic_modes or ("stat", "record")),
+            automatic_modes=(tuple(automatic_modes) if automatic_modes is not None else None),
             automatic_max_duration_seconds=automatic_max_duration_seconds,
             automatic_max_frequency_hz=automatic_max_frequency_hz,
             automatic_max_output_bytes=automatic_max_output_bytes,
@@ -543,7 +543,7 @@ def setup_command(
         list[str] | None,
         typer.Option(
             "--automatic-mode",
-            help="允许的自动采集模式; 可重复传入, 默认 stat 和 record。",
+            help="允许的自动采集模式; 可重复传入, 默认跟随已部署功能配置。",
         ),
     ] = None,
     automatic_max_duration_seconds: Annotated[
@@ -629,7 +629,7 @@ def setup_command(
             prepare_collector=prepare_collector,
             automatic_collection=automatic_collection,
             allow_pid_attach=allow_existing_pid_attach,
-            automatic_modes=tuple(automatic_modes or ("stat", "record")),
+            automatic_modes=(tuple(automatic_modes) if automatic_modes is not None else None),
             automatic_max_duration_seconds=automatic_max_duration_seconds,
             automatic_max_frequency_hz=automatic_max_frequency_hz,
             automatic_max_output_bytes=automatic_max_output_bytes,
@@ -2151,6 +2151,10 @@ def _render_collector_acceptance_chinese(
     typer.echo("测试目标: PerfLens 内置普通用户 CPU 负载")
     typer.echo(f"验收 ID: {artifact.acceptance_id}")
     typer.echo(f"Collector Socket: {artifact.socket_path}")
+    typer.echo(
+        "功能配置: "
+        + ("完整性能诊断" if artifact.feature_profile == "full_diagnostics" else "标准 CPU 调优")
+    )
     typer.echo(f"请求采集时长: {artifact.requested_duration_seconds:g} 秒")
     typer.echo(f"采集指标数量: {artifact.metric_count}")
     typer.echo(f"硬件 PMU: {_availability_chinese(artifact.hardware_pmu_status)}")
@@ -2160,6 +2164,17 @@ def _render_collector_acceptance_chinese(
         typer.echo(f"硬件采集尝试 ID: {_terminal_text(artifact.hardware_collection_id)}")
     typer.echo(f"软件计数事件: {_availability_chinese(artifact.software_counting_status)}")
     typer.echo(f"软件 cpu-clock 采样: {_availability_chinese(artifact.software_sampling_status)}")
+    if artifact.feature_profile == "full_diagnostics":
+        typer.echo("独立 Trace 后端: 可用")
+        typer.echo("高级模式真实验收:")
+        for trace in artifact.trace_modes:
+            typer.echo(
+                f"- {trace.mode}: 通过; 目标内事件 {trace.emitted_event_count}; "
+                f"分析 {trace.analysis_status}; 校验 {trace.verification_status}"
+            )
+            typer.echo(f"  证据 ID: {_terminal_text(trace.trace_evidence_id)}")
+            typer.echo(f"  分析 ID: {_terminal_text(trace.analysis_id)}")
+            typer.echo(f"  校验 ID: {_terminal_text(trace.verification_id)}")
     typer.echo(f"证据文件: {artifact.output_path}")
     typer.echo(f"证据大小: {_human_bytes(artifact.output_bytes)}")
     typer.echo(f"证据 SHA-256: {artifact.output_sha256}")
@@ -2171,6 +2186,9 @@ def _render_collector_acceptance_chinese(
             typer.echo(f"- {warning}")
     typer.echo("结论:")
     typer.echo("- 当前用户、Collector 策略和内核权限已完成软件计数与采样的真实短时采集。")
+    if artifact.feature_profile == "full_diagnostics":
+        typer.echo("- sched、off_cpu、lock 已完成目标内短时采集、确定性分析和一致性校验。")
+        typer.echo("- partial 表示证据边界或区间不完整, 不等于校验失败; 报告必须保留对应限制。")
     if artifact.hardware_pmu_status == "unavailable":
         typer.echo("- 硬件 PMU 不可用时会自动降级; 仍可定位 CPU 热点和调度开销候选。")
         typer.echo("- 降级证据不能用于 IPC、硬件缓存未命中率或分支未命中率结论。")

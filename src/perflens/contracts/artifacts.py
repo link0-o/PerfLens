@@ -698,6 +698,21 @@ class ProjectRunArtifact(ContractModel):
     warnings: tuple[str, ...] = ()
 
 
+class CollectorTraceModeAcceptance(ContractModel):
+    """One advanced mode proven through capture, analysis, and replay verification."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    mode: Literal["sched", "off_cpu", "lock"]
+    status: Literal["passed"] = "passed"
+    trace_evidence_id: str
+    evidence_status: Literal["complete", "partial"]
+    emitted_event_count: int = Field(gt=0)
+    analysis_id: str
+    analysis_status: Literal["complete", "partial"]
+    verification_id: str
+    verification_status: Literal["verified", "partial"]
+
+
 class CollectorAcceptanceArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     perflens_version: str
@@ -720,9 +735,23 @@ class CollectorAcceptanceArtifact(ContractModel):
     software_sampling_status: Literal["available", "unavailable", "unknown"] = "unknown"
     hardware_collection_id: str | None = None
     software_sampling_collection_id: str | None = None
+    feature_profile: Literal["cpu_only", "full_diagnostics"] = "cpu_only"
+    trace_backend_status: Literal["not_requested", "available"] = "not_requested"
+    trace_modes: tuple[CollectorTraceModeAcceptance, ...] = ()
     started_at: str
     finished_at: str
     warnings: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_trace_acceptance(self) -> CollectorAcceptanceArtifact:
+        expected_modes = ("sched", "off_cpu", "lock")
+        actual_modes = tuple(item.mode for item in self.trace_modes)
+        if self.feature_profile == "cpu_only":
+            if self.trace_backend_status != "not_requested" or self.trace_modes:
+                raise ValueError("cpu_only acceptance cannot claim Trace validation")
+        elif self.trace_backend_status != "available" or actual_modes != expected_modes:
+            raise ValueError("full_diagnostics acceptance requires all ordered Trace modes")
+        return self
 
 
 class CollectorHealthArtifact(ContractModel):

@@ -492,9 +492,11 @@ def test_setup_auto_detects_deployed_helper_and_update_resynchronizes_spool(
 
     assert artifact.collector_privilege_mode == "paranoid3_helper"
     assert artifact.collector_feature_profile == "full_diagnostics"
-    assert '"/var/lib/perflens-helper"' in (project / ".codex/config.toml").read_text(
-        encoding="utf-8"
-    )
+    full_config = (project / ".codex/config.toml").read_text(encoding="utf-8")
+    assert '"/var/lib/perflens-helper"' in full_config
+    assert full_config.count('"--automatic-mode"') == 5
+    for mode in ("stat", "record", "sched", "off_cpu", "lock"):
+        assert f'"{mode}"' in full_config
 
     monkeypatch.setattr(
         onboarding,
@@ -516,10 +518,10 @@ def test_setup_auto_detects_deployed_helper_and_update_resynchronizes_spool(
 
     assert updated.collector_privilege_mode == "cap_perfmon"
     assert updated.collector_feature_profile == "cpu_only"
-    assert '"/var/lib/perflens"' in (project / ".codex/config.toml").read_text(encoding="utf-8")
-    assert '"/var/lib/perflens-helper"' not in (project / ".codex/config.toml").read_text(
-        encoding="utf-8"
-    )
+    cpu_config = (project / ".codex/config.toml").read_text(encoding="utf-8")
+    assert '"/var/lib/perflens"' in cpu_config
+    assert '"/var/lib/perflens-helper"' not in cpu_config
+    assert cpu_config.count('"--automatic-mode"') == 2
 
 
 @pytest.mark.parametrize("prepare_collector", [False, True])

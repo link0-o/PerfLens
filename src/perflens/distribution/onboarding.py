@@ -65,7 +65,7 @@ def run_project_setup(
     prepare_collector: bool = False,
     automatic_collection: bool = False,
     allow_pid_attach: bool = False,
-    automatic_modes: tuple[str, ...] = ("stat", "record"),
+    automatic_modes: tuple[str, ...] | None = None,
     automatic_max_duration_seconds: float = 30.0,
     automatic_max_frequency_hz: int = 99,
     automatic_max_output_bytes: int = 256 << 20,
@@ -98,6 +98,15 @@ def run_project_setup(
             previous_artifact.collector_feature_profile
             if previous_artifact is not None
             else "cpu_only"
+        )
+    )
+    selected_automatic_modes = (
+        automatic_modes
+        if automatic_modes is not None
+        else (
+            ("stat", "record", "sched", "off_cpu", "lock")
+            if collector_feature_profile == "full_diagnostics"
+            else ("stat", "record")
         )
     )
     selected_collector_command = (
@@ -164,7 +173,7 @@ def run_project_setup(
         automatic_collection=automatic_collection,
         allow_project_execution=automatic_collection,
         allow_pid_attach=allow_pid_attach,
-        automatic_modes=automatic_modes,
+        automatic_modes=selected_automatic_modes,
         automatic_max_duration_seconds=automatic_max_duration_seconds,
         automatic_max_frequency_hz=automatic_max_frequency_hz,
         automatic_max_output_bytes=automatic_max_output_bytes,
@@ -181,7 +190,7 @@ def run_project_setup(
         automatic_collection=automatic_collection,
         allow_project_execution=automatic_collection,
         allow_pid_attach=allow_pid_attach,
-        automatic_modes=automatic_modes,
+        automatic_modes=selected_automatic_modes,
         automatic_max_duration_seconds=automatic_max_duration_seconds,
         automatic_max_frequency_hz=automatic_max_frequency_hz,
         automatic_max_output_bytes=automatic_max_output_bytes,

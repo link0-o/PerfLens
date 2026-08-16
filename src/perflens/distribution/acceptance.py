@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
+import signal
 import subprocess
 import sys
 from contextlib import suppress
 from pathlib import Path
 
 from perflens import __version__
+from perflens.application.analyze_trace import build_trace_analysis
+from perflens.application.verify_trace import (
+    require_usable_trace_analysis,
+    verify_trace_analysis_artifact,
+)
 from perflens.collection.collector import HARDWARE_STAT_EVENTS, SOFTWARE_STAT_EVENTS
 from perflens.collection.planning import (
     AutomaticCollectionPolicy,
@@ -22,17 +29,48 @@ from perflens.contracts.artifacts import (
     CollectionCapabilityArtifact,
     CollectionPlanArtifact,
     CollectorAcceptanceArtifact,
+    CollectorTraceModeAcceptance,
     PerfStatMetric,
+)
+from perflens.contracts.trace import (
+    LockAnalysisArtifact,
+    OffCpuAnalysisArtifact,
+    SchedulerAnalysisArtifact,
+    TraceEvidenceArtifact,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _MAX_DURATION_SECONDS = 5.0
 _PROBE_SOURCE = (
+    "import os\n"
+    "import threading\n"
     "import time\n"
     "deadline = time.monotonic() + 30.0\n"
+    "lock = threading.Lock()\n"
+    "def holder():\n"
+    "    while time.monotonic() < deadline:\n"
+    "        with lock:\n"
+    "            time.sleep(0.01)\n"
+    "        time.sleep(0)\n"
+    "threading.Thread(target=holder, daemon=True).start()\n"
+    "read_fd, write_fd = os.pipe()\n"
+    "child = os.fork()\n"
+    "if child == 0:\n"
+    "    os.close(read_fd)\n"
+    "    while time.monotonic() < deadline:\n"
+    "        time.sleep(0.01)\n"
+    "        os.write(write_fd, b'x')\n"
+    "    os._exit(0)\n"
+    "os.close(write_fd)\n"
     "value = 1\n"
-    "while time.monotonic() < deadline:\n"
-    "    value = (value * 1103515245 + 12345) & 0x7fffffff\n"
+    "try:\n"
+    "    while time.monotonic() < deadline:\n"
+    "        with lock:\n"
+    "            for _ in range(2000):\n"
+    "                value = (value * 1103515245 + 12345) & 0x7fffffff\n"
+    "        os.read(read_fd, 1)\n"
+    "finally:\n"
+    "    os.close(read_fd)\n"
 )
 
 
@@ -66,14 +104,34 @@ def accept_collector(
     process: subprocess.Popen[bytes] | None = None
     try:
         process = _start_probe()
+        client = _collector_client(socket_path, duration_seconds)
+        health = client.health()
+        feature_profile = health.feature_profile
+        trace_modes = ("sched", "off_cpu", "lock")
+        if feature_profile == "full_diagnostics" and not set(trace_modes).issubset(
+            health.allowed_modes
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "collector_acceptance",
+                "Collector full_diagnostics health is missing an advanced mode",
+                recoverable=True,
+                details={"allowed_modes": list(health.allowed_modes)},
+                suggested_actions=(
+                    "Repair or switch the Collector profile, then rerun acceptance.",
+                ),
+            )
         policy = AutomaticCollectionPolicy(
             enabled=True,
-            allowed_modes=("record", "stat"),
+            allowed_modes=(
+                ("record", "stat", *trace_modes)
+                if feature_profile == "full_diagnostics"
+                else ("record", "stat")
+            ),
             max_duration_seconds=_MAX_DURATION_SECONDS,
             max_output_bytes=8 << 20,
             plan_ttl_seconds=60,
         )
-        client = _collector_client(socket_path, duration_seconds)
         hardware_collection = None
         hardware_reason = None
         hardware_plan = create_collection_plan(
@@ -146,6 +204,18 @@ def accept_collector(
         _require_allowed_plan(sampling_plan)
         sampling_collection = client.collect(sampling_plan)
 
+        trace_acceptance = (
+            _accept_trace_modes(
+                client,
+                process.pid,
+                duration_seconds=duration_seconds,
+                policy=policy,
+                capabilities=capabilities,
+            )
+            if feature_profile == "full_diagnostics"
+            else ()
+        )
+
         identity = "\0".join(
             (
                 collection.collection_id,
@@ -183,6 +253,11 @@ def accept_collector(
             software_sampling_status="available",
             hardware_collection_id=hardware_collection_id,
             software_sampling_collection_id=sampling_collection.collection_id,
+            feature_profile=feature_profile,
+            trace_backend_status=(
+                "available" if feature_profile == "full_diagnostics" else "not_requested"
+            ),
+            trace_modes=trace_acceptance,
             started_at=collection.started_at,
             finished_at=collection.finished_at,
             warnings=tuple(warnings),
@@ -253,15 +328,119 @@ def _positive_measured_metrics(
     )
 
 
+def _accept_trace_modes(
+    client: CollectorBrokerClient,
+    pid: int,
+    *,
+    duration_seconds: float,
+    policy: AutomaticCollectionPolicy,
+    capabilities: CollectionCapabilityArtifact,
+) -> tuple[CollectorTraceModeAcceptance, ...]:
+    results: list[CollectorTraceModeAcceptance] = []
+    for mode in ("sched", "off_cpu", "lock"):
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode=mode,
+                pid=pid,
+                duration_seconds=duration_seconds,
+                event_source="hardware_required",
+                max_output_bytes=8 << 20,
+            ),
+            policy=policy,
+            capabilities=capabilities,
+        )
+        _require_allowed_plan(plan)
+        evidence = client.collect_trace(plan)
+        analysis = build_trace_analysis(evidence)
+        verification = verify_trace_analysis_artifact(analysis, evidence)
+        require_usable_trace_analysis(verification)
+        verification_status = verification.verification_status
+        if verification_status == "failed":
+            raise PerfLensError(
+                ErrorCode.INTERNAL_ERROR,
+                "collector_acceptance",
+                "Trace verification failure escaped the acceptance gate",
+            )
+        _require_substantive_trace(mode, evidence, analysis)
+        results.append(
+            CollectorTraceModeAcceptance(
+                mode=mode,
+                trace_evidence_id=evidence.trace_evidence_id,
+                evidence_status=evidence.status,
+                emitted_event_count=evidence.quality.emitted_event_count,
+                analysis_id=_trace_analysis_id(analysis),
+                analysis_status=analysis.status,
+                verification_id=verification.verification_id,
+                verification_status=verification_status,
+            )
+        )
+    return tuple(results)
+
+
+def _require_substantive_trace(
+    mode: str,
+    evidence: TraceEvidenceArtifact,
+    analysis: SchedulerAnalysisArtifact | OffCpuAnalysisArtifact | LockAnalysisArtifact,
+) -> None:
+    if mode == "sched":
+        substantive = (
+            isinstance(analysis, SchedulerAnalysisArtifact)
+            and analysis.total_context_switch_count > 0
+        )
+    elif mode == "off_cpu":
+        substantive = (
+            isinstance(analysis, OffCpuAnalysisArtifact)
+            and (
+                analysis.total_complete_interval_count
+                + analysis.total_incomplete_interval_count
+                > 0
+            )
+        )
+    else:
+        substantive = (
+            isinstance(analysis, LockAnalysisArtifact)
+            and (
+                analysis.total_exact_wait_count
+                + analysis.total_candidate_wait_event_count
+                > 0
+            )
+        )
+    if evidence.quality.emitted_event_count <= 0 or not substantive:
+        raise PerfLensError(
+            ErrorCode.PROFILE_PARSE_FAILED,
+            "collector_acceptance",
+            "Advanced Collector acceptance produced no substantive target evidence",
+            recoverable=True,
+            details={
+                "mode": mode,
+                "trace_evidence_id": evidence.trace_evidence_id,
+                "emitted_event_count": evidence.quality.emitted_event_count,
+            },
+            suggested_actions=(
+                "Inspect the Trace Helper capability, BTF, policy, and journal, then retry.",
+            ),
+        )
+
+
+def _trace_analysis_id(
+    analysis: SchedulerAnalysisArtifact | OffCpuAnalysisArtifact | LockAnalysisArtifact,
+) -> str:
+    if isinstance(analysis, SchedulerAnalysisArtifact):
+        return analysis.scheduler_analysis_id
+    if isinstance(analysis, OffCpuAnalysisArtifact):
+        return analysis.off_cpu_analysis_id
+    return analysis.lock_analysis_id
+
+
 def _stop_probe(process: subprocess.Popen[bytes]) -> None:
+    with suppress(OSError):
+        os.killpg(process.pid, signal.SIGTERM)
     if process.poll() is not None:
         return
-    with suppress(OSError):
-        process.terminate()
     try:
         process.wait(timeout=1)
     except subprocess.TimeoutExpired:
         with suppress(OSError):
-            process.kill()
+            os.killpg(process.pid, signal.SIGKILL)
         with suppress(subprocess.TimeoutExpired):
             process.wait(timeout=1)

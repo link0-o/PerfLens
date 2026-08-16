@@ -4,14 +4,18 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
+from perflens.collection.planning import AutomaticCollectionPolicy
 from perflens.contracts.artifacts import (
     CollectionArtifact,
     CollectionCapabilityArtifact,
     CollectionModeCapability,
     CollectionPlanArtifact,
+    CollectorHealthArtifact,
+    CollectorTraceModeAcceptance,
     PerfStatMetric,
 )
 from perflens.distribution import acceptance
@@ -34,6 +38,26 @@ def _capabilities() -> CollectionCapabilityArtifact:
             )
             for mode in ("record", "stat", "sched", "lock", "off_cpu")
         ),
+    )
+
+
+def _health(
+    *, feature_profile: Literal["cpu_only", "full_diagnostics"] = "cpu_only"
+) -> CollectorHealthArtifact:
+    allowed_modes = (
+        ("record", "stat", "sched", "off_cpu", "lock")
+        if feature_profile == "full_diagnostics"
+        else ("record", "stat")
+    )
+    return CollectorHealthArtifact(
+        perflens_version="test",
+        policy_version=1,
+        service_pid=123,
+        service_uid=os.geteuid(),
+        peer_uid=os.geteuid(),
+        allowed_modes=allowed_modes,
+        spool_root="/var/lib/perflens",
+        feature_profile=feature_profile,
     )
 
 
@@ -100,6 +124,9 @@ def test_accept_collector_rejects_success_without_a_measured_metric(
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
+        def health(self) -> CollectorHealthArtifact:
+            return _health()
+
         def collect(self, _plan: object) -> CollectionArtifact:
             return CollectionArtifact(
                 collection_id="collection-no-measured-metric",
@@ -158,6 +185,9 @@ def test_accept_collector_passes_with_software_evidence_when_hardware_pmu_is_unu
     class FallbackAcceptanceClient:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
+
+        def health(self) -> CollectorHealthArtifact:
+            return _health()
 
         def collect(self, plan: CollectionPlanArtifact) -> CollectionArtifact:
             mode = plan.mode
@@ -243,6 +273,9 @@ def test_accept_collector_links_no_hardware_artifact_when_hardware_execution_fai
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
+        def health(self) -> CollectorHealthArtifact:
+            return _health()
+
         def collect(self, plan: CollectionPlanArtifact) -> CollectionArtifact:
             if plan.requested_event_source == "hardware_required":
                 raise PerfLensError(
@@ -291,4 +324,95 @@ def test_accept_collector_links_no_hardware_artifact_when_hardware_execution_fai
     assert artifact.hardware_collection_id is None
     assert artifact.software_counting_status == "available"
     assert artifact.software_sampling_status == "available"
+    assert probe.poll() is not None
+
+
+def test_accept_collector_runs_all_trace_modes_for_full_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    probe = subprocess.Popen(
+        [sys.executable, "-I", "-c", "import time; time.sleep(30)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    monkeypatch.setattr(acceptance, "_start_probe", lambda: probe)
+
+    class FullAcceptanceClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def health(self) -> CollectorHealthArtifact:
+            return _health(feature_profile="full_diagnostics")
+
+        def collect(self, plan: CollectionPlanArtifact) -> CollectionArtifact:
+            record = plan.mode == "record"
+            hardware = plan.requested_event_source == "hardware_required"
+            event = "cycles" if hardware else "task-clock"
+            return CollectionArtifact(
+                collection_id=f"collection-{plan.mode}-{plan.requested_event_source}",
+                mode=plan.mode,
+                target_type="pid",
+                target_argument_count=0,
+                target_pid=probe.pid,
+                output_path=str(tmp_path / f"{plan.mode}.evidence"),
+                output_sha256=("a" if hardware else "b") * 64,
+                output_bytes=64,
+                output_format="perf_data" if record else "perf_stat_delimited",
+                perf_executable="/usr/bin/perf",
+                started_at="2026-08-04T00:00:00+00:00",
+                finished_at="2026-08-04T00:00:01+00:00",
+                duration_seconds=1,
+                events=() if record else (event,),
+                requested_event_source=plan.requested_event_source,
+                actual_event_source=("hardware" if hardware else "software"),
+                metrics=(
+                    ()
+                    if record
+                    else (PerfStatMetric(event=event, value=1000, unit="", status="measured"),)
+                ),
+            )
+
+    trace_calls: list[tuple[int, tuple[str, ...]]] = []
+
+    def fake_trace_acceptance(
+        _client: object,
+        pid: int,
+        *,
+        duration_seconds: float,
+        policy: AutomaticCollectionPolicy,
+        capabilities: object,
+    ) -> tuple[CollectorTraceModeAcceptance, ...]:
+        del duration_seconds, capabilities
+        allowed_modes = policy.allowed_modes
+        trace_calls.append((pid, allowed_modes))
+        return tuple(
+            CollectorTraceModeAcceptance(
+                mode=mode,
+                trace_evidence_id=f"trace-evidence-{mode}",
+                evidence_status="partial",
+                emitted_event_count=1,
+                analysis_id=f"{mode}-analysis-test",
+                analysis_status="partial",
+                verification_id=f"trace-verification-{mode}",
+                verification_status="partial",
+            )
+            for mode in ("sched", "off_cpu", "lock")
+        )
+
+    monkeypatch.setattr(acceptance, "CollectorBrokerClient", FullAcceptanceClient)
+    monkeypatch.setattr(acceptance, "_accept_trace_modes", fake_trace_acceptance)
+    artifact = acceptance.accept_collector(
+        tmp_path / "collector.sock",
+        duration_seconds=0.1,
+        authorized=True,
+        capabilities=_capabilities(),
+    )
+
+    assert artifact.feature_profile == "full_diagnostics"
+    assert artifact.trace_backend_status == "available"
+    assert tuple(item.mode for item in artifact.trace_modes) == ("sched", "off_cpu", "lock")
+    assert trace_calls == [(probe.pid, ("record", "stat", "sched", "off_cpu", "lock"))]
     assert probe.poll() is not None
