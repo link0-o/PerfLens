@@ -1,0 +1,16 @@
+4242/4243 [002] 200.000000001: lock:contention_begin: 0xffff888001234000 (flags=MUTEX)
+4242/4243 [002] 200.000000002: lock:contention_begin: 0xffff888001234000 (flags=SPIN)
+4242/4243 [002] 200.000000010: lock:contention_end: 0xffff888001234000 (ret=0)
+4242/4243 [002] 200.000000020: lock:contention_end: 0xffff888001234000 (ret=-4)
+4242/4243 [002] 200.000000030: lock:contention_end: 0xffff888001234000 (ret=-110)
+4242/4243 [002] 200.000000040: lock:contention_end: 0xffff888001234000 (ret=-35)
+4242/4243 [002] 200.000000050: lock:contention_begin: 0xffff888001234001 (flags=MUTEX|FUTURE)
+4242/4243 [002] 200.000000051: lock:contention_end: 0xffff888001234001 (ret=0)
+4242/4243 [002] 200.000000060: lock:lock_contended: 0xffff888001234002 legacy_mutex
+4242/4243 [002] 200.000000070: lock:lock_acquired: 0xffff888001234002 legacy_mutex
+4242/4243 [002] 200.000000080: lock:lock_release: 0xffff888001234002 legacy_mutex
+4242/4243 [002] 200.000000090: lock:lock_acquire: 0xffff888001234002 legacy_mutex
+4242/4243 [002] 200.000000100: syscalls:sys_enter_futex: __syscall_nr: 202, uaddr: 0x7fff12345000, op: 0x0, val: 0x1
+4242/4243 [002] 200.000000110: syscalls:sys_exit_futex: ret=-110
+4242/4243 [002] 200.000000120: syscalls:sys_enter_futex: __syscall_nr: 202, uaddr: 0x7fff12345000, op: 0x1, val: 0x1
+9777/9888 [002] 200.000000130: lock:contention_begin: 0xdeadbeefcafefeed (flags=MUTEX)

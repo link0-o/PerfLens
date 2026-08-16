@@ -57,6 +57,13 @@ from perflens.contracts.artifacts import (
     StackSample,
     VerificationCheck,
 )
+from perflens.contracts.trace import (
+    LockAnalysisArtifact,
+    OffCpuAnalysisArtifact,
+    SchedulerAnalysisArtifact,
+    TraceAnalysisVerificationArtifact,
+    TraceEvidenceArtifact,
+)
 
 
 def test_checked_in_json_schemas_match_contract_models() -> None:
@@ -115,6 +122,11 @@ def test_checked_in_json_schemas_match_contract_models() -> None:
         "project-run.schema.json": ProjectRunArtifact,
         "runtime-status.schema.json": RuntimeStatusArtifact,
         "setup.schema.json": SetupArtifact,
+        "trace-evidence.schema.json": TraceEvidenceArtifact,
+        "scheduler-analysis.schema.json": SchedulerAnalysisArtifact,
+        "off-cpu-analysis.schema.json": OffCpuAnalysisArtifact,
+        "lock-analysis.schema.json": LockAnalysisArtifact,
+        "trace-analysis-verification.schema.json": TraceAnalysisVerificationArtifact,
     }
 
     for filename, model in models.items():

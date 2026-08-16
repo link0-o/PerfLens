@@ -1,0 +1,13 @@
+4242/4243 [002] 100.000000001: sched:sched_switch: prev_comm=target-worker prev_pid=4243 prev_prio=120 prev_state=S ==> next_comm=foreign-worker next_pid=9888 next_prio=120
+9777/9888 [003] 100.000000010: sched:sched_waking: comm=target-worker pid=4243 prio=120 target_cpu=3
+9777/9888 [003] 100.000000020: sched:sched_wakeup: comm=target-worker pid=4243 prio=120 target_cpu=3
+9777/9888 [003] 100.000000025: sched:sched_waking: comm=target-main pid=4242 prio=120 target_cpu=1
+9777/9888 [003] 100.000000026: sched:sched_waking: comm=target-main pid=4242 prio=120 target_cpu=1
+9777/9888 [003] 100.000000030: sched:sched_wakeup_new: comm=target-main pid=4242 prio=120 target_cpu=1
+4242/4243 [003] 100.000000040: sched:sched_switch: prev_comm=foreign-worker prev_pid=9888 prev_prio=120 prev_state=R ==> next_comm=target-worker next_pid=4243 next_prio=120
+4242/4243 [003] 100.000000050: sched:sched_migrate_task: comm=target-worker pid=4243 prio=120 orig_cpu=3 dest_cpu=4
+4242/4242 [004] 100.000000055: sched:sched_switch: prev_comm=target-main prev_pid=4242 prev_prio=120 prev_state=R ==> next_comm=target-worker next_pid=4243 next_prio=120
+9777/9888 [004] 100.000000060: sched:sched_wakeup: comm=other-worker pid=9888 prio=120 target_cpu=4
+PERF_RECORD_LOST lost 7
+9777/9888 [004] 100.000000070: sched:sched_switch: prev_comm=evil prev_pid=9 prev_pid=4243 prev_prio=120 prev_state=S ==> next_comm=foreign next_pid=9888 next_prio=120
+9777/9888 [004] 100.000000080: sched:sched_waking: comm=target-worker pid=4243 prio=120 target_cpu=4

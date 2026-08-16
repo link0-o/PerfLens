@@ -1,0 +1,1603 @@
+{
+  "$defs": {
+    "FutexWaitEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "call_stack": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TraceStackFrame"
+          },
+          "title": "Call Stack",
+          "type": "array"
+        },
+        "cpu": {
+          "minimum": 0,
+          "title": "Cpu",
+          "type": "integer"
+        },
+        "event_id": {
+          "pattern": "^event-[a-f0-9]{16,64}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_index": {
+          "minimum": 0,
+          "title": "Event Index",
+          "type": "integer"
+        },
+        "event_type": {
+          "const": "futex_wait",
+          "default": "futex_wait",
+          "title": "Event Type",
+          "type": "string"
+        },
+        "lock_id": {
+          "pattern": "^lock-[a-f0-9]{20}$",
+          "title": "Lock Id",
+          "type": "string"
+        },
+        "operation": {
+          "enum": [
+            "wait",
+            "wait_bitset",
+            "wait_requeue_pi",
+            "unknown"
+          ],
+          "title": "Operation",
+          "type": "string"
+        },
+        "semantics": {
+          "const": "candidate",
+          "default": "candidate",
+          "title": "Semantics",
+          "type": "string"
+        },
+        "source_sequence": {
+          "minimum": 0,
+          "title": "Source Sequence",
+          "type": "integer"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        },
+        "target_tid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Tid",
+          "type": "integer"
+        },
+        "timestamp_ns": {
+          "minimum": 0,
+          "title": "Timestamp Ns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_index",
+        "source_sequence",
+        "timestamp_ns",
+        "cpu",
+        "target_pid",
+        "target_tid",
+        "lock_id",
+        "operation"
+      ],
+      "title": "FutexWaitEvent",
+      "type": "object"
+    },
+    "FutexWakeEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "minimum": 0,
+          "title": "Cpu",
+          "type": "integer"
+        },
+        "event_id": {
+          "pattern": "^event-[a-f0-9]{16,64}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_index": {
+          "minimum": 0,
+          "title": "Event Index",
+          "type": "integer"
+        },
+        "event_type": {
+          "const": "futex_wake",
+          "default": "futex_wake",
+          "title": "Event Type",
+          "type": "string"
+        },
+        "lock_id": {
+          "pattern": "^lock-[a-f0-9]{20}$",
+          "title": "Lock Id",
+          "type": "string"
+        },
+        "operation": {
+          "enum": [
+            "wake",
+            "wake_bitset",
+            "requeue",
+            "unknown"
+          ],
+          "title": "Operation",
+          "type": "string"
+        },
+        "semantics": {
+          "const": "candidate",
+          "default": "candidate",
+          "title": "Semantics",
+          "type": "string"
+        },
+        "source_sequence": {
+          "minimum": 0,
+          "title": "Source Sequence",
+          "type": "integer"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        },
+        "target_tid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Tid",
+          "type": "integer"
+        },
+        "timestamp_ns": {
+          "minimum": 0,
+          "title": "Timestamp Ns",
+          "type": "integer"
+        },
+        "woken_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Woken Count"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_index",
+        "source_sequence",
+        "timestamp_ns",
+        "cpu",
+        "target_pid",
+        "target_tid",
+        "lock_id",
+        "operation"
+      ],
+      "title": "FutexWakeEvent",
+      "type": "object"
+    },
+    "LockReleasedEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "call_stack": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TraceStackFrame"
+          },
+          "title": "Call Stack",
+          "type": "array"
+        },
+        "cpu": {
+          "minimum": 0,
+          "title": "Cpu",
+          "type": "integer"
+        },
+        "event_id": {
+          "pattern": "^event-[a-f0-9]{16,64}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_index": {
+          "minimum": 0,
+          "title": "Event Index",
+          "type": "integer"
+        },
+        "event_type": {
+          "const": "lock_released",
+          "default": "lock_released",
+          "title": "Event Type",
+          "type": "string"
+        },
+        "lock_id": {
+          "pattern": "^lock-[a-f0-9]{20}$",
+          "title": "Lock Id",
+          "type": "string"
+        },
+        "lock_kind": {
+          "enum": [
+            "kernel_lock",
+            "unknown"
+          ],
+          "title": "Lock Kind",
+          "type": "string"
+        },
+        "semantics": {
+          "const": "exact",
+          "default": "exact",
+          "title": "Semantics",
+          "type": "string"
+        },
+        "source_sequence": {
+          "minimum": 0,
+          "title": "Source Sequence",
+          "type": "integer"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        },
+        "target_tid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Tid",
+          "type": "integer"
+        },
+        "timestamp_ns": {
+          "minimum": 0,
+          "title": "Timestamp Ns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_index",
+        "source_sequence",
+        "timestamp_ns",
+        "cpu",
+        "target_pid",
+        "target_tid",
+        "lock_id",
+        "lock_kind"
+      ],
+      "title": "LockReleasedEvent",
+      "type": "object"
+    },
+    "LockWaitEndedEvent": {
+      "additionalProperties": false,
+      "description": "Observed lock-wait completion; only ``acquired`` may close an exact wait.",
+      "properties": {
+        "call_stack": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TraceStackFrame"
+          },
+          "title": "Call Stack",
+          "type": "array"
+        },
+        "cpu": {
+          "minimum": 0,
+          "title": "Cpu",
+          "type": "integer"
+        },
+        "event_id": {
+          "pattern": "^event-[a-f0-9]{16,64}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_index": {
+          "minimum": 0,
+          "title": "Event Index",
+          "type": "integer"
+        },
+        "event_type": {
+          "const": "lock_wait_ended",
+          "default": "lock_wait_ended",
+          "title": "Event Type",
+          "type": "string"
+        },
+        "lock_id": {
+          "pattern": "^lock-[a-f0-9]{20}$",
+          "title": "Lock Id",
+          "type": "string"
+        },
+        "lock_kind": {
+          "enum": [
+            "kernel_lock",
+            "unknown"
+          ],
+          "title": "Lock Kind",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "acquired",
+            "timed_out",
+            "interrupted",
+            "failed",
+            "unknown"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "semantics": {
+          "const": "exact",
+          "default": "exact",
+          "title": "Semantics",
+          "type": "string"
+        },
+        "source_sequence": {
+          "minimum": 0,
+          "title": "Source Sequence",
+          "type": "integer"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        },
+        "target_tid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Tid",
+          "type": "integer"
+        },
+        "timestamp_ns": {
+          "minimum": 0,
+          "title": "Timestamp Ns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_index",
+        "source_sequence",
+        "timestamp_ns",
+        "cpu",
+        "target_pid",
+        "target_tid",
+        "lock_id",
+        "lock_kind",
+        "outcome"
+      ],
+      "title": "LockWaitEndedEvent",
+      "type": "object"
+    },
+    "LockWaitEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "call_stack": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TraceStackFrame"
+          },
+          "title": "Call Stack",
+          "type": "array"
+        },
+        "cpu": {
+          "minimum": 0,
+          "title": "Cpu",
+          "type": "integer"
+        },
+        "event_id": {
+          "pattern": "^event-[a-f0-9]{16,64}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_index": {
+          "minimum": 0,
+          "title": "Event Index",
+          "type": "integer"
+        },
+        "event_type": {
+          "const": "lock_wait",
+          "default": "lock_wait",
+          "title": "Event Type",
+          "type": "string"
+        },
+        "lock_id": {
+          "pattern": "^lock-[a-f0-9]{20}$",
+          "title": "Lock Id",
+          "type": "string"
+        },
+        "lock_kind": {
+          "enum": [
+            "kernel_lock",
+            "unknown"
+          ],
+          "title": "Lock Kind",
+          "type": "string"
+        },
+        "owner_target_tid": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Target Tid"
+        },
+        "semantics": {
+          "const": "exact",
+          "default": "exact",
+          "title": "Semantics",
+          "type": "string"
+        },
+        "source_sequence": {
+          "minimum": 0,
+          "title": "Source Sequence",
+          "type": "integer"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        },
+        "target_tid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Tid",
+          "type": "integer"
+        },
+        "timestamp_ns": {
+          "minimum": 0,
+          "title": "Timestamp Ns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_index",
+        "source_sequence",
+        "timestamp_ns",
+        "cpu",
+        "target_pid",
+        "target_tid",
+        "lock_id",
+        "lock_kind"
+      ],
+      "title": "LockWaitEvent",
+      "type": "object"
+    },
+    "SchedMigrateEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "minimum": 0,
+          "title": "Cpu",
+          "type": "integer"
+        },
+        "destination_cpu": {
+          "minimum": 0,
+          "title": "Destination Cpu",
+          "type": "integer"
+        },
+        "event_id": {
+          "pattern": "^event-[a-f0-9]{16,64}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_index": {
+          "minimum": 0,
+          "title": "Event Index",
+          "type": "integer"
+        },
+        "event_type": {
+          "const": "sched_migrate",
+          "default": "sched_migrate",
+          "title": "Event Type",
+          "type": "string"
+        },
+        "origin_cpu": {
+          "minimum": 0,
+          "title": "Origin Cpu",
+          "type": "integer"
+        },
+        "semantics": {
+          "const": "exact",
+          "default": "exact",
+          "title": "Semantics",
+          "type": "string"
+        },
+        "source_sequence": {
+          "minimum": 0,
+          "title": "Source Sequence",
+          "type": "integer"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        },
+        "target_tid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Tid",
+          "type": "integer"
+        },
+        "timestamp_ns": {
+          "minimum": 0,
+          "title": "Timestamp Ns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_index",
+        "source_sequence",
+        "timestamp_ns",
+        "cpu",
+        "target_pid",
+        "target_tid",
+        "origin_cpu",
+        "destination_cpu"
+      ],
+      "title": "SchedMigrateEvent",
+      "type": "object"
+    },
+    "SchedSwitchEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "call_stack": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TraceStackFrame"
+          },
+          "title": "Call Stack",
+          "type": "array"
+        },
+        "cpu": {
+          "minimum": 0,
+          "title": "Cpu",
+          "type": "integer"
+        },
+        "direction": {
+          "enum": [
+            "switch_out",
+            "switch_in"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "event_id": {
+          "pattern": "^event-[a-f0-9]{16,64}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_index": {
+          "minimum": 0,
+          "title": "Event Index",
+          "type": "integer"
+        },
+        "event_type": {
+          "const": "sched_switch",
+          "default": "sched_switch",
+          "title": "Event Type",
+          "type": "string"
+        },
+        "previous_state": {
+          "anyOf": [
+            {
+              "enum": [
+                "running",
+                "interruptible_sleep",
+                "uninterruptible_sleep",
+                "stopped",
+                "traced",
+                "dead",
+                "parked",
+                "idle",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Previous State"
+        },
+        "semantics": {
+          "const": "exact",
+          "default": "exact",
+          "title": "Semantics",
+          "type": "string"
+        },
+        "source_sequence": {
+          "minimum": 0,
+          "title": "Source Sequence",
+          "type": "integer"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        },
+        "target_tid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Tid",
+          "type": "integer"
+        },
+        "timestamp_ns": {
+          "minimum": 0,
+          "title": "Timestamp Ns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_index",
+        "source_sequence",
+        "timestamp_ns",
+        "cpu",
+        "target_pid",
+        "target_tid",
+        "direction"
+      ],
+      "title": "SchedSwitchEvent",
+      "type": "object"
+    },
+    "SchedWakeupEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "minimum": 0,
+          "title": "Cpu",
+          "type": "integer"
+        },
+        "event_id": {
+          "pattern": "^event-[a-f0-9]{16,64}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_index": {
+          "minimum": 0,
+          "title": "Event Index",
+          "type": "integer"
+        },
+        "event_type": {
+          "const": "sched_wakeup",
+          "default": "sched_wakeup",
+          "title": "Event Type",
+          "type": "string"
+        },
+        "semantics": {
+          "const": "exact",
+          "default": "exact",
+          "title": "Semantics",
+          "type": "string"
+        },
+        "source_event": {
+          "enum": [
+            "sched_wakeup",
+            "sched_wakeup_new"
+          ],
+          "title": "Source Event",
+          "type": "string"
+        },
+        "source_sequence": {
+          "minimum": 0,
+          "title": "Source Sequence",
+          "type": "integer"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        },
+        "target_tid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Tid",
+          "type": "integer"
+        },
+        "timestamp_ns": {
+          "minimum": 0,
+          "title": "Timestamp Ns",
+          "type": "integer"
+        },
+        "waker_relation": {
+          "enum": [
+            "same_target",
+            "redacted",
+            "unavailable"
+          ],
+          "title": "Waker Relation",
+          "type": "string"
+        },
+        "waker_target_tid": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Waker Target Tid"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_index",
+        "source_sequence",
+        "timestamp_ns",
+        "cpu",
+        "target_pid",
+        "target_tid",
+        "source_event",
+        "waker_relation"
+      ],
+      "title": "SchedWakeupEvent",
+      "type": "object"
+    },
+    "TraceCaptureManifest": {
+      "additionalProperties": false,
+      "description": "Agent-visible identity and coverage of the private trace producer.\n\nA successful converter cannot prove that the producer observed every event required for a\nscheduler or off-CPU conclusion.  These fields keep that independent capture boundary in the\nevidence hash and prevent a partial ``perf -p`` capture from being relabeled as complete.",
+      "properties": {
+        "architecture": {
+          "pattern": "^[A-Za-z0-9_.+-]{1,64}$",
+          "title": "Architecture",
+          "type": "string"
+        },
+        "backend_id": {
+          "enum": [
+            "target_filtered_kernel_v1",
+            "stock_perf_pid_partial_v1",
+            "verified_private_import_v1"
+          ],
+          "title": "Backend Id",
+          "type": "string"
+        },
+        "backend_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Backend Version",
+          "type": "string"
+        },
+        "byte_order": {
+          "enum": [
+            "little",
+            "big"
+          ],
+          "title": "Byte Order",
+          "type": "string"
+        },
+        "capture_fingerprint": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Capture Fingerprint",
+          "type": "string"
+        },
+        "dynamic_thread_coverage": {
+          "enum": [
+            "complete",
+            "partial",
+            "unknown"
+          ],
+          "title": "Dynamic Thread Coverage",
+          "type": "string"
+        },
+        "event_formats": {
+          "items": {
+            "$ref": "#/$defs/TraceEventFormatIdentity"
+          },
+          "minItems": 1,
+          "title": "Event Formats",
+          "type": "array"
+        },
+        "external_wakeup_visibility": {
+          "enum": [
+            "complete",
+            "partial",
+            "not_applicable",
+            "unknown"
+          ],
+          "title": "External Wakeup Visibility",
+          "type": "string"
+        },
+        "foreign_metadata_before_userspace": {
+          "title": "Foreign Metadata Before Userspace",
+          "type": "boolean"
+        },
+        "kernel_release": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Kernel Release",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "sched",
+            "off_cpu",
+            "lock"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "pointer_size_bits": {
+          "enum": [
+            32,
+            64
+          ],
+          "title": "Pointer Size Bits",
+          "type": "integer"
+        },
+        "producer_path": {
+          "minLength": 1,
+          "title": "Producer Path",
+          "type": "string"
+        },
+        "producer_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Producer Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "switch_in_visibility": {
+          "enum": [
+            "complete",
+            "partial",
+            "not_applicable",
+            "unknown"
+          ],
+          "title": "Switch In Visibility",
+          "type": "string"
+        },
+        "target_scope": {
+          "enum": [
+            "kernel_tgid_filtered",
+            "per_task_partial",
+            "verified_import"
+          ],
+          "title": "Target Scope",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "backend_id",
+        "backend_version",
+        "producer_path",
+        "producer_sha256",
+        "kernel_release",
+        "architecture",
+        "byte_order",
+        "pointer_size_bits",
+        "target_scope",
+        "dynamic_thread_coverage",
+        "switch_in_visibility",
+        "external_wakeup_visibility",
+        "foreign_metadata_before_userspace",
+        "event_formats",
+        "capture_fingerprint"
+      ],
+      "title": "TraceCaptureManifest",
+      "type": "object"
+    },
+    "TraceClock": {
+      "additionalProperties": false,
+      "description": "Clock domain shared by all normalized trace timestamps.",
+      "properties": {
+        "clock": {
+          "const": "monotonic",
+          "default": "monotonic",
+          "title": "Clock",
+          "type": "string"
+        },
+        "source": {
+          "const": "linux_perf",
+          "default": "linux_perf",
+          "title": "Source",
+          "type": "string"
+        },
+        "unit": {
+          "const": "nanoseconds",
+          "default": "nanoseconds",
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "title": "TraceClock",
+      "type": "object"
+    },
+    "TraceConversionManifest": {
+      "additionalProperties": false,
+      "description": "Reproducible manifest for the fixed external trace conversion.",
+      "properties": {
+        "adapter": {
+          "const": "perf_script_trace",
+          "default": "perf_script_trace",
+          "title": "Adapter",
+          "type": "string"
+        },
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Argv",
+          "type": "array"
+        },
+        "conversion_fingerprint": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Conversion Fingerprint",
+          "type": "string"
+        },
+        "converter_path": {
+          "minLength": 1,
+          "title": "Converter Path",
+          "type": "string"
+        },
+        "converter_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Converter Sha256",
+          "type": "string"
+        },
+        "converter_version": {
+          "minLength": 1,
+          "title": "Converter Version",
+          "type": "string"
+        },
+        "locale": {
+          "const": "C",
+          "default": "C",
+          "title": "Locale",
+          "type": "string"
+        },
+        "normalization_version": {
+          "minLength": 1,
+          "title": "Normalization Version",
+          "type": "string"
+        },
+        "output_format": {
+          "const": "perflens_trace_ndjson_v1",
+          "default": "perflens_trace_ndjson_v1",
+          "title": "Output Format",
+          "type": "string"
+        },
+        "parser_version": {
+          "minLength": 1,
+          "title": "Parser Version",
+          "type": "string"
+        },
+        "recipe_id": {
+          "enum": [
+            "sched-v1",
+            "off-cpu-v1",
+            "lock-v1"
+          ],
+          "title": "Recipe Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "recipe_id",
+        "converter_path",
+        "converter_sha256",
+        "converter_version",
+        "parser_version",
+        "normalization_version",
+        "argv",
+        "conversion_fingerprint"
+      ],
+      "title": "TraceConversionManifest",
+      "type": "object"
+    },
+    "TraceEventFormatIdentity": {
+      "additionalProperties": false,
+      "description": "Hash of one kernel event format consumed by the fixed capture backend.",
+      "properties": {
+        "event_name": {
+          "pattern": "^[a-z0-9_]+:[a-z0-9_]+$",
+          "title": "Event Name",
+          "type": "string"
+        },
+        "format_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Format Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_name",
+        "format_sha256"
+      ],
+      "title": "TraceEventFormatIdentity",
+      "type": "object"
+    },
+    "TraceObservationWindow": {
+      "additionalProperties": false,
+      "description": "Boundaries used when deciding whether an interval is complete.",
+      "properties": {
+        "end_timestamp_ns": {
+          "minimum": 0,
+          "title": "End Timestamp Ns",
+          "type": "integer"
+        },
+        "source": {
+          "enum": [
+            "collector_monotonic_bounds",
+            "observed_event_bounds"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "start_timestamp_ns": {
+          "minimum": 0,
+          "title": "Start Timestamp Ns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start_timestamp_ns",
+        "end_timestamp_ns",
+        "source"
+      ],
+      "title": "TraceObservationWindow",
+      "type": "object"
+    },
+    "TraceQuality": {
+      "additionalProperties": false,
+      "description": "Conserved conversion counts and the evidence quality they imply.\n\n``input_event_count`` counts records observed by the converter. Every\nobserved record is either emitted, merged as non-emitting enrichment, or\nassigned exactly one drop category. A source record may also expand into\nmore than one scoped public event; ``expanded_derived_event_count`` is the\nexact number of additional events created by that expansion. Kernel-\nreported lost events were never observed, while unpaired events may remain\nin the emitted evidence, so both are tracked separately from that equality.",
+      "properties": {
+        "diagnostics_truncated": {
+          "default": false,
+          "title": "Diagnostics Truncated",
+          "type": "boolean"
+        },
+        "duplicate_event_count": {
+          "minimum": 0,
+          "title": "Duplicate Event Count",
+          "type": "integer"
+        },
+        "emitted_event_count": {
+          "minimum": 0,
+          "title": "Emitted Event Count",
+          "type": "integer"
+        },
+        "expanded_derived_event_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Expanded Derived Event Count",
+          "type": "integer"
+        },
+        "foreign_event_dropped_count": {
+          "minimum": 0,
+          "title": "Foreign Event Dropped Count",
+          "type": "integer"
+        },
+        "input_event_count": {
+          "minimum": 0,
+          "title": "Input Event Count",
+          "type": "integer"
+        },
+        "limitations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "lost_event_count": {
+          "minimum": 0,
+          "title": "Lost Event Count",
+          "type": "integer"
+        },
+        "malformed_event_count": {
+          "minimum": 0,
+          "title": "Malformed Event Count",
+          "type": "integer"
+        },
+        "merged_enrichment_event_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Merged Enrichment Event Count",
+          "type": "integer"
+        },
+        "out_of_order_event_count": {
+          "minimum": 0,
+          "title": "Out Of Order Event Count",
+          "type": "integer"
+        },
+        "quality_status": {
+          "enum": [
+            "verified",
+            "partial"
+          ],
+          "title": "Quality Status",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "truncated_event_count": {
+          "minimum": 0,
+          "title": "Truncated Event Count",
+          "type": "integer"
+        },
+        "unpaired_event_count": {
+          "minimum": 0,
+          "title": "Unpaired Event Count",
+          "type": "integer"
+        },
+        "unsupported_event_count": {
+          "minimum": 0,
+          "title": "Unsupported Event Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "quality_status",
+        "input_event_count",
+        "emitted_event_count",
+        "lost_event_count",
+        "malformed_event_count",
+        "duplicate_event_count",
+        "out_of_order_event_count",
+        "unpaired_event_count",
+        "unsupported_event_count",
+        "truncated_event_count",
+        "foreign_event_dropped_count"
+      ],
+      "title": "TraceQuality",
+      "type": "object"
+    },
+    "TraceRawArtifactReference": {
+      "additionalProperties": false,
+      "description": "Identity of the immutable Collector artifact used as converter input.",
+      "properties": {
+        "capture": {
+          "$ref": "#/$defs/TraceCaptureManifest"
+        },
+        "collection_artifact_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Collection Artifact Sha256",
+          "type": "string"
+        },
+        "collection_id": {
+          "pattern": "^collection-[a-f0-9]{16,64}$",
+          "title": "Collection Id",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "sched",
+            "off_cpu",
+            "lock"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "output_bytes": {
+          "exclusiveMinimum": 0,
+          "title": "Output Bytes",
+          "type": "integer"
+        },
+        "output_format": {
+          "const": "perf_data",
+          "default": "perf_data",
+          "title": "Output Format",
+          "type": "string"
+        },
+        "output_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Output Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "collection_id",
+        "mode",
+        "collection_artifact_sha256",
+        "output_sha256",
+        "output_bytes",
+        "capture"
+      ],
+      "title": "TraceRawArtifactReference",
+      "type": "object"
+    },
+    "TraceResourceLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_diagnostics": {
+          "default": 1000,
+          "exclusiveMinimum": 0,
+          "maximum": 10000,
+          "title": "Max Diagnostics",
+          "type": "integer"
+        },
+        "max_duration_seconds": {
+          "default": 10,
+          "exclusiveMinimum": 0,
+          "maximum": 10,
+          "title": "Max Duration Seconds",
+          "type": "integer"
+        },
+        "max_exported_events": {
+          "default": 100000,
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "title": "Max Exported Events",
+          "type": "integer"
+        },
+        "max_exported_intervals": {
+          "default": 100000,
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "title": "Max Exported Intervals",
+          "type": "integer"
+        },
+        "max_input_bytes": {
+          "default": 67108864,
+          "exclusiveMinimum": 0,
+          "maximum": 67108864,
+          "title": "Max Input Bytes",
+          "type": "integer"
+        },
+        "max_input_events": {
+          "default": 100000,
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "title": "Max Input Events",
+          "type": "integer"
+        },
+        "max_input_lines": {
+          "default": 100000,
+          "exclusiveMinimum": 0,
+          "maximum": 200000,
+          "title": "Max Input Lines",
+          "type": "integer"
+        },
+        "max_line_bytes": {
+          "default": 65536,
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Max Line Bytes",
+          "type": "integer"
+        },
+        "max_output_bytes": {
+          "default": 67108864,
+          "exclusiveMinimum": 0,
+          "maximum": 67108864,
+          "title": "Max Output Bytes",
+          "type": "integer"
+        },
+        "max_stack_depth": {
+          "default": 127,
+          "exclusiveMinimum": 0,
+          "maximum": 127,
+          "title": "Max Stack Depth",
+          "type": "integer"
+        },
+        "max_unique_locks": {
+          "default": 100000,
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "title": "Max Unique Locks",
+          "type": "integer"
+        },
+        "max_unique_target_tids": {
+          "default": 65536,
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Max Unique Target Tids",
+          "type": "integer"
+        },
+        "max_warnings": {
+          "default": 1000,
+          "exclusiveMinimum": 0,
+          "maximum": 10000,
+          "title": "Max Warnings",
+          "type": "integer"
+        }
+      },
+      "title": "TraceResourceLimits",
+      "type": "object"
+    },
+    "TraceStackFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "dso": {
+          "minLength": 1,
+          "title": "Dso",
+          "type": "string"
+        },
+        "ip": {
+          "anyOf": [
+            {
+              "pattern": "^(?:0x)?[a-fA-F0-9]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ip"
+        },
+        "is_kernel": {
+          "default": false,
+          "title": "Is Kernel",
+          "type": "boolean"
+        },
+        "source_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source File"
+        },
+        "source_line": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Line"
+        },
+        "symbol": {
+          "minLength": 1,
+          "title": "Symbol",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "dso"
+      ],
+      "title": "TraceStackFrame",
+      "type": "object"
+    },
+    "TraceTargetIdentity": {
+      "additionalProperties": false,
+      "description": "Immutable identity of the process authorized for trace analysis.",
+      "properties": {
+        "observed_target_tids": {
+          "default": [],
+          "items": {
+            "type": "integer"
+          },
+          "title": "Observed Target Tids",
+          "type": "array"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        },
+        "target_start_time_ticks": {
+          "exclusiveMinimum": 0,
+          "title": "Target Start Time Ticks",
+          "type": "integer"
+        },
+        "target_uid": {
+          "minimum": 0,
+          "title": "Target Uid",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "target_pid",
+        "target_uid",
+        "target_start_time_ticks"
+      ],
+      "title": "TraceTargetIdentity",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Canonical normalized trace events bound to an immutable raw source.",
+  "properties": {
+    "allowed_conclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Conclusions",
+      "type": "array"
+    },
+    "clock": {
+      "$ref": "#/$defs/TraceClock"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "conversion": {
+      "$ref": "#/$defs/TraceConversionManifest"
+    },
+    "diagnostic_count": {
+      "minimum": 0,
+      "title": "Diagnostic Count",
+      "type": "integer"
+    },
+    "events": {
+      "items": {
+        "discriminator": {
+          "mapping": {
+            "futex_wait": "#/$defs/FutexWaitEvent",
+            "futex_wake": "#/$defs/FutexWakeEvent",
+            "lock_released": "#/$defs/LockReleasedEvent",
+            "lock_wait": "#/$defs/LockWaitEvent",
+            "lock_wait_ended": "#/$defs/LockWaitEndedEvent",
+            "sched_migrate": "#/$defs/SchedMigrateEvent",
+            "sched_switch": "#/$defs/SchedSwitchEvent",
+            "sched_wakeup": "#/$defs/SchedWakeupEvent"
+          },
+          "propertyName": "event_type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/SchedSwitchEvent"
+          },
+          {
+            "$ref": "#/$defs/SchedWakeupEvent"
+          },
+          {
+            "$ref": "#/$defs/SchedMigrateEvent"
+          },
+          {
+            "$ref": "#/$defs/LockWaitEvent"
+          },
+          {
+            "$ref": "#/$defs/LockWaitEndedEvent"
+          },
+          {
+            "$ref": "#/$defs/LockReleasedEvent"
+          },
+          {
+            "$ref": "#/$defs/FutexWaitEvent"
+          },
+          {
+            "$ref": "#/$defs/FutexWakeEvent"
+          }
+        ]
+      },
+      "title": "Events",
+      "type": "array"
+    },
+    "evidence_fingerprint": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Evidence Fingerprint",
+      "type": "string"
+    },
+    "forbidden_conclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Forbidden Conclusions",
+      "type": "array"
+    },
+    "input_bytes": {
+      "exclusiveMinimum": 0,
+      "title": "Input Bytes",
+      "type": "integer"
+    },
+    "input_line_count": {
+      "minimum": 0,
+      "title": "Input Line Count",
+      "type": "integer"
+    },
+    "input_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Input Sha256",
+      "type": "string"
+    },
+    "limits": {
+      "$ref": "#/$defs/TraceResourceLimits"
+    },
+    "mode": {
+      "enum": [
+        "sched",
+        "off_cpu",
+        "lock"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "normalized_ndjson_bytes": {
+      "minimum": 0,
+      "title": "Normalized Ndjson Bytes",
+      "type": "integer"
+    },
+    "normalized_ndjson_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Normalized Ndjson Sha256",
+      "type": "string"
+    },
+    "observation_window": {
+      "$ref": "#/$defs/TraceObservationWindow"
+    },
+    "perflens_version": {
+      "minLength": 1,
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "quality": {
+      "$ref": "#/$defs/TraceQuality"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/TraceRawArtifactReference"
+    },
+    "status": {
+      "enum": [
+        "complete",
+        "partial"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "target": {
+      "$ref": "#/$defs/TraceTargetIdentity"
+    },
+    "trace_evidence_id": {
+      "pattern": "^[a-z][a-z0-9-]*-[a-f0-9]{16,64}$",
+      "title": "Trace Evidence Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "mode",
+    "status",
+    "input_sha256",
+    "input_bytes",
+    "source",
+    "target",
+    "conversion",
+    "clock",
+    "observation_window",
+    "quality",
+    "limits",
+    "allowed_conclusions",
+    "forbidden_conclusions",
+    "content_sha256",
+    "trace_evidence_id",
+    "evidence_fingerprint",
+    "normalized_ndjson_sha256",
+    "normalized_ndjson_bytes",
+    "input_line_count",
+    "diagnostic_count",
+    "events"
+  ],
+  "title": "TraceEvidenceArtifact",
+  "type": "object"
+}

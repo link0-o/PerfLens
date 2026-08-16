@@ -61,6 +61,13 @@ from perflens.contracts.artifacts import (
     StackSample,
     VerificationCheck,
 )
+from perflens.contracts.trace import (
+    LockAnalysisArtifact,
+    OffCpuAnalysisArtifact,
+    SchedulerAnalysisArtifact,
+    TraceAnalysisVerificationArtifact,
+    TraceEvidenceArtifact,
+)
 from perflens.privileged_helper.protocol import helper_request_schema, helper_response_schema
 
 MODELS = {
@@ -118,6 +125,11 @@ MODELS = {
     "project-detachment.schema.json": ProjectDetachmentArtifact,
     "runtime-status.schema.json": RuntimeStatusArtifact,
     "setup.schema.json": SetupArtifact,
+    "trace-evidence.schema.json": TraceEvidenceArtifact,
+    "scheduler-analysis.schema.json": SchedulerAnalysisArtifact,
+    "off-cpu-analysis.schema.json": OffCpuAnalysisArtifact,
+    "lock-analysis.schema.json": LockAnalysisArtifact,
+    "trace-analysis-verification.schema.json": TraceAnalysisVerificationArtifact,
 }
 
 

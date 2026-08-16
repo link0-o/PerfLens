@@ -1,0 +1,23 @@
+{
+  "scheduler": {
+    "event_kinds": ["sched_switch", "sched_wakeup", "sched_wakeup", "sched_switch", "sched_migrate", "sched_switch"],
+    "observed_target_tids": [4242, 4243],
+    "input_event_count": 12,
+    "emitted_event_count": 6,
+    "lost_event_count": 7,
+    "malformed_event_count": 1,
+    "foreign_event_dropped_count": 1,
+    "unsupported_event_count": 3,
+    "provisional_enrichment_event_count": 1
+  },
+  "lock": {
+    "event_kinds": ["lock_wait", "lock_wait_ended", "lock_wait_ended", "lock_wait_ended", "lock_wait_ended", "lock_wait_ended", "lock_wait", "lock_acquired", "lock_released", "futex_wait", "futex_wake"],
+    "wait_outcomes": ["acquired", "interrupted", "timed_out", "failed", "unknown"],
+    "observed_target_tids": [4242, 4243],
+    "input_event_count": 16,
+    "emitted_event_count": 11,
+    "unsupported_event_count": 3,
+    "lock_phase_enrichment_event_count": 1,
+    "foreign_event_dropped_count": 1
+  }
+}
