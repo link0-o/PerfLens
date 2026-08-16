@@ -86,6 +86,16 @@ def build_trace_evidence(
     _validate_raw_binding(source, verified_raw)
     _validate_capture(source)
     _validate_conversion(mode, conversion)
+    if (
+        conversion.adapter == "kernel_trace_ndjson"
+        and (
+            source.output_format != "target_filtered_trace_ndjson"
+            or source.capture.backend_id != "target_filtered_kernel_v1"
+        )
+    ) or (
+        conversion.adapter == "perf_script_trace" and source.output_format != "perf_data"
+    ):
+        raise _invalid_evidence("trace source format does not match its fixed adapter")
     _validate_parser_result(parsed, target=target, limits=limits)
     _validate_window(observation_window, limits)
 
@@ -140,7 +150,13 @@ def build_trace_evidence(
                 observed_target_tids=observed_tids,
             ),
             "conversion": conversion,
-            "clock": public.TraceClock(),
+            "clock": public.TraceClock(
+                source=(
+                    "linux_bpf"
+                    if source.capture.backend_id == "target_filtered_kernel_v1"
+                    else "linux_perf"
+                )
+            ),
             "observation_window": observation_window,
             "quality": quality,
             "limits": limits,
@@ -213,9 +229,14 @@ def _validate_conversion(
         "off_cpu": "off-cpu-v1",
         "lock": "lock-v1",
     }[mode]
-    if conversion.recipe_id != expected_recipe or (
-        conversion.conversion_fingerprint
+    if (
+        conversion.recipe_id != expected_recipe
+        or conversion.conversion_fingerprint
         != compute_trace_conversion_fingerprint(conversion)
+        or (
+            conversion.adapter == "kernel_trace_ndjson"
+            and conversion.output_format != "perflens_trace_ndjson_v1"
+        )
     ):
         raise _invalid_evidence("fixed trace conversion manifest failed integrity validation")
 

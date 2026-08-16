@@ -140,7 +140,7 @@ class TraceRawArtifactReference(ContractModel):
     collection_artifact_sha256: Sha256
     output_sha256: Sha256
     output_bytes: int = Field(gt=0)
-    output_format: Literal["perf_data"] = "perf_data"
+    output_format: Literal["perf_data", "target_filtered_trace_ndjson"] = "perf_data"
     capture: TraceCaptureManifest
 
     @model_validator(mode="after")
@@ -154,7 +154,7 @@ class TraceConversionManifest(ContractModel):
     """Reproducible manifest for the fixed external trace conversion."""
 
     schema_version: Literal["1.0"] = SCHEMA_VERSION
-    adapter: Literal["perf_script_trace"] = "perf_script_trace"
+    adapter: Literal["perf_script_trace", "kernel_trace_ndjson"] = "perf_script_trace"
     recipe_id: Literal["sched-v1", "off-cpu-v1", "lock-v1"]
     converter_path: str = Field(min_length=1)
     converter_sha256: Sha256
@@ -175,15 +175,19 @@ class TraceConversionManifest(ContractModel):
         if any(not argument for argument in self.argv):
             raise ValueError("trace converter argv must not contain empty arguments")
         expected = (
-            self.converter_path,
-            "script",
-            "--force",
-            "--ns",
-            "--show-lost-events",
-            "-F",
-            "trace:pid,tid,cpu,time,event,trace",
-            "-i",
-            "<private-input>",
+            (
+                self.converter_path,
+                "script",
+                "--force",
+                "--ns",
+                "--show-lost-events",
+                "-F",
+                "trace:pid,tid,cpu,time,event,trace",
+                "-i",
+                "<private-input>",
+            )
+            if self.adapter == "perf_script_trace"
+            else (self.converter_path, "<private-input>")
         )
         private_path_options = {
             "-i": "<private-input>",
@@ -216,7 +220,7 @@ class TraceClock(ContractModel):
 
     clock: Literal["monotonic"] = "monotonic"
     unit: Literal["nanoseconds"] = "nanoseconds"
-    source: Literal["linux_perf"] = "linux_perf"
+    source: Literal["linux_perf", "linux_bpf"] = "linux_perf"
 
 
 class TraceObservationWindow(ContractModel):

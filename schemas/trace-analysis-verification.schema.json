@@ -159,8 +159,11 @@
           "type": "string"
         },
         "source": {
-          "const": "linux_perf",
           "default": "linux_perf",
+          "enum": [
+            "linux_perf",
+            "linux_bpf"
+          ],
           "title": "Source",
           "type": "string"
         },
@@ -179,8 +182,11 @@
       "description": "Reproducible manifest for the fixed external trace conversion.",
       "properties": {
         "adapter": {
-          "const": "perf_script_trace",
           "default": "perf_script_trace",
+          "enum": [
+            "perf_script_trace",
+            "kernel_trace_ndjson"
+          ],
           "title": "Adapter",
           "type": "string"
         },
@@ -458,8 +464,11 @@
           "type": "integer"
         },
         "output_format": {
-          "const": "perf_data",
           "default": "perf_data",
+          "enum": [
+            "perf_data",
+            "target_filtered_trace_ndjson"
+          ],
           "title": "Output Format",
           "type": "string"
         },

@@ -12,7 +12,13 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+mod backend;
+mod execution;
 
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use nix::unistd::geteuid;
@@ -82,6 +88,28 @@ pub enum TraceHelperResult {
         max_concurrent_collections: u8,
         target_filter_before_userspace: bool,
     },
+    CollectionReady {
+        plan_id: String,
+        target_pid: u32,
+    },
+    Collection {
+        plan_id: String,
+        mode: TraceMode,
+        target_pid: u32,
+        target_start_time_ticks: u64,
+        artifact_name: String,
+        output_bytes: u64,
+        output_sha256: String,
+        output_format: &'static str,
+        capture_backend: &'static str,
+        policy_sha256: String,
+        observed_target_tids: Vec<u32>,
+        event_count: u64,
+        lost_event_count: u64,
+        truncated: bool,
+        started_at_monotonic_nanoseconds: u64,
+        finished_at_monotonic_nanoseconds: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -107,6 +135,8 @@ pub struct TraceHelperResponse {
 pub struct TraceHelperServerPolicy {
     pub broker_uid: u32,
     pub allowed_uid: u32,
+    pub artifact_gid: u32,
+    pub allowed_modes: Vec<TraceMode>,
     pub policy_sha256: String,
 }
 
@@ -158,9 +188,20 @@ pub fn serve_private_socket(
     policy: &TraceHelperServerPolicy,
 ) -> io::Result<()> {
     let listener = bind_private_socket(socket_path)?;
+    let policy = Arc::new(policy.clone());
+    let worker_active = Arc::new(AtomicBool::new(false));
     for incoming in listener.incoming() {
         let mut connection = incoming?;
-        handle_connection(&mut connection, policy, now_unix_milliseconds())?;
+        let policy = Arc::clone(&policy);
+        let worker_active = Arc::clone(&worker_active);
+        thread::spawn(move || {
+            let _result = handle_connection_with_worker(
+                &mut connection,
+                &policy,
+                now_unix_milliseconds(),
+                &worker_active,
+            );
+        });
     }
     Ok(())
 }
@@ -202,10 +243,26 @@ fn bind_private_socket(socket_path: &Path) -> io::Result<UnixListener> {
     Ok(listener)
 }
 
+#[cfg(test)]
 fn handle_connection(
     connection: &mut UnixStream,
     policy: &TraceHelperServerPolicy,
     now_milliseconds: u64,
+) -> io::Result<()> {
+    handle_connection_with_worker(
+        connection,
+        policy,
+        now_milliseconds,
+        &AtomicBool::new(false),
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+fn handle_connection_with_worker(
+    connection: &mut UnixStream,
+    policy: &TraceHelperServerPolicy,
+    now_milliseconds: u64,
+    worker_active: &AtomicBool,
 ) -> io::Result<()> {
     let credentials = getsockopt(connection, PeerCredentials).map_err(io::Error::other)?;
     if credentials.uid() != policy.broker_uid {
@@ -228,19 +285,20 @@ fn handle_connection(
         Ok(TraceHelperRequest::CollectPid {
             schema_version: _,
             request_id,
-            plan_id: _,
+            plan_id,
             caller_uid,
             target,
-            mode: _,
-            duration_milliseconds: _,
-            max_output_bytes: _,
+            mode,
+            duration_milliseconds,
+            max_output_bytes,
             expires_at_unix_milliseconds: _,
             expected_policy_sha256,
             expected_capture_backend,
-            report_ready: _,
+            report_ready,
         }) => {
             if caller_uid != policy.allowed_uid
                 || target.uid != policy.allowed_uid
+                || !policy.allowed_modes.contains(&mode)
                 || expected_policy_sha256 != policy.policy_sha256
                 || expected_capture_backend != CAPTURE_BACKEND
                 || assert_pid_identity(&target).is_err()
@@ -255,15 +313,112 @@ fn handle_connection(
                     ),
                 );
             }
-            write_response(
-                connection,
-                &rejected_response(
-                    &request_id,
-                    "UNSUPPORTED_FORMAT",
-                    "trace_backend",
-                    "Target-filtered kernel Trace backend is unavailable",
+            let available_modes = execution::backend_modes();
+            if !available_modes.contains(&mode) {
+                return write_response(
+                    connection,
+                    &rejected_response(
+                        &request_id,
+                        "UNSUPPORTED_FORMAT",
+                        "trace_backend",
+                        "Target-filtered kernel Trace backend is unavailable",
+                    ),
+                );
+            }
+            if worker_active
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return write_response(
+                    connection,
+                    &rejected_response(
+                        &request_id,
+                        "RESOURCE_LIMIT_EXCEEDED",
+                        "trace_helper_worker",
+                        "Trace Helper already has one active collection",
+                    ),
+                );
+            }
+            let _worker_guard = WorkerGuard(worker_active);
+            let plan = execution::TraceExecutionPlan {
+                plan_id: plan_id.clone(),
+                target: target.clone(),
+                mode,
+                duration_milliseconds,
+                max_output_bytes,
+            };
+            let mut notify_ready = || {
+                if report_ready {
+                    write_response(
+                        connection,
+                        &TraceHelperResponse {
+                            schema_version: TRACE_HELPER_SCHEMA_VERSION,
+                            request_id: request_id.clone(),
+                            ok: true,
+                            result: Some(TraceHelperResult::CollectionReady {
+                                plan_id: plan_id.clone(),
+                                target_pid: target.pid,
+                            }),
+                            error: None,
+                        },
+                    )?;
+                }
+                Ok(())
+            };
+            match execution::execute_plan(&plan, policy.artifact_gid, &mut notify_ready) {
+                Ok(result) => write_response(
+                    connection,
+                    &TraceHelperResponse {
+                        schema_version: TRACE_HELPER_SCHEMA_VERSION,
+                        request_id,
+                        ok: true,
+                        result: Some(TraceHelperResult::Collection {
+                            plan_id,
+                            mode,
+                            target_pid: target.pid,
+                            target_start_time_ticks: target.start_time_ticks,
+                            artifact_name: result.artifact_name,
+                            output_bytes: result.output_bytes,
+                            output_sha256: result.output_sha256,
+                            output_format: "target_filtered_trace_ndjson",
+                            capture_backend: CAPTURE_BACKEND,
+                            policy_sha256: policy.policy_sha256.clone(),
+                            observed_target_tids: result.observed_target_tids,
+                            event_count: result.event_count,
+                            lost_event_count: result.lost_event_count,
+                            truncated: result.truncated,
+                            started_at_monotonic_nanoseconds: result
+                                .started_at_monotonic_nanoseconds,
+                            finished_at_monotonic_nanoseconds: result
+                                .finished_at_monotonic_nanoseconds,
+                        }),
+                        error: None,
+                    },
                 ),
-            )
+                Err(error) => {
+                    let (code, stage, message) = match error.kind() {
+                        io::ErrorKind::PermissionDenied => (
+                            "PATH_SAFETY_VIOLATION",
+                            "trace_helper_policy",
+                            "Trace Helper immutable policy or spool rejected the collection",
+                        ),
+                        io::ErrorKind::StorageFull => (
+                            "RESOURCE_LIMIT_EXCEEDED",
+                            "trace_helper_spool",
+                            "Trace Helper spool quota rejected the collection",
+                        ),
+                        _ => (
+                            "EXTERNAL_TOOL_FAILED",
+                            "trace_backend",
+                            "Target-filtered kernel Trace collection failed safely",
+                        ),
+                    };
+                    write_response(
+                        connection,
+                        &rejected_response(&request_id, code, stage, message),
+                    )
+                }
+            }
         }
         Err(error) => write_response(
             connection,
@@ -278,6 +433,11 @@ fn handle_connection(
 }
 
 fn health_response(request_id: String, policy: &TraceHelperServerPolicy) -> TraceHelperResponse {
+    let supported_modes = execution::backend_modes()
+        .into_iter()
+        .filter(|mode| policy.allowed_modes.contains(mode))
+        .collect::<Vec<_>>();
+    let available = !supported_modes.is_empty();
     TraceHelperResponse {
         schema_version: TRACE_HELPER_SCHEMA_VERSION,
         request_id,
@@ -288,15 +448,27 @@ fn health_response(request_id: String, policy: &TraceHelperServerPolicy) -> Trac
             helper_uid: geteuid().as_raw(),
             ready: true,
             capture_backend: CAPTURE_BACKEND,
-            capture_backend_status: "unavailable",
-            supported_modes: Vec::new(),
+            capture_backend_status: if available {
+                "available"
+            } else {
+                "unavailable"
+            },
+            supported_modes,
             policy_sha256: policy.policy_sha256.clone(),
             max_duration_milliseconds: MAX_TRACE_HELPER_DURATION_MILLISECONDS,
             max_output_bytes: MAX_TRACE_HELPER_OUTPUT_BYTES,
             max_concurrent_collections: 1,
-            target_filter_before_userspace: false,
+            target_filter_before_userspace: available,
         }),
         error: None,
+    }
+}
+
+struct WorkerGuard<'worker>(&'worker AtomicBool);
+
+impl Drop for WorkerGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
     }
 }
 
@@ -320,7 +492,7 @@ fn rejected_response(
     }
 }
 
-fn assert_pid_identity(target: &TraceHelperTarget) -> io::Result<()> {
+pub(crate) fn assert_pid_identity(target: &TraceHelperTarget) -> io::Result<()> {
     if target.pid == std::process::id() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -329,6 +501,14 @@ fn assert_pid_identity(target: &TraceHelperTarget) -> io::Result<()> {
     }
     let proc_root = Path::new("/proc").join(target.pid.to_string());
     let metadata = fs::metadata(&proc_root)?;
+    let status_text = fs::read_to_string(proc_root.join("status"))?;
+    let target_tgid = status_text
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("Tgid:")
+                .and_then(|value| value.trim().parse::<u32>().ok())
+        })
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "target status is malformed"))?;
     let stat_text = fs::read_to_string(proc_root.join("stat"))?;
     let closing = stat_text
         .rfind(')')
@@ -338,10 +518,13 @@ fn assert_pid_identity(target: &TraceHelperTarget) -> io::Result<()> {
         .and_then(|tail| tail.split_whitespace().nth(19))
         .and_then(|value| value.parse::<u64>().ok())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "target stat is malformed"))?;
-    if metadata.uid() != target.uid || start_time_ticks != target.start_time_ticks {
+    if metadata.uid() != target.uid
+        || start_time_ticks != target.start_time_ticks
+        || target_tgid != target.pid
+    {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "target identity changed",
+            "target identity changed or is not a process leader",
         ));
     }
     Ok(())
@@ -522,12 +705,13 @@ mod tests {
     use std::os::unix::net::UnixStream;
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::sync::mpsc;
 
-    use nix::unistd::geteuid;
+    use nix::unistd::{getegid, geteuid, gettid};
 
     use super::{
-        ProtocolErrorKind, TraceHelperRequest, TraceHelperServerPolicy, handle_connection,
-        parse_request_frame,
+        ProtocolErrorKind, TraceHelperRequest, TraceHelperServerPolicy, TraceHelperTarget,
+        TraceMode, assert_pid_identity, handle_connection, parse_request_frame,
     };
 
     const NOW_MILLISECONDS: u64 = 4_102_444_700_000;
@@ -638,10 +822,44 @@ mod tests {
         assert_eq!(response["request_id"], "unknown");
     }
 
+    #[test]
+    fn target_identity_requires_a_process_leader() {
+        let (tid_sender, tid_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            tid_sender
+                .send(gettid().as_raw().cast_unsigned())
+                .expect("send worker TID");
+            release_receiver.recv().expect("release worker");
+        });
+        let tid = tid_receiver.recv().expect("receive worker TID");
+        let proc_root = Path::new("/proc").join(tid.to_string());
+        let uid = fs::metadata(&proc_root).expect("worker metadata").uid();
+        let stat = fs::read_to_string(proc_root.join("stat")).expect("worker stat");
+        let closing = stat.rfind(')').expect("stat comm terminator");
+        let start_time_ticks = stat[closing + 2..]
+            .split_whitespace()
+            .nth(19)
+            .expect("start ticks")
+            .parse::<u64>()
+            .expect("numeric ticks");
+        let error = assert_pid_identity(&TraceHelperTarget {
+            pid: tid,
+            uid,
+            start_time_ticks,
+        })
+        .expect_err("thread TID must not be accepted as target TGID");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        release_sender.send(()).expect("release worker");
+        worker.join().expect("join worker");
+    }
+
     fn policy(allowed_uid: u32) -> TraceHelperServerPolicy {
         TraceHelperServerPolicy {
             broker_uid: geteuid().as_raw(),
             allowed_uid,
+            artifact_gid: getegid().as_raw(),
+            allowed_modes: vec![TraceMode::Sched, TraceMode::OffCpu, TraceMode::Lock],
             policy_sha256: "a".repeat(64),
         }
     }

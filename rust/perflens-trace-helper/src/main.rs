@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use perflens_trace_helper::{
-    PRIVATE_TRACE_HELPER_SOCKET, TraceHelperServerPolicy, serve_private_socket,
+    PRIVATE_TRACE_HELPER_SOCKET, TraceHelperServerPolicy, TraceMode, serve_private_socket,
 };
 
 fn main() -> ExitCode {
@@ -34,17 +34,23 @@ fn parse_policy_arguments(arguments: &[String]) -> Result<TraceHelperServerPolic
         broker_uid,
         allowed_flag,
         allowed_uid,
+        artifact_flag,
+        artifact_gid,
+        modes_flag,
+        allowed_modes,
         policy_flag,
         policy_sha256,
     ] = arguments
     else {
-        return Err("expected --broker-uid <uid> --allowed-uid <uid> --policy-sha256 <sha256>");
+        return Err("expected fixed broker, target, artifact group, modes, and policy arguments");
     };
     if broker_flag != "--broker-uid"
         || allowed_flag != "--allowed-uid"
+        || artifact_flag != "--artifact-gid"
+        || modes_flag != "--allowed-modes"
         || policy_flag != "--policy-sha256"
     {
-        return Err("expected --broker-uid <uid> --allowed-uid <uid> --policy-sha256 <sha256>");
+        return Err("expected fixed broker, target, artifact group, modes, and policy arguments");
     }
     let broker_uid = broker_uid
         .parse::<u32>()
@@ -52,14 +58,47 @@ fn parse_policy_arguments(arguments: &[String]) -> Result<TraceHelperServerPolic
     let allowed_uid = allowed_uid
         .parse::<u32>()
         .map_err(|_error| "allowed UID must be an unsigned integer")?;
+    let artifact_gid = artifact_gid
+        .parse::<u32>()
+        .map_err(|_error| "artifact GID must be an unsigned integer")?;
+    let allowed_modes = parse_allowed_modes(allowed_modes)?;
     if !valid_sha256(policy_sha256) {
         return Err("policy SHA-256 must be 64 lowercase hexadecimal characters");
     }
     Ok(TraceHelperServerPolicy {
         broker_uid,
         allowed_uid,
+        artifact_gid,
+        allowed_modes,
         policy_sha256: policy_sha256.clone(),
     })
+}
+
+fn parse_allowed_modes(value: &str) -> Result<Vec<TraceMode>, &'static str> {
+    let mut modes = Vec::new();
+    for raw in value.split(',') {
+        let mode = match raw {
+            "sched" => TraceMode::Sched,
+            "off_cpu" => TraceMode::OffCpu,
+            "lock" => TraceMode::Lock,
+            _ => return Err("allowed modes contain an unknown value"),
+        };
+        if modes.contains(&mode) {
+            return Err("allowed modes contain a duplicate value");
+        }
+        modes.push(mode);
+    }
+    if modes.is_empty() {
+        return Err("at least one Trace mode is required");
+    }
+    let canonical = [TraceMode::Sched, TraceMode::OffCpu, TraceMode::Lock]
+        .into_iter()
+        .filter(|mode| modes.contains(mode))
+        .collect::<Vec<_>>();
+    if modes != canonical {
+        return Err("allowed modes must use canonical order");
+    }
+    Ok(modes)
 }
 
 fn valid_sha256(value: &str) -> bool {
@@ -84,12 +123,18 @@ mod tests {
             "991",
             "--allowed-uid",
             "1000",
+            "--artifact-gid",
+            "992",
+            "--allowed-modes",
+            "sched,off_cpu,lock",
             "--policy-sha256",
             &"a".repeat(64),
         ]))
         .expect("parse policy");
         assert_eq!(policy.broker_uid, 991);
         assert_eq!(policy.allowed_uid, 1000);
+        assert_eq!(policy.artifact_gid, 992);
+        assert_eq!(policy.allowed_modes.len(), 3);
     }
 
     #[test]
@@ -100,6 +145,10 @@ mod tests {
                 "root",
                 "--allowed-uid",
                 "1000",
+                "--artifact-gid",
+                "992",
+                "--allowed-modes",
+                "sched,off_cpu,lock",
                 "--policy-sha256",
                 &"a".repeat(64),
             ]))
@@ -111,6 +160,10 @@ mod tests {
                 "991",
                 "--allowed-uid",
                 "1000",
+                "--artifact-gid",
+                "992",
+                "--allowed-modes",
+                "sched,off_cpu,lock",
                 "--policy-sha256",
                 "ABC",
             ]))
