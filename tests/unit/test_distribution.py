@@ -191,14 +191,20 @@ def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
     )
     assert {path.name for path in target.iterdir()} == {
         "collector.toml",
+        "trace.toml",
         "perflens-collector.service",
         "perflens-collector-helper.service",
         "perflens-privileged-helper.service",
+        "perflens-collector-trace.service",
+        "perflens-collector-helper-trace.service",
+        "perflens-trace-helper.service",
         "perflens.sysusers",
     }
     policy = (target / "collector.toml").read_text(encoding="utf-8")
     service = (target / "perflens-collector.service").read_text(encoding="utf-8")
     helper_service = (target / "perflens-privileged-helper.service").read_text(encoding="utf-8")
+    trace_policy = (target / "trace.toml").read_text(encoding="utf-8")
+    trace_service = (target / "perflens-trace-helper.service").read_text(encoding="utf-8")
     assert "allowed_uids = [1000]" in policy
     assert "policy_version = 1" in policy
     assert 'privilege_mode = "cap_perfmon"' in policy
@@ -223,6 +229,18 @@ def test_collector_assets_are_staged_without_overwrite(tmp_path: Path) -> None:
     assert "NoNewPrivileges=yes" in helper_service
     assert "SecureBits=" not in helper_service
     assert "@PERFLENS_PERF_" not in helper_service
+    assert "allowed_uid = 1000" in trace_policy
+    assert 'capture_backend = "target_filtered_kernel_v1"' in trace_policy
+    assert "target_filter_before_userspace = true" in trace_policy
+    assert "max_duration_seconds = 10" in trace_policy
+    assert "max_output_bytes = 67108864" in trace_policy
+    assert "--allowed-uid 1000" in trace_service
+    assert "@PERFLENS_BROKER_UID@" in trace_service
+    assert "@PERFLENS_TRACE_ARTIFACT_GID@" in trace_service
+    assert "@PERFLENS_TRACE_POLICY_SHA256@" in trace_service
+    assert "@PERFLENS_TRACE_CAPABILITIES@" in trace_service
+    assert "TasksMax=16" in trace_service
+    assert "MemoryMax=268435456" in trace_service
     with pytest.raises(PerfLensError) as captured:
         install_collector_assets(target)
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
@@ -241,9 +259,15 @@ def test_collector_assets_have_fixed_safe_modes_independent_of_umask(
 
     assert target.stat().st_mode & 0o777 == 0o700
     assert (target / "collector.toml").stat().st_mode & 0o777 == 0o600
+    assert (target / "trace.toml").stat().st_mode & 0o777 == 0o600
     assert (target / "perflens-collector.service").stat().st_mode & 0o777 == 0o644
     assert (target / "perflens-collector-helper.service").stat().st_mode & 0o777 == 0o644
     assert (target / "perflens-privileged-helper.service").stat().st_mode & 0o777 == 0o644
+    assert (target / "perflens-collector-trace.service").stat().st_mode & 0o777 == 0o644
+    assert (
+        target / "perflens-collector-helper-trace.service"
+    ).stat().st_mode & 0o777 == 0o644
+    assert (target / "perflens-trace-helper.service").stat().st_mode & 0o777 == 0o644
     assert (target / "perflens.sysusers").stat().st_mode & 0o777 == 0o644
 
 

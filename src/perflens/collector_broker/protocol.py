@@ -46,6 +46,20 @@ class BrokerCollectionReady(ContractModel):
     target_pid: int = Field(gt=0)
 
 
+class BrokerTraceEvidenceReference(ContractModel):
+    """Small public receipt; the private Trace Helper path is never serialized."""
+
+    kind: Literal["trace_evidence"] = "trace_evidence"
+    plan_id: str = Field(pattern=r"^plan-[a-f0-9]{20}$")
+    target_pid: int = Field(gt=0)
+    mode: Literal["sched", "off_cpu", "lock"]
+    trace_evidence_id: str = Field(pattern=r"^trace-evidence-[a-f0-9]{16,64}$")
+    evidence_path: str = Field(min_length=1)
+    evidence_file_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    evidence_file_bytes: int = Field(gt=0, le=268_435_456)
+    evidence_content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class BrokerResponse(ContractModel):
     schema_version: Literal["1.1"] = BROKER_SCHEMA_VERSION
     request_id: str = Field(pattern=r"^(unknown|request-[a-f0-9]{16,64})$")

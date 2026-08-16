@@ -79,6 +79,35 @@ def test_plan_is_denied_outside_categorical_policy() -> None:
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 
+def test_trace_plan_uses_fixed_recipe_fields_and_safety_ceilings() -> None:
+    plan = create_collection_plan(
+        CollectionPlanRequest(mode="off_cpu", pid=os.getppid(), duration_seconds=10),
+        policy=AutomaticCollectionPolicy(
+            enabled=True,
+            allowed_modes=("off_cpu",),
+        ),
+        capabilities=_capabilities(),
+    )
+
+    assert plan.policy_status == "allowed"
+    assert plan.frequency_hz is None
+    assert plan.call_graph is None
+    assert plan.events == ()
+    assert plan.max_output_bytes == 64 << 20
+    assert any("64 MiB" in warning for warning in plan.warnings)
+
+    too_long = create_collection_plan(
+        CollectionPlanRequest(mode="sched", pid=os.getppid(), duration_seconds=11),
+        policy=AutomaticCollectionPolicy(
+            enabled=True,
+            allowed_modes=("sched",),
+        ),
+        capabilities=_capabilities(),
+    )
+    assert too_long.policy_status == "denied"
+    assert any("10-second" in warning for warning in too_long.warnings)
+
+
 def test_software_only_stat_plan_uses_fixed_software_events() -> None:
     plan = create_collection_plan(
         CollectionPlanRequest(

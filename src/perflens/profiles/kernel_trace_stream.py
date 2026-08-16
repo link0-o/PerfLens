@@ -102,6 +102,8 @@ class FixedKernelTraceNdjsonAdapter:
         expected_input_owner_uid: int,
         expected_input_owner_gid: int,
         expected_input_mode: int,
+        expected_input_sha256: str,
+        expected_input_bytes: int,
         mode: str,
         lost_event_count: int,
         truncated: bool,
@@ -119,6 +121,13 @@ class FixedKernelTraceNdjsonAdapter:
             raise ValueError("expected kernel trace owner identity must be non-negative")
         if expected_input_mode not in {0o600, 0o640}:
             raise ValueError("expected kernel trace mode must be exactly 0600 or 0640")
+        if (
+            len(expected_input_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in expected_input_sha256)
+            or isinstance(expected_input_bytes, bool)
+            or expected_input_bytes < 1
+        ):
+            raise ValueError("expected kernel trace content identity is invalid")
         if isinstance(lost_event_count, bool) or lost_event_count < 0:
             raise ValueError("lost_event_count must be a non-negative integer")
         self._target = target
@@ -127,18 +136,21 @@ class FixedKernelTraceNdjsonAdapter:
         self._owner_uid = expected_input_owner_uid
         self._owner_gid = expected_input_owner_gid
         self._input_mode = expected_input_mode
+        self._input_sha256 = expected_input_sha256
+        self._input_bytes = expected_input_bytes
         self._mode = mode
         self._lost_event_count = lost_event_count
         self._truncated = truncated
         self._limits = limits or ResourceLimits()
 
     def parse(self, path: Path) -> TraceStreamParseResult:
-        descriptor = _open_safe_input(
+        descriptor, identity = _open_safe_input(
             path,
             expected_uid=self._owner_uid,
             expected_gid=self._owner_gid,
             expected_mode=self._input_mode,
             max_bytes=self._limits.max_output_bytes,
+            expected_bytes=self._input_bytes,
         )
         state = _KernelParserState(
             target=self._target,
@@ -148,6 +160,7 @@ class FixedKernelTraceNdjsonAdapter:
             lost_event_count=self._lost_event_count,
             truncated=self._truncated,
         )
+        digest = hashlib.sha256()
         try:
             with os.fdopen(descriptor, "rb", closefd=True) as source:
                 descriptor = -1
@@ -155,7 +168,10 @@ class FixedKernelTraceNdjsonAdapter:
                     line = source.readline(self._limits.max_line_chars + 1)
                     if not line:
                         break
+                    digest.update(line)
                     state.consume(line)
+                after = os.fstat(source.fileno())
+            current = path.stat(follow_symlinks=False)
         except PerfLensError:
             raise
         except OSError as exc:
@@ -163,6 +179,18 @@ class FixedKernelTraceNdjsonAdapter:
         finally:
             if descriptor >= 0:
                 os.close(descriptor)
+        if (
+            state.input_bytes != self._input_bytes
+            or digest.hexdigest() != self._input_sha256
+            or _input_identity(after) != identity
+            or _input_identity(current) != identity
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "kernel_trace_input",
+                "Kernel trace content or file identity changed during parsing",
+                recoverable=True,
+            )
         result = state.finish(self._observed_target_tids)
         validate_trace_sequence(
             result.events,
@@ -496,7 +524,8 @@ def _open_safe_input(
     expected_gid: int,
     expected_mode: int,
     max_bytes: int,
-) -> int:
+    expected_bytes: int,
+) -> tuple[int, tuple[int, int, int, int, int, int, int, int, int]]:
     descriptor = -1
     try:
         descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
@@ -509,9 +538,10 @@ def _open_safe_input(
             or stat.S_IMODE(metadata.st_mode) != expected_mode
             or metadata.st_size <= 0
             or metadata.st_size > max_bytes
+            or metadata.st_size != expected_bytes
         ):
             raise OSError("unsafe private kernel trace")
-        return descriptor
+        return descriptor, _input_identity(metadata)
     except OSError as exc:
         if descriptor >= 0:
             os.close(descriptor)
@@ -521,6 +551,22 @@ def _open_safe_input(
             "Kernel trace input failed the private-file safety check",
             recoverable=True,
         ) from exc
+
+
+def _input_identity(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_uid,
+        metadata.st_gid,
+        stat.S_IMODE(metadata.st_mode),
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
 
 
 def _without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

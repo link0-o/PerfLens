@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -37,13 +38,22 @@ def _write(path: Path, records: list[dict[str, object]]) -> None:
     path.chmod(0o600)
 
 
-def _adapter(*, mode: str = "sched", lost: int = 0, truncated: bool = False):
+def _adapter(
+    path: Path,
+    *,
+    mode: str = "sched",
+    lost: int = 0,
+    truncated: bool = False,
+):
+    raw = path.read_bytes()
     return FixedKernelTraceNdjsonAdapter(
         target=TargetIdentity(pid=321, uid=os.getuid(), start_time_ticks=456),
         observed_target_tids=(321, 322),
         expected_input_owner_uid=os.getuid(),
         expected_input_owner_gid=os.getgid(),
         expected_input_mode=0o600,
+        expected_input_sha256=hashlib.sha256(raw).hexdigest(),
+        expected_input_bytes=len(raw),
         mode=mode,
         lost_event_count=lost,
         truncated=truncated,
@@ -80,7 +90,7 @@ def test_parses_target_filtered_scheduler_and_merges_waker(tmp_path: Path) -> No
         ],
     )
 
-    result = _adapter().parse(trace)
+    result = _adapter(trace).parse(trace)
 
     assert result.statistics.input_event_count == 4
     assert result.statistics.emitted_event_count == 3
@@ -98,7 +108,7 @@ def test_truncation_and_loss_are_explicitly_partial(tmp_path: Path) -> None:
     trace = tmp_path / "trace.ndjson"
     _write(trace, [_record(0, "sched_wakeup", target_cpu=2)])
 
-    result = _adapter(lost=7, truncated=True).parse(trace)
+    result = _adapter(trace, lost=7, truncated=True).parse(trace)
 
     assert result.statistics.partial
     assert result.statistics.lost_event_count == 7
@@ -120,7 +130,7 @@ def test_rejects_foreign_or_private_fields(
     trace = tmp_path / "trace.ndjson"
     _write(trace, [_record(0, "sched_wakeup", target_cpu=2, **mutation)])
 
-    result = _adapter().parse(trace)
+    result = _adapter(trace).parse(trace)
 
     assert not result.events
     assert result.statistics.malformed_event_count == 1
@@ -132,7 +142,17 @@ def test_rejects_symlink_and_group_writable_input(tmp_path: Path) -> None:
     symlink = tmp_path / "linked.ndjson"
     symlink.symlink_to(trace)
     with pytest.raises(PerfLensError):
-        _adapter().parse(symlink)
+        _adapter(trace).parse(symlink)
     trace.chmod(0o660)
     with pytest.raises(PerfLensError):
-        _adapter().parse(trace)
+        _adapter(trace).parse(trace)
+
+
+def test_rejects_content_replaced_after_expected_identity_was_bound(tmp_path: Path) -> None:
+    trace = tmp_path / "trace.ndjson"
+    _write(trace, [_record(0, "sched_wakeup", target_cpu=2)])
+    adapter = _adapter(trace)
+    _write(trace, [_record(0, "sched_wakeup", target_cpu=3)])
+
+    with pytest.raises(PerfLensError):
+        adapter.parse(trace)

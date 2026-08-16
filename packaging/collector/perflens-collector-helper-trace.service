@@ -1,0 +1,41 @@
+# Managed by PerfLens. Do not remove this marker from generated service units.
+[Unit]
+Description=PerfLens unprivileged broker with paranoid=3 and Trace Helpers
+Documentation=https://github.com/link0-o/PerfLens
+Requires=perflens-privileged-helper.service perflens-trace-helper.service
+After=local-fs.target perflens-privileged-helper.service perflens-trace-helper.service
+
+[Service]
+Type=simple
+User=perflens
+Group=perflens
+SupplementaryGroups=perflens-internal perflens-trace-internal
+ExecStart=/usr/bin/perflens-collector --socket /run/perflens/collector.sock --policy /etc/perflens/collector.toml --trace-policy /etc/perflens/trace.toml
+RuntimeDirectory=perflens
+RuntimeDirectoryMode=0750
+StateDirectory=perflens
+StateDirectoryMode=0750
+UMask=0007
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+ReadOnlyPaths=/run/perflens-helper /var/lib/perflens-helper /run/perflens-trace-helper /var/lib/perflens-trace-helper
+ReadWritePaths=/run/perflens /var/lib/perflens
+TasksMax=64
+MemoryMax=536870912
+LimitCORE=0
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target
+

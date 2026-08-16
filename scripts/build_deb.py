@@ -36,6 +36,11 @@ def main() -> None:
         help="Prebuilt release perflens-privileged-helper binary.",
     )
     parser.add_argument(
+        "--trace-helper-binary",
+        type=Path,
+        help="Prebuilt release perflens-trace-helper binary.",
+    )
+    parser.add_argument(
         "--offline",
         action="store_true",
         help="Require every locked dependency to already exist in the uv cache.",
@@ -57,6 +62,12 @@ def main() -> None:
         arguments.helper_binary or project_root / "target/release/perflens-privileged-helper",
         parser,
         "Rust Helper binary",
+    )
+    trace_helper_binary = _executable(
+        arguments.trace_helper_binary
+        or project_root / "target/release/perflens-trace-helper",
+        parser,
+        "Rust Trace Helper binary",
     )
     python = _executable(arguments.python, parser, "Python interpreter")
     uv_candidate = arguments.uv or _which_path("uv", parser)
@@ -108,6 +119,7 @@ def main() -> None:
             version=debian_version,
             architecture=architecture,
             helper_binary=helper_binary,
+            trace_helper_binary=trace_helper_binary,
         )
         _build_archive(dpkg_deb, main_root, main_output, project_root)
         _build_archive(dpkg_deb, collector_root, collector_output, project_root)
@@ -211,6 +223,7 @@ def _build_collector_tree(
     version: str,
     architecture: str,
     helper_binary: Path,
+    trace_helper_binary: Path,
 ) -> None:
     binary_directory = root / "usr/bin"
     binary_directory.mkdir(parents=True)
@@ -220,14 +233,21 @@ def _build_collector_tree(
     helper_destination.parent.mkdir(parents=True)
     shutil.copyfile(helper_binary, helper_destination)
     helper_destination.chmod(0o755)
+    trace_helper_destination = root / "usr/lib/perflens/perflens-trace-helper"
+    shutil.copyfile(trace_helper_binary, trace_helper_destination)
+    trace_helper_destination.chmod(0o755)
     _install_docs(root, project_root, "perflens-collector")
     examples = root / "usr/share/perflens/collector"
     examples.mkdir(parents=True)
     for filename in (
         "collector.example.toml",
+        "trace.example.toml",
         "perflens-collector.service",
         "perflens-collector-helper.service",
         "perflens-privileged-helper.service",
+        "perflens-collector-trace.service",
+        "perflens-collector-helper-trace.service",
+        "perflens-trace-helper.service",
         "perflens.sysusers",
     ):
         shutil.copyfile(project_root / "packaging/collector" / filename, examples / filename)
@@ -235,12 +255,22 @@ def _build_collector_tree(
         package="perflens-collector",
         version=version,
         architecture=architecture,
-        depends=(f"perflens (= {version})", "systemd", "passwd", "libc6 (>= 2.17)"),
+        depends=(
+            f"perflens (= {version})",
+            "systemd",
+            "passwd",
+            "libc6 (>= 2.17)",
+            "libbpf1",
+            "libelf1",
+            "zlib1g",
+            "libzstd1",
+        ),
         recommends=("linux-perf",),
         installed_size=_tree_kib(root),
         description=(
-            "Optional policy-bounded Collector and Rust Helper for PerfLens\n"
-            " This package adds administrator, Collector, and privileged Helper entry points.\n"
+            "Optional policy-bounded Collector and Rust Helpers for PerfLens\n"
+            " This package adds administrator, Collector, stat/record Helper, and independent\n"
+            " target-filtered Trace Helper entry points.\n"
             " Installation does not enable the service or alter kernel policy."
         ),
     )
@@ -361,9 +391,10 @@ def _normalize_tree(root: Path) -> None:
     launcher = root / "usr/lib/perflens/perflens-launcher"
     if launcher.is_file():
         launcher.chmod(0o755)
-    helper = root / "usr/lib/perflens/perflens-privileged-helper"
-    if helper.is_file():
-        helper.chmod(0o755)
+    for helper_name in ("perflens-privileged-helper", "perflens-trace-helper"):
+        helper = root / "usr/lib/perflens" / helper_name
+        if helper.is_file():
+            helper.chmod(0o755)
     for script_name in ("postinst", "preinst", "prerm", "postrm"):
         maintainer_script = root / "DEBIAN" / script_name
         if maintainer_script.is_file():

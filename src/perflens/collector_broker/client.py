@@ -16,18 +16,21 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from perflens.application.evidence import validate_collection_invariants
+from perflens.application.trace_evidence import validate_trace_evidence_invariants
 from perflens.collector_broker.protocol import (
     MAX_BROKER_MESSAGE_BYTES,
     BrokerCollectionReady,
     BrokerCollectRequest,
     BrokerHealthRequest,
     BrokerResponse,
+    BrokerTraceEvidenceReference,
 )
 from perflens.contracts.artifacts import (
     CollectionArtifact,
     CollectionPlanArtifact,
     CollectorHealthArtifact,
 )
+from perflens.contracts.trace import TraceEvidenceArtifact
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.metrics.perf_stat import PerfStatMetricAdapter
 
@@ -53,6 +56,61 @@ class CollectorBrokerClient:
         *,
         ready_callback: Callable[[], None] | None = None,
     ) -> CollectionArtifact:
+        if plan.mode not in {"record", "stat"}:
+            raise ValueError("Trace plans must use collect_trace")
+        result, server_uid = self._request_collection(plan, ready_callback=ready_callback)
+        try:
+            artifact = CollectionArtifact.model_validate(result)
+        except ValidationError as exc:
+            raise PerfLensError(
+                ErrorCode.INTERNAL_ERROR,
+                "collector_broker",
+                "Collector broker returned an invalid collection artifact",
+            ) from exc
+        if (
+            artifact.target_type != "pid"
+            or artifact.target_pid != plan.target_pid
+            or artifact.mode != plan.mode
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "collector_broker",
+                "Collector result does not match the authorized collection plan",
+            )
+        validate_collection_invariants(artifact)
+        _verify_collection_artifact(artifact, plan, self._socket, server_uid)
+        return artifact
+
+    def collect_trace(
+        self,
+        plan: CollectionPlanArtifact,
+        *,
+        ready_callback: Callable[[], None] | None = None,
+    ) -> TraceEvidenceArtifact:
+        if plan.mode not in {"sched", "off_cpu", "lock"}:
+            raise ValueError("record/stat plans must use collect")
+        result, server_uid = self._request_collection(plan, ready_callback=ready_callback)
+        try:
+            receipt = BrokerTraceEvidenceReference.model_validate(result)
+        except ValidationError as exc:
+            raise PerfLensError(
+                ErrorCode.INTERNAL_ERROR,
+                "collector_broker",
+                "Collector broker returned an invalid Trace evidence receipt",
+            ) from exc
+        return _verify_trace_evidence_receipt(
+            receipt,
+            plan,
+            self._socket,
+            server_uid,
+        )
+
+    def _request_collection(
+        self,
+        plan: CollectionPlanArtifact,
+        *,
+        ready_callback: Callable[[], None] | None,
+    ) -> tuple[dict[str, object], int]:
         identity = f"{plan.plan_id}\0{plan.target_pid}\0{plan.expires_at}"
         request = BrokerCollectRequest(
             request_id=f"request-{hashlib.sha256(identity.encode()).hexdigest()[:24]}",
@@ -73,27 +131,7 @@ class CollectorBrokerClient:
                 "collector_broker",
                 "Collector broker returned no result",
             )
-        try:
-            artifact = CollectionArtifact.model_validate(response.result)
-        except ValidationError as exc:
-            raise PerfLensError(
-                ErrorCode.INTERNAL_ERROR,
-                "collector_broker",
-                "Collector broker returned an invalid collection artifact",
-            ) from exc
-        if (
-            artifact.target_type != "pid"
-            or artifact.target_pid != plan.target_pid
-            or artifact.mode != plan.mode
-        ):
-            raise PerfLensError(
-                ErrorCode.PATH_SAFETY_VIOLATION,
-                "collector_broker",
-                "Collector result does not match the authorized collection plan",
-            )
-        validate_collection_invariants(artifact)
-        _verify_collection_artifact(artifact, plan, self._socket, server_uid)
-        return artifact
+        return response.result, server_uid
 
     def health(self, *, expected_service_uid: int | None = None) -> CollectorHealthArtifact:
         """Perform one authenticated, read-only protocol round trip."""
@@ -322,6 +360,92 @@ def _validate_connected_peer(identity: _SocketIdentity, server_pid: int, server_
         )
 
 
+def _verify_trace_evidence_receipt(
+    receipt: BrokerTraceEvidenceReference,
+    plan: CollectionPlanArtifact,
+    socket_identity: _SocketIdentity,
+    server_uid: int,
+) -> TraceEvidenceArtifact:
+    if (
+        receipt.plan_id != plan.plan_id
+        or receipt.target_pid != plan.target_pid
+        or receipt.mode != plan.mode
+    ):
+        raise _unsafe_trace_evidence()
+    candidate = Path(receipt.evidence_path).expanduser()
+    expected_name = f"{receipt.trace_evidence_id}.json"
+    if not candidate.is_absolute() or candidate.name != expected_name:
+        raise _unsafe_trace_evidence()
+    descriptor = -1
+    try:
+        resolved = candidate.resolve(strict=True)
+        metadata = candidate.stat(follow_symlinks=False)
+        parent_metadata = candidate.parent.stat(follow_symlinks=False)
+        if (
+            resolved != candidate
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_uid != server_uid
+            or metadata.st_gid != socket_identity.gid
+            or stat.S_IMODE(metadata.st_mode) not in {0o440, 0o640}
+            or metadata.st_size != receipt.evidence_file_bytes
+            or parent_metadata.st_uid != server_uid
+            or parent_metadata.st_mode & 0o022
+        ):
+            raise _unsafe_trace_evidence()
+        descriptor = os.open(resolved, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        before = os.fstat(descriptor)
+        if _file_identity(before) != _file_identity(metadata):
+            raise _unsafe_trace_evidence()
+        payload = bytearray()
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, min(1 << 20, receipt.evidence_file_bytes + 1)):
+            payload.extend(chunk)
+            digest.update(chunk)
+            if len(payload) > receipt.evidence_file_bytes:
+                raise _unsafe_trace_evidence()
+        after = os.fstat(descriptor)
+        current = resolved.stat(follow_symlinks=False)
+    except PerfLensError:
+        raise
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.EXTERNAL_TOOL_FAILED,
+            "collector_broker",
+            "Public Trace evidence cannot be read safely",
+            recoverable=True,
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if (
+        _file_identity(before) != _file_identity(after)
+        or _file_identity(after) != _file_identity(current)
+        or len(payload) != receipt.evidence_file_bytes
+        or digest.hexdigest() != receipt.evidence_file_sha256
+    ):
+        raise _unsafe_trace_evidence()
+    try:
+        evidence = TraceEvidenceArtifact.model_validate_json(payload)
+    except ValidationError as exc:
+        raise PerfLensError(
+            ErrorCode.PROFILE_PARSE_FAILED,
+            "collector_broker",
+            "Public Trace evidence failed schema validation",
+        ) from exc
+    if (
+        evidence.trace_evidence_id != receipt.trace_evidence_id
+        or evidence.content_sha256 != receipt.evidence_content_sha256
+        or evidence.mode != plan.mode
+        or evidence.target.target_pid != plan.target_pid
+        or evidence.target.target_uid != plan.target_uid
+        or evidence.target.target_start_time_ticks != plan.target_start_time_ticks
+    ):
+        raise _unsafe_trace_evidence()
+    validate_trace_evidence_invariants(evidence)
+    return evidence
+
+
 def _verify_collection_artifact(
     artifact: CollectionArtifact,
     plan: CollectionPlanArtifact,
@@ -492,6 +616,14 @@ def _unsafe_collection_artifact() -> PerfLensError:
         ErrorCode.PATH_SAFETY_VIOLATION,
         "collector_broker",
         "Collector output path or metadata violates the artifact policy",
+    )
+
+
+def _unsafe_trace_evidence() -> PerfLensError:
+    return PerfLensError(
+        ErrorCode.PATH_SAFETY_VIOLATION,
+        "collector_broker",
+        "Public Trace evidence identity, permissions, or digest are unsafe",
     )
 
 

@@ -64,6 +64,7 @@ from perflens.contracts.trace import (
     OffCpuAnalysisArtifact,
     SchedulerAnalysisArtifact,
     TraceAnalysisVerificationArtifact,
+    TraceEvidenceArtifact,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.storage import ArtifactStore, PathPolicy
@@ -240,10 +241,35 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             ) from exc
         assert_plan_current(plan)
         assert config.collector_socket is not None
-        artifact = CollectorBrokerClient(
+        client = CollectorBrokerClient(
             config.collector_socket,
             timeout_seconds=min(plan.duration_seconds + 15, 86_500),
-        ).collect(plan)
+        )
+        if plan.mode in {"sched", "off_cpu", "lock"}:
+            trace_evidence = client.collect_trace(plan)
+            store.save(
+                trace_evidence,
+                trace_evidence.trace_evidence_id,
+                "trace-evidence",
+            )
+            return ArtifactReference(
+                artifact_id=trace_evidence.trace_evidence_id,
+                artifact_type="trace-evidence",
+                uri=store.uri(trace_evidence.trace_evidence_id, "trace-evidence"),
+                summary={
+                    "mode": trace_evidence.mode,
+                    "target_pid": trace_evidence.target.target_pid,
+                    "target_uid": trace_evidence.target.target_uid,
+                    "status": trace_evidence.status,
+                    "quality": trace_evidence.quality.quality_status,
+                    "event_count": len(trace_evidence.events),
+                    "lost_event_count": trace_evidence.quality.lost_event_count,
+                    "content_sha256": trace_evidence.content_sha256,
+                    "source_output_sha256": trace_evidence.source.output_sha256,
+                    "limitations": "; ".join(trace_evidence.quality.limitations),
+                },
+            )
+        artifact = client.collect(plan)
         store.save(artifact, artifact.collection_id, "collection")
         return ArtifactReference(
             artifact_id=artifact.collection_id,
@@ -315,7 +341,32 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             capabilities=inspect_collection_capabilities(config.perf_path),
             collector_socket=config.collector_socket,
         )
-        store.save(collection, collection.collection_id, "collection")
+        if isinstance(collection, TraceEvidenceArtifact):
+            store.save(
+                collection,
+                collection.trace_evidence_id,
+                "trace-evidence",
+            )
+            collection_summary: dict[str, str | int | float | bool | None] = {
+                "actual_event_source": "kernel_trace",
+                "record_event": None,
+                "fallback_used": False,
+                "fallback_reason": None,
+                "evidence_limitations": "; ".join(collection.quality.limitations),
+                "warnings": "",
+                "trace_quality": collection.quality.quality_status,
+                "trace_event_count": len(collection.events),
+            }
+        else:
+            store.save(collection, collection.collection_id, "collection")
+            collection_summary = {
+                "actual_event_source": collection.actual_event_source,
+                "record_event": collection.record_event,
+                "fallback_used": collection.fallback_used,
+                "fallback_reason": collection.fallback_reason,
+                "evidence_limitations": "; ".join(collection.evidence_limitations),
+                "warnings": "; ".join(collection.warnings),
+            }
         store.save(project_run, project_run.project_run_id, "project-run")
         return ArtifactReference(
             artifact_id=project_run.project_run_id,
@@ -327,12 +378,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "target_pid": project_run.target_pid,
                 "workload_status": project_run.workload_status,
                 "workload_exit_code": project_run.workload_exit_code,
-                "actual_event_source": collection.actual_event_source,
-                "record_event": collection.record_event,
-                "fallback_used": collection.fallback_used,
-                "fallback_reason": collection.fallback_reason,
-                "evidence_limitations": "; ".join(collection.evidence_limitations),
-                "warnings": "; ".join(collection.warnings),
+                **collection_summary,
             },
         )
 

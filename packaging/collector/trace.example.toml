@@ -1,0 +1,32 @@
+# PerfLens Trace policy template / PerfLens Trace 策略模板
+# This file is installed only by the administrator workflow. Package installation never
+# activates Trace collection. / 只有管理员向导会安装本文件；安装软件包不会启用 Trace 采集。
+
+[trace]
+# Policy schema version. / 策略格式版本。
+schema_version = 1
+
+# Exactly one ordinary-user UID may request Trace collection.
+# 只允许一个普通用户 UID 请求 Trace 采集。
+allowed_uid = 1000
+
+# Fixed modes for full_diagnostics. Arbitrary tracepoints are never accepted.
+# full_diagnostics 的固定模式；不接受任意 tracepoint。
+allowed_modes = ["sched", "off_cpu", "lock"]
+
+# The packaged backend filters the authorized TGID in the kernel before data enters user space.
+# 包内后端必须在数据进入用户态前，在内核中按授权 TGID 过滤。
+capture_backend = "target_filtered_kernel_v1"
+target_filter_before_userspace = true
+
+# Hard ceilings enforced independently by Broker and Trace Helper.
+# Broker 与 Trace Helper 独立执行的硬上限。
+max_duration_seconds = 10
+max_output_bytes = 67108864
+max_concurrent_collections = 1
+
+# Fixed private locations. Ordinary users must not read either path.
+# 固定私有位置；普通用户不得读取这些路径。
+helper_socket = "/run/perflens-trace-helper/helper.sock"
+private_spool = "/var/lib/perflens-trace-helper"
+

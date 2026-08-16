@@ -51,6 +51,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - name: Install Trace Helper build prerequisites
+        run: sudo apt-get update && sudo apt-get install --yes clang gcc libbpf-dev
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
       - run: cargo fmt --all --check
@@ -72,7 +74,7 @@ jobs:
       - name: Install Debian build prerequisites
         run: >-
           apt-get update && apt-get install --yes
-          ca-certificates curl dpkg-dev gcc git linux-perf python3
+          ca-certificates clang curl dpkg-dev gcc git libbpf-dev linux-perf python3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
@@ -83,7 +85,10 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - run: cargo build --release --locked --package perflens-privileged-helper
+      - run: >-
+          cargo build --release --locked
+          --package perflens-privileged-helper
+          --package perflens-trace-helper
       - run: uv sync --all-groups --frozen --python /usr/bin/python3
       - run: uv build --no-sources
       - run: >-

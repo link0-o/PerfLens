@@ -1,0 +1,44 @@
+# Managed by PerfLens. Do not remove this marker from generated service units.
+[Unit]
+Description=PerfLens target-filtered kernel Trace Helper
+Documentation=https://github.com/link0-o/PerfLens
+After=local-fs.target
+Before=perflens-collector.service
+
+[Service]
+Type=simple
+User=root
+Group=perflens-trace-internal
+ExecStart=/usr/lib/perflens/perflens-trace-helper --broker-uid @PERFLENS_BROKER_UID@ --allowed-uid @PERFLENS_ALLOWED_UID@ --artifact-gid @PERFLENS_TRACE_ARTIFACT_GID@ --allowed-modes sched,off_cpu,lock --policy-sha256 @PERFLENS_TRACE_POLICY_SHA256@
+RuntimeDirectory=perflens-trace-helper
+RuntimeDirectoryMode=0750
+StateDirectory=perflens-trace-helper
+StateDirectoryMode=0750
+UMask=0027
+NoNewPrivileges=yes
+# The administrator renderer replaces this placeholder with a reviewed mode-specific ceiling.
+CapabilityBoundingSet=@PERFLENS_TRACE_CAPABILITIES@
+AmbientCapabilities=@PERFLENS_TRACE_CAPABILITIES@
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+ReadOnlyPaths=/proc /sys/kernel/btf/vmlinux /sys/kernel/tracing
+ReadWritePaths=/run/perflens-trace-helper /var/lib/perflens-trace-helper
+TasksMax=16
+MemoryMax=268435456
+LimitFSIZE=67108864
+LimitNOFILE=128
+LimitCORE=0
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target
+

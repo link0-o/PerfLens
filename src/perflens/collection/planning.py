@@ -22,6 +22,9 @@ from perflens.collection.collector import (
 from perflens.contracts.artifacts import CollectionCapabilityArtifact, CollectionPlanArtifact
 from perflens.domain.errors import ErrorCode, PerfLensError
 
+_TRACE_MAX_DURATION_SECONDS = 10.0
+_TRACE_MAX_OUTPUT_BYTES = 64 << 20
+
 
 @dataclass(frozen=True, slots=True)
 class AutomaticCollectionPolicy:
@@ -77,6 +80,11 @@ def create_collection_plan(
     if request.max_output_bytes > policy.max_output_bytes:
         allowed = False
         warnings.append("The requested output size exceeds the MCP policy limit.")
+    if request.mode in {"sched", "off_cpu", "lock"} and (
+        request.duration_seconds > _TRACE_MAX_DURATION_SECONDS
+    ):
+        allowed = False
+        warnings.append("Trace collection duration exceeds the fixed 10-second safety limit.")
     if not policy.enabled:
         warnings.append("Automatic collection is disabled by MCP server policy.")
     if request.event_source == "auto" and not policy.allow_software_fallback:
@@ -113,8 +121,16 @@ def create_collection_plan(
         fallback_events = ()
         record_event = None
         fallback_record_event = None
-    frequency = request.frequency_hz if request.mode in {"record", "off_cpu"} else None
-    call_graph = request.call_graph if request.mode in {"record", "off_cpu"} else None
+    # Trace modes use a fixed kernel-side recipe. Frequency and call-graph knobs belong only to
+    # perf record and must never cross the Trace Helper protocol boundary.
+    frequency = request.frequency_hz if request.mode == "record" else None
+    call_graph = request.call_graph if request.mode == "record" else None
+    max_output_bytes = request.max_output_bytes
+    if request.mode in {"sched", "off_cpu", "lock"} and (
+        max_output_bytes > _TRACE_MAX_OUTPUT_BYTES
+    ):
+        max_output_bytes = _TRACE_MAX_OUTPUT_BYTES
+        warnings.append("Trace output was capped at the fixed 64 MiB safety limit.")
     identity = "\0".join(
         (
             request.mode,
@@ -130,7 +146,7 @@ def create_collection_plan(
             ",".join(fallback_events),
             str(record_event),
             str(fallback_record_event),
-            str(request.max_output_bytes),
+            str(max_output_bytes),
             created.isoformat(),
         )
     )
@@ -151,7 +167,7 @@ def create_collection_plan(
         fallback_events=fallback_events,
         record_event=record_event,
         fallback_record_event=fallback_record_event,
-        max_output_bytes=request.max_output_bytes,
+        max_output_bytes=max_output_bytes,
         expires_at=expires_at.isoformat(),
         policy_status="allowed" if allowed else "denied",
         required_privilege=mode_capability.required_privilege,

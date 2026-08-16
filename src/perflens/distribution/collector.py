@@ -14,6 +14,7 @@ from perflens.domain.errors import ErrorCode, PerfLensError
 
 _ASSET_MAPPINGS = (
     ("collector.example.toml", "collector.toml", 0o600),
+    ("trace.example.toml", "trace.toml", 0o600),
     ("perflens-collector.service", "perflens-collector.service", 0o644),
     (
         "perflens-collector-helper.service",
@@ -23,6 +24,21 @@ _ASSET_MAPPINGS = (
     (
         "perflens-privileged-helper.service",
         "perflens-privileged-helper.service",
+        0o644,
+    ),
+    (
+        "perflens-collector-trace.service",
+        "perflens-collector-trace.service",
+        0o644,
+    ),
+    (
+        "perflens-collector-helper-trace.service",
+        "perflens-collector-helper-trace.service",
+        0o644,
+    ),
+    (
+        "perflens-trace-helper.service",
+        "perflens-trace-helper.service",
         0o644,
     ),
     ("perflens.sysusers", "perflens.sysusers", 0o644),
@@ -98,15 +114,35 @@ def install_collector_assets(
                     source_name,
                 )
                 data = text.encode("utf-8")
+            elif source_name == "trace.example.toml":
+                text = data.decode("utf-8")
+                text = _replace_exact(
+                    text,
+                    "allowed_uid = 1000",
+                    f"allowed_uid = {allowed_uids[0]}",
+                    source_name,
+                )
+                data = text.encode("utf-8")
             elif source_name in {
                 "perflens-collector.service",
                 "perflens-collector-helper.service",
+                "perflens-collector-trace.service",
+                "perflens-collector-helper-trace.service",
             }:
                 text = data.decode("utf-8")
                 text = _replace_exact(
                     text,
                     "ExecStart=/usr/bin/perflens-collector ",
                     f"ExecStart={rendered_collector} ",
+                    source_name,
+                )
+                data = text.encode("utf-8")
+            elif source_name == "perflens-trace-helper.service":
+                text = data.decode("utf-8")
+                text = _replace_exact(
+                    text,
+                    "@PERFLENS_ALLOWED_UID@",
+                    str(allowed_uids[0]),
                     source_name,
                 )
                 data = text.encode("utf-8")

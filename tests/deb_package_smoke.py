@@ -59,6 +59,9 @@ def main() -> None:
     assert f"perflens (= {package_version})" in _field(
         dpkg_deb, collector_package, "Depends"
     )
+    collector_dependencies = _field(dpkg_deb, collector_package, "Depends")
+    for dependency in ("libbpf1", "libelf1", "zlib1g", "libzstd1"):
+        assert dependency in collector_dependencies
 
     with tempfile.TemporaryDirectory(prefix="perflens-deb-smoke-") as directory:
         root = Path(directory) / "root"
@@ -96,6 +99,9 @@ def main() -> None:
         helper = root / "usr/lib/perflens/perflens-privileged-helper"
         assert helper.is_file()
         assert helper.stat().st_mode & 0o777 == 0o755
+        trace_helper = root / "usr/lib/perflens/perflens-trace-helper"
+        assert trace_helper.is_file()
+        assert trace_helper.stat().st_mode & 0o777 == 0o755
         _assert_safe_modes(root)
         policy = (root / "usr/share/perflens/collector/collector.example.toml").read_text(
             encoding="utf-8"
@@ -105,6 +111,12 @@ def main() -> None:
         )
         helper_service = (
             root / "usr/share/perflens/collector/perflens-privileged-helper.service"
+        ).read_text(encoding="utf-8")
+        trace_policy = (
+            root / "usr/share/perflens/collector/trace.example.toml"
+        ).read_text(encoding="utf-8")
+        trace_service = (
+            root / "usr/share/perflens/collector/perflens-trace-helper.service"
         ).read_text(encoding="utf-8")
         assert "policy_version = 1" in policy
         assert 'privilege_mode = "cap_perfmon"' in policy
@@ -118,6 +130,10 @@ def main() -> None:
         assert "AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_PTRACE" in helper_service
         assert "NoNewPrivileges=yes" in helper_service
         assert "SecureBits=" not in helper_service
+        assert 'capture_backend = "target_filtered_kernel_v1"' in trace_policy
+        assert "target_filter_before_userspace = true" in trace_policy
+        assert "@PERFLENS_TRACE_CAPABILITIES@" in trace_service
+        assert "ReadWritePaths=/run/perflens-trace-helper" in trace_service
         _assert_shared_libraries(root)
 
         environment = dict(os.environ)
@@ -140,6 +156,7 @@ def _assert_safe_modes(root: Path) -> None:
         if path.is_dir() or path.name in {
             "perflens-launcher",
             "perflens-privileged-helper",
+            "perflens-trace-helper",
         }:
             assert mode == 0o755, (path, oct(mode))
         else:
@@ -158,14 +175,17 @@ def _assert_shared_libraries(root: Path) -> None:
             text=True,
         )
         assert "not found" not in completed.stdout, shared_object
-    helper = root / "usr/lib/perflens/perflens-privileged-helper"
-    completed = subprocess.run(  # noqa: S603 - packaged fixed binary
-        [ldd, str(helper)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert "not found" not in completed.stdout
+    for helper in (
+        root / "usr/lib/perflens/perflens-privileged-helper",
+        root / "usr/lib/perflens/perflens-trace-helper",
+    ):
+        completed = subprocess.run(  # noqa: S603 - packaged fixed binary
+            [ldd, str(helper)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert "not found" not in completed.stdout
 
 
 def _field(dpkg_deb: str, package: Path, field: str) -> str:

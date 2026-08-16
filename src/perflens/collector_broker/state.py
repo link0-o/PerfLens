@@ -8,12 +8,18 @@ import stat
 
 _PLAN_ID = re.compile(r"^plan-[a-f0-9]{20}$")
 _COLLECTION_ARTIFACT = re.compile(r"^plan-[a-f0-9]{20}\.(?:stat\.csv|perf\.data)$")
+_TRACE_EVIDENCE_ARTIFACT = re.compile(r"^trace-evidence-[a-f0-9]{16,64}\.json$")
 _REPLAY_MARKER = re.compile(r"^\.perflens-consumed-(plan-[a-f0-9]{20})$")
 
 
 def collection_artifact_name(name: str) -> bool:
     """Return whether a spool basename is a Collector collection artifact."""
     return _COLLECTION_ARTIFACT.fullmatch(name) is not None
+
+
+def trace_evidence_artifact_name(name: str) -> bool:
+    """Return whether a spool basename is a public normalized Trace artifact."""
+    return _TRACE_EVIDENCE_ARTIFACT.fullmatch(name) is not None
 
 
 def replay_marker_name(plan_id: str) -> str:

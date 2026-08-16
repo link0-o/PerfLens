@@ -52,13 +52,16 @@ from perflens.collector_broker.protocol import (
     BrokerError,
     BrokerHealthRequest,
     BrokerResponse,
+    BrokerTraceEvidenceReference,
 )
 from perflens.collector_broker.state import (
     collection_artifact_name,
     replay_marker,
     replay_marker_name,
     safe_replay_marker_metadata,
+    trace_evidence_artifact_name,
 )
+from perflens.collector_broker.trace import TraceCollectionCoordinator
 from perflens.contracts.artifacts import (
     CollectionArtifact,
     CollectionPlanArtifact,
@@ -69,6 +72,8 @@ from perflens.metrics.perf_stat import PerfStatMetricAdapter
 from perflens.privileged_helper.client import HelperClient
 from perflens.privileged_helper.protocol import HelperCollectionResult
 from perflens.profiles.events import canonical_perf_event
+from perflens.trace_helper.client import TraceHelperClient
+from perflens.trace_helper.policy import TracePolicy, load_trace_policy
 
 _PEER_CREDENTIALS = struct.Struct("3i")
 _MAX_TRACKED_PLANS = 4096
@@ -79,7 +84,9 @@ _LOGGER.addHandler(logging.NullHandler())
 _LOGGER.propagate = False
 _HELPER_SOCKET = Path("/run/perflens-helper/helper.sock")
 _HELPER_SPOOL_ROOT = Path("/var/lib/perflens-helper")
+_TRACE_HELPER_SOCKET = Path("/run/perflens-trace-helper/helper.sock")
 _ROOT_UID = 0
+_MAX_PUBLIC_TRACE_EVIDENCE_BYTES = 256 << 20
 _HARDWARE_PROBE_MINIMUM_PLAN_SECONDS = 0.3
 _HARDWARE_PROBE_MAX_SECONDS = 0.25
 _HARDWARE_PROBE_EVENTS = HARDWARE_STAT_EVENTS[:2]
@@ -98,6 +105,9 @@ class CollectorBrokerServer:
         helper_client: HelperClient | None = None,
         helper_spool_root: Path = _HELPER_SPOOL_ROOT,
         expected_helper_uid: int = _ROOT_UID,
+        trace_policy: TracePolicy | None = None,
+        trace_helper_client: TraceHelperClient | None = None,
+        trace_coordinator: TraceCollectionCoordinator | None = None,
     ) -> None:
         if (
             isinstance(request_timeout_seconds, bool)
@@ -113,6 +123,8 @@ class CollectorBrokerServer:
         self._helper_client = helper_client
         self._helper_spool_root = helper_spool_root
         self._expected_helper_uid = expected_helper_uid
+        self._trace_policy = trace_policy
+        self._trace_coordinator = trace_coordinator
         if self._policy.privilege_mode == "paranoid3_helper" and self._helper_client is None:
             self._helper_client = HelperClient(
                 _HELPER_SOCKET,
@@ -120,6 +132,24 @@ class CollectorBrokerServer:
                 timeout_seconds=45,
             )
             self._helper_client.health()
+        if trace_policy is not None:
+            if trace_policy.allowed_uid != self._policy.allowed_uids[0]:
+                raise ValueError("Collector and Trace policies must authorize the same UID")
+            if self._trace_coordinator is None:
+                trace_client = trace_helper_client or TraceHelperClient(
+                    _TRACE_HELPER_SOCKET,
+                    expected_helper_uid=expected_helper_uid,
+                    timeout_seconds=15,
+                )
+                self._trace_coordinator = TraceCollectionCoordinator(
+                    trace_policy,
+                    helper_client=trace_client,
+                    public_spool=self._policy.spool_root,
+                    public_artifact_mode=self._policy.artifact_mode,
+                    expected_helper_uid=expected_helper_uid,
+                )
+        elif trace_helper_client is not None or trace_coordinator is not None:
+            raise ValueError("Trace clients require an explicit immutable Trace policy")
         self._socket_path = _new_socket_path(socket_path)
         self._request_timeout_seconds = float(request_timeout_seconds)
         self._stop = threading.Event()
@@ -206,6 +236,11 @@ class CollectorBrokerServer:
                     request,
                     ready_callback=report_ready if request.report_ready else None,
                 )
+                output_bytes = (
+                    artifact.evidence_file_bytes
+                    if isinstance(artifact, BrokerTraceEvidenceReference)
+                    else artifact.output_bytes
+                )
                 _emit_operational_event(
                     logging.INFO,
                     "collection_completed",
@@ -214,7 +249,7 @@ class CollectorBrokerServer:
                     plan_id=plan_id,
                     peer_uid=peer_uid,
                     mode=artifact.mode,
-                    output_bytes=artifact.output_bytes,
+                    output_bytes=output_bytes,
                 )
             response = BrokerResponse(
                 request_id=request_id,
@@ -261,10 +296,22 @@ class CollectorBrokerServer:
         request: BrokerCollectRequest,
         *,
         ready_callback: Callable[[], None] | None = None,
-    ) -> CollectionArtifact:
+    ) -> CollectionArtifact | BrokerTraceEvidenceReference:
         plan = request.plan
         self._authorize(peer_uid, plan)
         assert_plan_current(plan)
+        if plan.mode in {"sched", "off_cpu", "lock"}:
+            assert self._trace_coordinator is not None
+            self._authorize_spool_capacity(
+                plan,
+                reserve_bytes=_MAX_PUBLIC_TRACE_EVIDENCE_BYTES,
+            )
+            self._consume_plan(plan)
+            return self._trace_coordinator.collect(
+                peer_uid,
+                plan,
+                ready_callback=ready_callback,
+            )
         effective_plan = self._narrow_fallback_to_collector_policy(plan)
         if self._policy.privilege_mode == "paranoid3_helper":
             artifact = self._collect_with_helper(
@@ -591,19 +638,34 @@ class CollectorBrokerServer:
                 "Peer UID is not allowed to inspect Collector health",
                 recoverable=True,
             )
+        trace_policy = getattr(self, "_trace_policy", None)
         return CollectorHealthArtifact(
             perflens_version=__version__,
             policy_version=self._policy.policy_version,
             service_pid=os.getpid(),
             service_uid=os.geteuid(),
             peer_uid=peer_uid,
-            allowed_modes=tuple(self._policy.allowed_modes),
+            allowed_modes=tuple(
+                dict.fromkeys(
+                    (
+                        *self._policy.allowed_modes,
+                        *(
+                            trace_policy.allowed_modes
+                            if trace_policy is not None
+                            else ()
+                        ),
+                    )
+                )
+            ),
             spool_root=str(
                 self._helper_spool_root
                 if self._policy.privilege_mode == "paranoid3_helper"
                 else self._policy.spool_root
             ),
             privilege_mode=self._policy.privilege_mode,
+            feature_profile=(
+                "full_diagnostics" if trace_policy is not None else "cpu_only"
+            ),
         )
 
     def _authorize(self, peer_uid: int, plan: CollectionPlanArtifact) -> None:
@@ -614,7 +676,15 @@ class CollectorBrokerServer:
                 "Peer UID is not allowed by collector policy",
                 recoverable=True,
             )
-        if plan.mode not in self._policy.allowed_modes:
+        trace_mode = plan.mode in {"sched", "off_cpu", "lock"}
+        if trace_mode and getattr(self, "_trace_coordinator", None) is None:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "authorization",
+                "Trace collection is not enabled by the installed feature profile",
+                recoverable=True,
+            )
+        if not trace_mode and plan.mode not in self._policy.allowed_modes:
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,
                 "authorization",
@@ -628,21 +698,25 @@ class CollectorBrokerServer:
                 "Collector policy only permits targets owned by the requesting UID",
                 recoverable=True,
             )
-        if plan.duration_seconds > self._policy.max_duration_seconds:
+        if not trace_mode and plan.duration_seconds > self._policy.max_duration_seconds:
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,
                 "authorization",
                 "Collection duration exceeds collector policy",
                 recoverable=True,
             )
-        if plan.frequency_hz is not None and plan.frequency_hz > self._policy.max_frequency_hz:
+        if (
+            not trace_mode
+            and plan.frequency_hz is not None
+            and plan.frequency_hz > self._policy.max_frequency_hz
+        ):
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,
                 "authorization",
                 "Sampling frequency exceeds collector policy",
                 recoverable=True,
             )
-        if plan.max_output_bytes > self._policy.max_output_bytes:
+        if not trace_mode and plan.max_output_bytes > self._policy.max_output_bytes:
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,
                 "authorization",
@@ -657,6 +731,10 @@ class CollectorBrokerServer:
                 "Collection plan lifetime exceeds collector policy",
                 recoverable=True,
             )
+        if trace_mode:
+            if plan.frequency_hz is not None or plan.call_graph is not None:
+                raise _unsafe_event_source_plan()
+            return
         if plan.mode == "stat" and any(
             event not in self._policy.allowed_stat_events for event in plan.events
         ):
@@ -715,9 +793,15 @@ class CollectorBrokerServer:
         ):
             raise _unsafe_event_source_plan()
 
-    def _authorize_spool_capacity(self, plan: CollectionPlanArtifact) -> None:
+    def _authorize_spool_capacity(
+        self,
+        plan: CollectionPlanArtifact,
+        *,
+        reserve_bytes: int | None = None,
+    ) -> None:
         artifact_count = 0
         spool_bytes = 0
+        requested_bytes = plan.max_output_bytes if reserve_bytes is None else reserve_bytes
         try:
             spool_metadata = self._policy.spool_root.stat(follow_symlinks=False)
             with os.scandir(self._policy.spool_root) as entries:
@@ -737,9 +821,10 @@ class CollectorBrokerServer:
                                 details={"entry": entry.name},
                             )
                         continue
-                    if not collection_artifact_name(entry.name) or not entry.is_file(
-                        follow_symlinks=False
-                    ):
+                    if not (
+                        collection_artifact_name(entry.name)
+                        or trace_evidence_artifact_name(entry.name)
+                    ) or not entry.is_file(follow_symlinks=False):
                         raise PerfLensError(
                             ErrorCode.PATH_SAFETY_VIOLATION,
                             "collector_broker",
@@ -756,7 +841,7 @@ class CollectorBrokerServer:
                             recoverable=True,
                         )
                     spool_bytes += metadata.st_size
-                    if spool_bytes + plan.max_output_bytes > self._policy.max_spool_bytes:
+                    if spool_bytes + requested_bytes > self._policy.max_spool_bytes:
                         raise PerfLensError(
                             ErrorCode.RESOURCE_LIMIT_EXCEEDED,
                             "collector_broker",
@@ -773,7 +858,7 @@ class CollectorBrokerServer:
                 "Unable to inspect Collector spool capacity",
                 recoverable=True,
             ) from exc
-        if free_bytes - plan.max_output_bytes < self._policy.min_free_bytes:
+        if free_bytes - requested_bytes < self._policy.min_free_bytes:
             raise PerfLensError(
                 ErrorCode.RESOURCE_LIMIT_EXCEEDED,
                 "collector_broker",
@@ -1083,12 +1168,26 @@ def main() -> None:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--socket", type=Path, required=True)
     parser.add_argument("--policy", type=Path, required=True)
+    parser.add_argument(
+        "--trace-policy",
+        type=Path,
+        help="Independent full-diagnostics Trace policy (disabled when omitted)",
+    )
     arguments = parser.parse_args()
     _configure_operational_logging()
     started = False
     try:
         policy = load_broker_policy(arguments.policy)
-        with CollectorBrokerServer(arguments.socket, policy) as server:
+        trace_policy = (
+            load_trace_policy(arguments.trace_policy)
+            if arguments.trace_policy is not None
+            else None
+        )
+        with CollectorBrokerServer(
+            arguments.socket,
+            policy,
+            trace_policy=trace_policy,
+        ) as server:
 
             def close_server(_signum: int, _frame: FrameType | None) -> None:
                 server.close()

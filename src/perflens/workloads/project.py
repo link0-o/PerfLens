@@ -35,6 +35,7 @@ from perflens.contracts.artifacts import (
     CollectionCapabilityArtifact,
     ProjectRunArtifact,
 )
+from perflens.contracts.trace import TraceEvidenceArtifact
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 PROJECT_EXECUTION_AUTHORIZATION = "I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION"
@@ -67,7 +68,7 @@ def collect_project_workload(
     policy: AutomaticCollectionPolicy,
     capabilities: CollectionCapabilityArtifact,
     collector_socket: Path,
-) -> tuple[CollectionArtifact, ProjectRunArtifact]:
+) -> tuple[CollectionArtifact | TraceEvidenceArtifact, ProjectRunArtifact]:
     """Run an exact executable as the current user and profile only that PID incarnation."""
     project, executable, arguments = _validate_request(request)
     started_at = datetime.now(tz=UTC)
@@ -129,7 +130,12 @@ def collect_project_workload(
             release_write = -1
             released = True
 
-        collection = client.collect(plan, ready_callback=release_workload)
+        if plan.mode in {"sched", "off_cpu", "lock"}:
+            collection = client.collect_trace(plan, ready_callback=release_workload)
+            collection_id = collection.trace_evidence_id
+        else:
+            collection = client.collect(plan, ready_callback=release_workload)
+            collection_id = collection.collection_id
         if not released:
             raise PerfLensError(
                 ErrorCode.INTERNAL_ERROR,
@@ -161,7 +167,7 @@ def collect_project_workload(
                 "\0".join(arguments),
                 str(plan.target_pid),
                 str(plan.target_start_time_ticks),
-                collection.collection_id,
+                collection_id,
             )
         )
         project_run = ProjectRunArtifact(
@@ -175,7 +181,7 @@ def collect_project_workload(
             target_start_time_ticks=plan.target_start_time_ticks,
             mode=plan.mode,
             requested_duration_seconds=plan.duration_seconds,
-            collection_id=collection.collection_id,
+            collection_id=collection_id,
             workload_status=workload_status,
             workload_exit_code=exit_code,
             started_at=started_at.isoformat(),
