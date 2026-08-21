@@ -81,7 +81,7 @@ def _runtime(
     target = _target()
 
     def fake_resolve(*_args: object, **_kwargs: object) -> SimpleNamespace:
-        return SimpleNamespace(artifact=target)
+        return SimpleNamespace(artifact=target, instance="instance-a", kernel="kernel-a")
 
     monkeypatch.setattr(
         "perflens.docker.runtime.resolve_existing_container_target",
@@ -164,6 +164,34 @@ def test_existing_runtime_rejects_ungranted_modes_and_policy_replacement(
     with pytest.raises(PerfLensError) as replaced:
         runtime.resolve("service", host_pid=1234)
     assert "changed after MCP startup" in replaced.value.message
+
+
+def test_existing_runtime_rejects_container_replacement_after_collection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _ = _runtime(tmp_path, monkeypatch)
+    resolved = runtime.resolve_for_collection("service", host_pid=1234)
+
+    def replaced_target(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            artifact=resolved.artifact,
+            instance="instance-b",
+            kernel=resolved.kernel,
+        )
+
+    monkeypatch.setattr(
+        "perflens.docker.runtime.resolve_existing_container_target",
+        replaced_target,
+    )
+    with pytest.raises(PerfLensError) as captured:
+        runtime.assert_collection_target_current(
+            "service",
+            resolved,
+            host_pid=1234,
+        )
+    assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert "changed during collection" in captured.value.message
 
 
 def test_existing_runtime_rejects_unknown_session_without_disclosing_state(

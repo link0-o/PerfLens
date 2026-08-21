@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
+from tests.support.docker import make_container_resource_context
 from tests.support.trace import make_scheduler_trace_evidence
 
+from perflens import __version__
 from perflens.application.analyze import analyze_folded
 from perflens.application.analyze_trace import build_trace_analysis
+from perflens.application.evidence import contract_content_sha256
 from perflens.application.verify_trace import compute_trace_analysis_content_sha256
 from perflens.artifacts.filesystem import serialize_json
 from perflens.classification.engine import build_diagnosis_bundle
+from perflens.contracts.docker import ContainerRunArtifact
 from perflens.contracts.trace import SchedulerAnalysisArtifact
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.storage import ArtifactStore, PathPolicy
@@ -222,6 +227,202 @@ def test_trace_storage_replays_analysis_and_rejects_semantic_tampering(
         store.read_page(
             analysis.scheduler_analysis_id,
             "scheduler-analysis",
+            offset=0,
+            limit=65_536,
+        )
+
+
+def test_docker_resource_context_is_content_verified_before_agent_paging(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(
+        tmp_path / "artifacts",
+        PathPolicy((tmp_path,)),
+        allow_writes=True,
+    )
+    context = make_container_resource_context()
+    path = store.save(
+        context,
+        context.resource_context_id,
+        "container-resource-context",
+    )
+    assert store.load_container_resource_context(context.resource_context_id) == context
+    page, _, _ = store.read_page(
+        context.resource_context_id,
+        "container-resource-context",
+        offset=0,
+        limit=65_536,
+    )
+    assert '"scope": "entire_container_cgroup_v2"' in page
+    assert "/sys/fs/cgroup" not in page
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["delta"]["cpu_usage_usec"] = 999_999
+    unhashed = {key: value for key, value in payload.items() if key != "content_sha256"}
+    payload["content_sha256"] = hashlib.sha256(
+        json.dumps(
+            unhashed,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    path.chmod(0o600)
+    with pytest.raises(PerfLensError) as loaded:
+        store.load_container_resource_context(context.resource_context_id)
+    assert loaded.value.code is ErrorCode.INVALID_INPUT
+    with pytest.raises(PerfLensError) as paged:
+        store.read_page(
+            context.resource_context_id,
+            "container-resource-context",
+            offset=0,
+            limit=65_536,
+        )
+    assert paged.value.code is ErrorCode.INVALID_INPUT
+
+
+def test_container_run_rejects_resource_context_from_another_container(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(
+        tmp_path / "artifacts",
+        PathPolicy((tmp_path,)),
+        allow_writes=True,
+    )
+    context = make_container_resource_context(container_identity_sha256="5" * 64)
+    store.save(
+        context,
+        context.resource_context_id,
+        "container-resource-context",
+    )
+
+    matching_provisional = ContainerRunArtifact(
+        schema_version="1.0",
+        perflens_version=__version__,
+        run_id="container-run-" + "a" * 20,
+        created_at="2026-08-21T00:00:03+00:00",
+        session_id="container-session-" + "c" * 20,
+        workload_spec_sha256="d" * 64,
+        container_identity_sha256=context.container_identity_sha256,
+        image_identity_sha256="e" * 64,
+        target_identity_sha256="f" * 64,
+        container_pid=1,
+        host_pid=1234,
+        host_start_time_ticks=5678,
+        started_at="2026-08-21T00:00:00+00:00",
+        finished_at="2026-08-21T00:00:02+00:00",
+        status="exited",
+        exit_code=0,
+        collection_ids=(context.source_collection_id,),
+        resource_context_id=context.resource_context_id,
+        cleanup_status="removed",
+        content_sha256="0" * 64,
+    )
+    matching = matching_provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                matching_provisional,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+    store.save(matching, matching.run_id, "container-run")
+    assert store.load_container_run(matching.run_id) == matching
+    page, next_offset, _ = store.read_page(
+        matching.run_id,
+        "container-run",
+        offset=0,
+        limit=65_536,
+    )
+    assert next_offset is None
+    assert context.resource_context_id in page
+
+    legacy_provisional = matching_provisional.model_copy(
+        update={
+            "run_id": "container-run-" + "c" * 20,
+            "resource_context_id": None,
+            "content_sha256": "0" * 64,
+        }
+    )
+    legacy = legacy_provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                legacy_provisional,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+    store.save(legacy, legacy.run_id, "container-run")
+    assert store.load_container_run(legacy.run_id) == legacy
+    legacy_page, legacy_next_offset, _ = store.read_page(
+        legacy.run_id,
+        "container-run",
+        offset=0,
+        limit=65_536,
+    )
+    assert legacy_next_offset is None
+    assert '"resource_context_id"' not in legacy_page
+
+    provisional = ContainerRunArtifact(
+        schema_version="1.0",
+        perflens_version=__version__,
+        run_id="container-run-" + "b" * 20,
+        created_at="2026-08-21T00:00:03+00:00",
+        session_id="container-session-" + "c" * 20,
+        workload_spec_sha256="d" * 64,
+        container_identity_sha256="6" * 64,
+        image_identity_sha256="e" * 64,
+        target_identity_sha256="f" * 64,
+        container_pid=1,
+        host_pid=1234,
+        host_start_time_ticks=5678,
+        started_at="2026-08-21T00:00:00+00:00",
+        finished_at="2026-08-21T00:00:02+00:00",
+        status="exited",
+        exit_code=0,
+        collection_ids=(context.source_collection_id,),
+        resource_context_id=context.resource_context_id,
+        cleanup_status="removed",
+        content_sha256="0" * 64,
+    )
+    run = provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+    store.save(run, run.run_id, "container-run")
+
+    with pytest.raises(PerfLensError, match="identifier does not match"):
+        store.load_container_run(run.run_id)
+    with pytest.raises(PerfLensError, match="identifier does not match"):
+        store.read_page(run.run_id, "container-run", offset=0, limit=65_536)
+
+    wrong_collection_provisional = matching.model_copy(
+        update={
+            "run_id": "container-run-" + "d" * 20,
+            "collection_ids": ("collection-" + "9" * 16,),
+            "content_sha256": "0" * 64,
+        }
+    )
+    wrong_collection = wrong_collection_provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                wrong_collection_provisional,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+    store.save(wrong_collection, wrong_collection.run_id, "container-run")
+    with pytest.raises(PerfLensError, match="identifier does not match"):
+        store.load_container_run(wrong_collection.run_id)
+    with pytest.raises(PerfLensError, match="identifier does not match"):
+        store.read_page(
+            wrong_collection.run_id,
+            "container-run",
             offset=0,
             limit=65_536,
         )

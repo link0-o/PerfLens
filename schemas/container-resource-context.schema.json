@@ -532,6 +532,16 @@
       "default": "entire_container_cgroup_v2",
       "title": "Scope",
       "type": "string"
+    },
+    "source_collection_id": {
+      "pattern": "^collection-[a-f0-9]{16}$",
+      "title": "Source Collection Id",
+      "type": "string"
+    },
+    "source_output_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Source Output Sha256",
+      "type": "string"
     }
   },
   "required": [
@@ -540,6 +550,8 @@
     "created_at",
     "container_identity_sha256",
     "cgroup_identity_sha256",
+    "source_collection_id",
+    "source_output_sha256",
     "before",
     "after",
     "delta",

@@ -25,6 +25,9 @@ from perflens.docker.identity import (
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 
+_SOURCE_COLLECTION_ID = "collection-" + "1" * 16
+_SOURCE_OUTPUT_SHA256 = "2" * 64
+
 
 def _sha256_text(*parts: str) -> str:
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()
@@ -193,6 +196,8 @@ def test_cgroup_reader_and_delta_cover_bounded_container_resources(tmp_path: Pat
         reader,
         before,
         after,
+        source_collection_id=_SOURCE_COLLECTION_ID,
+        source_output_sha256=_SOURCE_OUTPUT_SHA256,
         created_at=started + timedelta(seconds=2),
     )
     assert context.quality_status == "verified"
@@ -213,10 +218,22 @@ def test_cgroup_reader_and_delta_cover_bounded_container_resources(tmp_path: Pat
     assert context.delta.io_write_bytes == 80
     assert context.delta.memory_pressure_some_usec == 10
     assert context.delta.io_pressure_some_usec == 20
+    assert context.source_collection_id == _SOURCE_COLLECTION_ID
+    assert context.source_output_sha256 == _SOURCE_OUTPUT_SHA256
     assert context.content_sha256 == contract_content_sha256(
         context,
         exclude={"content_sha256"},
     )
+    other_source = build_container_resource_context(
+        reader,
+        before,
+        after,
+        source_collection_id="collection-" + "3" * 16,
+        source_output_sha256="4" * 64,
+        created_at=started + timedelta(seconds=2),
+    )
+    assert other_source.resource_context_id != context.resource_context_id
+    assert other_source.content_sha256 != context.content_sha256
     serialized = context.model_dump_json()
     assert "/docker/test-container" not in serialized
     assert "not exclusive measurements" in serialized
@@ -235,7 +252,13 @@ def test_missing_optional_pressure_and_io_are_explicitly_partial(tmp_path: Path)
     for name in ("memory.pressure", "io.pressure", "io.stat"):
         (directory / name).unlink()
     after = reader.capture(observed_at=started + timedelta(seconds=1))
-    context = build_container_resource_context(reader, before, after)
+    context = build_container_resource_context(
+        reader,
+        before,
+        after,
+        source_collection_id=_SOURCE_COLLECTION_ID,
+        source_output_sha256=_SOURCE_OUTPUT_SHA256,
+    )
     assert context.quality_status == "partial"
     assert context.delta.memory_pressure_some_usec is None
     assert context.delta.io_pressure_some_usec is None
@@ -254,7 +277,13 @@ def test_resource_limit_change_is_reported_as_partial_environment_drift(
     before = reader.capture(observed_at=started)
     _later_files(directory, cpu_max="100000 100000")
     after = reader.capture(observed_at=started + timedelta(seconds=1))
-    context = build_container_resource_context(reader, before, after)
+    context = build_container_resource_context(
+        reader,
+        before,
+        after,
+        source_collection_id=_SOURCE_COLLECTION_ID,
+        source_output_sha256=_SOURCE_OUTPUT_SHA256,
+    )
     assert context.quality_status == "partial"
     assert "CPU quota changed" in context.limitations[0]
 
@@ -273,6 +302,8 @@ def test_missing_optional_cpu_fields_are_partial_not_fabricated(tmp_path: Path) 
         reader,
         before,
         after,
+        source_collection_id=_SOURCE_COLLECTION_ID,
+        source_output_sha256=_SOURCE_OUTPUT_SHA256,
         created_at=started + timedelta(seconds=2),
     )
     assert context.quality_status == "partial"
@@ -298,7 +329,13 @@ def test_snapshot_digest_and_target_binding_prevent_cross_container_mixup(
         snapshot=before.snapshot.model_copy(update={"cpu_usage_usec": 999}),
     )
     with pytest.raises(PerfLensError) as captured:
-        build_container_resource_context(first_reader, tampered, after)
+        build_container_resource_context(
+            first_reader,
+            tampered,
+            after,
+            source_collection_id=_SOURCE_COLLECTION_ID,
+            source_output_sha256=_SOURCE_OUTPUT_SHA256,
+        )
     assert "digest" in captured.value.message
 
     second_target, _ = _resolved_target(
@@ -307,7 +344,13 @@ def test_snapshot_digest_and_target_binding_prevent_cross_container_mixup(
     )
     second_reader = CgroupV2ResourceReader(second_target, cgroup_root=cgroup_root)
     with pytest.raises(PerfLensError) as captured:
-        build_container_resource_context(second_reader, before, after)
+        build_container_resource_context(
+            second_reader,
+            before,
+            after,
+            source_collection_id=_SOURCE_COLLECTION_ID,
+            source_output_sha256=_SOURCE_OUTPUT_SHA256,
+        )
     assert "different Docker target" in captured.value.message
 
 
@@ -321,7 +364,13 @@ def test_decreasing_cumulative_counter_is_rejected(tmp_path: Path) -> None:
     _initial_files(directory)
     after = reader.capture(observed_at=started + timedelta(seconds=1))
     with pytest.raises(PerfLensError) as captured:
-        build_container_resource_context(reader, before, after)
+        build_container_resource_context(
+            reader,
+            before,
+            after,
+            source_collection_id=_SOURCE_COLLECTION_ID,
+            source_output_sha256=_SOURCE_OUTPUT_SHA256,
+        )
     assert captured.value.code is ErrorCode.PROFILE_PARSE_FAILED
     assert "decreased" in captured.value.message
 
@@ -342,6 +391,8 @@ def test_resource_context_rejects_naive_or_pre_observation_creation_time(
             reader,
             before,
             after,
+            source_collection_id=_SOURCE_COLLECTION_ID,
+            source_output_sha256=_SOURCE_OUTPUT_SHA256,
             created_at=datetime(2026, 8, 21),
         )
     with pytest.raises(PerfLensError):
@@ -349,6 +400,8 @@ def test_resource_context_rejects_naive_or_pre_observation_creation_time(
             reader,
             before,
             after,
+            source_collection_id=_SOURCE_COLLECTION_ID,
+            source_output_sha256=_SOURCE_OUTPUT_SHA256,
             created_at=started,
         )
 

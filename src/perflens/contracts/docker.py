@@ -8,6 +8,7 @@ an existing container are private adapter data and never belong here.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
@@ -52,6 +53,31 @@ def _timestamp(value: str, label: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError(f"{label} must include a timezone")
     return parsed
+
+
+def derive_container_resource_context_id(
+    *,
+    container_identity_sha256: str,
+    cgroup_identity_sha256: str,
+    source_collection_id: str,
+    source_output_sha256: str,
+    before_observed_at: str,
+    after_observed_at: str,
+    created_at: str,
+) -> str:
+    material = "\0".join(
+        (
+            "perflens-docker-resource-context-v1",
+            container_identity_sha256,
+            cgroup_identity_sha256,
+            source_collection_id,
+            source_output_sha256,
+            before_observed_at,
+            after_observed_at,
+            created_at,
+        )
+    )
+    return f"container-resource-{hashlib.sha256(material.encode('utf-8')).hexdigest()[:20]}"
 
 
 class DockerToolIdentity(ContractModel):
@@ -300,6 +326,139 @@ class ContainerResourceDelta(ContractModel):
         return self
 
 
+def _exact_delta(before: int, after: int, label: str) -> int:
+    if after < before:
+        raise ValueError(f"{label} counter cannot decrease within one cgroup identity")
+    return after - before
+
+
+def _optional_exact_delta(
+    before: int | None,
+    after: int | None,
+    label: str,
+) -> int | None:
+    if before is None or after is None:
+        return None
+    return _exact_delta(before, after, label)
+
+
+def _resource_delta_from_snapshots(
+    before: ContainerResourceSnapshot,
+    after: ContainerResourceSnapshot,
+) -> ContainerResourceDelta:
+    memory_before = dict(before.memory_events)
+    memory_after = dict(after.memory_events)
+
+    def io_totals(
+        snapshot: ContainerResourceSnapshot,
+        field: Literal["read_bytes", "write_bytes", "read_ios", "write_ios"],
+    ) -> dict[tuple[int, int], int]:
+        return {
+            (device.major, device.minor): getattr(device, field)
+            for device in snapshot.io_devices
+        }
+
+    def io_delta(
+        field: Literal["read_bytes", "write_bytes", "read_ios", "write_ios"],
+    ) -> int:
+        first = io_totals(before, field)
+        second = io_totals(after, field)
+        return sum(
+            _exact_delta(
+                first.get(device, 0),
+                second.get(device, 0),
+                f"I/O {field}",
+            )
+            for device in first.keys() | second.keys()
+        )
+
+    def pressure_delta(
+        field: Literal["some_total_us", "full_total_us"],
+        first: PressureSnapshot | None,
+        second: PressureSnapshot | None,
+        label: str,
+    ) -> int | None:
+        if first is None or second is None:
+            return None
+        return _optional_exact_delta(
+            getattr(first, field),
+            getattr(second, field),
+            label,
+        )
+
+    return ContainerResourceDelta(
+        cpu_usage_usec=_exact_delta(
+            before.cpu_usage_usec,
+            after.cpu_usage_usec,
+            "CPU usage",
+        ),
+        cpu_user_usec=_optional_exact_delta(
+            before.cpu_user_usec,
+            after.cpu_user_usec,
+            "CPU user",
+        ),
+        cpu_system_usec=_optional_exact_delta(
+            before.cpu_system_usec,
+            after.cpu_system_usec,
+            "CPU system",
+        ),
+        cpu_nr_periods=_optional_exact_delta(
+            before.cpu_nr_periods,
+            after.cpu_nr_periods,
+            "CPU periods",
+        ),
+        cpu_nr_throttled=_optional_exact_delta(
+            before.cpu_nr_throttled,
+            after.cpu_nr_throttled,
+            "CPU throttled periods",
+        ),
+        cpu_throttled_usec=_optional_exact_delta(
+            before.cpu_throttled_usec,
+            after.cpu_throttled_usec,
+            "CPU throttled time",
+        ),
+        memory_event_deltas=tuple(
+            (
+                name,
+                _exact_delta(
+                    memory_before.get(name, 0),
+                    memory_after.get(name, 0),
+                    f"memory event {name}",
+                ),
+            )
+            for name in sorted(memory_before.keys() | memory_after.keys())
+        ),
+        io_read_bytes=io_delta("read_bytes"),
+        io_write_bytes=io_delta("write_bytes"),
+        io_read_ios=io_delta("read_ios"),
+        io_write_ios=io_delta("write_ios"),
+        memory_pressure_some_usec=pressure_delta(
+            "some_total_us",
+            before.memory_pressure,
+            after.memory_pressure,
+            "memory pressure some",
+        ),
+        memory_pressure_full_usec=pressure_delta(
+            "full_total_us",
+            before.memory_pressure,
+            after.memory_pressure,
+            "memory pressure full",
+        ),
+        io_pressure_some_usec=pressure_delta(
+            "some_total_us",
+            before.io_pressure,
+            after.io_pressure,
+            "I/O pressure some",
+        ),
+        io_pressure_full_usec=pressure_delta(
+            "full_total_us",
+            before.io_pressure,
+            after.io_pressure,
+            "I/O pressure full",
+        ),
+    )
+
+
 class ContainerResourceContextArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     perflens_version: str
@@ -307,6 +466,8 @@ class ContainerResourceContextArtifact(ContractModel):
     created_at: str
     container_identity_sha256: Sha256
     cgroup_identity_sha256: Sha256
+    source_collection_id: CollectionId
+    source_output_sha256: Sha256
     scope: Literal["entire_container_cgroup_v2"] = "entire_container_cgroup_v2"
     before: ContainerResourceSnapshot
     after: ContainerResourceSnapshot
@@ -319,13 +480,41 @@ class ContainerResourceContextArtifact(ContractModel):
 
     @model_validator(mode="after")
     def validate_context(self) -> ContainerResourceContextArtifact:
+        if self.resource_context_id != derive_container_resource_context_id(
+            container_identity_sha256=self.container_identity_sha256,
+            cgroup_identity_sha256=self.cgroup_identity_sha256,
+            source_collection_id=self.source_collection_id,
+            source_output_sha256=self.source_output_sha256,
+            before_observed_at=self.before.observed_at,
+            after_observed_at=self.after.observed_at,
+            created_at=self.created_at,
+        ):
+            raise ValueError("container resource identity does not match its bound evidence")
         if _timestamp(self.before.observed_at, "before.observed_at") >= _timestamp(
             self.after.observed_at,
             "after.observed_at",
         ):
             raise ValueError("container resource snapshots must be time ordered")
+        if _timestamp(self.created_at, "created_at") < _timestamp(
+            self.after.observed_at,
+            "after.observed_at",
+        ):
+            raise ValueError("container resource creation cannot precede its final snapshot")
+        if self.delta != _resource_delta_from_snapshots(self.before, self.after):
+            raise ValueError("container resource delta does not match its snapshots")
+        environment_changed = (
+            self.before.cpu_quota_usec != self.after.cpu_quota_usec
+            or self.before.cpu_period_usec != self.after.cpu_period_usec
+            or self.before.cpuset_cpus_effective != self.after.cpuset_cpus_effective
+            or self.before.memory_max_bytes != self.after.memory_max_bytes
+            or self.before.pids_max != self.after.pids_max
+        )
+        if environment_changed and self.quality_status != "partial":
+            raise ValueError("container resource limit drift must be reported as partial")
         if self.quality_status == "partial" and not self.limitations:
             raise ValueError("partial container resource context must explain its limitations")
+        if not self.allowed_conclusions or not self.forbidden_conclusions:
+            raise ValueError("container resource context must preserve its conclusion boundary")
         return self
 
 

@@ -23,6 +23,7 @@ from perflens.docker.capability import open_local_docker_adapter
 from perflens.docker.existing import discover_existing_container_processes
 from perflens.docker.identity import (
     LinuxContainerIdentityReader,
+    ResolvedContainerTarget,
     resolve_existing_container_target,
 )
 from perflens.docker.managed import (
@@ -139,6 +140,20 @@ class ExistingDockerRuntime:
         host_pid: int | None = None,
         container_pid: int | None = None,
     ) -> ContainerTargetArtifact:
+        return self.resolve_for_collection(
+            container_reference,
+            host_pid=host_pid,
+            container_pid=container_pid,
+        ).artifact
+
+    def resolve_for_collection(
+        self,
+        container_reference: str,
+        *,
+        host_pid: int | None = None,
+        container_pid: int | None = None,
+    ) -> ResolvedContainerTarget:
+        """Return the private kernel identity needed for one bounded collection window."""
         self._assert_context_current()
         return resolve_existing_container_target(
             self._adapter_factory(),
@@ -149,7 +164,34 @@ class ExistingDockerRuntime:
             allow_rootful_cross_uid=(
                 self._collection_policy.allow_rootful_container_targets
             ),
-        ).artifact
+        )
+
+    def assert_collection_target_current(
+        self,
+        container_reference: str,
+        expected: ResolvedContainerTarget,
+        *,
+        host_pid: int | None = None,
+        container_pid: int | None = None,
+    ) -> None:
+        """Re-resolve Docker and Linux identities after one collection window."""
+        current = self.resolve_for_collection(
+            container_reference,
+            host_pid=host_pid,
+            container_pid=container_pid,
+        )
+        if (
+            current.instance != expected.instance
+            or current.kernel != expected.kernel
+            or current.artifact.identity_fingerprint
+            != expected.artifact.identity_fingerprint
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "docker_identity",
+                "Docker container or selected process changed during collection",
+                recoverable=True,
+            )
 
     def authorize(
         self,

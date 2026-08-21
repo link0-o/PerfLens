@@ -18,6 +18,7 @@ from perflens.contracts.docker import (
     ContainerResourceDelta,
     ContainerResourceSnapshot,
     PressureSnapshot,
+    derive_container_resource_context_id,
 )
 from perflens.docker.identity import ResolvedContainerTarget
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -237,6 +238,8 @@ def build_container_resource_context(
     before: CapturedCgroupSnapshot,
     after: CapturedCgroupSnapshot,
     *,
+    source_collection_id: str,
+    source_output_sha256: str,
     created_at: datetime | None = None,
 ) -> ContainerResourceContextArtifact:
     """Build a bounded container-wide delta without attributing it to one process."""
@@ -325,20 +328,24 @@ def build_container_resource_context(
     if timestamp < _parse_timestamp(second.observed_at):
         raise _resource_error("Resource context creation precedes its final cgroup snapshot")
     limitation_tuple = tuple(sorted(limitations))
-    identity = _sha256_text(
-        reader.container_identity_sha256,
-        reader.cgroup_identity_sha256,
-        first.observed_at,
-        second.observed_at,
-        timestamp.isoformat(),
+    resource_context_id = derive_container_resource_context_id(
+        container_identity_sha256=reader.container_identity_sha256,
+        cgroup_identity_sha256=reader.cgroup_identity_sha256,
+        source_collection_id=source_collection_id,
+        source_output_sha256=source_output_sha256,
+        before_observed_at=first.observed_at,
+        after_observed_at=second.observed_at,
+        created_at=timestamp.isoformat(),
     )
     provisional = ContainerResourceContextArtifact(
         schema_version="1.0",
         perflens_version=__version__,
-        resource_context_id=f"container-resource-{identity[:20]}",
+        resource_context_id=resource_context_id,
         created_at=timestamp.isoformat(),
         container_identity_sha256=reader.container_identity_sha256,
         cgroup_identity_sha256=reader.cgroup_identity_sha256,
+        source_collection_id=source_collection_id,
+        source_output_sha256=source_output_sha256,
         before=first,
         after=second,
         delta=delta,

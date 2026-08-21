@@ -12,6 +12,7 @@ from pydantic import BaseModel, ValidationError
 
 from perflens.application.evidence import (
     compute_diagnosis_content_sha256,
+    contract_content_sha256,
     verify_collection_artifact,
 )
 from perflens.application.trace_evidence import validate_trace_evidence_invariants
@@ -29,6 +30,10 @@ from perflens.contracts.artifacts import (
     DiagnosisBundle,
     ProfileComparison,
     ProjectRunArtifact,
+)
+from perflens.contracts.docker import (
+    ContainerResourceContextArtifact,
+    ContainerRunArtifact,
 )
 from perflens.contracts.trace import (
     LockAnalysisArtifact,
@@ -211,6 +216,46 @@ class ArtifactStore:
         validate_trace_evidence_invariants(evidence)
         return evidence
 
+    def load_container_resource_context(
+        self,
+        resource_context_id: str,
+    ) -> ContainerResourceContextArtifact:
+        context = self._load(
+            resource_context_id,
+            "container-resource-context",
+            ContainerResourceContextArtifact,
+        )
+        self._require_embedded_id(
+            context.resource_context_id,
+            resource_context_id,
+            "container-resource-context",
+        )
+        self._verify_docker_content(
+            context,
+            context.content_sha256,
+            resource_context_id,
+            "container-resource-context",
+        )
+        return context
+
+    def load_container_run(self, run_id: str) -> ContainerRunArtifact:
+        run = self._load(run_id, "container-run", ContainerRunArtifact)
+        self._require_embedded_id(run.run_id, run_id, "container-run")
+        self._verify_docker_content(
+            run,
+            run.content_sha256,
+            run_id,
+            "container-run",
+        )
+        if run.resource_context_id is not None:
+            context = self.load_container_resource_context(run.resource_context_id)
+            if (
+                context.container_identity_sha256 != run.container_identity_sha256
+                or context.source_collection_id not in run.collection_ids
+            ):
+                raise self._identity_error(run_id, "container-run")
+        return run
+
     def load_trace_analysis(
         self,
         analysis_id: str,
@@ -259,6 +304,8 @@ class ArtifactStore:
             "scheduler-analysis",
             "off-cpu-analysis",
             "lock-analysis",
+            "container-resource-context",
+            "container-run",
         }:
             # Validate and page the exact same immutable byte snapshot. Performing
             # a typed load followed by a second open would leave a replacement
@@ -328,6 +375,37 @@ class ArtifactStore:
             verification = verify_trace_analysis_artifact(analysis, evidence)
             require_usable_trace_analysis(verification)
             return
+        if artifact_type == "container-resource-context":
+            context = ContainerResourceContextArtifact.model_validate_json(payload)
+            self._require_embedded_id(
+                context.resource_context_id,
+                artifact_id,
+                artifact_type,
+            )
+            self._verify_docker_content(
+                context,
+                context.content_sha256,
+                artifact_id,
+                artifact_type,
+            )
+            return
+        if artifact_type == "container-run":
+            run = ContainerRunArtifact.model_validate_json(payload)
+            self._require_embedded_id(run.run_id, artifact_id, artifact_type)
+            self._verify_docker_content(
+                run,
+                run.content_sha256,
+                artifact_id,
+                artifact_type,
+            )
+            if run.resource_context_id is not None:
+                context = self.load_container_resource_context(run.resource_context_id)
+                if (
+                    context.container_identity_sha256 != run.container_identity_sha256
+                    or context.source_collection_id not in run.collection_ids
+                ):
+                    raise self._identity_error(artifact_id, artifact_type)
+            return
         if artifact_type == "diagnosis":
             diagnosis = DiagnosisBundle.model_validate_json(payload)
             expected_analysis_id = artifact_id.removeprefix("diagnosis-")
@@ -355,6 +433,19 @@ class ArtifactStore:
         else:
             raise self._identity_error(artifact_id, artifact_type)
         self._require_embedded_id(embedded_id, artifact_id, artifact_type)
+
+    def _verify_docker_content(
+        self,
+        model: BaseModel,
+        content_sha256: str,
+        artifact_id: str,
+        artifact_type: str,
+    ) -> None:
+        if content_sha256 != contract_content_sha256(
+            model,
+            exclude={"content_sha256"},
+        ):
+            raise self._identity_error(artifact_id, artifact_type)
 
     @staticmethod
     def _trace_analysis_type(

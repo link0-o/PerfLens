@@ -67,6 +67,7 @@ from perflens.contracts.docker import (
     CollectionMode,
     ContainerOptimizationSessionArtifact,
     ContainerProcessInventoryArtifact,
+    ContainerResourceContextArtifact,
     ContainerRunArtifact,
     ContainerTargetArtifact,
     DockerRuntimeCapabilityArtifact,
@@ -79,6 +80,11 @@ from perflens.contracts.trace import (
     TraceEvidenceArtifact,
 )
 from perflens.docker.capability import discover_docker_capability
+from perflens.docker.cgroup import (
+    CapturedCgroupSnapshot,
+    CgroupV2ResourceReader,
+    build_container_resource_context,
+)
 from perflens.docker.managed import build_container_run_artifact
 from perflens.docker.project_config import (
     assert_docker_project_policy_current,
@@ -151,6 +157,7 @@ class ServerConfig:
 class _ExecutedBrokerPlan:
     reference: ArtifactReference
     collection_id: str
+    output_sha256: str
     evidence_bytes: int
     active_seconds: float
 
@@ -268,6 +275,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     },
                 ),
                 collection_id=trace_evidence.source.collection_id,
+                output_sha256=trace_evidence.source.output_sha256,
                 evidence_bytes=trace_evidence.source.output_bytes,
                 active_seconds=active_seconds,
             )
@@ -295,6 +303,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 },
             ),
             collection_id=artifact.collection_id,
+            output_sha256=artifact.output_sha256,
             evidence_bytes=artifact.output_bytes,
             active_seconds=active_seconds,
         )
@@ -471,11 +480,13 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         _require_automatic_collection(config, require_existing_pid_attach=True)
         _require_docker_targets(config)
         assert docker_runtime is not None
-        target = docker_runtime.resolve(
+        resolved_target = docker_runtime.resolve_for_collection(
             container_reference,
             host_pid=host_pid,
             container_pid=container_pid,
         )
+        target = resolved_target.artifact
+        resource_reader = CgroupV2ResourceReader(resolved_target)
         plan = create_collection_plan(
             CollectionPlanRequest(
                 mode=mode,
@@ -508,8 +519,49 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             reserve_evidence_bytes=plan.max_output_bytes,
         )
         started = time.monotonic()
+        executed: _ExecutedBrokerPlan | None = None
+        before_snapshot: CapturedCgroupSnapshot | None = None
+
+        def capture_resource_baseline() -> None:
+            nonlocal before_snapshot
+            if before_snapshot is not None:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "docker_resource_context",
+                    "Docker resource baseline callback was invoked more than once",
+                )
+            before_snapshot = resource_reader.capture()
+
         try:
-            executed = execute_broker_plan(plan)
+            executed = execute_broker_plan(
+                plan,
+                ready_callback=capture_resource_baseline,
+            )
+            if before_snapshot is None:
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "docker_resource_context",
+                    "Collector completed without requesting the Docker resource baseline",
+                )
+            after_snapshot = resource_reader.capture()
+            docker_runtime.assert_collection_target_current(
+                container_reference,
+                resolved_target,
+                host_pid=host_pid,
+                container_pid=container_pid,
+            )
+            resource_context = build_container_resource_context(
+                resource_reader,
+                before_snapshot,
+                after_snapshot,
+                source_collection_id=executed.collection_id,
+                source_output_sha256=executed.output_sha256,
+            )
+            store.save(
+                resource_context,
+                resource_context.resource_context_id,
+                "container-resource-context",
+            )
         except BaseException:
             with suppress(PerfLensError):
                 docker_runtime.finish_existing_run(
@@ -519,7 +571,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                         reserve_active_seconds,
                         max(0, math.ceil(time.monotonic() - started)),
                     ),
-                    actual_evidence_bytes=0,
+                    actual_evidence_bytes=(
+                        executed.evidence_bytes if executed is not None else 0
+                    ),
                 )
             raise
         session = docker_runtime.finish_existing_run(
@@ -541,6 +595,13 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "docker_session_state": session.state,
                     "container_target_id": target.target_id,
                     "container_pid": target.container_pid,
+                    **_container_resource_summary(
+                        resource_context,
+                        uri=store.uri(
+                            resource_context.resource_context_id,
+                            "container-resource-context",
+                        ),
+                    ),
                 },
             }
         )
@@ -590,6 +651,20 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         )
         try:
             target = run.prepared.target.artifact
+            resource_reader = CgroupV2ResourceReader(run.prepared.target)
+            before_snapshot: CapturedCgroupSnapshot | None = None
+
+            def capture_and_release_workload() -> None:
+                nonlocal before_snapshot
+                if before_snapshot is not None:
+                    raise PerfLensError(
+                        ErrorCode.PATH_SAFETY_VIOLATION,
+                        "docker_resource_context",
+                        "Managed Docker resource baseline callback was invoked more than once",
+                    )
+                before_snapshot = resource_reader.capture()
+                run.coordinator.release(run.prepared)
+
             plan = create_collection_plan(
                 CollectionPlanRequest(
                     mode=mode,
@@ -615,7 +690,26 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 )
             executed = execute_broker_plan(
                 plan,
-                ready_callback=lambda: run.coordinator.release(run.prepared),
+                ready_callback=capture_and_release_workload,
+            )
+            if before_snapshot is None:
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "docker_resource_context",
+                    "Collector completed without releasing the managed Docker workload",
+                )
+            after_snapshot = resource_reader.capture()
+            resource_context = build_container_resource_context(
+                resource_reader,
+                before_snapshot,
+                after_snapshot,
+                source_collection_id=executed.collection_id,
+                source_output_sha256=executed.output_sha256,
+            )
+            store.save(
+                resource_context,
+                resource_context.resource_context_id,
+                "container-resource-context",
             )
             elapsed = math.ceil(time.monotonic() - started)
             remaining = workload_timeout_seconds - elapsed
@@ -636,6 +730,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 status="exited",
                 cleanup_status=cleanup_status,
                 collection_ids=(executed.collection_id,),
+                resource_context_id=resource_context.resource_context_id,
                 warnings=(
                     (
                         "Managed container identity could not be safely removed; "
@@ -655,7 +750,12 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 container_run,
                 executed.reference,
                 session,
+                resource_context,
                 uri=store.uri(container_run.run_id, "container-run"),
+                resource_uri=store.uri(
+                    resource_context.resource_context_id,
+                    "container-resource-context",
+                ),
             )
         except BaseException:
             with suppress(PerfLensError):
@@ -1186,6 +1286,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "scheduler-analysis",
             "off-cpu-analysis",
             "lock-analysis",
+            "container-resource-context",
+            "container-run",
         ],
         offset: int = 0,
         limit: int = 65_536,
@@ -1455,8 +1557,10 @@ def _managed_run_reference(
     run: ContainerRunArtifact,
     collection: ArtifactReference,
     session: ContainerOptimizationSessionArtifact,
+    resource_context: ContainerResourceContextArtifact,
     *,
     uri: str,
+    resource_uri: str,
 ) -> ArtifactReference:
     return ArtifactReference(
         artifact_id=run.run_id,
@@ -1473,8 +1577,32 @@ def _managed_run_reference(
             "cleanup_status": run.cleanup_status,
             "collection_id": collection.artifact_id,
             "collection_artifact_type": collection.artifact_type,
+            **_container_resource_summary(resource_context, uri=resource_uri),
         },
     )
+
+
+def _container_resource_summary(
+    context: ContainerResourceContextArtifact,
+    *,
+    uri: str,
+) -> dict[str, str | int | float | bool | None]:
+    """Project the bounded whole-container context without implying process ownership."""
+    return {
+        "container_resource_context_id": context.resource_context_id,
+        "container_resource_context_uri": uri,
+        "container_resource_collection_id": context.source_collection_id,
+        "container_resource_output_sha256": context.source_output_sha256,
+        "container_resource_quality": context.quality_status,
+        "container_cpu_usage_usec": context.delta.cpu_usage_usec,
+        "container_cpu_throttled_usec": context.delta.cpu_throttled_usec,
+        "container_memory_current_bytes_after": context.after.memory_current_bytes,
+        "container_io_read_bytes": context.delta.io_read_bytes,
+        "container_io_write_bytes": context.delta.io_write_bytes,
+        "container_pids_current_after": context.after.pids_current,
+        "container_resource_scope": context.scope,
+        "container_resource_limitations": "; ".join(context.limitations),
+    }
 
 
 def _detect_source_type(path: Path) -> Literal["folded", "perf_script", "perf_data"]:

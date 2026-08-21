@@ -12,6 +12,7 @@ from typing import Any, cast
 
 import pytest
 from mcp.client import Client
+from tests.support.docker import make_container_resource_context
 from tests.support.trace import make_scheduler_trace_evidence
 
 from perflens.application.evidence import contract_content_sha256
@@ -174,8 +175,8 @@ def _managed_session(*, state: str = "active") -> ContainerOptimizationSessionAr
     )
 
 
-def _managed_run_artifact() -> ContainerRunArtifact:
-    return ContainerRunArtifact(
+def _managed_run_artifact(resource_context_id: str) -> ContainerRunArtifact:
+    provisional = ContainerRunArtifact(
         schema_version="1.0",
         perflens_version="0.3.1",
         run_id="container-run-" + "5" * 20,
@@ -193,8 +194,17 @@ def _managed_run_artifact() -> ContainerRunArtifact:
         status="exited",
         exit_code=0,
         collection_ids=("collection-" + "b" * 16,),
+        resource_context_id=resource_context_id,
         cleanup_status="removed",
-        content_sha256="7" * 64,
+        content_sha256="0" * 64,
+    )
+    return provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            )
+        }
     )
 
 
@@ -401,16 +411,53 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
     target = _docker_target()
     collection = _fake_docker_collection(tmp_path)
     planned_requests: list[CollectionPlanRequest] = []
+    plan_denied = {"value": False}
 
     def fake_resolve(*_args: object, **_kwargs: object) -> SimpleNamespace:
-        return SimpleNamespace(artifact=target)
+        return SimpleNamespace(artifact=target, instance="instance", kernel="kernel")
+
+    resource_context = make_container_resource_context(
+        source_collection_id=collection.collection_id,
+        source_output_sha256=collection.output_sha256,
+    )
+    resource_captures: list[object] = []
+
+    class FakeCgroupReader:
+        def __init__(self, resolved: SimpleNamespace) -> None:
+            assert resolved.artifact == target
+
+        def capture(self) -> object:
+            snapshot = object()
+            resource_captures.append(snapshot)
+            return snapshot
+
+    def fake_build_resource(
+        _reader: FakeCgroupReader,
+        before: object,
+        after: object,
+        *,
+        source_collection_id: str,
+        source_output_sha256: str,
+    ):
+        assert (before, after) == tuple(resource_captures[-2:])
+        assert source_collection_id == collection.collection_id
+        assert source_output_sha256 == collection.output_sha256
+        return resource_context
 
     def fake_create_plan(
         request: CollectionPlanRequest,
         **_kwargs: object,
     ) -> CollectionPlanArtifact:
         planned_requests.append(request)
-        return _fake_docker_plan()
+        plan = _fake_docker_plan()
+        if plan_denied["value"]:
+            return plan.model_copy(
+                update={
+                    "policy_status": "denied",
+                    "warnings": ("simulated automatic-collection policy denial",),
+                }
+            )
+        return plan
 
     def fake_assert_plan_current(
         _plan: CollectionPlanArtifact,
@@ -420,6 +467,7 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
 
     class FakeBrokerClient:
         fail = False
+        callback_count = 1
 
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
@@ -431,7 +479,8 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
             ready_callback: Any = None,
         ) -> CollectionArtifact:
             if ready_callback is not None:
-                ready_callback()
+                for _ in range(self.callback_count):
+                    ready_callback()
             if self.fail:
                 raise PerfLensError(
                     ErrorCode.EXTERNAL_TOOL_FAILED,
@@ -454,6 +503,11 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
         fake_assert_plan_current,
     )
     monkeypatch.setattr("perflens.mcp.server.CollectorBrokerClient", FakeBrokerClient)
+    monkeypatch.setattr("perflens.mcp.server.CgroupV2ResourceReader", FakeCgroupReader)
+    monkeypatch.setattr(
+        "perflens.mcp.server.build_container_resource_context",
+        fake_build_resource,
+    )
     server = create_server(
         ServerConfig(
             (tmp_path,),
@@ -527,8 +581,126 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
             assert reference["artifact_id"] == collection.collection_id
             assert reference["summary"]["docker_run_number"] == 1
             assert reference["summary"]["docker_session_state"] == "active"
+            assert reference["summary"]["container_resource_context_id"] == (
+                resource_context.resource_context_id
+            )
+            assert reference["summary"]["container_cpu_usage_usec"] == 600
+            assert reference["summary"]["container_resource_collection_id"] == (
+                collection.collection_id
+            )
+            assert reference["summary"]["container_resource_output_sha256"] == (
+                collection.output_sha256
+            )
             assert planned_requests[0].container_target == target
             assert (artifact_root / f"{collection.collection_id}.collection.json").is_file()
+            assert (
+                artifact_root
+                / (
+                    f"{resource_context.resource_context_id}."
+                    "container-resource-context.json"
+                )
+            ).is_file()
+            assert len(resource_captures) == 2
+
+            denied_plan_session = _structured(
+                await client.call_tool(
+                    "authorize_docker_session",
+                    {
+                        "container_reference": "service",
+                        "container_pid": 12,
+                        "authorization_mode": "bounded_session",
+                        "allowed_modes": ["stat"],
+                        "authorization": (
+                            "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
+                        ),
+                    },
+                )
+            )
+            plan_denied["value"] = True
+            denied_plan = await client.call_tool(
+                "collect_docker_target",
+                {
+                    "session_id": denied_plan_session["session_id"],
+                    "container_reference": "service",
+                    "container_pid": 12,
+                    "mode": "stat",
+                    "duration_seconds": 1,
+                    "events": ["task-clock"],
+                    "event_source": "software_only",
+                    "max_output_bytes": 1000,
+                },
+            )
+            assert denied_plan.is_error
+            assert "outside MCP automatic-collection policy" in str(denied_plan.content)
+            assert len(resource_captures) == 2
+            plan_denied["value"] = False
+
+            duplicate_callback_session = _structured(
+                await client.call_tool(
+                    "authorize_docker_session",
+                    {
+                        "container_reference": "service",
+                        "container_pid": 12,
+                        "authorization_mode": "bounded_session",
+                        "allowed_modes": ["stat"],
+                        "authorization": (
+                            "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
+                        ),
+                    },
+                )
+            )
+            FakeBrokerClient.callback_count = 2
+            duplicate_callback = await client.call_tool(
+                "collect_docker_target",
+                {
+                    "session_id": duplicate_callback_session["session_id"],
+                    "container_reference": "service",
+                    "container_pid": 12,
+                    "mode": "stat",
+                    "duration_seconds": 1,
+                    "events": ["task-clock"],
+                    "event_source": "software_only",
+                    "max_output_bytes": 1000,
+                },
+            )
+            assert duplicate_callback.is_error
+            assert "baseline callback was invoked more than once" in str(
+                duplicate_callback.content
+            )
+
+            missing_callback_session = _structured(
+                await client.call_tool(
+                    "authorize_docker_session",
+                    {
+                        "container_reference": "service",
+                        "container_pid": 12,
+                        "authorization_mode": "bounded_session",
+                        "allowed_modes": ["stat"],
+                        "authorization": (
+                            "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
+                        ),
+                    },
+                )
+            )
+            FakeBrokerClient.callback_count = 0
+            missing_callback = await client.call_tool(
+                "collect_docker_target",
+                {
+                    "session_id": missing_callback_session["session_id"],
+                    "container_reference": "service",
+                    "container_pid": 12,
+                    "mode": "stat",
+                    "duration_seconds": 1,
+                    "events": ["task-clock"],
+                    "event_source": "software_only",
+                    "max_output_bytes": 1000,
+                },
+            )
+            assert missing_callback.is_error
+            assert "without requesting the Docker resource baseline" in str(
+                missing_callback.content
+            )
+            FakeBrokerClient.callback_count = 1
 
             revoked = await client.call_tool(
                 "revoke_docker_session",
@@ -608,9 +780,14 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
     collection = _fake_docker_collection(tmp_path)
     active_session = _managed_session()
     exhausted_session = _managed_session(state="exhausted")
-    container_run = _managed_run_artifact()
+    resource_context = make_container_resource_context(
+        source_collection_id=collection.collection_id,
+        source_output_sha256=collection.output_sha256,
+    )
+    container_run = _managed_run_artifact(resource_context.resource_context_id)
     operations: list[str] = []
     requests: list[CollectionPlanRequest] = []
+    plan_denied = {"value": False}
 
     class FakeCoordinator:
         def release(self, prepared: SimpleNamespace) -> None:
@@ -638,6 +815,29 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
         coordinator=FakeCoordinator(),
         authorization=SimpleNamespace(workload=object()),
     )
+
+    class FakeCgroupReader:
+        def __init__(self, resolved: SimpleNamespace) -> None:
+            assert resolved.artifact == target
+            self.capture_count = 0
+
+        def capture(self) -> object:
+            self.capture_count += 1
+            operations.append(f"cgroup-{self.capture_count}")
+            return object()
+
+    def fake_build_resource(
+        _reader: FakeCgroupReader,
+        _before: object,
+        _after: object,
+        *,
+        source_collection_id: str,
+        source_output_sha256: str,
+    ):
+        operations.append("resource")
+        assert source_collection_id == collection.collection_id
+        assert source_output_sha256 == collection.output_sha256
+        return resource_context
 
     class FakeDockerRuntime:
         def __init__(self, **_kwargs: object) -> None:
@@ -668,16 +868,26 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
         **_kwargs: object,
     ) -> CollectionPlanArtifact:
         requests.append(request)
-        return _fake_docker_plan()
+        plan = _fake_docker_plan()
+        if plan_denied["value"]:
+            return plan.model_copy(
+                update={
+                    "policy_status": "denied",
+                    "warnings": ("simulated automatic-collection policy denial",),
+                }
+            )
+        return plan
 
     def fake_assert_current(_plan: CollectionPlanArtifact) -> None:
         return None
 
-    def fake_build_run(**_kwargs: object) -> ContainerRunArtifact:
+    def fake_build_run(**kwargs: object) -> ContainerRunArtifact:
+        assert kwargs["resource_context_id"] == resource_context.resource_context_id
         return container_run
 
     class FakeBrokerClient:
         fail = False
+        callback_count = 1
 
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
@@ -690,7 +900,8 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
         ) -> CollectionArtifact:
             operations.append("broker")
             assert ready_callback is not None
-            ready_callback()
+            for _ in range(self.callback_count):
+                ready_callback()
             if self.fail:
                 raise PerfLensError(
                     ErrorCode.EXTERNAL_TOOL_FAILED,
@@ -703,6 +914,11 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
     monkeypatch.setattr("perflens.mcp.server.create_collection_plan", fake_create_plan)
     monkeypatch.setattr("perflens.mcp.server.assert_plan_current", fake_assert_current)
     monkeypatch.setattr("perflens.mcp.server.CollectorBrokerClient", FakeBrokerClient)
+    monkeypatch.setattr("perflens.mcp.server.CgroupV2ResourceReader", FakeCgroupReader)
+    monkeypatch.setattr(
+        "perflens.mcp.server.build_container_resource_context",
+        fake_build_resource,
+    )
     monkeypatch.setattr(
         "perflens.mcp.server.build_container_run_artifact",
         fake_build_run,
@@ -773,13 +989,109 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             reference = _structured(result)
             assert reference["artifact_id"] == container_run.run_id
             assert reference["summary"]["docker_session_state"] == "exhausted"
-            assert operations == ["prepare", "broker", "release", "wait", "cleanup", "finish"]
+            assert reference["summary"]["container_resource_context_id"] == (
+                resource_context.resource_context_id
+            )
+            assert reference["summary"]["container_resource_collection_id"] == (
+                collection.collection_id
+            )
+            assert operations == [
+                "prepare",
+                "broker",
+                "cgroup-1",
+                "release",
+                "cgroup-2",
+                "resource",
+                "wait",
+                "cleanup",
+                "finish",
+            ]
             assert requests[0].container_target == target
             assert (artifact_root / f"{container_run.run_id}.container-run.json").is_file()
+            assert (
+                artifact_root
+                / (
+                    f"{resource_context.resource_context_id}."
+                    "container-resource-context.json"
+                )
+            ).is_file()
 
             operations.clear()
             prepared.state = "prepared"
             prepared.exit_code = None
+            plan_denied["value"] = True
+            denied_plan = await client.call_tool(
+                "collect_managed_docker_workload",
+                {
+                    "session_id": active_session.session_id,
+                    "mode": "stat",
+                    "duration_seconds": 1,
+                    "workload_timeout_seconds": 30,
+                    "events": ["task-clock"],
+                    "event_source": "software_only",
+                    "max_output_bytes": 1000,
+                },
+            )
+            assert denied_plan.is_error
+            assert "outside MCP automatic-collection policy" in str(denied_plan.content)
+            assert operations == ["prepare", "cleanup", "finish"]
+            plan_denied["value"] = False
+
+            operations.clear()
+            prepared.state = "prepared"
+            prepared.exit_code = None
+            FakeBrokerClient.callback_count = 2
+            duplicate_callback = await client.call_tool(
+                "collect_managed_docker_workload",
+                {
+                    "session_id": active_session.session_id,
+                    "mode": "stat",
+                    "duration_seconds": 1,
+                    "workload_timeout_seconds": 30,
+                    "events": ["task-clock"],
+                    "event_source": "software_only",
+                    "max_output_bytes": 1000,
+                },
+            )
+            assert duplicate_callback.is_error
+            assert "baseline callback was invoked more than once" in str(
+                duplicate_callback.content
+            )
+            assert operations == [
+                "prepare",
+                "broker",
+                "cgroup-1",
+                "release",
+                "cleanup",
+                "finish",
+            ]
+
+            operations.clear()
+            prepared.state = "prepared"
+            prepared.exit_code = None
+            FakeBrokerClient.callback_count = 0
+            missing_callback = await client.call_tool(
+                "collect_managed_docker_workload",
+                {
+                    "session_id": active_session.session_id,
+                    "mode": "stat",
+                    "duration_seconds": 1,
+                    "workload_timeout_seconds": 30,
+                    "events": ["task-clock"],
+                    "event_source": "software_only",
+                    "max_output_bytes": 1000,
+                },
+            )
+            assert missing_callback.is_error
+            assert "without releasing the managed Docker workload" in str(
+                missing_callback.content
+            )
+            assert operations == ["prepare", "broker", "cleanup", "finish"]
+
+            operations.clear()
+            prepared.state = "prepared"
+            prepared.exit_code = None
+            FakeBrokerClient.callback_count = 1
             FakeBrokerClient.fail = True
             failed = await client.call_tool(
                 "collect_managed_docker_workload",
@@ -794,7 +1106,14 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
                 },
             )
             assert failed.is_error
-            assert operations == ["prepare", "broker", "release", "cleanup", "finish"]
+            assert operations == [
+                "prepare",
+                "broker",
+                "cgroup-1",
+                "release",
+                "cleanup",
+                "finish",
+            ]
 
     asyncio.run(exercise())
 

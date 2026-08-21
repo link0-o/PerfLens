@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
+from tests.support.docker import make_container_resource_context
 
 from perflens.contracts.artifacts import CollectionArtifact, CollectionPlanArtifact
 from perflens.contracts.docker import (
@@ -14,6 +15,7 @@ from perflens.contracts.docker import (
     ContainerTargetArtifact,
     ContainerWorkloadSpecArtifact,
     DockerRuntimeCapabilityArtifact,
+    derive_container_resource_context_id,
 )
 
 SHA_A = "a" * 64
@@ -105,6 +107,18 @@ def _snapshot(observed_at: str, *, usage: int) -> dict[str, Any]:
         "pids_current": 2,
         "pids_max": 64,
     }
+
+
+def _bind_resource_context_id(payload: dict[str, Any]) -> None:
+    payload["resource_context_id"] = derive_container_resource_context_id(
+        container_identity_sha256=payload["container_identity_sha256"],
+        cgroup_identity_sha256=payload["cgroup_identity_sha256"],
+        source_collection_id=payload["source_collection_id"],
+        source_output_sha256=payload["source_output_sha256"],
+        before_observed_at=payload["before"]["observed_at"],
+        after_observed_at=payload["after"]["observed_at"],
+        created_at=payload["created_at"],
+    )
 
 
 def _workload() -> dict[str, Any]:
@@ -217,6 +231,8 @@ def test_resource_context_is_container_scoped_and_time_ordered() -> None:
         "created_at": "2026-08-21T00:00:02+00:00",
         "container_identity_sha256": SHA_A,
         "cgroup_identity_sha256": SHA_B,
+        "source_collection_id": "collection-" + "1" * 16,
+        "source_output_sha256": SHA_C,
         "before": _snapshot("2026-08-21T00:00:00+00:00", usage=10),
         "after": _snapshot("2026-08-21T00:00:01+00:00", usage=20),
         "delta": {
@@ -231,17 +247,73 @@ def test_resource_context_is_container_scoped_and_time_ordered() -> None:
             "io_write_bytes": 0,
             "io_read_ios": 0,
             "io_write_ios": 0,
+            "memory_pressure_some_usec": 0,
+            "memory_pressure_full_usec": 0,
+            "io_pressure_some_usec": 0,
+            "io_pressure_full_usec": 0,
         },
         "quality_status": "verified",
         "allowed_conclusions": ["container cgroup CPU delta"],
         "forbidden_conclusions": ["target process exclusive resource attribution"],
         "content_sha256": SHA_C,
     }
+    _bind_resource_context_id(context)
     artifact = ContainerResourceContextArtifact.model_validate(context)
     assert artifact.scope == "entire_container_cgroup_v2"
     context["after"] = _snapshot("2026-08-20T23:59:59+00:00", usage=20)
+    _bind_resource_context_id(context)
     with pytest.raises(ValidationError):
         ContainerResourceContextArtifact.model_validate(context)
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "delta",
+        "created_at",
+        "counter_decrease",
+        "source_binding",
+        "unreported_limit_drift",
+        "partial_without_limitations",
+        "missing_allowed_conclusions",
+        "missing_forbidden_conclusions",
+    ),
+)
+def test_resource_context_rejects_forged_or_unbounded_semantics(
+    case: str,
+) -> None:
+    payload = make_container_resource_context().model_dump(mode="json")
+    if case == "delta":
+        payload["delta"]["cpu_usage_usec"] = 999
+    elif case == "created_at":
+        payload["created_at"] = "2026-08-20T23:59:59+00:00"
+        _bind_resource_context_id(payload)
+    elif case == "counter_decrease":
+        payload["after"]["cpu_usage_usec"] = 1
+    elif case == "source_binding":
+        payload["source_output_sha256"] = "9" * 64
+    elif case == "unreported_limit_drift":
+        payload["after"]["cpu_quota_usec"] = 50_000
+    elif case == "partial_without_limitations":
+        payload["quality_status"] = "partial"
+        payload["limitations"] = []
+    elif case == "missing_allowed_conclusions":
+        payload["allowed_conclusions"] = []
+    else:
+        assert case == "missing_forbidden_conclusions"
+        payload["forbidden_conclusions"] = []
+    with pytest.raises(ValidationError):
+        ContainerResourceContextArtifact.model_validate(payload)
+
+
+def test_resource_context_preserves_unknown_optional_counter_semantics() -> None:
+    payload = make_container_resource_context().model_dump(mode="json")
+    payload["before"]["cpu_user_usec"] = None
+    payload["delta"]["cpu_user_usec"] = None
+    payload["quality_status"] = "partial"
+    payload["limitations"] = ["cpu.stat omits optional user_usec."]
+    artifact = ContainerResourceContextArtifact.model_validate(payload)
+    assert artifact.delta.cpu_user_usec is None
 
 
 def test_workload_spec_has_no_arbitrary_docker_argument_surface() -> None:
