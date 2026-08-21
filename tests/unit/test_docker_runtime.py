@@ -118,6 +118,23 @@ def test_existing_runtime_authorizes_bounded_modes_and_revokes(
     assert session.allowed_modes == ("stat", "sched")
     assert session.max_workload_runs == 2
     assert session.max_active_seconds == 1200
+    lease = runtime.begin_existing_run(
+        session.session_id,
+        target,
+        requested_modes=("stat",),
+        reserve_active_seconds=10,
+        reserve_evidence_bytes=1000,
+    )
+    assert lease.run_number == 1
+    after_run = runtime.finish_existing_run(
+        session.session_id,
+        lease,
+        actual_active_seconds=2,
+        actual_evidence_bytes=120,
+    )
+    assert after_run.workload_runs_used == 1
+    assert after_run.active_seconds_used == 2
+    assert after_run.evidence_bytes_used == 120
     revoked = runtime.revoke(session.session_id)
     assert revoked.state == "revoked"
     assert runtime.revoke(session.session_id) == revoked

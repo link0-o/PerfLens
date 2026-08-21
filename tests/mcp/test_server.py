@@ -16,7 +16,11 @@ from tests.support.trace import make_scheduler_trace_evidence
 
 from perflens.application.evidence import contract_content_sha256
 from perflens.collection.collector import ACTIVE_COLLECTION_AUTHORIZATION
-from perflens.collection.planning import AutomaticCollectionPolicy
+from perflens.collection.planning import (
+    AutomaticCollectionPolicy,
+    CollectionPlanRequest,
+)
+from perflens.contracts.artifacts import CollectionArtifact, CollectionPlanArtifact
 from perflens.contracts.docker import (
     ContainerCgroupIdentity,
     ContainerNamespaceIdentity,
@@ -24,6 +28,7 @@ from perflens.contracts.docker import (
 )
 from perflens.docker.capability import discover_docker_capability
 from perflens.docker.project_config import render_default_docker_project_policy
+from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.server import ServerConfig, create_server
 from perflens.mcp.storage import ArtifactStore, PathPolicy
 
@@ -66,6 +71,48 @@ def _docker_target() -> ContainerTargetArtifact:
     )
 
 
+def _fake_docker_plan() -> CollectionPlanArtifact:
+    return CollectionPlanArtifact(
+        schema_version="1.0",
+        plan_id="plan-" + "a" * 20,
+        mode="stat",
+        target_type="pid",
+        target_pid=1234,
+        target_uid=os.geteuid(),
+        target_start_time_ticks=5678,
+        backend="privileged_broker",
+        duration_seconds=1,
+        events=("task-clock",),
+        requested_event_source="software_only",
+        max_output_bytes=1000,
+        expires_at="2026-08-21T01:00:00+00:00",
+        policy_status="allowed",
+        required_privilege="cap_perfmon",
+    )
+
+
+def _fake_docker_collection(tmp_path: Path) -> CollectionArtifact:
+    return CollectionArtifact(
+        schema_version="1.0",
+        collection_id="collection-" + "b" * 16,
+        mode="stat",
+        target_type="pid",
+        target_argument_count=0,
+        target_pid=1234,
+        output_path=str(tmp_path / "fake.stat.csv"),
+        output_sha256="c" * 64,
+        output_bytes=120,
+        output_format="perf_stat_delimited",
+        perf_executable="/usr/bin/perf",
+        started_at="2026-08-21T00:00:00+00:00",
+        finished_at="2026-08-21T00:00:01+00:00",
+        duration_seconds=1,
+        events=("task-clock",),
+        requested_event_source="software_only",
+        actual_event_source="software",
+    )
+
+
 def _structured(result: Any) -> dict[str, Any]:
     payload = result.structured_content
     assert isinstance(payload, dict)
@@ -102,6 +149,7 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "resolve_docker_target",
                 "authorize_docker_session",
                 "revoke_docker_session",
+                "collect_docker_target",
                 "plan_automatic_collection",
                 "execute_collection_plan",
                 "collect_project_workload",
@@ -143,6 +191,9 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             }
             assert tools["revoke_docker_session"].meta == {
                 "perflens/permission": "DOCKER_AUTHORIZATION"
+            }
+            assert tools["collect_docker_target"].meta == {
+                "perflens/permission": "DOCKER_COLLECTION"
             }
             docker_authorization = tools["authorize_docker_session"].input_schema[
                 "properties"
@@ -237,9 +288,39 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
     policy.write_text(render_default_docker_project_policy(), encoding="utf-8")
     policy.chmod(0o600)
     target = _docker_target()
+    collection = _fake_docker_collection(tmp_path)
+    planned_requests: list[CollectionPlanRequest] = []
 
     def fake_resolve(*_args: object, **_kwargs: object) -> SimpleNamespace:
         return SimpleNamespace(artifact=target)
+
+    def fake_create_plan(
+        request: CollectionPlanRequest,
+        **_kwargs: object,
+    ) -> CollectionPlanArtifact:
+        planned_requests.append(request)
+        return _fake_docker_plan()
+
+    def fake_assert_plan_current(
+        _plan: CollectionPlanArtifact,
+        **_kwargs: object,
+    ) -> None:
+        return None
+
+    class FakeBrokerClient:
+        fail = False
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def collect(self, _plan: CollectionPlanArtifact) -> CollectionArtifact:
+            if self.fail:
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "collector_broker",
+                    "simulated Docker collection failure",
+                )
+            return collection
 
     monkeypatch.setattr(
         "perflens.docker.runtime.open_local_docker_adapter",
@@ -249,6 +330,12 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
         "perflens.docker.runtime.resolve_existing_container_target",
         fake_resolve,
     )
+    monkeypatch.setattr("perflens.mcp.server.create_collection_plan", fake_create_plan)
+    monkeypatch.setattr(
+        "perflens.mcp.server.assert_plan_current",
+        fake_assert_plan_current,
+    )
+    monkeypatch.setattr("perflens.mcp.server.CollectorBrokerClient", FakeBrokerClient)
     server = create_server(
         ServerConfig(
             (tmp_path,),
@@ -256,6 +343,7 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
             allow_writes=True,
             allow_process_execution=True,
             allow_active_collection=True,
+            allow_pid_attach=True,
             allow_automatic_collection=True,
             allow_docker_targets=True,
             docker_project_config=policy,
@@ -303,12 +391,77 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
             assert session["state"] == "active"
             assert session["allowed_modes"] == ["stat", "sched"]
 
+            collected = await client.call_tool(
+                "collect_docker_target",
+                {
+                    "session_id": session["session_id"],
+                    "container_reference": "service",
+                    "container_pid": 12,
+                    "mode": "stat",
+                    "duration_seconds": 1,
+                    "events": ["task-clock"],
+                    "event_source": "software_only",
+                    "max_output_bytes": 1000,
+                },
+            )
+            assert not collected.is_error
+            reference = _structured(collected)
+            assert reference["artifact_id"] == collection.collection_id
+            assert reference["summary"]["docker_run_number"] == 1
+            assert reference["summary"]["docker_session_state"] == "active"
+            assert planned_requests[0].container_target == target
+            assert (artifact_root / f"{collection.collection_id}.collection.json").is_file()
+
             revoked = await client.call_tool(
                 "revoke_docker_session",
                 {"session_id": session["session_id"]},
             )
             assert not revoked.is_error
             assert _structured(revoked)["state"] == "revoked"
+
+            per_run = await client.call_tool(
+                "authorize_docker_session",
+                {
+                    "container_reference": "service",
+                    "container_pid": 12,
+                    "authorization_mode": "per_run",
+                    "allowed_modes": ["stat"],
+                    "authorization": (
+                        "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
+                    ),
+                },
+            )
+            per_run_session = _structured(per_run)
+            FakeBrokerClient.fail = True
+            failed = await client.call_tool(
+                "collect_docker_target",
+                {
+                    "session_id": per_run_session["session_id"],
+                    "container_reference": "service",
+                    "container_pid": 12,
+                    "mode": "stat",
+                    "duration_seconds": 1,
+                    "events": ["task-clock"],
+                    "event_source": "software_only",
+                    "max_output_bytes": 1000,
+                },
+            )
+            assert failed.is_error
+            repeated = await client.call_tool(
+                "collect_docker_target",
+                {
+                    "session_id": per_run_session["session_id"],
+                    "container_reference": "service",
+                    "container_pid": 12,
+                    "mode": "stat",
+                    "duration_seconds": 1,
+                    "events": ["task-clock"],
+                    "event_source": "software_only",
+                    "max_output_bytes": 1000,
+                },
+            )
+            assert repeated.is_error
+            assert "no longer active" in str(repeated.content)
 
     asyncio.run(exercise())
 

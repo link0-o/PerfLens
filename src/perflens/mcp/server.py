@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import math
+import time
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -139,6 +142,13 @@ class ServerConfig:
     max_artifact_bytes: int = 128 << 20
 
 
+@dataclass(frozen=True, slots=True)
+class _ExecutedBrokerPlan:
+    reference: ArtifactReference
+    evidence_bytes: int
+    active_seconds: float
+
+
 def create_server(config: ServerConfig) -> MCPServer[None]:
     if config.allow_pid_attach and not config.allow_active_collection:
         raise ValueError("PID attachment cannot be enabled while active collection is disabled")
@@ -206,6 +216,70 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         version=__version__,
     )
     collection_plans: dict[str, CollectionPlanArtifact] = {}
+
+    def execute_broker_plan(plan: CollectionPlanArtifact) -> _ExecutedBrokerPlan:
+        assert_plan_current(plan)
+        assert config.collector_socket is not None
+        client = CollectorBrokerClient(
+            config.collector_socket,
+            timeout_seconds=min(plan.duration_seconds + 15, 86_500),
+        )
+        started = time.monotonic()
+        if plan.mode in {"sched", "off_cpu", "lock"}:
+            trace_evidence = client.collect_trace(plan)
+            active_seconds = time.monotonic() - started
+            store.save(
+                trace_evidence,
+                trace_evidence.trace_evidence_id,
+                "trace-evidence",
+            )
+            return _ExecutedBrokerPlan(
+                reference=ArtifactReference(
+                    artifact_id=trace_evidence.trace_evidence_id,
+                    artifact_type="trace-evidence",
+                    uri=store.uri(trace_evidence.trace_evidence_id, "trace-evidence"),
+                    summary={
+                        "mode": trace_evidence.mode,
+                        "target_pid": trace_evidence.target.target_pid,
+                        "target_uid": trace_evidence.target.target_uid,
+                        "status": trace_evidence.status,
+                        "quality": trace_evidence.quality.quality_status,
+                        "event_count": len(trace_evidence.events),
+                        "lost_event_count": trace_evidence.quality.lost_event_count,
+                        "content_sha256": trace_evidence.content_sha256,
+                        "source_output_sha256": trace_evidence.source.output_sha256,
+                        "limitations": "; ".join(trace_evidence.quality.limitations),
+                    },
+                ),
+                evidence_bytes=trace_evidence.source.output_bytes,
+                active_seconds=active_seconds,
+            )
+        artifact = client.collect(plan)
+        active_seconds = time.monotonic() - started
+        store.save(artifact, artifact.collection_id, "collection")
+        return _ExecutedBrokerPlan(
+            reference=ArtifactReference(
+                artifact_id=artifact.collection_id,
+                artifact_type="collection",
+                uri=store.uri(artifact.collection_id, "collection"),
+                summary={
+                    "mode": artifact.mode,
+                    "target_type": artifact.target_type,
+                    "target_pid": artifact.target_pid,
+                    "output_bytes": artifact.output_bytes,
+                    "metric_count": len(artifact.metrics),
+                    "record_event": artifact.record_event,
+                    "requested_event_source": artifact.requested_event_source,
+                    "actual_event_source": artifact.actual_event_source,
+                    "fallback_used": artifact.fallback_used,
+                    "fallback_reason": artifact.fallback_reason,
+                    "evidence_limitations": "; ".join(artifact.evidence_limitations),
+                    "warnings": "; ".join(artifact.warnings),
+                },
+            ),
+            evidence_bytes=artifact.output_bytes,
+            active_seconds=active_seconds,
+        )
 
     @server.tool(
         name="inspect_collection_capabilities",
@@ -332,6 +406,107 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         return docker_runtime.revoke(session_id)
 
     @server.tool(
+        name="collect_docker_target",
+        description=(
+            "Re-resolve one authorized existing-container process, consume one bounded session "
+            "run, and collect it through the restricted Broker. The Docker adapter never enters "
+            "the Collector or Helper."
+        ),
+        annotations=EXECUTES_TARGET,
+        meta={"perflens/permission": "DOCKER_COLLECTION"},
+        structured_output=True,
+    )
+    async def collect_docker_target(
+        session_id: str,
+        container_reference: str,
+        host_pid: int | None = None,
+        container_pid: int | None = None,
+        mode: Literal["record", "stat", "sched", "lock", "off_cpu"] = "record",
+        duration_seconds: float = 10.0,
+        frequency_hz: int = 99,
+        call_graph: Literal["fp", "dwarf", "lbr"] = "dwarf",
+        events: tuple[str, ...] = HARDWARE_STAT_EVENTS,
+        event_source: Literal["auto", "hardware_required", "software_only"] = "auto",
+        max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
+    ) -> ArtifactReference:
+        _require_automatic_collection(config, require_existing_pid_attach=True)
+        _require_docker_targets(config)
+        assert docker_runtime is not None
+        target = docker_runtime.resolve(
+            container_reference,
+            host_pid=host_pid,
+            container_pid=container_pid,
+        )
+        plan = create_collection_plan(
+            CollectionPlanRequest(
+                mode=mode,
+                pid=target.host_pid,
+                duration_seconds=duration_seconds,
+                frequency_hz=frequency_hz,
+                call_graph=call_graph,
+                events=events,
+                event_source=event_source,
+                max_output_bytes=max_output_bytes,
+                container_target=target,
+            ),
+            policy=config.automatic_collection_policy,
+            capabilities=inspect_collection_capabilities(config.perf_path),
+        )
+        if plan.policy_status != "allowed":
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "docker_authorization",
+                "Docker collection request is outside MCP automatic-collection policy",
+                recoverable=True,
+                details={"warnings": "; ".join(plan.warnings)},
+            )
+        reserve_active_seconds = math.ceil(plan.duration_seconds)
+        lease = docker_runtime.begin_existing_run(
+            session_id,
+            target,
+            requested_modes=(mode,),
+            reserve_active_seconds=reserve_active_seconds,
+            reserve_evidence_bytes=plan.max_output_bytes,
+        )
+        started = time.monotonic()
+        try:
+            executed = execute_broker_plan(plan)
+        except BaseException:
+            with suppress(PerfLensError):
+                docker_runtime.finish_existing_run(
+                    session_id,
+                    lease,
+                    actual_active_seconds=min(
+                        reserve_active_seconds,
+                        max(0, math.ceil(time.monotonic() - started)),
+                    ),
+                    actual_evidence_bytes=0,
+                )
+            raise
+        session = docker_runtime.finish_existing_run(
+            session_id,
+            lease,
+            actual_active_seconds=min(
+                reserve_active_seconds,
+                max(0, math.ceil(executed.active_seconds)),
+            ),
+            actual_evidence_bytes=executed.evidence_bytes,
+        )
+        return ArtifactReference.model_validate(
+            {
+                **executed.reference.model_dump(mode="json"),
+                "summary": {
+                    **executed.reference.summary,
+                    "docker_session_id": session.session_id,
+                    "docker_run_number": lease.run_number,
+                    "docker_session_state": session.state,
+                    "container_target_id": target.target_id,
+                    "container_pid": target.container_pid,
+                },
+            }
+        )
+
+    @server.tool(
         name="plan_automatic_collection",
         description=(
             "Create a short-lived PID-bound collection plan. This does not sample or attach."
@@ -404,57 +579,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 recoverable=True,
                 details={"plan_id": plan_id},
             ) from exc
-        assert_plan_current(plan)
-        assert config.collector_socket is not None
-        client = CollectorBrokerClient(
-            config.collector_socket,
-            timeout_seconds=min(plan.duration_seconds + 15, 86_500),
-        )
-        if plan.mode in {"sched", "off_cpu", "lock"}:
-            trace_evidence = client.collect_trace(plan)
-            store.save(
-                trace_evidence,
-                trace_evidence.trace_evidence_id,
-                "trace-evidence",
-            )
-            return ArtifactReference(
-                artifact_id=trace_evidence.trace_evidence_id,
-                artifact_type="trace-evidence",
-                uri=store.uri(trace_evidence.trace_evidence_id, "trace-evidence"),
-                summary={
-                    "mode": trace_evidence.mode,
-                    "target_pid": trace_evidence.target.target_pid,
-                    "target_uid": trace_evidence.target.target_uid,
-                    "status": trace_evidence.status,
-                    "quality": trace_evidence.quality.quality_status,
-                    "event_count": len(trace_evidence.events),
-                    "lost_event_count": trace_evidence.quality.lost_event_count,
-                    "content_sha256": trace_evidence.content_sha256,
-                    "source_output_sha256": trace_evidence.source.output_sha256,
-                    "limitations": "; ".join(trace_evidence.quality.limitations),
-                },
-            )
-        artifact = client.collect(plan)
-        store.save(artifact, artifact.collection_id, "collection")
-        return ArtifactReference(
-            artifact_id=artifact.collection_id,
-            artifact_type="collection",
-            uri=store.uri(artifact.collection_id, "collection"),
-            summary={
-                "mode": artifact.mode,
-                "target_type": artifact.target_type,
-                "target_pid": artifact.target_pid,
-                "output_bytes": artifact.output_bytes,
-                "metric_count": len(artifact.metrics),
-                "record_event": artifact.record_event,
-                "requested_event_source": artifact.requested_event_source,
-                "actual_event_source": artifact.actual_event_source,
-                "fallback_used": artifact.fallback_used,
-                "fallback_reason": artifact.fallback_reason,
-                "evidence_limitations": "; ".join(artifact.evidence_limitations),
-                "warnings": "; ".join(artifact.warnings),
-            },
-        )
+        return execute_broker_plan(plan).reference
 
     @server.tool(
         name="collect_project_workload",

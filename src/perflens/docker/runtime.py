@@ -28,6 +28,7 @@ from perflens.docker.project_config import (
     assert_docker_project_policy_current,
 )
 from perflens.docker.session import (
+    DockerRunLease,
     DockerSessionAuthority,
     SessionAccess,
 )
@@ -161,15 +162,49 @@ class ExistingDockerRuntime:
 
     def revoke(self, session_id: str) -> ContainerOptimizationSessionArtifact:
         with self._session_lock:
-            access = self._access.get(session_id)
-            if access is None:
-                raise PerfLensError(
-                    ErrorCode.INVALID_INPUT,
-                    "docker_authorization",
-                    "Docker session is unknown to this MCP process",
-                    recoverable=True,
-                )
+            access = self._require_access_locked(session_id)
             return self._authority.revoke(access)
+
+    def begin_existing_run(
+        self,
+        session_id: str,
+        target: ContainerTargetArtifact,
+        *,
+        requested_modes: tuple[CollectionMode, ...],
+        reserve_active_seconds: int,
+        reserve_evidence_bytes: int,
+    ) -> DockerRunLease:
+        self._assert_context_current()
+        modes = self._authorized_modes(requested_modes)
+        with self._session_lock:
+            access = self._require_access_locked(session_id)
+            return self._authority.begin_run(
+                access,
+                project_identity_sha256=self._project.identity_sha256,
+                client_connection_identity_sha256=self._client_identity,
+                policy_identity_sha256=self._project_policy.sha256,
+                binding_sha256=target.identity_fingerprint,
+                requested_modes=modes,
+                reserve_active_seconds=reserve_active_seconds,
+                reserve_evidence_bytes=reserve_evidence_bytes,
+            )
+
+    def finish_existing_run(
+        self,
+        session_id: str,
+        lease: DockerRunLease,
+        *,
+        actual_active_seconds: int,
+        actual_evidence_bytes: int,
+    ) -> ContainerOptimizationSessionArtifact:
+        with self._session_lock:
+            access = self._require_access_locked(session_id)
+            return self._authority.finish_run(
+                access,
+                lease,
+                actual_active_seconds=actual_active_seconds,
+                actual_evidence_bytes=actual_evidence_bytes,
+            )
 
     def _prune_access_locked(self) -> None:
         inactive = tuple(
@@ -179,6 +214,17 @@ class ExistingDockerRuntime:
         )
         for session_id in inactive:
             self._access.pop(session_id, None)
+
+    def _require_access_locked(self, session_id: str) -> SessionAccess:
+        access = self._access.get(session_id)
+        if access is None:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "docker_authorization",
+                "Docker session is unknown to this MCP process",
+                recoverable=True,
+            )
+        return access
 
     def _assert_context_current(self) -> None:
         assert_docker_project_policy_current(
