@@ -127,6 +127,48 @@ class LinuxContainerIdentityReader:
         finally:
             os.close(descriptor)
 
+    def inspect_cpu_time_ticks(self, identity: KernelProcessIdentity) -> int:
+        """Read CPU ticks only after rebinding the exact PID incarnation."""
+        process_path = self._proc_root / str(identity.host_pid)
+        flags = (
+            os.O_RDONLY
+            | os.O_DIRECTORY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        try:
+            descriptor = os.open(process_path, flags)
+        except OSError as exc:
+            raise _identity_error(
+                "Docker process disappeared during CPU observation",
+                recoverable=True,
+            ) from exc
+        try:
+            opened = os.fstat(descriptor)
+            start_time, cpu_ticks = _parse_stat_counters(
+                _read_proc_text(descriptor, "stat")
+            )
+            if opened.st_uid != identity.host_uid or start_time != identity.host_start_time_ticks:
+                raise _identity_error(
+                    "Docker process identity changed during CPU observation",
+                    recoverable=True,
+                )
+            try:
+                current = process_path.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise _identity_error(
+                    "Docker process exited during CPU observation",
+                    recoverable=True,
+                ) from exc
+            if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+                raise _identity_error(
+                    "Docker process PID was reused during CPU observation",
+                    recoverable=True,
+                )
+            return cpu_ticks
+        finally:
+            os.close(descriptor)
+
     def _read_snapshot(
         self,
         descriptor: int,
@@ -260,7 +302,7 @@ def resolve_existing_container_target(
         if selected.host_pid == instance.init_host_pid
         else identity_reader.inspect_process(selected.host_pid)
     )
-    _validate_container_membership(instance, init_identity, target_identity, selected)
+    assert_container_membership(instance, init_identity, target_identity, selected)
     current_instance = parse_container_instance(adapter.inspect_container(container_reference))
     current_hints = parse_container_top(adapter.top_container(container_reference))
     current_selected = _select_process_hint(current_hints, host_pid=selected.host_pid)
@@ -328,7 +370,7 @@ def _select_process_hint(
     return matches[0]
 
 
-def _validate_container_membership(
+def assert_container_membership(
     instance: PrivateContainerInstance,
     init: KernelProcessIdentity,
     target: KernelProcessIdentity,
@@ -348,6 +390,20 @@ def _validate_container_membership(
         raise _identity_error("Selected process is outside the container kernel identity")
 
 
+def container_identity_sha256(
+    adapter: DockerCommandAdapter,
+    instance: PrivateContainerInstance,
+) -> str:
+    endpoint = adapter.endpoint_identity
+    return _sha256_text(
+        "container",
+        instance.container_id,
+        endpoint.kind,
+        str(endpoint.device),
+        str(endpoint.inode),
+    )
+
+
 def _build_target_artifact(
     *,
     adapter: DockerCommandAdapter,
@@ -358,13 +414,7 @@ def _build_target_artifact(
     created_at: datetime,
 ) -> ContainerTargetArtifact:
     endpoint = adapter.endpoint_identity
-    container_identity = _sha256_text(
-        "container",
-        instance.container_id,
-        endpoint.kind,
-        str(endpoint.device),
-        str(endpoint.inode),
-    )
+    container_identity = container_identity_sha256(adapter, instance)
     image_identity = instance.image_digest.removeprefix("sha256:")
     cgroup_identity = _sha256_text(
         "cgroup-v2",
@@ -472,17 +522,23 @@ def _read_proc_text(descriptor: int, name: str) -> str:
 
 
 def _parse_start_time(text: str) -> int:
+    return _parse_stat_counters(text)[0]
+
+
+def _parse_stat_counters(text: str) -> tuple[int, int]:
     closing = text.rfind(")")
     try:
         if closing < 0:
             raise ValueError("missing process-name terminator")
         fields = text[closing + 2 :].split()
+        user_ticks = int(fields[11])
+        system_ticks = int(fields[12])
         start_time = int(fields[19])
     except (ValueError, IndexError) as exc:
         raise _identity_error("Docker target procfs stat is malformed") from exc
-    if start_time <= 0:
-        raise _identity_error("Docker target start time is invalid")
-    return start_time
+    if start_time <= 0 or user_ticks < 0 or system_ticks < 0:
+        raise _identity_error("Docker target stat counters are invalid")
+    return start_time, user_ticks + system_ticks
 
 
 def _parse_status(text: str, *, expected_host_pid: int) -> tuple[int, tuple[int, ...]]:
