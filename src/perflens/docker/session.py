@@ -114,6 +114,7 @@ class DockerSessionAuthority:
         allowed_modes: tuple[CollectionMode, ...],
         authorization_mode: str,
         explicit_authorization: str,
+        max_workload_runs: int = 6,
         max_active_seconds: int = 1200,
         max_evidence_bytes: int = _DEFAULT_MAX_EVIDENCE_BYTES,
         hard_expiry_seconds: int = _MAX_HARD_EXPIRY_SECONDS,
@@ -132,7 +133,9 @@ class DockerSessionAuthority:
             explicit_authorization=explicit_authorization,
             workload_spec_sha256=None,
             existing_target_identity_sha256=target.identity_fingerprint,
-            max_workload_runs=1 if authorization_mode == "per_run" else 6,
+            max_workload_runs=(
+                1 if authorization_mode == "per_run" else max_workload_runs
+            ),
             max_active_seconds=max_active_seconds,
             max_evidence_bytes=max_evidence_bytes,
             hard_expiry_seconds=hard_expiry_seconds,

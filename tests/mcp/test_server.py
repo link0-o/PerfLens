@@ -7,18 +7,63 @@ import os
 import stat
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 from mcp.client import Client
 from tests.support.trace import make_scheduler_trace_evidence
 
+from perflens.application.evidence import contract_content_sha256
 from perflens.collection.collector import ACTIVE_COLLECTION_AUTHORIZATION
 from perflens.collection.planning import AutomaticCollectionPolicy
+from perflens.contracts.docker import (
+    ContainerCgroupIdentity,
+    ContainerNamespaceIdentity,
+    ContainerTargetArtifact,
+)
 from perflens.docker.capability import discover_docker_capability
 from perflens.docker.project_config import render_default_docker_project_policy
 from perflens.mcp.server import ServerConfig, create_server
 from perflens.mcp.storage import ArtifactStore, PathPolicy
+
+
+def _docker_target() -> ContainerTargetArtifact:
+    provisional = ContainerTargetArtifact(
+        schema_version="1.0",
+        perflens_version="0.3.1",
+        target_id="container-target-" + "4" * 20,
+        created_at="2026-08-21T00:00:00+00:00",
+        target_kind="existing_container",
+        container_identity_sha256="5" * 64,
+        image_identity_sha256="6" * 64,
+        container_pid=12,
+        host_pid=1234,
+        host_uid=os.geteuid(),
+        host_start_time_ticks=5678,
+        executable_name="worker",
+        namespace=ContainerNamespaceIdentity(
+            pid_namespace_inode=101,
+            user_namespace_inode=102,
+            mount_namespace_inode=103,
+            cgroup_namespace_inode=104,
+        ),
+        cgroup=ContainerCgroupIdentity(inode=105, identity_sha256="7" * 64),
+        uid_mapping="rootless_same_uid",
+        adapter_recipe_id="local-docker-read-v1",
+        adapter_sha256="8" * 64,
+        identity_fingerprint="9" * 64,
+        content_sha256="0" * 64,
+    )
+    return ContainerTargetArtifact.model_validate(
+        {
+            **provisional.model_dump(mode="json"),
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            ),
+        }
+    )
 
 
 def _structured(result: Any) -> dict[str, Any]:
@@ -53,6 +98,10 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "collect_profile",
                 "inspect_collection_capabilities",
                 "inspect_docker_capability",
+                "discover_docker_processes",
+                "resolve_docker_target",
+                "authorize_docker_session",
+                "revoke_docker_session",
                 "plan_automatic_collection",
                 "execute_collection_plan",
                 "collect_project_workload",
@@ -89,6 +138,18 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["execute_collection_plan"].meta == {
                 "perflens/permission": "AUTOMATIC_COLLECTION"
             }
+            assert tools["authorize_docker_session"].meta == {
+                "perflens/permission": "DOCKER_AUTHORIZATION"
+            }
+            assert tools["revoke_docker_session"].meta == {
+                "perflens/permission": "DOCKER_AUTHORIZATION"
+            }
+            docker_authorization = tools["authorize_docker_session"].input_schema[
+                "properties"
+            ]["authorization"]
+            assert docker_authorization["const"] == (
+                "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
+            )
             assert tools["collect_project_workload"].meta == {
                 "perflens/permission": "PROJECT_EXECUTION"
             }
@@ -161,6 +222,93 @@ def test_docker_capability_requires_project_opt_in(
             replaced = await client.call_tool("inspect_docker_capability", {})
             assert replaced.is_error
             assert "changed after MCP startup" in str(replaced.content)
+
+    asyncio.run(exercise())
+
+
+def test_docker_target_resolution_authorization_and_revocation_are_typed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    policy = tmp_path / "perflens-setup/container-workload.toml"
+    policy.parent.mkdir()
+    policy.write_text(render_default_docker_project_policy(), encoding="utf-8")
+    policy.chmod(0o600)
+    target = _docker_target()
+
+    def fake_resolve(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(artifact=target)
+
+    monkeypatch.setattr(
+        "perflens.docker.runtime.open_local_docker_adapter",
+        lambda: cast(Any, object()),
+    )
+    monkeypatch.setattr(
+        "perflens.docker.runtime.resolve_existing_container_target",
+        fake_resolve,
+    )
+    server = create_server(
+        ServerConfig(
+            (tmp_path,),
+            artifact_root,
+            allow_writes=True,
+            allow_process_execution=True,
+            allow_active_collection=True,
+            allow_automatic_collection=True,
+            allow_docker_targets=True,
+            docker_project_config=policy,
+            collector_socket=tmp_path / "collector.sock",
+            automatic_collection_policy=AutomaticCollectionPolicy(
+                enabled=True,
+                allowed_modes=("record", "stat", "sched"),
+            ),
+        )
+    )
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            resolved = await client.call_tool(
+                "resolve_docker_target",
+                {"container_reference": "service", "container_pid": 12},
+            )
+            assert not resolved.is_error
+            assert _structured(resolved)["identity_fingerprint"] == "9" * 64
+
+            unauthorized = await client.call_tool(
+                "authorize_docker_session",
+                {
+                    "container_reference": "service",
+                    "container_pid": 12,
+                    "authorization": "yes",
+                },
+            )
+            assert unauthorized.is_error
+
+            authorized = await client.call_tool(
+                "authorize_docker_session",
+                {
+                    "container_reference": "service",
+                    "container_pid": 12,
+                    "authorization_mode": "bounded_session",
+                    "allowed_modes": ["sched", "stat"],
+                    "authorization": (
+                        "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
+                    ),
+                },
+            )
+            assert not authorized.is_error
+            session = _structured(authorized)
+            assert session["state"] == "active"
+            assert session["allowed_modes"] == ["stat", "sched"]
+
+            revoked = await client.call_tool(
+                "revoke_docker_session",
+                {"session_id": session["session_id"]},
+            )
+            assert not revoked.is_error
+            assert _structured(revoked)["state"] == "revoked"
 
     asyncio.run(exercise())
 

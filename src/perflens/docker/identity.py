@@ -397,24 +397,44 @@ def resolve_existing_container_target(
     container_reference: str,
     *,
     host_pid: int | None = None,
+    container_pid: int | None = None,
     reader: LinuxContainerIdentityReader | None = None,
     allow_rootful_cross_uid: bool = False,
     invoking_uid: int | None = None,
     created_at: datetime | None = None,
 ) -> ResolvedContainerTarget:
     """Resolve one existing container process and return a privacy-safe public proof."""
+    if host_pid is not None and container_pid is not None:
+        raise _identity_error("Select a Docker process by host PID or container PID, not both")
+    if container_pid is not None and container_pid <= 0:
+        raise _identity_error("Selected container PID is outside its valid range")
     instance = parse_container_instance(adapter.inspect_container(container_reference))
     hints = parse_container_top(adapter.top_container(container_reference))
-    selected = _select_process_hint(hints, host_pid=host_pid)
     if not any(item.host_pid == instance.init_host_pid for item in hints):
         raise _identity_error("Docker init PID is absent from the verified process inventory")
     identity_reader = reader or LinuxContainerIdentityReader()
     init_identity = identity_reader.inspect_process(instance.init_host_pid)
-    target_identity = (
-        init_identity
-        if selected.host_pid == instance.init_host_pid
-        else identity_reader.inspect_process(selected.host_pid)
-    )
+    if container_pid is None:
+        selected = _select_process_hint(hints, host_pid=host_pid)
+        target_identity = (
+            init_identity
+            if selected.host_pid == instance.init_host_pid
+            else identity_reader.inspect_process(selected.host_pid)
+        )
+    else:
+        selected_matches: list[tuple[PrivateProcessHint, KernelProcessIdentity]] = []
+        for hint in hints:
+            identity = (
+                init_identity
+                if hint.host_pid == instance.init_host_pid
+                else identity_reader.inspect_process(hint.host_pid)
+            )
+            assert_container_membership(instance, init_identity, identity, hint)
+            if identity.container_pid == container_pid:
+                selected_matches.append((hint, identity))
+        if len(selected_matches) != 1:
+            raise _identity_error("Selected container PID is not a unique current process")
+        selected, target_identity = selected_matches[0]
     assert_container_membership(instance, init_identity, target_identity, selected)
     current_instance = parse_container_instance(adapter.inspect_container(container_reference))
     current_hints = parse_container_top(adapter.top_container(container_reference))

@@ -20,7 +20,10 @@ from perflens.docker.adapter import (
     ManagedDockerCreateRequest,
     inspect_docker_cli,
 )
-from perflens.docker.capability import discover_docker_capability
+from perflens.docker.capability import (
+    discover_docker_capability,
+    open_local_docker_adapter,
+)
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _FAKE_DOCKER = """#!/usr/bin/python3
@@ -475,6 +478,14 @@ def test_capability_discovers_rootless_linux_cgroup_v2_and_binds_content() -> No
     uid = os.geteuid()
     checked_at = datetime(2026, 8, 21, tzinfo=UTC)
     with _docker_sandbox() as sandbox:
+        adapter = open_local_docker_adapter(
+            docker_path=sandbox.cli,
+            config_directory=sandbox.config,
+            rootless_socket=sandbox.endpoint,
+            rootful_socket=sandbox.root / "missing.sock",
+            invoking_uid=uid,
+            trusted_cli_owner_uids=_trusted_owner_uids(),
+        )
         capability = discover_docker_capability(
             docker_path=sandbox.cli,
             config_directory=sandbox.config,
@@ -484,6 +495,8 @@ def test_capability_discovers_rootless_linux_cgroup_v2_and_binds_content() -> No
             checked_at=checked_at,
             trusted_cli_owner_uids=_trusted_owner_uids(),
         )
+        assert adapter.endpoint_identity.path == sandbox.endpoint
+        assert adapter.version_info()["Client"]["Version"] == "28.0.1"
     assert capability.status == "available"
     assert capability.endpoint_kind == "local_rootless"
     assert capability.daemon_mode == "rootless"

@@ -59,7 +59,13 @@ from perflens.contracts.artifacts import (
     SourceContextArtifact,
     SourceResolutionArtifact,
 )
-from perflens.contracts.docker import DockerRuntimeCapabilityArtifact
+from perflens.contracts.docker import (
+    CollectionMode,
+    ContainerOptimizationSessionArtifact,
+    ContainerProcessInventoryArtifact,
+    ContainerTargetArtifact,
+    DockerRuntimeCapabilityArtifact,
+)
 from perflens.contracts.trace import (
     LockAnalysisArtifact,
     OffCpuAnalysisArtifact,
@@ -72,6 +78,8 @@ from perflens.docker.project_config import (
     assert_docker_project_policy_current,
     load_docker_project_policy,
 )
+from perflens.docker.runtime import ExistingDockerRuntime
+from perflens.docker.workload import inspect_managed_project_root
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.storage import ArtifactStore, PathPolicy
 from perflens.workloads.project import (
@@ -95,6 +103,18 @@ EXECUTES_TARGET = ToolAnnotations(
     read_only_hint=False,
     destructive_hint=True,
     idempotent_hint=False,
+    open_world_hint=False,
+)
+AUTHORIZES_DOCKER = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=False,
+    open_world_hint=False,
+)
+REVOKES_DOCKER = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=True,
     open_world_hint=False,
 )
 
@@ -147,6 +167,16 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             allowed_roots=config.allowed_roots,
         )
         if config.docker_project_config is not None
+        else None
+    )
+    docker_runtime = (
+        ExistingDockerRuntime(
+            project=inspect_managed_project_root(docker_policy.path.parent.parent),
+            project_policy=docker_policy,
+            allowed_roots=config.allowed_roots,
+            collection_policy=config.automatic_collection_policy,
+        )
+        if docker_policy is not None
         else None
     )
     policy = PathPolicy(config.allowed_roots)
@@ -208,6 +238,98 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             allowed_roots=config.allowed_roots,
         )
         return discover_docker_capability()
+
+    @server.tool(
+        name="discover_docker_processes",
+        description=(
+            "Observe bounded CPU deltas for one existing local container and return only "
+            "container PID, host PID, executable name, and a safe recommendation."
+        ),
+        annotations=READ_ONLY,
+        meta={"perflens/permission": "READ_ONLY"},
+        structured_output=True,
+    )
+    async def discover_docker_processes(
+        container_reference: str,
+        observation_duration_ms: int = 100,
+    ) -> ContainerProcessInventoryArtifact:
+        _require_docker_targets(config)
+        assert docker_runtime is not None
+        return docker_runtime.discover(
+            container_reference,
+            observation_duration_ms=observation_duration_ms,
+        )
+
+    @server.tool(
+        name="resolve_docker_target",
+        description=(
+            "Re-resolve one container process against Docker, /proc, PID start time, "
+            "namespaces, cgroup identity, and UID policy without profiling it."
+        ),
+        annotations=READ_ONLY,
+        meta={"perflens/permission": "READ_ONLY"},
+        structured_output=True,
+    )
+    async def resolve_docker_target(
+        container_reference: str,
+        host_pid: int | None = None,
+        container_pid: int | None = None,
+    ) -> ContainerTargetArtifact:
+        _require_docker_targets(config)
+        assert docker_runtime is not None
+        return docker_runtime.resolve(
+            container_reference,
+            host_pid=host_pid,
+            container_pid=container_pid,
+        )
+
+    @server.tool(
+        name="authorize_docker_session",
+        description=(
+            "Authorize one project-bound existing-container performance session. This stores "
+            "only process-local authorization and does not execute or profile the target."
+        ),
+        annotations=AUTHORIZES_DOCKER,
+        meta={"perflens/permission": "DOCKER_AUTHORIZATION"},
+        structured_output=True,
+    )
+    async def authorize_docker_session(
+        container_reference: str,
+        authorization: Literal[
+            "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
+        ],
+        host_pid: int | None = None,
+        container_pid: int | None = None,
+        authorization_mode: Literal["per_run", "bounded_session"] | None = None,
+        allowed_modes: tuple[CollectionMode, ...] = (),
+    ) -> ContainerOptimizationSessionArtifact:
+        _require_docker_targets(config)
+        assert docker_runtime is not None
+        return docker_runtime.authorize(
+            container_reference,
+            host_pid=host_pid,
+            container_pid=container_pid,
+            allowed_modes=allowed_modes,
+            authorization_mode=authorization_mode,
+            explicit_authorization=authorization,
+        )
+
+    @server.tool(
+        name="revoke_docker_session",
+        description=(
+            "Revoke one Docker authorization held by this project MCP process without stopping "
+            "or removing a user container."
+        ),
+        annotations=REVOKES_DOCKER,
+        meta={"perflens/permission": "DOCKER_AUTHORIZATION"},
+        structured_output=True,
+    )
+    async def revoke_docker_session(
+        session_id: str,
+    ) -> ContainerOptimizationSessionArtifact:
+        _require_docker_targets(config)
+        assert docker_runtime is not None
+        return docker_runtime.revoke(session_id)
 
     @server.tool(
         name="plan_automatic_collection",

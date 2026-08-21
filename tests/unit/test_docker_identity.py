@@ -220,7 +220,7 @@ def test_resolver_emits_privacy_safe_content_bound_target(tmp_path: Path) -> Non
     resolved = resolve_existing_container_target(
         _adapter(),
         "service",
-        host_pid=1002,
+        container_pid=12,
         reader=reader,
         invoking_uid=os.geteuid(),
         created_at=datetime(2026, 8, 21, tzinfo=UTC),
@@ -239,6 +239,16 @@ def test_resolver_emits_privacy_safe_content_bound_target(tmp_path: Path) -> Non
     assert "/run/docker.sock" not in serialized
     assert "SECRET" not in serialized
     assert "/private/host/path" not in serialized
+
+    with pytest.raises(PerfLensError) as conflicting:
+        resolve_existing_container_target(
+            _adapter(),
+            "service",
+            host_pid=1002,
+            container_pid=12,
+            reader=reader,
+        )
+    assert conflicting.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 
 def test_collection_binding_revalidates_every_linux_identity_field(tmp_path: Path) -> None:

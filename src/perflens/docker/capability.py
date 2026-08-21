@@ -12,13 +12,48 @@ from perflens import __version__
 from perflens.application.evidence import contract_content_sha256
 from perflens.contracts.docker import DockerRuntimeCapabilityArtifact, DockerToolIdentity
 from perflens.docker.adapter import DockerCommandAdapter
-from perflens.domain.errors import PerfLensError
+from perflens.domain.errors import ErrorCode, PerfLensError
 
 CapabilityStatus = Literal["available", "partial", "unavailable"]
 EndpointKind = Literal["local_rootful", "local_rootless", "unsupported", "missing"]
 DaemonMode = Literal["rootful", "rootless", "unknown"]
 OperatingSystem = Literal["linux", "unknown"]
 CgroupVersion = Literal["v2", "v1", "unknown"]
+
+
+def open_local_docker_adapter(
+    *,
+    docker_path: Path = Path("/usr/bin/docker"),
+    config_directory: Path = Path("/usr/share/perflens/docker-empty-config"),
+    rootful_socket: Path = Path("/run/docker.sock"),
+    rootless_socket: Path | None = None,
+    invoking_uid: int | None = None,
+    trusted_cli_owner_uids: tuple[int, ...] = (0,),
+) -> DockerCommandAdapter:
+    """Open only the fixed local rootless-or-rootful Docker endpoint."""
+    uid = os.geteuid() if invoking_uid is None else invoking_uid
+    rootless = rootless_socket or Path(f"/run/user/{uid}/docker.sock")
+    if rootless.exists() or rootless.is_socket():
+        endpoint_path = rootless
+        endpoint_kind: Literal["local_rootful", "local_rootless"] = "local_rootless"
+    elif rootful_socket.exists() or rootful_socket.is_socket():
+        endpoint_path = rootful_socket
+        endpoint_kind = "local_rootful"
+    else:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "docker_capability",
+            "No fixed local Docker Unix socket was found",
+            recoverable=True,
+        )
+    return DockerCommandAdapter(
+        docker_path=docker_path,
+        endpoint_path=endpoint_path,
+        endpoint_kind=endpoint_kind,
+        config_directory=config_directory,
+        trusted_cli_owner_uids=trusted_cli_owner_uids,
+        invoking_uid=uid,
+    )
 
 
 def discover_docker_capability(
