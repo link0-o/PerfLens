@@ -121,17 +121,38 @@ mod tests {
     };
     use std::ffi::OsString;
     use std::fs;
-    use std::io::{Read, Write};
+    use std::io::{ErrorKind, Read, Write};
     use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
     use std::process;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::thread;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     fn parse(values: &[&str]) -> Result<GateCommand, &'static str> {
         parse_arguments(values.iter().map(OsString::from))
+    }
+
+    fn private_test_directory() -> PathBuf {
+        let epoch_nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("test clock must follow the Unix epoch")
+            .as_nanos();
+        for _attempt in 0..128 {
+            let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let directory = std::env::temp_dir().join(format!(
+                "perflens-container-gate-test-{}-{epoch_nanos}-{sequence}",
+                process::id()
+            ));
+            match fs::create_dir(&directory) {
+                Ok(()) => return directory,
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+                Err(error) => panic!("create private gate test directory: {error}"),
+            }
+        }
+        panic!("private gate test directory collision limit was exhausted")
     }
 
     #[test]
@@ -191,12 +212,7 @@ mod tests {
 
     #[test]
     fn waits_for_exact_ready_and_release_frames() {
-        let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let directory = std::env::temp_dir().join(format!(
-            "perflens-container-gate-test-{}-{sequence}",
-            process::id()
-        ));
-        fs::create_dir(&directory).expect("create private gate test directory");
+        let directory = private_test_directory();
         let socket = directory.join("control.sock");
         let listener = UnixListener::bind(&socket).expect("bind gate test socket");
         let server = thread::spawn(move || {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -174,6 +175,67 @@ def test_existing_runtime_rejects_unknown_session_without_disclosing_state(
         runtime.revoke("container-session-" + "f" * 20)
     assert captured.value.code is ErrorCode.INVALID_INPUT
     assert "unknown" in captured.value.message
+
+
+def test_managed_runtime_authorizes_only_the_fixed_project_recipe(
+    tmp_path: Path,
+) -> None:
+    policy_path = tmp_path / "perflens-setup" / "container-workload.toml"
+    policy_path.parent.mkdir()
+    policy_path.write_text(
+        render_default_docker_project_policy()
+        .replace(
+            "allow_managed_temporary_containers = false",
+            "allow_managed_temporary_containers = true",
+        )
+        .replace('image_digest = ""', 'image_digest = "sha256:' + "d" * 64 + '"')
+        .replace('entrypoint = ""', 'entrypoint = "/usr/bin/python3"')
+        .replace('container_user = ""', f'container_user = "{os.geteuid()}:{os.getegid()}"'),
+        encoding="utf-8",
+    )
+    policy_path.chmod(0o600)
+    gate = tmp_path / "perflens-container-gate"
+    gate.write_bytes(b"fixed-gate")
+    gate.chmod(0o500)
+    runtime_root = tmp_path.parent / (tmp_path.name + "-runtime")
+    runtime_root.mkdir(mode=0o700)
+    policy = load_docker_project_policy(policy_path, allowed_roots=(tmp_path,))
+    runtime = ExistingDockerRuntime(
+        project=inspect_managed_project_root(tmp_path),
+        project_policy=policy,
+        allowed_roots=(tmp_path,),
+        collection_policy=AutomaticCollectionPolicy(
+            enabled=True,
+            allowed_modes=("record", "stat", "sched"),
+        ),
+        client_connection_identity_sha256="a" * 64,
+        adapter_factory=lambda: cast(DockerCommandAdapter, object()),
+        managed_runtime_root=runtime_root,
+        container_gate_path=gate,
+        trusted_gate_owner_uids=(os.geteuid(),),
+    )
+
+    session = runtime.authorize_managed(
+        explicit_authorization=EXPLICIT_DOCKER_SESSION_AUTHORIZATION,
+    )
+    assert session.target_kind == "managed_temporary_container"
+    assert session.authorization_mode == "per_run"
+    assert session.allowed_modes == ("stat", "record", "sched")
+    assert session.workload_spec_sha256 is not None
+    assert session.existing_target_identity_sha256 is None
+
+
+def test_managed_runtime_rejects_disabled_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _ = _runtime(tmp_path, monkeypatch)
+    with pytest.raises(PerfLensError) as captured:
+        runtime.authorize_managed(
+            explicit_authorization=EXPLICIT_DOCKER_SESSION_AUTHORIZATION,
+        )
+    assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert "disabled" in captured.value.message
 
 
 def test_existing_runtime_prunes_inactive_private_access_before_reuse(

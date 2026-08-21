@@ -212,7 +212,7 @@ def _validate_policy_values(parsed: dict[str, object]) -> _ValidatedPolicy:
     if authorization not in {"per_run", "bounded_session"}:
         raise _policy_error("Docker authorization mode is unsupported")
     allow_managed = _boolean(parsed["allow_managed_temporary_containers"], "managed switch")
-    max_runs = _integer(parsed["max_workload_runs"], "workload runs", 1, 64)
+    max_runs = _integer(parsed["max_workload_runs"], "workload runs", 1, 6)
     max_active = _integer(parsed["max_active_seconds"], "active seconds", 1, 7200)
     hard_expiry = _integer(parsed["hard_expiry_seconds"], "hard expiry", 1, 28_800)
     max_evidence = _integer(parsed["max_evidence_bytes"], "evidence bytes", 1, 8 << 30)

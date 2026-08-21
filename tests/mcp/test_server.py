@@ -24,6 +24,8 @@ from perflens.contracts.artifacts import CollectionArtifact, CollectionPlanArtif
 from perflens.contracts.docker import (
     ContainerCgroupIdentity,
     ContainerNamespaceIdentity,
+    ContainerOptimizationSessionArtifact,
+    ContainerRunArtifact,
     ContainerTargetArtifact,
 )
 from perflens.docker.capability import discover_docker_capability
@@ -113,6 +115,89 @@ def _fake_docker_collection(tmp_path: Path) -> CollectionArtifact:
     )
 
 
+def _managed_docker_target() -> ContainerTargetArtifact:
+    existing = _docker_target()
+    provisional = ContainerTargetArtifact.model_validate(
+        {
+            **existing.model_dump(mode="json"),
+            "target_kind": "managed_temporary_container",
+            "adapter_recipe_id": "local-docker-managed-v1",
+            "identity_fingerprint": "d" * 64,
+            "content_sha256": "0" * 64,
+        }
+    )
+    return ContainerTargetArtifact.model_validate(
+        {
+            **provisional.model_dump(mode="json"),
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            ),
+        }
+    )
+
+
+def _managed_session(*, state: str = "active") -> ContainerOptimizationSessionArtifact:
+    inactive = None if state == "active" else "Docker authorization budget was exhausted."
+    provisional = ContainerOptimizationSessionArtifact(
+        schema_version="1.0",
+        perflens_version="0.3.1",
+        session_id="container-session-" + "e" * 20,
+        created_at="2026-08-21T00:00:00+00:00",
+        expires_at="2026-08-21T02:00:00+00:00",
+        target_kind="managed_temporary_container",
+        authorization_mode="per_run",
+        project_identity_sha256="1" * 64,
+        client_connection_identity_sha256="2" * 64,
+        authorization_receipt_sha256="3" * 64,
+        workload_spec_sha256="4" * 64,
+        allowed_modes=("stat",),
+        state=cast(Any, state),
+        max_workload_runs=1,
+        workload_runs_used=1 if state != "active" else 0,
+        max_active_seconds=1200,
+        active_seconds_used=1 if state != "active" else 0,
+        max_evidence_bytes=1 << 20,
+        evidence_bytes_used=120 if state != "active" else 0,
+        instance_count=1 if state != "active" else 0,
+        invalidation_reason=inactive,
+        content_sha256="0" * 64,
+    )
+    return ContainerOptimizationSessionArtifact.model_validate(
+        {
+            **provisional.model_dump(mode="json"),
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            ),
+        }
+    )
+
+
+def _managed_run_artifact() -> ContainerRunArtifact:
+    return ContainerRunArtifact(
+        schema_version="1.0",
+        perflens_version="0.3.1",
+        run_id="container-run-" + "5" * 20,
+        created_at="2026-08-21T00:01:01+00:00",
+        session_id="container-session-" + "e" * 20,
+        workload_spec_sha256="4" * 64,
+        container_identity_sha256="5" * 64,
+        image_identity_sha256="6" * 64,
+        target_identity_sha256="d" * 64,
+        container_pid=12,
+        host_pid=1234,
+        host_start_time_ticks=5678,
+        started_at="2026-08-21T00:00:01+00:00",
+        finished_at="2026-08-21T00:01:01+00:00",
+        status="exited",
+        exit_code=0,
+        collection_ids=("collection-" + "b" * 16,),
+        cleanup_status="removed",
+        content_sha256="7" * 64,
+    )
+
+
 def _structured(result: Any) -> dict[str, Any]:
     payload = result.structured_content
     assert isinstance(payload, dict)
@@ -148,8 +233,10 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "discover_docker_processes",
                 "resolve_docker_target",
                 "authorize_docker_session",
+                "authorize_managed_docker_session",
                 "revoke_docker_session",
                 "collect_docker_target",
+                "collect_managed_docker_workload",
                 "plan_automatic_collection",
                 "execute_collection_plan",
                 "collect_project_workload",
@@ -192,7 +279,13 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["revoke_docker_session"].meta == {
                 "perflens/permission": "DOCKER_AUTHORIZATION"
             }
+            assert tools["authorize_managed_docker_session"].meta == {
+                "perflens/permission": "DOCKER_AUTHORIZATION"
+            }
             assert tools["collect_docker_target"].meta == {
+                "perflens/permission": "DOCKER_COLLECTION"
+            }
+            assert tools["collect_managed_docker_workload"].meta == {
                 "perflens/permission": "DOCKER_COLLECTION"
             }
             docker_authorization = tools["authorize_docker_session"].input_schema[
@@ -201,6 +294,24 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert docker_authorization["const"] == (
                 "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
             )
+            managed_authorization = tools[
+                "authorize_managed_docker_session"
+            ].input_schema["properties"]
+            assert set(managed_authorization) == {"authorization"}
+            assert managed_authorization["authorization"]["const"] == (
+                "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
+            )
+            managed_collection = tools[
+                "collect_managed_docker_workload"
+            ].input_schema["properties"]
+            assert not {
+                "image",
+                "entrypoint",
+                "arguments",
+                "mounts",
+                "network",
+                "docker_options",
+            }.intersection(managed_collection)
             assert tools["collect_project_workload"].meta == {
                 "perflens/permission": "PROJECT_EXECUTION"
             }
@@ -313,7 +424,14 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
-        def collect(self, _plan: CollectionPlanArtifact) -> CollectionArtifact:
+        def collect(
+            self,
+            _plan: CollectionPlanArtifact,
+            *,
+            ready_callback: Any = None,
+        ) -> CollectionArtifact:
+            if ready_callback is not None:
+                ready_callback()
             if self.fail:
                 raise PerfLensError(
                     ErrorCode.EXTERNAL_TOOL_FAILED,
@@ -462,6 +580,221 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
             )
             assert repeated.is_error
             assert "no longer active" in str(repeated.content)
+
+    asyncio.run(exercise())
+
+
+def test_managed_docker_session_releases_gate_only_after_broker_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    policy = tmp_path / "perflens-setup" / "container-workload.toml"
+    policy.parent.mkdir()
+    policy.write_text(
+        render_default_docker_project_policy()
+        .replace(
+            "allow_managed_temporary_containers = false",
+            "allow_managed_temporary_containers = true",
+        )
+        .replace('image_digest = ""', 'image_digest = "sha256:' + "a" * 64 + '"')
+        .replace('entrypoint = ""', 'entrypoint = "/usr/bin/python3"')
+        .replace('container_user = ""', f'container_user = "{os.geteuid()}:{os.getegid()}"'),
+        encoding="utf-8",
+    )
+    policy.chmod(0o600)
+    target = _managed_docker_target()
+    collection = _fake_docker_collection(tmp_path)
+    active_session = _managed_session()
+    exhausted_session = _managed_session(state="exhausted")
+    container_run = _managed_run_artifact()
+    operations: list[str] = []
+    requests: list[CollectionPlanRequest] = []
+
+    class FakeCoordinator:
+        def release(self, prepared: SimpleNamespace) -> None:
+            operations.append("release")
+            prepared.state = "released"
+
+        def wait(self, prepared: SimpleNamespace, *, timeout_seconds: int) -> int:
+            assert timeout_seconds > 0
+            operations.append("wait")
+            prepared.exit_code = 0
+            return 0
+
+        def cleanup(self, prepared: SimpleNamespace) -> str:
+            operations.append("cleanup")
+            prepared.state = "cleaned"
+            return "removed"
+
+    prepared = SimpleNamespace(
+        target=SimpleNamespace(artifact=target),
+        state="prepared",
+        exit_code=None,
+    )
+    coordinated = SimpleNamespace(
+        prepared=prepared,
+        coordinator=FakeCoordinator(),
+        authorization=SimpleNamespace(workload=object()),
+    )
+
+    class FakeDockerRuntime:
+        def __init__(self, **_kwargs: object) -> None:
+            self.prepare_count = 0
+
+        def authorize_managed(self, *, explicit_authorization: str):
+            assert explicit_authorization.startswith("I_EXPLICITLY_AUTHORIZE")
+            return active_session
+
+        def prepare_managed_run(self, *_args: object, **_kwargs: object):
+            self.prepare_count += 1
+            operations.append("prepare")
+            return coordinated
+
+        def finish_managed_run(self, *_args: object, **_kwargs: object):
+            operations.append("finish")
+            return exhausted_session
+
+    runtime_instances: list[FakeDockerRuntime] = []
+
+    def fake_runtime_factory(**kwargs: object) -> FakeDockerRuntime:
+        runtime = FakeDockerRuntime(**kwargs)
+        runtime_instances.append(runtime)
+        return runtime
+
+    def fake_create_plan(
+        request: CollectionPlanRequest,
+        **_kwargs: object,
+    ) -> CollectionPlanArtifact:
+        requests.append(request)
+        return _fake_docker_plan()
+
+    def fake_assert_current(_plan: CollectionPlanArtifact) -> None:
+        return None
+
+    def fake_build_run(**_kwargs: object) -> ContainerRunArtifact:
+        return container_run
+
+    class FakeBrokerClient:
+        fail = False
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def collect(
+            self,
+            _plan: CollectionPlanArtifact,
+            *,
+            ready_callback: Any = None,
+        ) -> CollectionArtifact:
+            operations.append("broker")
+            assert ready_callback is not None
+            ready_callback()
+            if self.fail:
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "collector_broker",
+                    "simulated managed Docker collection failure",
+                )
+            return collection
+
+    monkeypatch.setattr("perflens.mcp.server.ExistingDockerRuntime", fake_runtime_factory)
+    monkeypatch.setattr("perflens.mcp.server.create_collection_plan", fake_create_plan)
+    monkeypatch.setattr("perflens.mcp.server.assert_plan_current", fake_assert_current)
+    monkeypatch.setattr("perflens.mcp.server.CollectorBrokerClient", FakeBrokerClient)
+    monkeypatch.setattr(
+        "perflens.mcp.server.build_container_run_artifact",
+        fake_build_run,
+    )
+    server = create_server(
+        ServerConfig(
+            (tmp_path,),
+            artifact_root,
+            allow_writes=True,
+            allow_process_execution=True,
+            allow_active_collection=True,
+            allow_pid_attach=True,
+            allow_automatic_collection=True,
+            allow_docker_targets=True,
+            docker_project_config=policy,
+            docker_runtime_root=tmp_path / "runtime",
+            collector_socket=tmp_path / "collector.sock",
+            automatic_collection_policy=AutomaticCollectionPolicy(
+                enabled=True,
+                allowed_modes=("stat",),
+                max_duration_seconds=10,
+                max_output_bytes=1000,
+            ),
+        )
+    )
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            authorized = await client.call_tool(
+                "authorize_managed_docker_session",
+                {
+                    "authorization": (
+                        "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
+                    )
+                },
+            )
+            assert not authorized.is_error
+            assert _structured(authorized)["target_kind"] == "managed_temporary_container"
+
+            denied = await client.call_tool(
+                "collect_managed_docker_workload",
+                {
+                    "session_id": active_session.session_id,
+                    "mode": "stat",
+                    "duration_seconds": 2,
+                    "workload_timeout_seconds": 1,
+                    "events": ["task-clock"],
+                    "event_source": "software_only",
+                    "max_output_bytes": 1000,
+                },
+            )
+            assert denied.is_error
+            assert runtime_instances[0].prepare_count == 0
+
+            result = await client.call_tool(
+                "collect_managed_docker_workload",
+                {
+                    "session_id": active_session.session_id,
+                    "mode": "stat",
+                    "duration_seconds": 1,
+                    "workload_timeout_seconds": 30,
+                    "events": ["task-clock"],
+                    "event_source": "software_only",
+                    "max_output_bytes": 1000,
+                },
+            )
+            assert not result.is_error
+            reference = _structured(result)
+            assert reference["artifact_id"] == container_run.run_id
+            assert reference["summary"]["docker_session_state"] == "exhausted"
+            assert operations == ["prepare", "broker", "release", "wait", "cleanup", "finish"]
+            assert requests[0].container_target == target
+            assert (artifact_root / f"{container_run.run_id}.container-run.json").is_file()
+
+            operations.clear()
+            prepared.state = "prepared"
+            prepared.exit_code = None
+            FakeBrokerClient.fail = True
+            failed = await client.call_tool(
+                "collect_managed_docker_workload",
+                {
+                    "session_id": active_session.session_id,
+                    "mode": "stat",
+                    "duration_seconds": 1,
+                    "workload_timeout_seconds": 30,
+                    "events": ["task-clock"],
+                    "event_source": "software_only",
+                    "max_output_bytes": 1000,
+                },
+            )
+            assert failed.is_error
+            assert operations == ["prepare", "broker", "release", "cleanup", "finish"]
 
     asyncio.run(exercise())
 

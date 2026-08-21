@@ -51,6 +51,7 @@ def test_project_policy_is_strict_bounded_and_identity_pinned(tmp_path: Path) ->
     (
         "\nunknown = true\n",
         "max_workload_runs = 6\nmax_workload_runs = 7\n",
+        "max_workload_runs = 7\n",
         "allow_managed_temporary_containers = true\n",
         'default_authorization_mode = "permanent"\n',
     ),

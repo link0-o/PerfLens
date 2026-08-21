@@ -1,4 +1,4 @@
-"""Project-bound existing-container discovery and authorization coordination."""
+"""Project-bound Docker discovery, authorization, and run coordination."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import hashlib
 import secrets
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from perflens.collection.planning import AutomaticCollectionPolicy
@@ -15,6 +16,7 @@ from perflens.contracts.docker import (
     ContainerOptimizationSessionArtifact,
     ContainerProcessInventoryArtifact,
     ContainerTargetArtifact,
+    ContainerWorkloadSpecArtifact,
 )
 from perflens.docker.adapter import DockerCommandAdapter
 from perflens.docker.capability import open_local_docker_adapter
@@ -22,6 +24,10 @@ from perflens.docker.existing import discover_existing_container_processes
 from perflens.docker.identity import (
     LinuxContainerIdentityReader,
     resolve_existing_container_target,
+)
+from perflens.docker.managed import (
+    ManagedDockerCoordinator,
+    PreparedManagedContainer,
 )
 from perflens.docker.project_config import (
     DockerProjectPolicy,
@@ -33,8 +39,11 @@ from perflens.docker.session import (
     SessionAccess,
 )
 from perflens.docker.workload import (
+    ContainerGateIdentity,
     ManagedProjectIdentity,
     assert_managed_project_current,
+    build_container_workload_spec,
+    inspect_container_gate,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 
@@ -46,6 +55,23 @@ _CANONICAL_MODES: tuple[CollectionMode, ...] = (
     "lock",
 )
 _MAX_SESSION_ACCESS = 64
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class AuthorizedManagedRun:
+    """Private, single-use state connecting one session lease to its fixed workload."""
+
+    session_id: str
+    workload: ContainerWorkloadSpecArtifact
+    access: SessionAccess = field(repr=False)
+    lease: DockerRunLease = field(repr=False)
+
+
+@dataclass(slots=True, repr=False)
+class CoordinatedManagedRun:
+    authorization: AuthorizedManagedRun
+    coordinator: ManagedDockerCoordinator
+    prepared: PreparedManagedContainer
 
 
 class ExistingDockerRuntime:
@@ -62,6 +88,9 @@ class ExistingDockerRuntime:
         adapter_factory: Callable[[], DockerCommandAdapter] | None = None,
         reader_factory: Callable[[], LinuxContainerIdentityReader] | None = None,
         authority: DockerSessionAuthority | None = None,
+        managed_runtime_root: Path | None = None,
+        container_gate_path: Path = Path("/usr/lib/perflens/perflens-container-gate"),
+        trusted_gate_owner_uids: tuple[int, ...] = (0,),
     ) -> None:
         if not collection_policy.enabled:
             raise ValueError("Docker runtime requires enabled automatic collection")
@@ -81,6 +110,10 @@ class ExistingDockerRuntime:
         self._reader_factory = reader_factory or LinuxContainerIdentityReader
         self._authority = authority or DockerSessionAuthority()
         self._access: dict[str, SessionAccess] = {}
+        self._managed_workloads: dict[str, ContainerWorkloadSpecArtifact] = {}
+        self._managed_runtime_root = managed_runtime_root
+        self._container_gate_path = container_gate_path
+        self._trusted_gate_owner_uids = trusted_gate_owner_uids
         self._session_lock = threading.RLock()
 
     def discover(
@@ -206,6 +239,158 @@ class ExistingDockerRuntime:
                 actual_evidence_bytes=actual_evidence_bytes,
             )
 
+    def authorize_managed(
+        self,
+        *,
+        explicit_authorization: str,
+    ) -> ContainerOptimizationSessionArtifact:
+        """Authorize the exact managed recipe already pinned in project policy."""
+        self._assert_context_current()
+        if not self._project_policy.allow_managed_temporary_containers:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "docker_authorization",
+                "Managed temporary containers are disabled by project policy",
+                recoverable=True,
+            )
+        if self._managed_runtime_root is None:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "docker_authorization",
+                "Managed Docker runtime root is not configured for this MCP process",
+                recoverable=True,
+            )
+        gate = self._inspect_gate()
+        managed = self._project_policy.managed
+        workload = build_container_workload_spec(
+            project=self._project,
+            gate=gate,
+            image_digest=managed.image_digest,
+            entrypoint=managed.entrypoint,
+            arguments=managed.arguments,
+            working_directory=managed.working_directory,
+            container_user=managed.container_user,
+            cpus=managed.cpus,
+            memory_bytes=managed.memory_bytes,
+            pids=managed.pids,
+            allowed_modes=self._collection_policy.allowed_modes,
+            authorization_mode=self._project_policy.default_authorization_mode,
+            max_workload_runs=self._project_policy.max_workload_runs,
+            max_active_seconds=self._project_policy.max_active_seconds,
+            hard_expiry_seconds=self._project_policy.hard_expiry_seconds,
+            trace_max_duration_seconds=self._project_policy.trace_max_duration_seconds,
+        )
+        with self._session_lock:
+            self._prune_access_locked()
+            if len(self._access) >= _MAX_SESSION_ACCESS:
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "docker_authorization",
+                    "Docker MCP session access capacity is exhausted",
+                    recoverable=True,
+                )
+            authorized = self._authority.authorize_managed_workload(
+                workload,
+                client_connection_identity_sha256=self._client_identity,
+                policy_identity_sha256=self._project_policy.sha256,
+                explicit_authorization=explicit_authorization,
+                max_evidence_bytes=self._project_policy.max_evidence_bytes,
+            )
+            session_id = authorized.artifact.session_id
+            self._access[session_id] = authorized.access
+            self._managed_workloads[session_id] = workload
+            return authorized.artifact
+
+    def prepare_managed_run(
+        self,
+        session_id: str,
+        *,
+        requested_modes: tuple[CollectionMode, ...],
+        reserve_active_seconds: int,
+        reserve_evidence_bytes: int,
+    ) -> CoordinatedManagedRun:
+        """Consume one run lease and freeze its container at the package Gate."""
+        self._assert_context_current()
+        modes = self._authorized_modes(requested_modes)
+        with self._session_lock:
+            access = self._require_access_locked(session_id)
+            try:
+                workload = self._managed_workloads[session_id]
+            except KeyError as exc:
+                raise PerfLensError(
+                    ErrorCode.INVALID_INPUT,
+                    "docker_authorization",
+                    "Docker session is not a managed temporary-container session",
+                    recoverable=True,
+                ) from exc
+        gate = self._inspect_gate()
+        assert self._managed_runtime_root is not None
+        coordinator = ManagedDockerCoordinator(
+            adapter=self._adapter_factory(),
+            runtime_root=self._managed_runtime_root,
+            project=self._project,
+            gate=gate,
+            reader=self._reader_factory(),
+            allow_rootful_cross_uid=(
+                self._collection_policy.allow_rootful_container_targets
+            ),
+        )
+        with self._session_lock:
+            current_access = self._require_access_locked(session_id)
+            if current_access != access:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "docker_authorization",
+                    "Managed Docker session access changed before its workload run",
+                )
+            lease = self._authority.begin_run(
+                access,
+                project_identity_sha256=self._project.identity_sha256,
+                client_connection_identity_sha256=self._client_identity,
+                policy_identity_sha256=self._project_policy.sha256,
+                binding_sha256=workload.content_sha256,
+                requested_modes=modes,
+                reserve_active_seconds=reserve_active_seconds,
+                reserve_evidence_bytes=reserve_evidence_bytes,
+            )
+        authorization = AuthorizedManagedRun(
+            session_id=session_id,
+            workload=workload,
+            access=access,
+            lease=lease,
+        )
+        prepared = coordinator.prepare(
+            workload=workload,
+            authority=self._authority,
+            access=access,
+            lease=lease,
+            client_connection_identity_sha256=self._client_identity,
+            policy_identity_sha256=self._project_policy.sha256,
+        )
+        return CoordinatedManagedRun(authorization, coordinator, prepared)
+
+    def finish_managed_run(
+        self,
+        run: CoordinatedManagedRun,
+        *,
+        actual_active_seconds: int,
+        actual_evidence_bytes: int,
+    ) -> ContainerOptimizationSessionArtifact:
+        with self._session_lock:
+            current = self._require_access_locked(run.authorization.session_id)
+            if current != run.authorization.access:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "docker_authorization",
+                    "Managed Docker session access changed during the workload run",
+                )
+            return self._authority.finish_run(
+                current,
+                run.authorization.lease,
+                actual_active_seconds=actual_active_seconds,
+                actual_evidence_bytes=actual_evidence_bytes,
+            )
+
     def _prune_access_locked(self) -> None:
         inactive = tuple(
             session_id
@@ -214,6 +399,7 @@ class ExistingDockerRuntime:
         )
         for session_id in inactive:
             self._access.pop(session_id, None)
+            self._managed_workloads.pop(session_id, None)
 
     def _require_access_locked(self, session_id: str) -> SessionAccess:
         access = self._access.get(session_id)
@@ -232,6 +418,18 @@ class ExistingDockerRuntime:
             allowed_roots=self._allowed_roots,
         )
         assert_managed_project_current(self._project)
+
+    def _inspect_gate(self) -> ContainerGateIdentity:
+        if not self._trusted_gate_owner_uids:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "docker_workload",
+                "Managed Container Gate requires a non-empty trusted owner policy",
+            )
+        return inspect_container_gate(
+            self._container_gate_path,
+            trusted_owner_uids=self._trusted_gate_owner_uids,
+        )
 
     def _authorized_modes(
         self,

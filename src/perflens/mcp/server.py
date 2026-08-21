@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import math
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -66,6 +67,7 @@ from perflens.contracts.docker import (
     CollectionMode,
     ContainerOptimizationSessionArtifact,
     ContainerProcessInventoryArtifact,
+    ContainerRunArtifact,
     ContainerTargetArtifact,
     DockerRuntimeCapabilityArtifact,
 )
@@ -77,6 +79,7 @@ from perflens.contracts.trace import (
     TraceEvidenceArtifact,
 )
 from perflens.docker.capability import discover_docker_capability
+from perflens.docker.managed import build_container_run_artifact
 from perflens.docker.project_config import (
     assert_docker_project_policy_current,
     load_docker_project_policy,
@@ -134,6 +137,8 @@ class ServerConfig:
     allow_project_execution: bool = False
     allow_docker_targets: bool = False
     docker_project_config: Path | None = None
+    docker_runtime_root: Path | None = None
+    docker_gate_path: Path = Path("/usr/lib/perflens/perflens-container-gate")
     collector_socket: Path | None = None
     automatic_collection_policy: AutomaticCollectionPolicy = field(
         default_factory=AutomaticCollectionPolicy
@@ -145,6 +150,7 @@ class ServerConfig:
 @dataclass(frozen=True, slots=True)
 class _ExecutedBrokerPlan:
     reference: ArtifactReference
+    collection_id: str
     evidence_bytes: int
     active_seconds: float
 
@@ -171,6 +177,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         )
     if not config.allow_docker_targets and config.docker_project_config is not None:
         raise ValueError("Docker project policy cannot be set while Docker targets are disabled")
+    if not config.allow_docker_targets and config.docker_runtime_root is not None:
+        raise ValueError("Docker runtime root cannot be set while Docker targets are disabled")
     docker_policy = (
         load_docker_project_policy(
             config.docker_project_config,
@@ -185,6 +193,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             project_policy=docker_policy,
             allowed_roots=config.allowed_roots,
             collection_policy=config.automatic_collection_policy,
+            managed_runtime_root=config.docker_runtime_root,
+            container_gate_path=config.docker_gate_path,
         )
         if docker_policy is not None
         else None
@@ -217,7 +227,11 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     )
     collection_plans: dict[str, CollectionPlanArtifact] = {}
 
-    def execute_broker_plan(plan: CollectionPlanArtifact) -> _ExecutedBrokerPlan:
+    def execute_broker_plan(
+        plan: CollectionPlanArtifact,
+        *,
+        ready_callback: Callable[[], None] | None = None,
+    ) -> _ExecutedBrokerPlan:
         assert_plan_current(plan)
         assert config.collector_socket is not None
         client = CollectorBrokerClient(
@@ -226,7 +240,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         )
         started = time.monotonic()
         if plan.mode in {"sched", "off_cpu", "lock"}:
-            trace_evidence = client.collect_trace(plan)
+            trace_evidence = client.collect_trace(plan, ready_callback=ready_callback)
             active_seconds = time.monotonic() - started
             store.save(
                 trace_evidence,
@@ -251,10 +265,11 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                         "limitations": "; ".join(trace_evidence.quality.limitations),
                     },
                 ),
+                collection_id=trace_evidence.source.collection_id,
                 evidence_bytes=trace_evidence.source.output_bytes,
                 active_seconds=active_seconds,
             )
-        artifact = client.collect(plan)
+        artifact = client.collect(plan, ready_callback=ready_callback)
         active_seconds = time.monotonic() - started
         store.save(artifact, artifact.collection_id, "collection")
         return _ExecutedBrokerPlan(
@@ -277,6 +292,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "warnings": "; ".join(artifact.warnings),
                 },
             ),
+            collection_id=artifact.collection_id,
             evidence_bytes=artifact.output_bytes,
             active_seconds=active_seconds,
         )
@@ -385,6 +401,27 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             container_pid=container_pid,
             allowed_modes=allowed_modes,
             authorization_mode=authorization_mode,
+            explicit_authorization=authorization,
+        )
+
+    @server.tool(
+        name="authorize_managed_docker_session",
+        description=(
+            "Authorize the exact immutable image, command, mounts, resource limits, modes, and "
+            "budget pinned in this project's Docker policy. This never builds or pulls an image."
+        ),
+        annotations=AUTHORIZES_DOCKER,
+        meta={"perflens/permission": "DOCKER_AUTHORIZATION"},
+        structured_output=True,
+    )
+    async def authorize_managed_docker_session(
+        authorization: Literal[
+            "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
+        ],
+    ) -> ContainerOptimizationSessionArtifact:
+        _require_docker_targets(config)
+        assert docker_runtime is not None
+        return docker_runtime.authorize_managed(
             explicit_authorization=authorization,
         )
 
@@ -505,6 +542,131 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 },
             }
         )
+
+    @server.tool(
+        name="collect_managed_docker_workload",
+        description=(
+            "Create one fixed-policy temporary container from an already-local immutable image, "
+            "hold its exact workload at the package Gate until Broker collection is ready, then "
+            "run, collect, wait, and conservatively clean only that verified container."
+        ),
+        annotations=EXECUTES_TARGET,
+        meta={"perflens/permission": "DOCKER_COLLECTION"},
+        structured_output=True,
+    )
+    async def collect_managed_docker_workload(
+        session_id: str,
+        mode: Literal["record", "stat", "sched", "lock", "off_cpu"] = "record",
+        duration_seconds: float = 10.0,
+        workload_timeout_seconds: int = 60,
+        frequency_hz: int = 99,
+        call_graph: Literal["fp", "dwarf", "lbr"] = "dwarf",
+        events: tuple[str, ...] = HARDWARE_STAT_EVENTS,
+        event_source: Literal["auto", "hardware_required", "software_only"] = "auto",
+        max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
+    ) -> ArtifactReference:
+        _require_automatic_collection(config, require_existing_pid_attach=True)
+        _require_docker_targets(config)
+        assert docker_runtime is not None
+        assert docker_policy is not None
+        _preflight_managed_collection(
+            config,
+            mode=mode,
+            duration_seconds=duration_seconds,
+            workload_timeout_seconds=workload_timeout_seconds,
+            frequency_hz=frequency_hz,
+            max_output_bytes=max_output_bytes,
+            trace_max_duration_seconds=docker_policy.trace_max_duration_seconds,
+        )
+        started = time.monotonic()
+        executed: _ExecutedBrokerPlan | None = None
+        run = docker_runtime.prepare_managed_run(
+            session_id,
+            requested_modes=(mode,),
+            reserve_active_seconds=workload_timeout_seconds,
+            reserve_evidence_bytes=max_output_bytes,
+        )
+        try:
+            target = run.prepared.target.artifact
+            plan = create_collection_plan(
+                CollectionPlanRequest(
+                    mode=mode,
+                    pid=target.host_pid,
+                    duration_seconds=duration_seconds,
+                    frequency_hz=frequency_hz,
+                    call_graph=call_graph,
+                    events=events,
+                    event_source=event_source,
+                    max_output_bytes=max_output_bytes,
+                    container_target=target,
+                ),
+                policy=config.automatic_collection_policy,
+                capabilities=inspect_collection_capabilities(config.perf_path),
+            )
+            if plan.policy_status != "allowed":
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "docker_authorization",
+                    "Managed Docker collection is outside MCP automatic-collection policy",
+                    recoverable=True,
+                    details={"warnings": "; ".join(plan.warnings)},
+                )
+            executed = execute_broker_plan(
+                plan,
+                ready_callback=lambda: run.coordinator.release(run.prepared),
+            )
+            elapsed = math.ceil(time.monotonic() - started)
+            remaining = workload_timeout_seconds - elapsed
+            if remaining <= 0:
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "docker_workload",
+                    "Managed Docker workload exhausted its bounded run timeout",
+                    recoverable=True,
+                )
+            run.coordinator.wait(run.prepared, timeout_seconds=remaining)
+            cleanup_status = run.coordinator.cleanup(run.prepared)
+            finished_at = datetime.now(tz=UTC)
+            container_run = build_container_run_artifact(
+                prepared=run.prepared,
+                workload=run.authorization.workload,
+                finished_at=finished_at,
+                status="exited",
+                cleanup_status=cleanup_status,
+                collection_ids=(executed.collection_id,),
+                warnings=(
+                    (
+                        "Managed container identity could not be safely removed; "
+                        "manual review is required.",
+                    )
+                    if cleanup_status == "preserved_for_manual_cleanup"
+                    else ()
+                ),
+            )
+            session = docker_runtime.finish_managed_run(
+                run,
+                actual_active_seconds=max(1, math.ceil(time.monotonic() - started)),
+                actual_evidence_bytes=executed.evidence_bytes,
+            )
+            store.save(container_run, container_run.run_id, "container-run")
+            return _managed_run_reference(
+                container_run,
+                executed.reference,
+                session,
+                uri=store.uri(container_run.run_id, "container-run"),
+            )
+        except BaseException:
+            with suppress(PerfLensError):
+                run.coordinator.cleanup(run.prepared)
+            with suppress(PerfLensError):
+                docker_runtime.finish_managed_run(
+                    run,
+                    actual_active_seconds=max(1, math.ceil(time.monotonic() - started)),
+                    actual_evidence_bytes=(
+                        executed.evidence_bytes if executed is not None else 0
+                    ),
+                )
+            raise
 
     @server.tool(
         name="plan_automatic_collection",
@@ -1250,6 +1412,69 @@ def _trace_analysis_identity(
     return analysis.lock_analysis_id, "lock-analysis"
 
 
+def _preflight_managed_collection(
+    config: ServerConfig,
+    *,
+    mode: CollectionMode,
+    duration_seconds: float,
+    workload_timeout_seconds: int,
+    frequency_hz: int,
+    max_output_bytes: int,
+    trace_max_duration_seconds: int,
+) -> None:
+    policy = config.automatic_collection_policy
+    invalid = (
+        mode not in policy.allowed_modes
+        or not math.isfinite(duration_seconds)
+        or duration_seconds <= 0
+        or duration_seconds > policy.max_duration_seconds
+        or type(workload_timeout_seconds) is not int
+        or workload_timeout_seconds < math.ceil(duration_seconds)
+        or workload_timeout_seconds > 1200
+        or frequency_hz < 1
+        or frequency_hz > policy.max_frequency_hz
+        or max_output_bytes < 1
+        or max_output_bytes > policy.max_output_bytes
+        or (
+            mode in {"sched", "off_cpu", "lock"}
+            and duration_seconds > trace_max_duration_seconds
+        )
+    )
+    if invalid:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "docker_authorization",
+            "Managed Docker collection exceeds its fixed project or MCP bounds",
+            recoverable=True,
+        )
+
+
+def _managed_run_reference(
+    run: ContainerRunArtifact,
+    collection: ArtifactReference,
+    session: ContainerOptimizationSessionArtifact,
+    *,
+    uri: str,
+) -> ArtifactReference:
+    return ArtifactReference(
+        artifact_id=run.run_id,
+        artifact_type="container-run",
+        uri=uri,
+        summary={
+            "docker_session_id": run.session_id,
+            "docker_session_state": session.state,
+            "container_target_identity_sha256": run.target_identity_sha256,
+            "container_pid": run.container_pid,
+            "host_pid": run.host_pid,
+            "workload_status": run.status,
+            "workload_exit_code": run.exit_code,
+            "cleanup_status": run.cleanup_status,
+            "collection_id": collection.artifact_id,
+            "collection_artifact_type": collection.artifact_type,
+        },
+    )
+
+
 def _detect_source_type(path: Path) -> Literal["folded", "perf_script", "perf_data"]:
     if path.name.endswith("perf.data") or path.suffix == ".data":
         return "perf_data"
@@ -1362,6 +1587,12 @@ def main() -> None:
     parser.add_argument("--allow-project-execution", action="store_true")
     parser.add_argument("--allow-docker-targets", action="store_true")
     parser.add_argument("--docker-project-config", type=Path)
+    parser.add_argument("--docker-runtime-root", type=Path)
+    parser.add_argument(
+        "--docker-gate-path",
+        type=Path,
+        default=Path("/usr/lib/perflens/perflens-container-gate"),
+    )
     parser.add_argument("--collector-socket", type=Path)
     parser.add_argument(
         "--automatic-mode",
@@ -1392,6 +1623,8 @@ def main() -> None:
             allow_project_execution=arguments.allow_project_execution,
             allow_docker_targets=arguments.allow_docker_targets,
             docker_project_config=arguments.docker_project_config,
+            docker_runtime_root=arguments.docker_runtime_root,
+            docker_gate_path=arguments.docker_gate_path,
             collector_socket=arguments.collector_socket,
             automatic_collection_policy=AutomaticCollectionPolicy(
                 enabled=arguments.allow_automatic_collection,
