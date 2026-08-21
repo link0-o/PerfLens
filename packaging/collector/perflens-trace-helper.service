@@ -9,7 +9,7 @@ Before=perflens-collector.service
 Type=simple
 User=root
 Group=perflens-trace-internal
-ExecStart=/usr/lib/perflens/perflens-trace-helper --broker-uid @PERFLENS_BROKER_UID@ --allowed-uid @PERFLENS_ALLOWED_UID@ --artifact-gid @PERFLENS_TRACE_ARTIFACT_GID@ --allowed-modes sched,off_cpu,lock --policy-sha256 @PERFLENS_TRACE_POLICY_SHA256@
+ExecStart=/usr/lib/perflens/perflens-trace-helper --broker-uid @PERFLENS_BROKER_UID@ --allowed-uid @PERFLENS_ALLOWED_UID@ --artifact-gid @PERFLENS_TRACE_ARTIFACT_GID@ --allowed-modes sched,off_cpu,lock --policy-sha256 @PERFLENS_TRACE_POLICY_SHA256@@PERFLENS_ROOTFUL_CONTAINER_ARGUMENT@
 RuntimeDirectory=perflens-trace-helper
 RuntimeDirectoryMode=0750
 StateDirectory=perflens-trace-helper
@@ -41,4 +41,3 @@ RestartSec=2s
 
 [Install]
 WantedBy=multi-user.target
-

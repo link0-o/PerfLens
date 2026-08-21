@@ -29,6 +29,11 @@ fn main() -> ExitCode {
 }
 
 fn parse_policy_arguments(arguments: &[String]) -> Result<TraceHelperServerPolicy, &'static str> {
+    let (policy_arguments, allow_rootful_container_targets) =
+        match arguments.last().map(String::as_str) {
+            Some("--allow-rootful-container-targets") => (&arguments[..arguments.len() - 1], true),
+            _ => (arguments, false),
+        };
     let [
         broker_flag,
         broker_uid,
@@ -40,7 +45,7 @@ fn parse_policy_arguments(arguments: &[String]) -> Result<TraceHelperServerPolic
         allowed_modes,
         policy_flag,
         policy_sha256,
-    ] = arguments
+    ] = policy_arguments
     else {
         return Err("expected fixed broker, target, artifact group, modes, and policy arguments");
     };
@@ -71,6 +76,7 @@ fn parse_policy_arguments(arguments: &[String]) -> Result<TraceHelperServerPolic
         artifact_gid,
         allowed_modes,
         policy_sha256: policy_sha256.clone(),
+        allow_rootful_container_targets,
     })
 }
 
@@ -135,6 +141,23 @@ mod tests {
         assert_eq!(policy.allowed_uid, 1000);
         assert_eq!(policy.artifact_gid, 992);
         assert_eq!(policy.allowed_modes.len(), 3);
+        assert!(!policy.allow_rootful_container_targets);
+
+        let rootful = parse_policy_arguments(&arguments(&[
+            "--broker-uid",
+            "991",
+            "--allowed-uid",
+            "1000",
+            "--artifact-gid",
+            "992",
+            "--allowed-modes",
+            "sched,off_cpu,lock",
+            "--policy-sha256",
+            &"a".repeat(64),
+            "--allow-rootful-container-targets",
+        ]))
+        .expect("parse rootful policy");
+        assert!(rootful.allow_rootful_container_targets);
     }
 
     #[test]

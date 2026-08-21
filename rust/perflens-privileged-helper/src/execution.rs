@@ -19,8 +19,8 @@ use nix::unistd::{Pid, getegid, geteuid};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ActualEventSource, CallGraph, CollectionMode, DockerTargetKind, HelperTarget, RecordEvent,
-    RequestedEventSource, TargetRuntime,
+    ActualEventSource, CallGraph, CollectionMode, DockerTargetKind, DockerUidMapping, HelperTarget,
+    RecordEvent, RequestedEventSource, TargetRuntime,
 };
 
 const SPOOL_ROOT: &str = "/var/lib/perflens-helper";
@@ -99,6 +99,7 @@ pub struct ExecutionError {
 pub fn execute_production_plan_with_ready<R>(
     plan: &ExecutionPlan,
     allowed_uid: u32,
+    allow_rootful_container_targets: bool,
     artifact_gid: u32,
     configured_perf_path: &Path,
     ready_notifier: &mut R,
@@ -106,7 +107,7 @@ pub fn execute_production_plan_with_ready<R>(
 where
     R: FnMut() -> Result<(), ExecutionError>,
 {
-    validate_plan(plan, allowed_uid)?;
+    validate_plan(plan, allowed_uid, allow_rootful_container_targets)?;
     assert_pid_identity(&plan.target)?;
     let perf_path = trusted_root_executable(configured_perf_path)?;
     let spool_root = trusted_spool(Path::new(SPOOL_ROOT))?;
@@ -140,14 +141,18 @@ pub fn prepare_production_environment(
     validate_spool_entries(&spool_root, artifact_gid).map(|_usage| ())
 }
 
-fn validate_plan(plan: &ExecutionPlan, allowed_uid: u32) -> Result<(), ExecutionError> {
+fn validate_plan(
+    plan: &ExecutionPlan,
+    allowed_uid: u32,
+    allow_rootful_container_targets: bool,
+) -> Result<(), ExecutionError> {
     let allowed_events = ALLOWED_STAT_EVENTS.iter().copied().collect::<HashSet<_>>();
     let hardware_events = ALLOWED_STAT_EVENTS[..6]
         .iter()
         .copied()
         .collect::<HashSet<_>>();
     if plan.caller_uid != allowed_uid
-        || plan.target.uid != allowed_uid
+        || !target_uid_allowed(&plan.target, allowed_uid, allow_rootful_container_targets)
         || plan.duration_milliseconds == 0
         || plan.duration_milliseconds > MAX_DURATION_MILLISECONDS
         || plan.max_output_bytes == 0
@@ -216,6 +221,27 @@ fn validate_plan(plan: &ExecutionPlan, allowed_uid: u32) -> Result<(), Execution
         ));
     }
     Ok(())
+}
+
+fn target_uid_allowed(
+    target: &HelperTarget,
+    allowed_uid: u32,
+    allow_rootful_container_targets: bool,
+) -> bool {
+    if target.uid == allowed_uid {
+        return target.container.as_ref().is_none_or(|container| {
+            container.uid_mapping != DockerUidMapping::RootfulCrossUid
+                && !container.rootful_risk_authorized
+        });
+    }
+    allow_rootful_container_targets
+        && target.target_runtime == TargetRuntime::Docker
+        && target.uid == 0
+        && target.container.as_ref().is_some_and(|container| {
+            container.uid_mapping == DockerUidMapping::RootfulCrossUid
+                && container.rootful_risk_authorized
+                && container.host_uid == 0
+        })
 }
 
 fn assert_pid_identity(target: &HelperTarget) -> Result<(), ExecutionError> {
@@ -1842,7 +1868,25 @@ finish
 
     #[test]
     fn immutable_policy_accepts_bounded_owner_only_record() {
-        assert!(validate_plan(&record_plan(), 1000).is_ok());
+        assert!(validate_plan(&record_plan(), 1000, false).is_ok());
+    }
+
+    #[test]
+    fn immutable_policy_requires_dedicated_rootful_container_grant() {
+        let fixture = docker_identity_fixture();
+        let mut plan = record_plan();
+        plan.target = fixture.target.clone();
+        plan.target.uid = 0;
+        let container = plan.target.container.as_mut().expect("Docker binding");
+        container.host_uid = 0;
+        container.uid_mapping = DockerUidMapping::RootfulCrossUid;
+        container.rootful_risk_authorized = true;
+        assert!(validate_plan(&plan, 1000, false).is_err());
+        assert!(validate_plan(&plan, 1000, true).is_ok());
+
+        plan.target.target_runtime = TargetRuntime::Host;
+        plan.target.container = None;
+        assert!(validate_plan(&plan, 1000, true).is_err());
     }
 
     #[test]
@@ -1933,18 +1977,18 @@ finish
     fn immutable_policy_rejects_cross_uid_duration_frequency_and_events() {
         let mut plan = record_plan();
         plan.target.uid = 1001;
-        assert!(validate_plan(&plan, 1000).is_err());
+        assert!(validate_plan(&plan, 1000, false).is_err());
         plan.target.uid = 1000;
         plan.duration_milliseconds = MAX_DURATION_MILLISECONDS + 1;
-        assert!(validate_plan(&plan, 1000).is_err());
+        assert!(validate_plan(&plan, 1000, false).is_err());
         plan.duration_milliseconds = 1000;
         plan.frequency_hz = Some(100);
-        assert!(validate_plan(&plan, 1000).is_err());
+        assert!(validate_plan(&plan, 1000, false).is_err());
         plan.mode = CollectionMode::Stat;
         plan.frequency_hz = None;
         plan.call_graph = None;
         plan.events = vec!["raw-unsafe-event".to_owned()];
-        assert!(validate_plan(&plan, 1000).is_err());
+        assert!(validate_plan(&plan, 1000, false).is_err());
     }
 
     #[test]

@@ -209,6 +209,7 @@ pub struct TraceHelperServerPolicy {
     pub artifact_gid: u32,
     pub allowed_modes: Vec<TraceMode>,
     pub policy_sha256: String,
+    pub allow_rootful_container_targets: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -367,9 +368,12 @@ fn handle_connection_with_worker(
             expected_capture_backend,
             report_ready,
         }) => {
-            if caller_uid != policy.allowed_uid
-                || target.uid != policy.allowed_uid
-                || !policy.allowed_modes.contains(&mode)
+            if !target_allowed_by_policy(
+                caller_uid,
+                &target,
+                policy.allowed_uid,
+                policy.allow_rootful_container_targets,
+            ) || !policy.allowed_modes.contains(&mode)
                 || expected_policy_sha256 != policy.policy_sha256
                 || expected_capture_backend != CAPTURE_BACKEND
                 || assert_pid_identity(&target).is_err()
@@ -501,6 +505,31 @@ fn handle_connection_with_worker(
             ),
         ),
     }
+}
+
+fn target_allowed_by_policy(
+    caller_uid: u32,
+    target: &TraceHelperTarget,
+    allowed_uid: u32,
+    allow_rootful_container_targets: bool,
+) -> bool {
+    if caller_uid != allowed_uid {
+        return false;
+    }
+    if target.uid == allowed_uid {
+        return target.container.as_ref().is_none_or(|container| {
+            container.uid_mapping != DockerUidMapping::RootfulCrossUid
+                && !container.rootful_risk_authorized
+        });
+    }
+    allow_rootful_container_targets
+        && target.target_runtime == TargetRuntime::Docker
+        && target.uid == 0
+        && target.container.as_ref().is_some_and(|container| {
+            container.uid_mapping == DockerUidMapping::RootfulCrossUid
+                && container.rootful_risk_authorized
+                && container.host_uid == 0
+        })
 }
 
 fn health_response(request_id: String, policy: &TraceHelperServerPolicy) -> TraceHelperResponse {
@@ -1061,7 +1090,7 @@ mod tests {
         DockerAdapterRecipe, DockerTargetKind, DockerUidMapping, ProtocolErrorKind, TargetRuntime,
         TraceHelperRequest, TraceHelperServerPolicy, TraceHelperTarget, TraceMode,
         assert_pid_identity, assert_pid_identity_at, docker_identity_fingerprint,
-        handle_connection, parse_request_frame, sha256_nul,
+        handle_connection, parse_request_frame, sha256_nul, target_allowed_by_policy,
     };
 
     const NOW_MILLISECONDS: u64 = 4_102_444_700_000;
@@ -1171,6 +1200,36 @@ mod tests {
     }
 
     #[test]
+    fn rootful_docker_target_requires_dedicated_trace_policy() {
+        let fixture = docker_identity_fixture();
+        let caller_uid = geteuid().as_raw();
+        assert!(target_allowed_by_policy(
+            caller_uid,
+            &fixture.target,
+            caller_uid,
+            false,
+        ));
+        let mut target = fixture.target.clone();
+        target.uid = 0;
+        let container = target.container.as_mut().expect("Docker binding");
+        container.host_uid = 0;
+        container.uid_mapping = DockerUidMapping::RootfulCrossUid;
+        container.rootful_risk_authorized = true;
+        assert!(!target_allowed_by_policy(
+            caller_uid, &target, caller_uid, false
+        ));
+        assert!(target_allowed_by_policy(
+            caller_uid, &target, caller_uid, true
+        ));
+
+        target.target_runtime = TargetRuntime::Host;
+        target.container = None;
+        assert!(!target_allowed_by_policy(
+            caller_uid, &target, caller_uid, true
+        ));
+    }
+
+    #[test]
     fn docker_identity_is_revalidated_from_proc_and_cgroup_state() {
         let fixture = docker_identity_fixture();
         assert_pid_identity_at(&fixture.target, &fixture.proc_root, &fixture.cgroup_root)
@@ -1231,6 +1290,8 @@ mod tests {
         let health = fs::read(fixture("valid/health.jsonl")).expect("health fixture");
         let sched = fs::read(fixture("valid/sched.jsonl")).expect("sched fixture");
         let docker = fs::read(fixture("valid/docker-sched.jsonl")).expect("Docker fixture");
+        let rootful =
+            fs::read(fixture("valid/docker-rootful-sched.jsonl")).expect("rootful Docker fixture");
         assert!(matches!(
             parse_request_frame(&health, NOW_MILLISECONDS).expect("health"),
             TraceHelperRequest::Health { .. }
@@ -1241,6 +1302,10 @@ mod tests {
         ));
         assert!(matches!(
             parse_request_frame(&docker, NOW_MILLISECONDS).expect("Docker sched"),
+            TraceHelperRequest::CollectPid { .. }
+        ));
+        assert!(matches!(
+            parse_request_frame(&rootful, NOW_MILLISECONDS).expect("rootful Docker sched"),
             TraceHelperRequest::CollectPid { .. }
         ));
     }
@@ -1372,6 +1437,7 @@ mod tests {
             artifact_gid: getegid().as_raw(),
             allowed_modes: vec![TraceMode::Sched, TraceMode::OffCpu, TraceMode::Lock],
             policy_sha256: "a".repeat(64),
+            allow_rootful_container_targets: false,
         }
     }
 

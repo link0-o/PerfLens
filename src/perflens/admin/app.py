@@ -106,6 +106,13 @@ def deploy_command(
             ),
         ),
     ] = False,
+    acknowledge_rootful_container_risk: Annotated[
+        bool,
+        typer.Option(
+            "--acknowledge-rootful-container-risk",
+            help="确认采集已验证的 rootful UID-0 容器目标会扩大跨 UID 边界。",
+        ),
+    ] = False,
 ) -> None:
     """校验或部署 Collector; 默认输出中文摘要。"""
     try:
@@ -114,6 +121,7 @@ def deploy_command(
             dry_run=dry_run,
             collector_command=collector_command,
             acknowledge_privileged_helper_risk=acknowledge_privileged_helper_risk,
+            acknowledge_rootful_container_risk=acknowledge_rootful_container_risk,
         )
     except PerfLensError as exc:
         _fail(exc)
@@ -453,10 +461,21 @@ def update_policy_command(
         bool,
         typer.Option("--dry-run", help="只验证并比较策略, 不修改系统。"),
     ] = False,
+    acknowledge_rootful_container_risk: Annotated[
+        bool,
+        typer.Option(
+            "--acknowledge-rootful-container-risk",
+            help="确认启用 rootful UID-0 容器目标会扩大跨 UID 采集边界。",
+        ),
+    ] = False,
 ) -> None:
     """安全更新策略、重启并健康检查, 失败时自动恢复。"""
     try:
-        result = update_collector_policy(config, dry_run=dry_run)
+        result = update_collector_policy(
+            config,
+            dry_run=dry_run,
+            acknowledge_rootful_container_risk=acknowledge_rootful_container_risk,
+        )
     except PerfLensError as exc:
         _fail(exc)
     typer.echo(result.model_dump_json(indent=2))

@@ -38,6 +38,7 @@ class CollectorBrokerPolicy:
     policy_version: int = COLLECTOR_POLICY_VERSION
     allowed_modes: tuple[CollectionMode, ...] = ("record", "stat")
     allow_other_target_uids: bool = False
+    allow_rootful_container_targets: bool = False
     max_duration_seconds: float = 30.0
     max_frequency_hz: int = 99
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
@@ -93,6 +94,12 @@ def validate_broker_policy(policy: CollectorBrokerPolicy) -> CollectorBrokerPoli
         raise ValueError("Collector policy contains an unsupported or empty mode set")
     if not _is_boolean(policy.allow_other_target_uids):
         raise ValueError("Collector cross-UID policy must be boolean")
+    if not _is_boolean(policy.allow_rootful_container_targets):
+        raise ValueError("Collector rootful-container policy must be boolean")
+    if policy.allow_rootful_container_targets and policy.privilege_mode != "paranoid3_helper":
+        raise ValueError(
+            "Rootful container targets require the independently bounded paranoid3 Helper"
+        )
     if policy.privilege_mode not in {"cap_perfmon", "paranoid3_helper"}:
         raise ValueError("Collector privilege_mode is unsupported")
     if not _is_number(policy.max_duration_seconds) or not math.isfinite(
@@ -177,6 +184,7 @@ def validate_broker_policy(policy: CollectorBrokerPolicy) -> CollectorBrokerPoli
         policy_version=policy.policy_version,
         allowed_modes=tuple(dict.fromkeys(policy.allowed_modes)),
         allow_other_target_uids=policy.allow_other_target_uids,
+        allow_rootful_container_targets=policy.allow_rootful_container_targets,
         max_duration_seconds=policy.max_duration_seconds,
         max_frequency_hz=policy.max_frequency_hz,
         max_output_bytes=policy.max_output_bytes,
@@ -200,6 +208,7 @@ def _parse_policy(section: dict[str, Any]) -> CollectorBrokerPolicy:
         "privilege_mode",
         "allowed_modes",
         "allow_other_target_uids",
+        "allow_rootful_container_targets",
         "max_duration_seconds",
         "max_frequency_hz",
         "max_output_bytes",
@@ -235,6 +244,9 @@ def _parse_policy(section: dict[str, Any]) -> CollectorBrokerPolicy:
         allow_other = section.get("allow_other_target_uids", False)
         if not isinstance(allow_other, bool):
             raise TypeError("allow_other_target_uids must be boolean")
+        allow_rootful = section.get("allow_rootful_container_targets", False)
+        if not isinstance(allow_rootful, bool):
+            raise TypeError("allow_rootful_container_targets must be boolean")
         policy = CollectorBrokerPolicy(
             spool_root=Path(_string_value(section["spool_root"])),
             perf_path=Path(_string_value(section["perf_path"])),
@@ -246,6 +258,7 @@ def _parse_policy(section: dict[str, Any]) -> CollectorBrokerPolicy:
             policy_version=policy_version,
             allowed_modes=cast(tuple[CollectionMode, ...], raw_modes),
             allow_other_target_uids=allow_other,
+            allow_rootful_container_targets=allow_rootful,
             max_duration_seconds=_number_field(section, "max_duration_seconds", 30.0),
             max_frequency_hz=_integer_field(section, "max_frequency_hz", 99),
             max_output_bytes=_integer_field(section, "max_output_bytes", DEFAULT_MAX_OUTPUT_BYTES),

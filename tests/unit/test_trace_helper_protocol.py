@@ -10,6 +10,7 @@ from perflens.trace_helper.protocol import (
     MAX_TRACE_HELPER_MESSAGE_BYTES,
     TraceHelperCollectionResult,
     TraceHelperCollectPidRequest,
+    TraceHelperDockerTarget,
     TraceHelperHealthRequest,
     TraceHelperHealthResult,
     TraceHelperResponse,
@@ -46,6 +47,10 @@ def test_trace_helper_valid_golden_frames_and_unavailable_health() -> None:
         (fixture_root / "valid/docker-sched.jsonl").read_bytes(),
         now_unix_milliseconds=_NOW_MILLISECONDS,
     )
+    rootful_collect = parse_trace_helper_request_frame(
+        (fixture_root / "valid/docker-rootful-sched.jsonl").read_bytes(),
+        now_unix_milliseconds=_NOW_MILLISECONDS,
+    )
     response = parse_trace_helper_response_frame(
         (fixture_root / "responses/health-unavailable.jsonl").read_bytes()
     )
@@ -55,6 +60,10 @@ def test_trace_helper_valid_golden_frames_and_unavailable_health() -> None:
     assert collect.mode == "sched"
     assert isinstance(docker_collect, TraceHelperCollectPidRequest)
     assert docker_collect.target.target_runtime == "docker"
+    assert isinstance(rootful_collect, TraceHelperCollectPidRequest)
+    assert isinstance(rootful_collect.target, TraceHelperDockerTarget)
+    assert rootful_collect.target.uid == 0
+    assert rootful_collect.target.container.rootful_risk_authorized is True
     assert isinstance(response.result, TraceHelperHealthResult)
     assert response.result.capture_backend_status == "unavailable"
     assert response.result.supported_modes == ()

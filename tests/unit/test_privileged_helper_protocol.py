@@ -10,6 +10,7 @@ from perflens.privileged_helper.protocol import (
     HelperCollectionReadyResult,
     HelperCollectionResult,
     HelperCollectPidRequest,
+    HelperDockerTarget,
     HelperHealthRequest,
     HelperResponse,
     helper_request_schema,
@@ -45,7 +46,12 @@ def test_privileged_helper_valid_golden_frames() -> None:
     assert isinstance(parsed["record.jsonl"], HelperCollectPidRequest)
     assert isinstance(parsed["stat.jsonl"], HelperCollectPidRequest)
     assert isinstance(parsed["docker-stat.jsonl"], HelperCollectPidRequest)
+    assert isinstance(parsed["docker-rootful-stat.jsonl"], HelperCollectPidRequest)
     assert parsed["docker-stat.jsonl"].target.target_runtime == "docker"
+    rootful_target = parsed["docker-rootful-stat.jsonl"].target
+    assert isinstance(rootful_target, HelperDockerTarget)
+    assert rootful_target.uid == 0
+    assert rootful_target.container.rootful_risk_authorized is True
     assert parsed["record.jsonl"].report_ready is True
 
     response_fixture = root.parent / "responses/collection-ready.jsonl"

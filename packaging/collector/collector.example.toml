@@ -49,6 +49,12 @@ allowed_modes = ["record", "stat"]
 # Whether callers may profile processes owned by other users. Security-sensitive; keep false.
 allow_other_target_uids = false
 
+# 是否允许经过容器身份复核的 rootful UID 0 目标。默认关闭；它不会开放普通跨 UID 采集。
+# Whether verified rootful UID-0 container targets are allowed. Disabled by default; this does
+# not enable generic cross-UID profiling. Enabling it requires paranoid3_helper and a separate
+# administrator risk acknowledgement.
+allow_rootful_container_targets = false
+
 # 单次采集最长时间（秒）。用户可请求更短时间，但不能超过此上限。
 # Maximum duration of one collection in seconds. Requests may be shorter, never longer.
 max_duration_seconds = 30.0

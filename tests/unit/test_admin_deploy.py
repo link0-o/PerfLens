@@ -95,6 +95,7 @@ def _deployment_inputs(tmp_path: Path) -> tuple[Path, Path, Path, CollectorSyste
         f"allowed_uids = [{os.geteuid()}]\n"
         'allowed_modes = ["record", "stat"]\n'
         "allow_other_target_uids = false\n"
+        "allow_rootful_container_targets = false\n"
         "max_duration_seconds = 30.0\n"
         "max_frequency_hz = 99\n"
         "max_output_bytes = 1048576\n"
@@ -244,6 +245,7 @@ def test_admin_cli_help_is_chinese_first_and_keeps_stable_commands() -> None:
     assert deploy_help.exit_code == 0, deploy_help.output
     assert "--acknowledge-privileged-helper-risk" in deploy_help.output
     assert "--acknowledge-cap-sys-admin-risk" in deploy_help.output
+    assert "--acknowledge-rootful-container-risk" in deploy_help.output
     assert "CAP_SYS_PTRACE" in deploy_help.output
 
     upgrade_help = runner.invoke(app, ["upgrade", "--help"])
@@ -268,6 +270,10 @@ def test_admin_cli_help_is_chinese_first_and_keeps_stable_commands() -> None:
     assert profile_help.exit_code == 0, profile_help.output
     assert "事务化切换采集功能配置" in profile_help.output
     assert "--acknowledge-trace-risk" in profile_help.output
+
+    update_help = runner.invoke(app, ["update-policy", "--help"])
+    assert update_help.exit_code == 0, update_help.output
+    assert "--acknowledge-rootful-container-risk" in update_help.output
 
 
 def test_admin_setup_supports_analysis_only_and_generates_selected_policy(
@@ -1458,8 +1464,14 @@ def test_admin_deploy_dry_run_is_read_only_and_cli_reports_chinese_or_json(
         dry_run: bool = False,
         collector_command: Path | None = None,
         acknowledge_privileged_helper_risk: bool = False,
+        acknowledge_rootful_container_risk: bool = False,
     ) -> CollectorDeploymentArtifact:
-        del dry_run, collector_command, acknowledge_privileged_helper_risk
+        del (
+            dry_run,
+            collector_command,
+            acknowledge_privileged_helper_risk,
+            acknowledge_rootful_container_risk,
+        )
         return result
 
     monkeypatch.setattr("perflens.admin.app.deploy_collector", fake_deploy)
@@ -1603,6 +1615,72 @@ def test_admin_deploy_paranoid3_helper_requires_risk_acknowledgement_and_two_uni
     assert f"--artifact-gid {os.getegid()}" in helper_unit
 
 
+def test_admin_deploy_rootful_container_policy_requires_separate_acknowledgement(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_paranoid3(config)
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "allow_rootful_container_targets = false",
+            "allow_rootful_container_targets = true",
+        ),
+        encoding="utf-8",
+    )
+    dry_run = deploy_collector(
+        config,
+        dry_run=True,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+    )
+    assert dry_run.status == "dry_run"
+    with pytest.raises(PerfLensError, match="separate administrator risk"):
+        deploy_collector(
+            config,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+            acknowledge_privileged_helper_risk=True,
+        )
+
+    deployed = deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=(os.geteuid(), os.getegid()),
+        acknowledge_privileged_helper_risk=True,
+        acknowledge_rootful_container_risk=True,
+    )
+    assert deployed.status == "deployed"
+    helper = layout.helper_service_path.read_text(encoding="utf-8")
+    assert helper.count("--allow-rootful-container-targets") == 1
+
+
+def test_admin_rejects_rootful_container_policy_without_paranoid3_helper(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "allow_rootful_container_targets = false",
+            "allow_rootful_container_targets = true",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(PerfLensError, match="violates fixed paths or bounded policy"):
+        deploy_collector(
+            config,
+            dry_run=True,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+        )
+
+
 def test_admin_deploy_cli_reports_completed_health_and_acceptance_step(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1623,8 +1701,14 @@ def test_admin_deploy_cli_reports_completed_health_and_acceptance_step(
         dry_run: bool = False,
         collector_command: Path | None = None,
         acknowledge_privileged_helper_risk: bool = False,
+        acknowledge_rootful_container_risk: bool = False,
     ) -> CollectorDeploymentArtifact:
-        del dry_run, collector_command, acknowledge_privileged_helper_risk
+        del (
+            dry_run,
+            collector_command,
+            acknowledge_privileged_helper_risk,
+            acknowledge_rootful_container_risk,
+        )
         return deployed
 
     monkeypatch.setattr("perflens.admin.app.deploy_collector", fake_deploy)
@@ -2528,8 +2612,9 @@ def test_admin_policy_update_dry_run_and_unchanged_are_read_only(
         _config: Path,
         *,
         dry_run: bool = False,
+        acknowledge_rootful_container_risk: bool = False,
     ) -> CollectorPolicyUpdateArtifact:
-        del dry_run
+        del dry_run, acknowledge_rootful_container_risk
         return unchanged
 
     monkeypatch.setattr("perflens.admin.app.update_collector_policy", fake_update)
@@ -2604,6 +2689,266 @@ def test_admin_policy_update_applies_tunables_and_preserves_service_and_data(
     assert artifact.read_bytes() == b"evidence"
     assert commands == [("/usr/bin/systemctl", "restart", "perflens-collector.service")]
     assert sockets == [(layout.socket_path, os.geteuid())]
+
+
+def test_admin_policy_update_transactionally_enables_and_disables_rootful_targets(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_paranoid3(config)
+    identity = (os.geteuid(), os.getegid())
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        acknowledge_privileged_helper_risk=True,
+    )
+    original_config = layout.config_path.read_bytes()
+    original_helper = layout.helper_service_path.read_bytes()
+    candidate = tmp_path / "rootful.toml"
+    candidate.write_text(
+        original_config.decode("utf-8").replace(
+            "allow_rootful_container_targets = false",
+            "allow_rootful_container_targets = true",
+        ),
+        encoding="utf-8",
+    )
+    candidate.chmod(0o600)
+
+    dry_run = update_collector_policy(
+        candidate,
+        dry_run=True,
+        layout=layout,
+        require_root=False,
+        service_identity=identity,
+    )
+    assert dry_run.status == "dry_run"
+    assert dry_run.service_unit_preserved is False
+    assert any(
+        command[-1] == "perflens-privileged-helper.service"
+        for command in dry_run.planned_commands
+    )
+    with pytest.raises(PerfLensError, match="separate administrator acknowledgement"):
+        update_collector_policy(
+            candidate,
+            layout=layout,
+            require_root=False,
+            service_identity=identity,
+        )
+    assert layout.config_path.read_bytes() == original_config
+    assert layout.helper_service_path.read_bytes() == original_helper
+
+    commands: list[tuple[str, ...]] = []
+    enabled = update_collector_policy(
+        candidate,
+        layout=layout,
+        require_root=False,
+        command_executor=commands.append,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        acknowledge_rootful_container_risk=True,
+    )
+    assert enabled.status == "updated"
+    assert "allow_rootful_container_targets = true" in layout.config_path.read_text(
+        encoding="utf-8"
+    )
+    assert "--allow-rootful-container-targets" in layout.helper_service_path.read_text(
+        encoding="utf-8"
+    )
+    assert ("/usr/bin/systemctl", "daemon-reload") in commands
+
+    with pytest.raises(PerfLensError, match="Disable rootful container targets"):
+        switch_collector_mode(
+            "cap_perfmon",
+            config_path=layout.config_path,
+            dry_run=True,
+            layout=layout,
+            collector_command=collector,
+            require_root=False,
+            service_identity=identity,
+            perf_event_paranoid=2,
+        )
+
+    disabled_candidate = tmp_path / "rootful-disabled.toml"
+    disabled_candidate.write_bytes(original_config)
+    disabled_candidate.chmod(0o600)
+    disabled = update_collector_policy(
+        disabled_candidate,
+        layout=layout,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+    )
+    assert disabled.status == "updated"
+    assert "--allow-rootful-container-targets" not in layout.helper_service_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_admin_rootful_policy_update_rolls_back_config_and_helper_on_health_failure(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_paranoid3(config)
+    identity = (os.geteuid(), os.getegid())
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        acknowledge_privileged_helper_risk=True,
+    )
+    previous_config = layout.config_path.read_bytes()
+    previous_helper = layout.helper_service_path.read_bytes()
+    candidate = tmp_path / "rootful.toml"
+    candidate.write_text(
+        previous_config.decode("utf-8").replace(
+            "allow_rootful_container_targets = false",
+            "allow_rootful_container_targets = true",
+        ),
+        encoding="utf-8",
+    )
+    candidate.chmod(0o600)
+    checks = 0
+
+    def fail_first_health(_path: Path) -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 1:
+            raise PerfLensError(ErrorCode.EXTERNAL_TOOL_FAILED, "test", "health failed")
+
+    with pytest.raises(PerfLensError, match="health failed"):
+        update_collector_policy(
+            candidate,
+            layout=layout,
+            require_root=False,
+            command_executor=lambda _command: None,
+            socket_waiter=fail_first_health,
+            service_identity=identity,
+            acknowledge_rootful_container_risk=True,
+        )
+    assert checks == 2
+    assert layout.config_path.read_bytes() == previous_config
+    assert layout.helper_service_path.read_bytes() == previous_helper
+
+
+def test_admin_rootful_policy_update_rejects_a_unit_out_of_sync_with_current_policy(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_paranoid3(config)
+    identity = (os.geteuid(), os.getegid())
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        acknowledge_privileged_helper_risk=True,
+    )
+    previous_config = layout.config_path.read_bytes()
+    helper_text = layout.helper_service_path.read_text(encoding="utf-8")
+    layout.helper_service_path.write_text(
+        helper_text.replace(
+            " --perf-path ",
+            " --allow-rootful-container-targets --perf-path ",
+        ),
+        encoding="utf-8",
+    )
+    candidate = tmp_path / "rootful.toml"
+    candidate.write_text(
+        previous_config.decode("utf-8").replace(
+            "allow_rootful_container_targets = false",
+            "allow_rootful_container_targets = true",
+        ),
+        encoding="utf-8",
+    )
+    candidate.chmod(0o600)
+
+    with pytest.raises(PerfLensError, match="does not match the current rootful policy"):
+        update_collector_policy(
+            candidate,
+            dry_run=True,
+            layout=layout,
+            require_root=False,
+            service_identity=identity,
+        )
+    assert layout.config_path.read_bytes() == previous_config
+
+
+def test_admin_rootful_policy_update_binds_both_helpers_in_full_diagnostics(
+    tmp_path: Path,
+) -> None:
+    config, _perf, collector, layout = _deployment_inputs(tmp_path)
+    _configure_paranoid3(config)
+    identity = (os.geteuid(), os.getegid())
+    capability = TraceBackendCapability(
+        status="available",
+        target_filter_before_userspace=True,
+        supported_modes=("sched", "off_cpu", "lock"),
+        reason="packaged target-filtered backend is available",
+    )
+    deploy_collector(
+        config,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        acknowledge_privileged_helper_risk=True,
+    )
+    switch_collector_profile(
+        "full_diagnostics",
+        config_path=layout.config_path,
+        layout=layout,
+        collector_command=collector,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        trace_group_gid=os.getegid(),
+        trace_backend_capability=capability,
+        acknowledge_trace_risk=True,
+    )
+    candidate = tmp_path / "rootful-full.toml"
+    candidate.write_text(
+        layout.config_path.read_text(encoding="utf-8").replace(
+            "allow_rootful_container_targets = false",
+            "allow_rootful_container_targets = true",
+        ),
+        encoding="utf-8",
+    )
+    candidate.chmod(0o600)
+
+    result = update_collector_policy(
+        candidate,
+        layout=layout,
+        require_root=False,
+        command_executor=lambda _command: None,
+        socket_waiter=lambda _path: None,
+        service_identity=identity,
+        trace_group_gid=os.getegid(),
+        acknowledge_rootful_container_risk=True,
+    )
+
+    assert result.status == "updated"
+    assert "--allow-rootful-container-targets" in layout.helper_service_path.read_text(
+        encoding="utf-8"
+    )
+    assert "--allow-rootful-container-targets" in layout.trace_helper_service_path.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_admin_policy_update_rolls_back_exact_policy_after_health_failure(

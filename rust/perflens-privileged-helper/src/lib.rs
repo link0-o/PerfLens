@@ -234,6 +234,7 @@ pub struct HelperServerPolicy {
     pub allowed_uid: u32,
     pub artifact_gid: u32,
     pub perf_path: PathBuf,
+    pub allow_rootful_container_targets: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -404,7 +405,13 @@ pub fn handle_connection(
             caller_uid,
             target,
             ..
-        }) if caller_uid != policy.allowed_uid || target.uid != policy.allowed_uid => {
+        }) if !target_allowed_by_policy(
+            caller_uid,
+            &target,
+            policy.allowed_uid,
+            policy.allow_rootful_container_targets,
+        ) =>
+        {
             write_response(
                 connection,
                 &rejected_response(
@@ -476,6 +483,7 @@ pub fn handle_connection(
                     max_output_bytes,
                 },
                 policy.allowed_uid,
+                policy.allow_rootful_container_targets,
                 policy.artifact_gid,
                 &policy.perf_path,
                 &mut notify_ready,
@@ -495,6 +503,31 @@ pub fn handle_connection(
             ),
         ),
     }
+}
+
+fn target_allowed_by_policy(
+    caller_uid: u32,
+    target: &HelperTarget,
+    allowed_uid: u32,
+    allow_rootful_container_targets: bool,
+) -> bool {
+    if caller_uid != allowed_uid {
+        return false;
+    }
+    if target.uid == allowed_uid {
+        return target.container.as_ref().is_none_or(|container| {
+            container.uid_mapping != DockerUidMapping::RootfulCrossUid
+                && !container.rootful_risk_authorized
+        });
+    }
+    allow_rootful_container_targets
+        && target.target_runtime == TargetRuntime::Docker
+        && target.uid == 0
+        && target.container.as_ref().is_some_and(|container| {
+            container.uid_mapping == DockerUidMapping::RootfulCrossUid
+                && container.rootful_risk_authorized
+                && container.host_uid == 0
+        })
 }
 
 fn collection_response(
@@ -895,9 +928,10 @@ mod tests {
     use nix::unistd::geteuid;
 
     use super::{
-        HELPER_SCHEMA_VERSION, HelperRequest, HelperResponse, HelperResult, HelperServerPolicy,
-        MAX_HELPER_MESSAGE_BYTES, ProtocolErrorKind, bind_private_socket, handle_connection,
-        parse_request_frame, serve_listener,
+        DockerUidMapping, HELPER_SCHEMA_VERSION, HelperRequest, HelperResponse, HelperResult,
+        HelperServerPolicy, MAX_HELPER_MESSAGE_BYTES, ProtocolErrorKind, TargetRuntime,
+        bind_private_socket, handle_connection, parse_request_frame, serve_listener,
+        target_allowed_by_policy,
     };
 
     const NOW_MILLISECONDS: u64 = 4_102_444_700_000;
@@ -909,6 +943,7 @@ mod tests {
             allowed_uid,
             artifact_gid: nix::unistd::getegid().as_raw(),
             perf_path: "/usr/bin/perf".into(),
+            allow_rootful_container_targets: false,
         }
     }
 
@@ -922,6 +957,10 @@ mod tests {
                 .as_slice(),
             include_bytes!("../../../tests/fixtures/privileged_helper/valid/docker-stat.jsonl")
                 .as_slice(),
+            include_bytes!(
+                "../../../tests/fixtures/privileged_helper/valid/docker-rootful-stat.jsonl"
+            )
+            .as_slice(),
         ];
         let parsed = fixtures
             .iter()
@@ -932,6 +971,44 @@ mod tests {
         assert!(matches!(parsed[1], HelperRequest::CollectPid { .. }));
         assert!(matches!(parsed[2], HelperRequest::CollectPid { .. }));
         assert!(matches!(parsed[3], HelperRequest::CollectPid { .. }));
+        assert!(matches!(parsed[4], HelperRequest::CollectPid { .. }));
+    }
+
+    #[test]
+    fn rootful_docker_target_requires_dedicated_helper_policy() {
+        let request = parse_request_frame(
+            include_bytes!("../../../tests/fixtures/privileged_helper/valid/docker-stat.jsonl"),
+            NOW_MILLISECONDS,
+        )
+        .expect("parse Docker fixture");
+        let HelperRequest::CollectPid {
+            caller_uid,
+            mut target,
+            ..
+        } = request
+        else {
+            panic!("expected collection request");
+        };
+        assert!(target_allowed_by_policy(
+            caller_uid, &target, caller_uid, false
+        ));
+        target.uid = 0;
+        let container = target.container.as_mut().expect("Docker binding");
+        container.host_uid = 0;
+        container.uid_mapping = DockerUidMapping::RootfulCrossUid;
+        container.rootful_risk_authorized = true;
+        assert!(!target_allowed_by_policy(
+            caller_uid, &target, caller_uid, false
+        ));
+        assert!(target_allowed_by_policy(
+            caller_uid, &target, caller_uid, true
+        ));
+
+        target.target_runtime = TargetRuntime::Host;
+        target.container = None;
+        assert!(!target_allowed_by_policy(
+            caller_uid, &target, caller_uid, true
+        ));
     }
 
     #[test]

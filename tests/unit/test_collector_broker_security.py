@@ -228,7 +228,7 @@ def test_broker_authorization_denies_every_out_of_policy_dimension(tmp_path: Pat
     )
 
 
-def test_broker_authorizes_rootless_docker_but_keeps_rootful_fail_closed(
+def test_broker_authorizes_rootless_and_requires_dedicated_rootful_policy(
     tmp_path: Path,
 ) -> None:
     peer_uid = 1234
@@ -246,10 +246,23 @@ def test_broker_authorizes_rootless_docker_but_keeps_rootful_fail_closed(
         rootful_risk_authorized=True,
     )
     generic_cross_uid = replace(base_policy, allow_other_target_uids=True)
-    with pytest.raises(PerfLensError, match="not enabled"):
+    with pytest.raises(PerfLensError, match="dedicated policy"):
         _broker_with_policy(generic_cross_uid)._authorize(peer_uid, rootful)
-    with pytest.raises(PerfLensError, match="not enabled"):
+    with pytest.raises(PerfLensError, match="dedicated policy"):
         _broker_with_policy(base_policy)._authorize(peer_uid, rootful)
+
+    rootful_policy = replace(
+        base_policy,
+        privilege_mode="paranoid3_helper",
+        allow_rootful_container_targets=True,
+    )
+    _broker_with_policy(rootful_policy)._authorize(peer_uid, rootful)
+
+    forged_host = rootful.model_copy(
+        update={"target_runtime": "host", "container_target": None}
+    )
+    with pytest.raises(PerfLensError):
+        _broker_with_policy(rootful_policy)._authorize(peer_uid, forged_host)
 
 
 def test_broker_health_allows_root_admin_without_relaxing_user_policy(

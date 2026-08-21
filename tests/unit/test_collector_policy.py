@@ -53,6 +53,7 @@ def test_policy_must_be_immutable_to_non_root_service_owner(tmp_path: Path) -> N
     assert policy.min_free_bytes == 2 << 30
     assert policy.max_plan_ttl_seconds == 120
     assert policy.allow_software_fallback is False
+    assert policy.allow_rootful_container_targets is False
 
 
 def test_policy_rejects_unknown_fields(tmp_path: Path) -> None:
@@ -102,7 +103,8 @@ def test_policy_loader_rejects_invalid_field_types(tmp_path: Path) -> None:
         'perf_path = "/bin/true"\n'
         'allowed_uids = ["not-an-integer"]\n'
         'policy_version = "1"\n'
-        'allow_other_target_uids = "false"\n',
+        'allow_other_target_uids = "false"\n'
+        'allow_rootful_container_targets = "false"\n',
         encoding="utf-8",
     )
     policy_path.chmod(0o444)
@@ -189,6 +191,7 @@ def test_broker_policy_limit_validation(tmp_path: Path) -> None:
         replace(base, artifact_mode=0o540),
         replace(base, artifact_mode=0),
         replace(base, artifact_mode=False),
+        replace(base, allow_rootful_container_targets=True),
     )
     for policy in invalid_policies:
         with pytest.raises(ValueError):
@@ -209,6 +212,8 @@ def test_paranoid3_helper_policy_is_owner_only_and_immutably_bounded(
         privilege_mode="paranoid3_helper",
     )
     assert validate_broker_policy(base).privilege_mode == "paranoid3_helper"
+    rootful = validate_broker_policy(replace(base, allow_rootful_container_targets=True))
+    assert rootful.allow_rootful_container_targets is True
     denied = (
         replace(base, allowed_modes=("record", "sched")),
         replace(base, allow_other_target_uids=True),

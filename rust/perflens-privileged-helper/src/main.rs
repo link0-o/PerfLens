@@ -27,7 +27,13 @@ fn main() -> ExitCode {
 }
 
 fn parse_policy_arguments(arguments: &[String]) -> Result<HelperServerPolicy, &'static str> {
-    let (raw_broker_uid, raw_allowed_uid, raw_artifact_gid, raw_perf_path) = match arguments {
+    let (policy_arguments, allow_rootful_container_targets) =
+        match arguments.last().map(String::as_str) {
+            Some("--allow-rootful-container-targets") => (&arguments[..arguments.len() - 1], true),
+            _ => (arguments, false),
+        };
+    let (raw_broker_uid, raw_allowed_uid, raw_artifact_gid, raw_perf_path) = match policy_arguments
+    {
         [
             broker_flag,
             broker_uid,
@@ -93,6 +99,7 @@ fn parse_policy_arguments(arguments: &[String]) -> Result<HelperServerPolicy, &'
         allowed_uid,
         artifact_gid,
         perf_path,
+        allow_rootful_container_targets,
     })
 }
 
@@ -120,6 +127,21 @@ mod tests {
         ]))
         .expect("parse current unit");
         assert_eq!(configured.perf_path, PathBuf::from("/opt/trusted/bin/perf"));
+        assert!(!configured.allow_rootful_container_targets);
+
+        let rootful = parse_policy_arguments(&arguments(&[
+            "--broker-uid",
+            "991",
+            "--allowed-uid",
+            "1000",
+            "--artifact-gid",
+            "992",
+            "--perf-path",
+            "/opt/trusted/bin/perf",
+            "--allow-rootful-container-targets",
+        ]))
+        .expect("parse rootful policy");
+        assert!(rootful.allow_rootful_container_targets);
 
         let legacy = parse_policy_arguments(&arguments(&[
             "--broker-uid",
@@ -156,5 +178,16 @@ mod tests {
             "992",
         ]);
         assert!(parse_policy_arguments(&malformed).is_err());
+
+        let unknown = arguments(&[
+            "--broker-uid",
+            "991",
+            "--allowed-uid",
+            "1000",
+            "--artifact-gid",
+            "992",
+            "--allow-rootful-container-target",
+        ]);
+        assert!(parse_policy_arguments(&unknown).is_err());
     }
 }

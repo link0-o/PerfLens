@@ -721,12 +721,19 @@ class CollectorBrokerServer:
                         recoverable=True,
                     )
             else:
-                raise PerfLensError(
-                    ErrorCode.PATH_SAFETY_VIOLATION,
-                    "authorization",
-                    "Rootful cross-UID Docker collection is not enabled by this policy stage",
-                    recoverable=True,
-                )
+                if (
+                    not self._policy.allow_rootful_container_targets
+                    or self._policy.privilege_mode != "paranoid3_helper"
+                    or plan.target_uid != 0
+                    or container.uid_mapping != "rootful_cross_uid"
+                    or not container.rootful_risk_authorized
+                ):
+                    raise PerfLensError(
+                        ErrorCode.PATH_SAFETY_VIOLATION,
+                        "authorization",
+                        "Rootful cross-UID Docker collection is outside the dedicated policy",
+                        recoverable=True,
+                    )
         elif not self._policy.allow_other_target_uids and plan.target_uid != peer_uid:
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,

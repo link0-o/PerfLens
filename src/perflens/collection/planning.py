@@ -38,6 +38,7 @@ class AutomaticCollectionPolicy:
     enabled: bool = False
     allowed_modes: tuple[CollectionMode, ...] = ("record", "stat")
     allow_other_uids: bool = False
+    allow_rootful_container_targets: bool = False
     max_duration_seconds: float = 30.0
     max_frequency_hz: int = 99
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
@@ -93,10 +94,16 @@ def create_collection_plan(
             if not policy.allow_other_uids:
                 allowed = False
                 warnings.append("The target PID is owned by a different user.")
-        else:
+        elif (
+            not policy.allow_rootful_container_targets
+            or target_uid != 0
+            or container_target.uid_mapping != "rootful_cross_uid"
+            or not container_target.rootful_risk_authorized
+        ):
             allowed = False
             warnings.append(
-                "Rootful cross-UID Docker collection is not enabled by this policy stage."
+                "Rootful cross-UID Docker collection requires a verified UID-0 target and its "
+                "dedicated policy grant."
             )
     if request.duration_seconds > policy.max_duration_seconds:
         allowed = False
@@ -307,6 +314,7 @@ def _validate_policy(policy: AutomaticCollectionPolicy) -> None:
         or policy.plan_ttl_seconds < 1
         or policy.plan_ttl_seconds > 3600
         or type(policy.allow_other_uids) is not bool
+        or type(policy.allow_rootful_container_targets) is not bool
         or type(policy.allow_software_fallback) is not bool
     ):
         raise ValueError("Automatic collection policy limits are invalid")

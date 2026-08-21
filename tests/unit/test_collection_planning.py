@@ -175,7 +175,7 @@ def test_docker_plan_binds_full_kernel_identity_and_revalidates(
 def test_docker_plan_rejects_pid_mismatch_and_gates_rootful_cross_uid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    target = _docker_target(host_uid=os.geteuid() + 1, rootful_cross_uid=True)
+    target = _docker_target(host_uid=0, rootful_cross_uid=True)
     binding = _collection_binding(target)
 
     def bind_target(_target: ContainerTargetArtifact) -> ContainerCollectionTargetBinding:
@@ -197,6 +197,47 @@ def test_docker_plan_rejects_pid_mismatch_and_gates_rootful_cross_uid(
     )
     assert denied.policy_status == "denied"
     assert any("cross-UID" in warning for warning in denied.warnings)
+
+    allowed = create_collection_plan(
+        CollectionPlanRequest(mode="record", pid=target.host_pid, container_target=target),
+        policy=AutomaticCollectionPolicy(
+            enabled=True,
+            allow_rootful_container_targets=True,
+        ),
+        capabilities=_capabilities(),
+    )
+    assert allowed.policy_status == "allowed"
+
+    arbitrary_cross_uid = _docker_target(
+        host_uid=os.geteuid() + 1,
+        rootful_cross_uid=True,
+    )
+    arbitrary_binding = _collection_binding(arbitrary_cross_uid)
+
+    def bind_arbitrary_target(
+        _target: ContainerTargetArtifact,
+    ) -> ContainerCollectionTargetBinding:
+        return arbitrary_binding
+
+    monkeypatch.setattr(
+        planning,
+        "bind_container_collection_target",
+        bind_arbitrary_target,
+    )
+    rejected = create_collection_plan(
+        CollectionPlanRequest(
+            mode="record",
+            pid=arbitrary_cross_uid.host_pid,
+            container_target=arbitrary_cross_uid,
+        ),
+        policy=AutomaticCollectionPolicy(
+            enabled=True,
+            allow_rootful_container_targets=True,
+        ),
+        capabilities=_capabilities(),
+    )
+    assert rejected.policy_status == "denied"
+    assert any("verified UID-0" in warning for warning in rejected.warnings)
 
 
 

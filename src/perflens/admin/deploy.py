@@ -100,6 +100,7 @@ class CollectorDeploymentPolicy:
     spool_root: Path
     perf_path: Path
     allowed_uids: tuple[int, ...]
+    allow_rootful_container_targets: bool
     privilege_mode: Literal["cap_perfmon", "paranoid3_helper"]
     allowed_modes: tuple[str, ...]
     max_output_bytes: int
@@ -218,6 +219,7 @@ def deploy_collector(
     socket_waiter: SocketWaiter | None = None,
     service_identity: tuple[int, int] | None = None,
     acknowledge_privileged_helper_risk: bool = False,
+    acknowledge_rootful_container_risk: bool = False,
     _admin_lock_held: bool = False,
 ) -> CollectorDeploymentArtifact:
     """Deploy fixed Collector assets from one strictly validated data-only policy."""
@@ -246,6 +248,7 @@ def deploy_collector(
                 socket_waiter=socket_waiter,
                 service_identity=service_identity,
                 acknowledge_privileged_helper_risk=acknowledge_privileged_helper_risk,
+                acknowledge_rootful_container_risk=acknowledge_rootful_container_risk,
                 _admin_lock_held=True,
             )
     source = load_collector_config(config_path)
@@ -267,6 +270,11 @@ def deploy_collector(
         warnings.append(
             "The Rust Helper runs in a root service bounded to CAP_PERFMON, CAP_SYS_ADMIN, and "
             "CAP_SYS_PTRACE; this is a larger host-security boundary."
+        )
+    if policy.allow_rootful_container_targets:
+        warnings.append(
+            "Rootful UID-0 Docker targets are enabled only after independent Broker and Helper "
+            "identity checks; generic cross-UID profiling remains disabled."
         )
     next_steps = (
         "Start a new login session for every newly authorized user.",
@@ -294,6 +302,17 @@ def deploy_collector(
             suggested_actions=(
                 "Review the dry-run and security guide, then add "
                 "--acknowledge-privileged-helper-risk.",
+            ),
+        )
+    if policy.allow_rootful_container_targets and not acknowledge_rootful_container_risk:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "collector_deploy",
+            "Rootful container targets require a separate administrator risk acknowledgement",
+            recoverable=True,
+            suggested_actions=(
+                "Review the dry-run and Docker security boundary, then add "
+                "--acknowledge-rootful-container-risk.",
             ),
         )
     if require_root and os.geteuid() != 0:
@@ -353,6 +372,7 @@ def deploy_collector(
                 helper_text = _render_helper_service(
                     (staged / "perflens-privileged-helper.service").read_text(encoding="utf-8"),
                     identity,
+                    allow_rootful_container_targets=policy.allow_rootful_container_targets,
                     stage="collector_deploy",
                 )
                 installed_helper_service = _install_new_or_identical_text(
@@ -713,6 +733,16 @@ def switch_collector_mode(
         stage=stage,
     )
     current_mode = current_policy.privilege_mode
+    if current_policy.allow_rootful_container_targets and target_mode != "paranoid3_helper":
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Disable rootful container targets before leaving paranoid3_helper mode",
+            recoverable=True,
+            suggested_actions=(
+                "Apply a reviewed policy with allow_rootful_container_targets=false first.",
+            ),
+        )
     command = _collector_command(
         collector_command,
         require_root_owner=require_root,
@@ -846,6 +876,7 @@ def switch_collector_mode(
             candidate_helper = _render_helper_service(
                 (staged / "perflens-privileged-helper.service").read_text(encoding="utf-8"),
                 identity,
+                allow_rootful_container_targets=current_policy.allow_rootful_container_targets,
                 stage=stage,
             ).encode("utf-8")
         previous_helper_bytes = previous_helper.raw if previous_helper is not None else None
@@ -1238,6 +1269,7 @@ def switch_collector_profile(
                 artifact_gid=resolved_trace_gid,
                 policy_sha256=hashlib.sha256(candidate_trace_policy).hexdigest(),
                 privilege_mode=policy.privilege_mode,
+                allow_rootful_container_targets=policy.allow_rootful_container_targets,
                 stage=stage,
             ).encode("utf-8")
         try:
@@ -1549,6 +1581,7 @@ def upgrade_collector(
             helper_candidate = _render_helper_service(
                 (staged / "perflens-privileged-helper.service").read_text(encoding="utf-8"),
                 identity,
+                allow_rootful_container_targets=policy.allow_rootful_container_targets,
                 stage=stage,
             ).encode("utf-8")
             if len(helper_candidate) > _MAX_SERVICE_BYTES:
@@ -1581,6 +1614,7 @@ def upgrade_collector(
                 artifact_gid=resolved_trace_gid,
                 policy_sha256=hashlib.sha256(previous_trace_policy.raw).hexdigest(),
                 privilege_mode=policy.privilege_mode,
+                allow_rootful_container_targets=policy.allow_rootful_container_targets,
                 stage=stage,
             ).encode("utf-8")
             if len(trace_helper_candidate) > _MAX_SERVICE_BYTES:
@@ -1896,6 +1930,9 @@ def update_collector_policy(
     require_root: bool = True,
     command_executor: CommandExecutor | None = None,
     socket_waiter: SocketWaiter | None = None,
+    service_identity: tuple[int, int] | None = None,
+    trace_group_gid: int | None = None,
+    acknowledge_rootful_container_risk: bool = False,
     _admin_lock_held: bool = False,
 ) -> CollectorPolicyUpdateArtifact:
     """Validate and atomically apply a bounded Collector policy update."""
@@ -1924,6 +1961,9 @@ def update_collector_policy(
                 require_root=require_root,
                 command_executor=command_executor,
                 socket_waiter=socket_waiter,
+                service_identity=service_identity,
+                trace_group_gid=trace_group_gid,
+                acknowledge_rootful_container_risk=acknowledge_rootful_container_risk,
                 _admin_lock_held=True,
             )
     candidate = load_collector_config(config_path, stage=stage)
@@ -1998,6 +2038,27 @@ def update_collector_policy(
     previous_raw = current.raw_text.encode("utf-8")
     candidate_raw = candidate.raw_text.encode("utf-8")
     change_required = previous_raw != candidate_raw
+    rootful_policy_changed = (
+        candidate_policy.allow_rootful_container_targets
+        != current_policy.allow_rootful_container_targets
+    )
+    if rootful_policy_changed:
+        return _update_rootful_container_policy(
+            candidate=candidate,
+            current=current,
+            current_policy=current_policy,
+            candidate_policy=candidate_policy,
+            previous_raw=previous_raw,
+            candidate_raw=candidate_raw,
+            dry_run=dry_run,
+            layout=effective_layout,
+            require_root=require_root,
+            command_executor=command_executor,
+            socket_waiter=socket_waiter,
+            service_identity=service_identity,
+            trace_group_gid=trace_group_gid,
+            acknowledge_rootful_container_risk=acknowledge_rootful_container_risk,
+        )
     commands = (("/usr/bin/systemctl", "restart", "perflens-collector.service"),)
     warnings = (
         "Authorized UID, fixed spool, service unit, and retained artifacts are preserved.",
@@ -2141,6 +2202,321 @@ def update_collector_policy(
         warnings=warnings,
         next_steps=next_steps,
     )
+
+
+def _update_rootful_container_policy(
+    *,
+    candidate: CollectorConfigSource,
+    current: CollectorConfigSource,
+    current_policy: CollectorDeploymentPolicy,
+    candidate_policy: CollectorDeploymentPolicy,
+    previous_raw: bytes,
+    candidate_raw: bytes,
+    dry_run: bool,
+    layout: CollectorSystemLayout,
+    require_root: bool,
+    command_executor: CommandExecutor | None,
+    socket_waiter: SocketWaiter | None,
+    service_identity: tuple[int, int] | None,
+    trace_group_gid: int | None,
+    acknowledge_rootful_container_risk: bool,
+) -> CollectorPolicyUpdateArtifact:
+    """Transactionally bind a rootful grant into Broker and both privileged units."""
+    stage = "collector_policy_update"
+    if current_policy.privilege_mode != "paranoid3_helper":
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Rootful container targets require the paranoid3 Helper deployment",
+        )
+    identity = service_identity
+    if identity is None:
+        try:
+            account = pwd.getpwnam("perflens")
+        except KeyError as exc:
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_FAILED,
+                stage,
+                "Dedicated perflens service account does not exist",
+            ) from exc
+        identity = (account.pw_uid, account.pw_gid)
+    previous_helper = _verify_managed_service(
+        layout.helper_service_path,
+        require_root_owner=require_root,
+        stage=stage,
+    )
+    previous_trace_helper = _optional_managed_service(
+        layout.trace_helper_service_path,
+        require_root_owner=require_root,
+        stage=stage,
+    )
+    resolved_trace_gid = trace_group_gid
+    if previous_trace_helper is not None and resolved_trace_gid is None:
+        try:
+            resolved_trace_gid = grp.getgrnam("perflens-trace-internal").gr_gid
+        except KeyError as exc:
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_FAILED,
+                stage,
+                "Trace internal group does not exist",
+            ) from exc
+    with tempfile.TemporaryDirectory(prefix="perflens-admin-rootful-") as temporary:
+        staged = install_collector_assets(
+            Path(temporary) / "assets",
+            allowed_uids=candidate_policy.allowed_uids,
+            collector_command=Path("/usr/bin/perflens-collector"),
+            perf_path=candidate_policy.perf_path,
+            spool_root=candidate_policy.spool_root,
+            privilege_mode=candidate_policy.privilege_mode,
+        )
+        helper_candidate = _render_helper_service(
+            (staged / "perflens-privileged-helper.service").read_text(encoding="utf-8"),
+            identity,
+            allow_rootful_container_targets=(
+                candidate_policy.allow_rootful_container_targets
+            ),
+            stage=stage,
+        ).encode("utf-8")
+        helper_expected_current = _render_helper_service(
+            (staged / "perflens-privileged-helper.service").read_text(encoding="utf-8"),
+            identity,
+            allow_rootful_container_targets=(
+                current_policy.allow_rootful_container_targets
+            ),
+            stage=stage,
+        ).encode("utf-8")
+        if previous_helper.raw != helper_expected_current:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "Installed privileged Helper unit does not match the current rootful policy",
+                recoverable=True,
+                suggested_actions=("Run perflens-admin upgrade before changing this policy.",),
+            )
+        trace_candidate: bytes | None = None
+        if previous_trace_helper is not None:
+            if resolved_trace_gid is None:
+                raise AssertionError("Trace group identity was not resolved")
+            trace_policy = _optional_managed_text(
+                layout.trace_config_path,
+                marker=b"# PerfLens Trace policy template",
+                require_root_owner=require_root,
+                stage=stage,
+            )
+            if trace_policy is None:
+                raise PerfLensError(
+                    ErrorCode.INVALID_INPUT,
+                    stage,
+                    "Installed Trace Helper requires its managed Trace policy",
+                )
+            trace_candidate = _render_trace_helper_service(
+                (staged / "perflens-trace-helper.service").read_text(encoding="utf-8"),
+                identity=identity,
+                allowed_uid=candidate_policy.allowed_uids[0],
+                artifact_gid=resolved_trace_gid,
+                policy_sha256=hashlib.sha256(trace_policy.raw).hexdigest(),
+                privilege_mode=candidate_policy.privilege_mode,
+                allow_rootful_container_targets=(
+                    candidate_policy.allow_rootful_container_targets
+                ),
+                stage=stage,
+            ).encode("utf-8")
+            trace_expected_current = _render_trace_helper_service(
+                (staged / "perflens-trace-helper.service").read_text(encoding="utf-8"),
+                identity=identity,
+                allowed_uid=current_policy.allowed_uids[0],
+                artifact_gid=resolved_trace_gid,
+                policy_sha256=hashlib.sha256(trace_policy.raw).hexdigest(),
+                privilege_mode=current_policy.privilege_mode,
+                allow_rootful_container_targets=(
+                    current_policy.allow_rootful_container_targets
+                ),
+                stage=stage,
+            ).encode("utf-8")
+            if previous_trace_helper.raw != trace_expected_current:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    stage,
+                    "Installed Trace Helper unit does not match the current rootful policy",
+                    recoverable=True,
+                    suggested_actions=(
+                        "Run perflens-admin upgrade before changing this policy.",
+                    ),
+                )
+
+        commands: list[tuple[str, ...]] = [
+            ("/usr/bin/systemctl", "daemon-reload"),
+            ("/usr/bin/systemctl", "restart", "perflens-privileged-helper.service"),
+        ]
+        if trace_candidate is not None:
+            commands.append(
+                ("/usr/bin/systemctl", "restart", "perflens-trace-helper.service")
+            )
+        commands.append(("/usr/bin/systemctl", "restart", "perflens-collector.service"))
+        warnings = (
+            "The rootful Docker grant is independently enforced by the Broker and each installed "
+            "privileged Helper.",
+            "Generic cross-UID profiling, host sysctl, and retained evidence are unchanged.",
+        )
+        next_steps = (
+            "Run an explicitly authorized rootful-container acceptance before relying on it.",
+            "Run perflens accept-collector --authorize-host-acceptance for host regression "
+            "coverage.",
+        )
+        if dry_run:
+            return _policy_update_result(
+                "dry_run",
+                candidate,
+                current.path,
+                previous_raw,
+                candidate_raw,
+                candidate_policy,
+                change_required=True,
+                policy_updated=False,
+                service_restarted=False,
+                commands=tuple(commands),
+                warnings=warnings,
+                next_steps=next_steps,
+                service_unit_preserved=False,
+            )
+        if (
+            candidate_policy.allow_rootful_container_targets
+            and not acknowledge_rootful_container_risk
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "Enabling rootful container targets requires separate administrator "
+                "acknowledgement",
+                recoverable=True,
+                suggested_actions=(
+                    "Review update-policy --dry-run, then add "
+                    "--acknowledge-rootful-container-risk.",
+                ),
+            )
+        if require_root and os.geteuid() != 0:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                stage,
+                "Collector policy update must be started explicitly by an administrator",
+            )
+
+        executor = command_executor or _run_admin_policy_update_command
+        replacements = [
+            (layout.helper_service_path, previous_helper, helper_candidate),
+        ]
+        if previous_trace_helper is not None and trace_candidate is not None:
+            replacements.append(
+                (layout.trace_helper_service_path, previous_trace_helper, trace_candidate)
+            )
+        updated_services: list[
+            tuple[Path, _ManagedServiceSnapshot, bytes]
+        ] = []
+        config_replaced = False
+        try:
+            for path, snapshot, replacement_bytes in replacements:
+                if snapshot.raw == replacement_bytes:
+                    continue
+                _replace_verified_managed_service(
+                    path,
+                    snapshot,
+                    replacement_bytes,
+                    stage=stage,
+                )
+                updated_services.append((path, snapshot, replacement_bytes))
+            _replace_verified_config(
+                current.path,
+                current,
+                candidate_raw,
+                stage=stage,
+                mode=stat.S_IMODE(current.metadata.st_mode),
+            )
+            config_replaced = True
+            for command in commands:
+                executor(command)
+            if socket_waiter is not None:
+                socket_waiter(layout.socket_path)
+            else:
+                _wait_for_policy_update_socket(
+                    layout.socket_path,
+                    expected_service_uid=identity[0],
+                )
+        except BaseException as exc:
+            rollback_errors: list[str] = []
+            try:
+                if config_replaced:
+                    deployed = load_collector_config(
+                        current.path,
+                        stage=stage,
+                        require_root_owner=require_root,
+                    )
+                    if deployed.raw_text.encode("utf-8") != candidate_raw:
+                        raise PerfLensError(
+                            ErrorCode.PATH_SAFETY_VIOLATION,
+                            stage,
+                            "Collector policy changed before rootful rollback",
+                        )
+                    _replace_verified_config(
+                        current.path,
+                        deployed,
+                        previous_raw,
+                        stage=stage,
+                        mode=stat.S_IMODE(current.metadata.st_mode),
+                    )
+                for path, snapshot, installed in reversed(updated_services):
+                    observed = _verify_managed_service(
+                        path,
+                        require_root_owner=require_root,
+                        stage=stage,
+                    )
+                    if observed.raw != installed:
+                        raise PerfLensError(
+                            ErrorCode.PATH_SAFETY_VIOLATION,
+                            stage,
+                            "Managed Helper changed before rootful rollback",
+                        )
+                    _replace_verified_managed_service(
+                        path,
+                        observed,
+                        snapshot.raw,
+                        stage=stage,
+                        mode=stat.S_IMODE(snapshot.metadata.st_mode),
+                    )
+                for command in commands:
+                    executor(command)
+                if socket_waiter is not None:
+                    socket_waiter(layout.socket_path)
+                else:
+                    _wait_for_policy_update_socket(
+                        layout.socket_path,
+                        expected_service_uid=identity[0],
+                    )
+            except BaseException as rollback_exc:
+                rollback_errors.append(type(rollback_exc).__name__)
+            if rollback_errors:
+                raise PerfLensError(
+                    ErrorCode.OUTPUT_WRITE_FAILED,
+                    stage,
+                    "Rootful policy update failed and could not be fully restored",
+                    recoverable=True,
+                    details={"rollback_errors": rollback_errors},
+                ) from exc
+            raise
+        return _policy_update_result(
+            "updated",
+            candidate,
+            current.path,
+            previous_raw,
+            candidate_raw,
+            candidate_policy,
+            change_required=True,
+            policy_updated=True,
+            service_restarted=True,
+            commands=tuple(commands),
+            warnings=warnings,
+            next_steps=next_steps,
+            service_unit_preserved=False,
+        )
 
 
 def undeploy_collector(
@@ -2378,6 +2754,7 @@ def parse_collector_deployment_policy(
         "privilege_mode",
         "allowed_modes",
         "allow_other_target_uids",
+        "allow_rootful_container_targets",
         "max_duration_seconds",
         "max_frequency_hz",
         "max_output_bytes",
@@ -2418,6 +2795,10 @@ def parse_collector_deployment_policy(
         plan_ttl = _strict_integer(values.get("max_plan_ttl_seconds", DEFAULT_MAX_PLAN_TTL_SECONDS))
         events = tuple(_strict_string(value) for value in values.get("allowed_stat_events", ()))
         allow_software_fallback = values.get("allow_software_fallback", False)
+        allow_rootful_container_targets = values.get(
+            "allow_rootful_container_targets",
+            False,
+        )
         socket_mode_raw = values.get("socket_mode", "0660")
         artifact_mode_raw = values.get("artifact_mode", "0640")
         socket_mode = _strict_mode(socket_mode_raw)
@@ -2447,6 +2828,11 @@ def parse_collector_deployment_policy(
         or not modes
         or any(mode not in _SUPPORTED_MODES for mode in modes)
         or allow_other is not False
+        or type(allow_rootful_container_targets) is not bool
+        or (
+            allow_rootful_container_targets
+            and privilege_mode != "paranoid3_helper"
+        )
         or not math.isfinite(duration)
         or not 0 < duration <= 86_400
         or not 1 <= frequency <= 10_000
@@ -2488,6 +2874,7 @@ def parse_collector_deployment_policy(
         spool_root=spool,
         perf_path=perf,
         allowed_uids=uids,
+        allow_rootful_container_targets=allow_rootful_container_targets,
         privilege_mode=cast(
             Literal["cap_perfmon", "paranoid3_helper"],
             privilege_mode,
@@ -3125,12 +3512,17 @@ def _render_helper_service(
     text: str,
     identity: tuple[int, int],
     *,
+    allow_rootful_container_targets: bool,
     stage: str,
 ) -> str:
     rendered = text
     for marker, value in (
         ("@PERFLENS_BROKER_UID@", str(identity[0])),
         ("@PERFLENS_ARTIFACT_GID@", str(identity[1])),
+        (
+            "@PERFLENS_ROOTFUL_CONTAINER_ARGUMENT@",
+            " --allow-rootful-container-targets" if allow_rootful_container_targets else "",
+        ),
     ):
         if rendered.count(marker) != 1:
             raise PerfLensError(
@@ -3156,6 +3548,7 @@ def _render_trace_helper_service(
     artifact_gid: int,
     policy_sha256: str,
     privilege_mode: Literal["cap_perfmon", "paranoid3_helper"],
+    allow_rootful_container_targets: bool,
     stage: str,
 ) -> str:
     rendered = text
@@ -3169,6 +3562,11 @@ def _render_trace_helper_service(
         ("@PERFLENS_ALLOWED_UID@", str(allowed_uid), 1),
         ("@PERFLENS_TRACE_ARTIFACT_GID@", str(artifact_gid), 1),
         ("@PERFLENS_TRACE_POLICY_SHA256@", policy_sha256, 1),
+        (
+            "@PERFLENS_ROOTFUL_CONTAINER_ARGUMENT@",
+            " --allow-rootful-container-targets" if allow_rootful_container_targets else "",
+            1,
+        ),
         # The same reviewed ceiling is deliberately used for BoundingSet and Ambient.
         ("@PERFLENS_TRACE_CAPABILITIES@", capabilities, 2),
     )
@@ -4047,6 +4445,7 @@ def _policy_update_result(
     commands: tuple[tuple[str, ...], ...],
     warnings: tuple[str, ...],
     next_steps: tuple[str, ...],
+    service_unit_preserved: bool = True,
 ) -> CollectorPolicyUpdateArtifact:
     return CollectorPolicyUpdateArtifact(
         perflens_version=__version__,
@@ -4061,6 +4460,7 @@ def _policy_update_result(
         allowed_uid=policy.allowed_uids[0],
         allowed_modes=policy.allowed_modes,
         planned_commands=commands,
+        service_unit_preserved=service_unit_preserved,
         warnings=warnings,
         next_steps=next_steps,
     )
