@@ -33,6 +33,7 @@ from perflens.docker.project_config import (
     DockerProjectPolicy,
     assert_docker_project_policy_current,
 )
+from perflens.docker.runtime_root import prepare_default_managed_runtime_root
 from perflens.docker.session import (
     DockerRunLease,
     DockerSessionAuthority,
@@ -253,13 +254,7 @@ class ExistingDockerRuntime:
                 "Managed temporary containers are disabled by project policy",
                 recoverable=True,
             )
-        if self._managed_runtime_root is None:
-            raise PerfLensError(
-                ErrorCode.PATH_SAFETY_VIOLATION,
-                "docker_authorization",
-                "Managed Docker runtime root is not configured for this MCP process",
-                recoverable=True,
-            )
+        self._managed_root()
         gate = self._inspect_gate()
         managed = self._project_policy.managed
         workload = build_container_workload_spec(
@@ -324,10 +319,10 @@ class ExistingDockerRuntime:
                     recoverable=True,
                 ) from exc
         gate = self._inspect_gate()
-        assert self._managed_runtime_root is not None
+        runtime_root = self._managed_root()
         coordinator = ManagedDockerCoordinator(
             adapter=self._adapter_factory(),
-            runtime_root=self._managed_runtime_root,
+            runtime_root=runtime_root,
             project=self._project,
             gate=gate,
             reader=self._reader_factory(),
@@ -430,6 +425,14 @@ class ExistingDockerRuntime:
             self._container_gate_path,
             trusted_owner_uids=self._trusted_gate_owner_uids,
         )
+
+    def _managed_root(self) -> Path:
+        with self._session_lock:
+            if self._managed_runtime_root is None:
+                self._managed_runtime_root = prepare_default_managed_runtime_root(
+                    self._project
+                )
+            return self._managed_runtime_root
 
     def _authorized_modes(
         self,

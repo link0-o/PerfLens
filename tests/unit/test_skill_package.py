@@ -15,6 +15,7 @@ def test_performance_skill_has_valid_minimal_frontmatter_and_resources() -> None
     assert metadata.keys() == {"name", "description"}
     assert metadata["name"] == "perflens"
     assert "perf.data" in metadata["description"]
+    assert "Docker" in metadata["description"]
     assert "TODO" not in skill_text
     assert "Verified Improvement" in body
 
@@ -27,9 +28,13 @@ def test_performance_skill_has_valid_minimal_frontmatter_and_resources() -> None
         "benchmark-validation.md",
         "active-collection-safety.md",
         "project-workload.md",
+        "docker-analysis.md",
     }
     assert {path.name for path in (skill_root / "references").glob("*.md")} == expected_references
     assert (skill_root / "assets" / "diagnosis-report-template.md").is_file()
+    assert "collect_managed_docker_workload" in body
+    assert "collect_docker_target" in body
+    assert "build/pull images" in body
 
 
 def test_skill_declares_mcp_dependency_and_explicit_invocation_prompt() -> None:

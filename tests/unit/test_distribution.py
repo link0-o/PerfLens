@@ -41,15 +41,20 @@ def test_project_skill_install_copies_the_complete_skill_and_refuses_overwrite(
     assert (installed / "SKILL.md").is_file()
     assert (installed / "agents" / "openai.yaml").is_file()
     assert (installed / "assets" / "diagnosis-report-template.md").is_file()
-    assert len(tuple((installed / "references").glob("*.md"))) == 8
+    assert len(tuple((installed / "references").glob("*.md"))) == 9
 
     skill_text = (installed / "SKILL.md").read_text(encoding="utf-8")
     project_workload_text = (installed / "references/project-workload.md").read_text(
         encoding="utf-8"
     )
+    docker_text = (installed / "references/docker-analysis.md").read_text(
+        encoding="utf-8"
+    )
     assert "I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION" in skill_text
     assert "Do not substitute" in project_workload_text
     assert "parameter sweep" in project_workload_text
+    assert "perflens-container-gate" in docker_text
+    assert "Docker Socket" in docker_text
     with pytest.raises(PerfLensError) as captured:
         install_project_skill(project)
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION

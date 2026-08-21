@@ -97,6 +97,10 @@ def test_setup_enables_docker_policy_and_preserves_user_edits_on_update(
     assert '"--allow-docker-targets"' in codex_config
     assert str(policy) in codex_config
     assert "--allow-docker-targets" in claude_config
+    codex_skill = (project / ".agents/skills/perflens/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "collect_managed_docker_workload" in codex_skill
 
     policy.write_text(
         policy.read_text(encoding="utf-8") + "\n# user reviewed\n",

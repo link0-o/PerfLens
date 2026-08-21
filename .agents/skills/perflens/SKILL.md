@@ -1,6 +1,6 @@
 ---
 name: perflens
-description: Analyze and optimize Linux runtime performance with PerfLens MCP tools using an evidence-first workflow. Use for performance analysis or optimization of an executable project, authorized bounded workload or live-PID collection, FlameGraph, perf.data, perf script, folded profiles, CPU hotspots, scheduling delay, off-CPU waits, lock contention, source attribution, regressions, or matched A/B validation. 当用户要求性能分析、性能优化、CPU 热点、调度延迟、off-CPU 等待、锁竞争、火焰图、perf.data、性能回归或授权采集时使用；不要用于没有性能问题的一般代码审查。
+description: Analyze and optimize Linux host or local-Docker runtime performance with PerfLens MCP tools using an evidence-first workflow. Use for performance analysis or optimization of an executable project, authorized container workload or live PID, FlameGraph, perf.data, CPU hotspots, scheduling delay, off-CPU waits, lock contention, source attribution, regressions, or matched A/B validation. 当用户要求分析或优化 Linux 宿主机/本地 Docker 容器性能、CPU 热点、调度延迟、off-CPU 等待、锁竞争、火焰图、perf.data、性能回归或授权采集时使用；不要用于没有性能问题的一般代码审查。
 ---
 
 # PerfLens Performance Analysis
@@ -31,10 +31,12 @@ Always read [evidence-model.md](references/evidence-model.md). Load the topic re
 - Read [active-collection-safety.md](references/active-collection-safety.md) before any live collection request.
 - Read [project-workload.md](references/project-workload.md) when the user asks to optimize the
   current project without supplying a Profile or PID.
+- Read [docker-analysis.md](references/docker-analysis.md) when the target runs in a local Docker
+  container or the project Docker workload policy is selected.
 
 ## Default workflow
 
-1. If an existing Profile is available, call `analyze_profile` with its input path and explicit source type when auto-detection is ambiguous. If an exact project workload is the authorized evidence source, follow **Project-level optimization** below. If a live PID is the authorized evidence source, follow **Automatic live collection** first.
+1. If an existing Profile is available, call `analyze_profile` with its input path and explicit source type when auto-detection is ambiguous. If a local Docker container is the requested target, follow **Docker project optimization** below. If an exact host-project workload is the authorized evidence source, follow **Project-level optimization** below. If a live host PID is the authorized evidence source, follow **Automatic live collection** first.
 2. Call `verify_analysis` for the returned `analysis_id` before interpreting it. Stop if
    fingerprint, content digest, Collection/input binding, or weight-conservation validation fails.
    A `partial` verification may still support explicitly allowed observations, but it must not be
@@ -85,6 +87,42 @@ argument that remains inside the already authorized scope. Do not substitute a s
 launch, `timeout` wrapper, direct `perf`, `plan_automatic_collection`, or existing-PID attachment.
 Do not run a parameter sweep, Callgrind, another profiler, or different arguments without a new
 explicit authorization for those exact executions.
+
+## Docker project optimization
+
+Read [docker-analysis.md](references/docker-analysis.md) before any Docker target discovery,
+authorization, collection, or lifecycle operation. A request such as “使用 PerfLens 深度优化当前
+项目的容器负载” selects this workflow when `perflens init --docker` has enabled the project MCP
+policy; the user does not need to provide a host PID or repeat long CLI commands.
+
+1. Call `inspect_docker_capability`. Stop if the fixed local Docker endpoint, cgroup v2, project
+   policy, or Collector cannot support the requested mode. Do not substitute direct Docker CLI or
+   Socket access.
+2. For an **existing container**, call `discover_docker_processes`, present the bounded process
+   recommendation, and use `resolve_docker_target` for the exact container PID or host PID. Ask
+   once for `per_run` or `bounded_session` authorization, then call `authorize_docker_session`.
+   Use `collect_docker_target` only with that returned session ID and the same container identity.
+3. For a **managed temporary test container**, inspect the fixed project
+   `perflens-setup/container-workload.toml` recipe before asking for authorization. It must pin an
+   already-local image digest, entrypoint, arguments, numeric user, read-only project mount,
+   disabled network, and bounded resources. Call `authorize_managed_docker_session`, then
+   `collect_managed_docker_workload`. PerfLens waits for Broker readiness before releasing the
+   package Gate and cleans only the verified session-created container.
+4. Use typed `stat` evidence directly; analyze `record` with `analyze_collection`; analyze
+   `sched`/`off_cpu`/`lock` using `analyze_trace_evidence` followed by
+   `verify_trace_analysis`. Preserve software-PMU fallback and Trace quality limits.
+5. For optimization, keep image digest, fixed recipe, resources, collection mode/event source,
+   and benchmark parameters matched. New container IDs and PIDs are normal for managed A/B runs;
+   existing-container identity replacement invalidates its session. Only correctness-preserving,
+   matched before/after evidence is a verified improvement.
+
+The Skill never receives the Docker Socket and never accepts arbitrary Docker arguments. It must
+not build/pull images, enable networking, add mounts/devices/capabilities, use host namespaces,
+grant rootful targets, or remove an existing user container. `bounded_session` is bound to the
+current MCP/Agent connection, fixed project policy, workload/target identity, allowed modes, at
+most six runs, active-time/evidence budgets, and short single-use collection plans. Any policy,
+image recipe, existing target, client connection, namespace, cgroup, UID mapping, or resource
+scope change requires new authorization.
 
 ## Automatic live collection
 

@@ -221,7 +221,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "authorized project workload, collect_project_workload must receive the exact fixed "
             "authorization value I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION. A failed project "
             "workload call must not be replaced with a shell launch, direct perf, or existing-PID "
-            "attachment."
+            "attachment. Docker tools require the project Docker policy and bounded-session "
+            "authorization. Never substitute direct Docker CLI/Socket access, build/pull, "
+            "arbitrary mounts, networking, capabilities, or host namespaces."
         ),
         version=__version__,
     )

@@ -1,12 +1,12 @@
 interface:
   display_name: "PerfLens 性能分析与优化"
-  short_description: "自动运行项目、采集并基于证据优化 Linux 性能"
-  default_prompt: "使用 $perflens 优化当前项目的运行性能；先确认可重复工作负载，再自动运行、采集并做前后对比。"
+  short_description: "采集并基于证据优化 Linux 宿主机或本地容器性能"
+  default_prompt: "使用 $perflens 优化当前项目的宿主机或容器运行性能；先确认可重复工作负载，再自动采集并做前后对比。"
 dependencies:
   tools:
     - type: "mcp"
       value: "perflens"
-      description: "PerfLens 确定性 Linux 性能采集与 Profile 分析工具"
+      description: "PerfLens 确定性 Linux 宿主机/本地 Docker 性能采集与 Profile 分析工具"
       transport: "stdio"
 policy:
   allow_implicit_invocation: true
