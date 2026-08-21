@@ -2,11 +2,11 @@
 
 English | [简体中文](INSTALL.zh-CN.md)
 
-Download `perflens-0.2.0-py3-none-any.whl` for the normal CLI/MCP installation. A wheel is an installable Python package: do not extract it. The extracted `perflens/` and `.dist-info/` directories are modules and metadata, not a graphical launcher.
+Download `perflens-0.3.0-py3-none-any.whl` for the normal CLI/MCP installation. A wheel is an installable Python package: do not extract it. The extracted `perflens/` and `.dist-info/` directories are modules and metadata, not a graphical launcher.
 
 On Debian 13 `amd64`, the recommended alternative is
-`sudo apt install ./perflens_0.2.0-2_amd64.deb`. Add the exact-version
-`perflens-collector_0.2.0-2_amd64.deb` only for automatic collection. Package
+`sudo apt install ./perflens_0.3.0-1_amd64.deb`. Add the exact-version
+`perflens-collector_0.3.0-1_amd64.deb` only for automatic collection. Package
 installation does not activate a privileged service. See
 [Debian packages](docs/debian-packages.md).
 
@@ -27,7 +27,7 @@ checking only the assets you downloaded, but each selected file must report
 
 ```bash
 sha256sum --ignore-missing --check SHA256SUMS
-gh attestation verify ./perflens-0.2.0-py3-none-any.whl \
+gh attestation verify ./perflens-0.3.0-py3-none-any.whl \
   --repo link0-o/PerfLens \
   --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -43,9 +43,9 @@ PerfLens requires Linux and Python 3.12 or 3.13. Install the wheel as an isolate
 
 ```bash
 cd ~/Downloads
-pipx install ./perflens-0.2.0-py3-none-any.whl
+pipx install ./perflens-0.3.0-py3-none-any.whl
 # or
-uv tool install ./perflens-0.2.0-py3-none-any.whl
+uv tool install ./perflens-0.3.0-py3-none-any.whl
 ```
 
 Verify it and run the project-scoped onboarding command:

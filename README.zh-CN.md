@@ -53,9 +53,9 @@ PerfLens 不包含 LLM API、Web UI、自动修改源码功能、Benchmark 执�
 从 GitHub Releases 下载 wheel 后，推荐作为独立工具安装：
 
 ```bash
-pipx install ./perflens-0.2.0-py3-none-any.whl
+pipx install ./perflens-0.3.0-py3-none-any.whl
 # 或者
-uv tool install ./perflens-0.2.0-py3-none-any.whl
+uv tool install ./perflens-0.3.0-py3-none-any.whl
 ```
 
 不要手工提取 wheel。安装成功后进入要分析的项目，首次运行：
@@ -89,10 +89,9 @@ Debian 13 用户也可以直接安装原生 `.deb`，不需要自己创建 Pytho
 root Rust Helper；该模式不会自动启用，必须由管理员确认受限 root、`CAP_SYS_ADMIN` 与
 `CAP_SYS_PTRACE` 风险。
 
-当前 `main` 已进入尚未发布的 v0.3.0 实施阶段：源码包含独立 Trace Helper、目标内核过滤
-后端、`sched/off_cpu/lock` 确定性分析和 `full_diagnostics` 生命周期。发布版 `0.2.0` 仍只有
-稳定的 `stat/record` 闭环；在完整 Python/Rust/DEB/真实主机门禁通过前，不把源码能力
-描述成已发布功能。详细状态见
+发布版 v0.3.0 增加了独立 Trace Helper、目标内核过滤后端、`sched/off_cpu/lock`
+确定性分析和 `full_diagnostics` 生命周期；原有特权 stat/record Helper 仍严格限制为
+`stat/record`。详细边界见
 [《Collector 与用户态锁能力路线图（v0.3.0 / v0.4.0）》](docs/collector-capability-roadmap.zh-CN.md)。
 `v0.3.1` 改为本地 Docker 单进程能力，四类用户态锁 Adapter 的目标版本为 `v0.4.0`；
 已经提交的 Runtime Lock 公共合同只是前置骨架，不代表 Adapter 已可用。Docker 计划见
@@ -360,7 +359,7 @@ perflens collect-profile \
   --authorization I_EXPLICITLY_AUTHORIZE_TARGET_PROFILING
 ```
 
-发布版 `0.2.0` 正式支持 `record` 和 `stat`。v0.3.0 源码新增的 `full_diagnostics` 通过
+发布版 `0.3.0` 正式支持 `record` 和 `stat`。v0.3.0 的 `full_diagnostics` 通过
 独立 Trace Helper 提供 `sched`、`off_cpu`、`lock`，并生成专用、可验证的确定性 Artifact；
 现有 paranoid=3 Rust Helper 仍严格只处理 `stat/record`。高级模式默认不因包安装而启用，
 必须由管理员选择功能配置并通过真实验收。附加到已有 PID 还需要独立开关、有限时长以及
@@ -449,8 +448,8 @@ uv run pip-audit
 - `perf.data` 能否迁移分析取决于本机 `perf` 版本和匹配的 DSO/调试符号。
 - 主动采样取决于 Linux 内核权限；普通进程在 `perf_event_paranoid=3` 下受阻，不代表
   已部署 Collector 必然受阻，仍应以真实短时验收和 Collection 的实际事件来源为准。
-- 发布版 `0.2.0` 没有稳定的 `sched/lock/off_cpu` 闭环。v0.3.0 源码已经生成调度延迟、
-  off-CPU 区间和底层锁/futex 候选 Artifact，但仍等待完整发布门禁；它也不能把 futex
+- 发布版 v0.3.0 通过可选的 `full_diagnostics` 配置生成调度延迟、off-CPU 区间和底层
+  锁/futex 候选 Artifact；它仍不能把 futex
   候选升级成特定语言锁、在缺少配对时猜 owner/持锁时长，或覆盖所有用户态快路径。
 - 当前没有正式的 Docker 主动采集：已有容器路径映射只用于分析已有证据，不会发现容器、
   启动容器或把 Collector 附加到容器内进程。该能力是 `v0.3.1` 计划。

@@ -15,10 +15,10 @@
 | MCP | 官方 Python SDK 2.x，本地 stdio 传输 |
 | Skill | Codex `.agents/skills` 与 Claude Code `.claude/skills` 项目 Skill，并使用 `skill-creator` 验证 |
 | AI 客户端配置 | Codex 项目 `.codex/config.toml`；Claude Code 项目 `.mcp.json` |
-| 主动采集 | 发布版 `0.2.0` 正式支持 `record/stat`；v0.3.0 预发布源码增加经独立 Trace Helper 处理的 `sched/off_cpu/lock`，尚待发布门禁 |
+| 主动采集 | 发布版 `0.3.0` 正式支持 `record/stat`，并通过独立 Trace Helper 提供可选的 `sched/off_cpu/lock` |
 | 自动采集 | 当前只支持宿主机：普通用户项目启动器，加上只接受 Host PID 的 Linux Collector Broker；使用 `SO_PEERCRED`，并提供 systemd 模板 |
-| Collector 策略 | 当前版本 1，生成策略默认只允许 `record`、`stat`；缺失版本号按旧版版本 1 读取，不支持的版本会被拒绝 |
-| paranoid=3 Helper | 现有 Rust Helper 永远只支持 `record/stat`；v0.3.0 预发布源码用另一套服务/协议/Socket/spool 的 Trace Helper 处理高级模式 |
+| Collector 策略 | 当前版本 1；`cpu_only` 允许 `record/stat`，`full_diagnostics` 额外允许 `sched/off_cpu/lock`；缺失版本号按旧版版本 1 读取，不支持的版本会被拒绝 |
+| paranoid=3 Helper | 现有 Rust Helper 永远只支持 `record/stat`；v0.3.0 用另一套服务/协议/Socket/spool 的 Trace Helper 处理高级模式 |
 | 目标运行时 | 当前正式范围为 Linux 宿主机 PID；本地 Docker Engine + cgroup v2 的单容器进程是 `v0.3.1` 计划，不是现有能力 |
 | 原生 DEB | Debian 13 `amd64`、系统 Python 3.13；主包和完全同版本 Collector 包分离 |
 | 产物 Schema | 1.0 |
@@ -31,7 +31,7 @@ Double 验证。MCP 行为使用官方 SDK 客户端在内存中完成测试。
 Collector Broker 已使用真实 Unix Socket 和可执行 perf Test Double 完成端到端测试。
 Debian 13 人工主机验收还证明了 `paranoid3_helper` 可以在硬件 PMU 没有产生可用计数时，
 完成软件 `stat` 与 `cpu-clock record` 的短时采集。该验收不代表所有内核、虚拟机、PMU、
-LSM 或高级 trace 模式都兼容；`sched`、`lock`、`off_cpu` 尚无真实主机稳定性声明。
+LSM 或高级 trace 模式都兼容；每台 `full_diagnostics` 主机仍须单独完成短时真实验收。
 
 当前容器兼容只指分析已有 Profile 时的容器/build 路径映射。PerfLens 尚不发现 Docker
 进程、不启动容器、不连接远程 Engine，也不读取容器 cgroup。`v0.3.1` 计划只支持本地

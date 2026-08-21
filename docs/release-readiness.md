@@ -93,9 +93,9 @@ perflens accept-collector --authorize-host-acceptance
 
 ## Tags and next version
 
-Source currently remains at `0.2.0`. This roadmap treats the next release with
-new collection/analysis capability as `v0.3.0`; do not bump the package version
-or create the tag before its gates pass.
+This historical snapshot was recorded while the source version was `0.2.0`.
+The current release metadata is `0.3.0`; every `v0.3.0` tag attempt must run the
+fresh gates in the release workflow rather than treating this old snapshot as proof.
 
 Published tags should remain immutable. Even when an old tag/Release was never
 distributed, deleting and recreating it is a separately reviewed repository

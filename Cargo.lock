@@ -116,7 +116,7 @@ dependencies = [
 
 [[package]]
 name = "perflens-privileged-helper"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nix",
  "serde",
@@ -126,7 +126,7 @@ dependencies = [
 
 [[package]]
 name = "perflens-trace-helper"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nix",
  "serde",

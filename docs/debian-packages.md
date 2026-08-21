@@ -18,7 +18,7 @@ MCP or Collector identity. Links in writable directories are rejected.
 For offline profile analysis, install only the main package:
 
 ```bash
-sudo apt install ./perflens_0.2.0-2_amd64.deb
+sudo apt install ./perflens_0.3.0-1_amd64.deb
 cd /absolute/path/to/project
 perflens init
 ```
@@ -27,8 +27,8 @@ For automatic collection, install both packages and generate a reviewed policy:
 
 ```bash
 sudo apt install \
-  ./perflens_0.2.0-2_amd64.deb \
-  ./perflens-collector_0.2.0-2_amd64.deb
+  ./perflens_0.3.0-1_amd64.deb \
+  ./perflens-collector_0.3.0-1_amd64.deb
 
 perflens setup \
   --project /absolute/path/to/project \
@@ -63,9 +63,10 @@ The command prints a Chinese deployment summary by default and distinguishes a
 read-only dry run from a completed authenticated deployment. Add `--json` for
 the complete versioned artifact.
 
-This corrected build keeps upstream version `0.2.0` and increments only the
-Debian revision from `1` to `2`. APT can therefore upgrade an installed
-`0.2.0-1` package to `0.2.0-2`, while the PerfLens CLI still reports `0.2.0`.
+The previous repaired `0.2.0` line kept its upstream version and incremented only the
+Debian revision from `1` to `2`. APT could therefore upgrade an installed
+`0.2.0-1` package to `0.2.0-2`, while the PerfLens CLI still reported `0.2.0`.
+The new `0.3.0` upstream release starts again at Debian revision `1`.
 After the user's new login session, `perflens status --project <project>` checks
 runtime readiness and `perflens-admin spool-status` reports Collector storage
 headroom. Both are read-only; add `--json` to the latter for a versioned artifact.

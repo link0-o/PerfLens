@@ -9,15 +9,15 @@ for development acceptance and other Linux distributions.
 Deploy PerfLens as two privilege domains: ordinary-user CLI/MCP/Skill processes and a dedicated `perflens-collector` system service with only the host-approved perf capability. The Agent and MCP server must not run as root.
 
 After installing the DEBs, the recommended first host configuration is
-`sudo perflens-admin setup`. The current `0.2.0` wizard offers `cap_perfmon`,
+`sudo perflens-admin setup`. The `0.3.0` wizard offers `cap_perfmon`,
 `paranoid3_helper`, and analysis-only. Use `perflens-admin switch-mode <mode> --dry-run` before an explicit
 host-level switch, then run `perflens init --update` in initialized projects. See
 the [Collector privilege-mode lifecycle](collector-mode-lifecycle.md). The staged
 asset flow below remains the advanced path for reviewed custom policy.
 
-## Guided setup in the pre-release `v0.3.0` source tree
+## Guided setup in `v0.3.0`
 
-The v0.3.0 source tree implements a feature-first, privilege-second wizard. DEB
+Release v0.3.0 implements a feature-first, privilege-second wizard. DEB
 installation remains non-interactive and inactive: it does not generate policy, start services,
 or edit sysctl, and only directs the administrator to run:
 
@@ -55,8 +55,8 @@ sudo perflens-admin setup \
 Full diagnostics requires acknowledgement of trace metadata, call-path, disk, and overhead risk.
 The level-3 path additionally requires both `--acknowledge-privileged-helper-risk` and
 `--acknowledge-trace-risk`. The existing Rust Helper remains limited to `stat/record`; a separate
-Trace Helper handles the advanced modes. These interfaces exist in the v0.3.0 source tree but not
-in `0.2.0` packages; production users must wait for the full CI, DEB, and real-host release gates.
+Trace Helper handles the advanced modes. These interfaces are shipped in v0.3.0; every deployed
+host must still pass the explicit short real-host acceptance before relying on them.
 
 The Trace Helper capability set is fixed by privilege mode: `CAP_BPF CAP_PERFMON` for
 `cap_perfmon`, and `CAP_BPF CAP_PERFMON CAP_SYS_ADMIN` for `paranoid3_helper` because Debian level
@@ -81,8 +81,8 @@ and acceptance contract.
 ## Planned `v0.3.1` Docker deployment boundary
 
 `v0.3.1` plans collection from one explicit process in a local Linux Docker Engine using cgroup
-v2. These interfaces are not implemented yet. Neither current packages nor the pre-release v0.3.0
-source may advertise active Docker collection as available. See the
+v2. These interfaces are not implemented yet. Release v0.3.0 must not advertise active Docker
+collection as available. See the
 [v0.3.1 Docker process roadmap](docker-container-roadmap.md).
 
 Docker is the `host/docker` target-runtime axis, not a third Collector privilege mode. It remains

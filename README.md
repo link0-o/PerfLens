@@ -44,9 +44,9 @@ The current release formally supports Milestones 0 through 9:
 - a repository Performance Analysis Skill for evidence-constrained Agent workflows.
 - profile and repeated-benchmark comparison with environment comparability checks;
 - pyperf, Google Benchmark, and hyperfine JSON normalization;
-- default-off, explicitly authorized `stat`/`record` collection. The pre-release v0.3.0 source
-  also contains a separate target-filtered Trace Helper and verified `sched`/`off_cpu`/`lock`
-  pipeline; it is not a shipped `0.2.0` claim.
+- default-off, explicitly authorized `stat`/`record` collection. Release v0.3.0 also provides a
+  separate target-filtered Trace Helper and verified `sched`/`off_cpu`/`lock` pipeline through
+  the opt-in `full_diagnostics` feature profile.
 
 It does **not** include an AI/LLM API, Web UI, source-code patch tool, benchmark
 runner, or custom agent framework.
@@ -58,9 +58,9 @@ PerfLens requires Python 3.12 or newer.
 For a GitHub release, download the wheel and install it as an isolated tool:
 
 ```bash
-pipx install ./perflens-0.2.0-py3-none-any.whl
+pipx install ./perflens-0.3.0-py3-none-any.whl
 # or
-uv tool install ./perflens-0.2.0-py3-none-any.whl
+uv tool install ./perflens-0.3.0-py3-none-any.whl
 ```
 
 Then opt one project in. Other projects do not see the Skill or MCP server:
@@ -102,10 +102,9 @@ plans to a bounded root Rust Helper while `perf_event_paranoid=3` remains unchan
 enabled automatically and requires administrator acknowledgement of the bounded root,
 `CAP_SYS_ADMIN`, and `CAP_SYS_PTRACE` risk.
 
-Current `main` is implementing unreleased v0.3.0. It contains a separate Trace Helper,
-in-kernel target filtering, deterministic sched/off-CPU/lock analysis, and the
-`full_diagnostics` lifecycle. Release 0.2.0 still has only the stable stat/record loop; source
-features remain pre-release until full Python/Rust/DEB/real-host gates pass. See the
+Release v0.3.0 adds a separate Trace Helper, in-kernel target filtering, deterministic
+sched/off-CPU/lock analysis, and the `full_diagnostics` lifecycle. The existing privileged
+stat/record Helper remains limited to stat/record. See the
 [Collector and user-space-lock roadmap](docs/collector-capability-roadmap.md). `v0.3.1` is now the
 local-Docker single-process release, while the four runtime-lock adapters move to `v0.4.0`.
 Checked-in Runtime Lock public contracts are groundwork, not available adapters. See the
@@ -152,7 +151,7 @@ out IPC, hardware cache-miss, and branch-miss claims. Use `--json` for complete
 machine-readable output or `--output ./collector-acceptance.json` to preserve a
 new versioned evidence file.
 
-With the pre-release v0.3.0 `full_diagnostics` profile, the same command also requires substantive
+With the v0.3.0 `full_diagnostics` profile, the same command also requires substantive
 target evidence, deterministic analysis, and replay verification for sched, off-CPU, and lock.
 Empty evidence or failed conservation does not pass. The packaged fixed eBPF filters authorized
 TGID/TIDs in kernel and never falls back to `perf -a`.
@@ -299,10 +298,10 @@ perflens collect-profile \
   --authorization I_EXPLICITLY_AUTHORIZE_TARGET_PROFILING
 ```
 
-Release 0.2.0 supports `record` and `stat`; `stat` uses an independent typed
+Release 0.3.0 supports `record` and `stat`; `stat` uses an independent typed
 metric adapter and derives IPC when cycles and instructions are available.
-The pre-release v0.3.0 `full_diagnostics` source adds `sched`, `off_cpu`, and `lock` through a
-separate Trace Helper and produces dedicated verified artifacts. The existing paranoid=3 Rust
+The v0.3.0 `full_diagnostics` profile adds `sched`, `off_cpu`, and `lock` through a separate
+Trace Helper and produces dedicated verified artifacts. The existing paranoid=3 Rust
 Helper remains strictly stat/record-only. Package installation never enables advanced modes;
 an administrator selects the profile and runs real acceptance. PID attachment requires `--pid`, a bounded duration,
 `--authorize-pid-attach`, and the separate phrase
@@ -494,8 +493,8 @@ Chinese version.
 - Active collection depends on kernel perf permissions. An ordinary process is
   blocked by `perf_event_paranoid=3`; an installed Collector may still pass its
   separate host acceptance, including an explicitly reported software fallback.
-- Release 0.2.0 has no stable sched/lock/off-CPU loop. The v0.3.0 source produces scheduler-delay,
-  off-CPU interval, and low-level lock/futex-candidate artifacts but still awaits release gates.
+- Release v0.3.0 produces scheduler-delay, off-CPU interval, and low-level
+  lock/futex-candidate artifacts through the opt-in `full_diagnostics` profile.
   It cannot promote a futex candidate to a language lock, invent owner/hold time without pairs, or
   cover every user-space fast path.
 - Active Docker discovery, launch, and collection are not currently supported. Existing container

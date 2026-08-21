@@ -24,12 +24,11 @@ ordinary users, Agents, MCP, and the Skill from calling it directly. See the
 [privileged Helper design](privileged-helper.md). Package installation does not enable this mode;
 an administrator must explicitly select it, acknowledge the risk, and run real acceptance.
 
-Release `0.2.0` policy and the `paranoid3_helper` protocol support only `stat` and `record`.
-The current unreleased v0.3.0 source adds a separate Trace Helper, in-kernel target filtering,
+The original `paranoid3_helper` protocol remains limited to `stat` and `record`.
+Release v0.3.0 adds a separate Trace Helper, in-kernel target filtering,
 private trace spool, and normalized evidence, deterministic analysis, and verification for
 `sched`, `off_cpu`, and `lock`. It does not expand the existing stat/record Rust Helper protocol or
-privilege. These source capabilities become a release claim only after full CI, package, and
-real-host gates. See the [Collector and user-space-lock roadmap](collector-capability-roadmap.md).
+privilege. See the [Collector and user-space-lock roadmap](collector-capability-roadmap.md).
 
 The domain layer uses frozen/slotted records, integer Frame IDs, and standard
 library protocols. It imports neither Pydantic nor Typer. Format adapters own

@@ -50,9 +50,9 @@ normal 95% interval for repeated means, a practical-impact threshold, and
 environment checks; it does not claim a verified improvement without matched
 correctness-preserving A/B evidence.
 
-Release `0.2.0` formally enables only `stat` and `record`. The current pre-release v0.3.0 source
-adds a separate Trace Helper, target filtering, dedicated deterministic analysis, and consistency
-verification for `sched`, `off_cpu`, and `lock`, but still requires all release gates. Even after
+Release `0.3.0` formally enables `stat` and `record` and offers the opt-in `full_diagnostics`
+profile with a separate Trace Helper, target filtering, dedicated deterministic analysis, and
+consistency verification for `sched`, `off_cpu`, and `lock`. Even after
 verification, lost, truncated, boundary-censored, or unpaired evidence remains `partial`; a futex
 is only a user-space-lock candidate, and owner or hold time is unavailable without genuine source
 evidence. See the [Collector and user-space-lock roadmap](collector-capability-roadmap.md).

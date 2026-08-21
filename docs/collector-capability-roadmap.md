@@ -2,15 +2,15 @@
 
 English | [简体中文](collector-capability-roadmap.zh-CN.md)
 
-Status: **v0.3.0 implemented in source; not released**
+Status: **v0.3.0 implemented; v0.4.0 planned**
 
-Last audited: 2026-08-16 against the current pre-release v0.3.0 `main`
+Last audited: 2026-08-21 for the v0.3.0 release metadata update
 
-Candidate releases: `v0.3.0` and `v0.4.0`
+Covered releases: `v0.3.0` and planned `v0.4.0`
 
-This document separates the shipped `0.2.0` baseline, v0.3.0 code awaiting release gates, and
-planned v0.4.0 work. Source presence is not a stable release claim. v0.3.0 still requires the full
-Python, Rust, DEB, lifecycle, and real-Debian-host gates below.
+This document separates the historical `0.2.0` baseline, the v0.3.0 implementation, and planned
+v0.4.0 work. Source presence alone is never a stable release claim; the gates below remain the
+acceptance contract for the shipped v0.3.0 capability.
 
 The source tree now contains the versioned Trace contracts, target-filtered Rust Trace Helper,
 three deterministic analyzers and verifier, separate policy/socket/spool, transactional setup and
@@ -102,8 +102,7 @@ sudo perflens-admin setup \
   --dry-run
 ```
 
-`--feature-profile` is implemented in the v0.3.0 source tree but is not present in `0.2.0`
-packages. It remains a source/local-build validation interface until the release gates pass.
+`--feature-profile` is available in v0.3.0 and was not present in `0.2.0` packages.
 
 ### 3.3 Privilege recommendation and acknowledgement
 
@@ -405,8 +404,8 @@ recommended by the [Linux perf security guide](https://www.kernel.org/doc/html/l
 Any additional capability needs evidence from the corresponding isolated service's real denial
 and acceptance path.
 
-Until those gates pass, the shipped release continues to advertise only `stat/record` as stable.
-`v0.3.0` may advertise `full_diagnostics` only if every included mode is complete. `v0.4.0` must
+Release v0.3.0 advertises `full_diagnostics` only as the complete, opt-in five-mode profile; a host
+that fails any included mode's acceptance must use `cpu_only`. `v0.4.0` must
 publish an exact runtime/backend/version/sampling/fast-path support matrix. Software fallback still
 forbids IPC/cache/branch claims, and PerfLens remains outside heap profiling, request-level I/O APM,
 GPU profiling, and distributed tracing. Release notes must be generated from the final

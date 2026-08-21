@@ -1,9 +1,7 @@
 # Collector privilege-mode and feature-profile lifecycle
 
-This document records the shipped PerfLens `0.2.0` first-deployment, project-detection, and
-privilege-mode lifecycle and defines the feature-profile contract implemented in the pre-release
-v0.3.0 source tree. These commands are absent from `0.2.0` packages and remain source/local-build
-validation interfaces until all v0.3.0 release gates pass. See the
+This document records the PerfLens `0.3.0` first-deployment, project-detection,
+privilege-mode, and feature-profile lifecycle. See the
 [complete Simplified Chinese guide](collector-mode-lifecycle.zh-CN.md).
 
 PerfLens ships, but never automatically activates, two mutually exclusive host-level modes:
@@ -33,7 +31,7 @@ Selecting `cap_perfmon` while `perf_event_paranoid > 2` produces a blocked dry-r
 refused before system writes. The administrator must select another outcome or review host
 kernel policy separately.
 
-## Feature-profile wizard in the pre-release `v0.3.0` source tree
+## Feature-profile wizard in `v0.3.0`
 
 Feature profiles are independent from the two privilege modes:
 
@@ -129,7 +127,7 @@ reports `false`.
 
 `deploy --config` remains the advanced reviewed-policy path. `update-policy` changes bounded fields within the current mode; `upgrade` refreshes managed service files; neither command switches privilege mode.
 
-## Feature-profile switching in the pre-release `v0.3.0` source tree
+## Feature-profile switching in `v0.3.0`
 
 Feature changes use a separate transaction rather than editing `allowed_modes` or overloading
 `switch-mode`:

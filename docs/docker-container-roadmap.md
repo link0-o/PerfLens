@@ -4,7 +4,7 @@
 
 Status: **planned; not currently available**
 
-Last audited: 2026-08-16 against the current unreleased v0.3.0 implementation on `main`
+Last audited: 2026-08-21 against the v0.3.0 host implementation
 
 Target release: `v0.3.1`
 

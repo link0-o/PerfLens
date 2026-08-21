@@ -23,11 +23,10 @@ Symbol Provider                ─→ 已验证的源码定位
 连接。详细约束见[《高权限 Helper 设计》](privileged-helper.zh-CN.md)。软件安装本身不会
 自动启用等级 3 Helper；管理员仍需显式选择、确认风险并完成真实短时验收。
 
-发布版 `0.2.0` 的生成策略和 `paranoid3_helper` 协议只支持 `stat`、`record`。当前尚未发布
-的 v0.3.0 源码增加了独立 Trace Helper、内核侧目标过滤、私有 trace spool，以及
+原有 `paranoid3_helper` 协议继续只支持 `stat`、`record`。发布版 v0.3.0 增加了独立
+Trace Helper、内核侧目标过滤、私有 trace spool，以及
 `sched`、`off_cpu`、`lock` 的规范化证据、确定性分析和 verifier；现有 stat/record Rust
-Helper 的协议和权限没有被扩大。只有完整 CI、包和真实主机门禁通过后，这些源码能力才
-能成为发布声明，详见
+Helper 的协议和权限没有被扩大，详见
 [《Collector 与用户态锁能力路线图》](collector-capability-roadmap.zh-CN.md)。
 
 ## Core 与边界层

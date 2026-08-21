@@ -27,15 +27,15 @@ PerfLens 应拆成普通用户分析端和系统 Collector 两部分部署：
 sudo perflens-admin setup
 ```
 
-当前 `0.2.0` 向导提供 `cap_perfmon`、`paranoid3_helper` 和仅分析三种选择。已部署后切换模式应先运行
+`0.3.0` 向导提供 `cap_perfmon`、`paranoid3_helper` 和仅分析三种选择。已部署后切换模式应先运行
 `sudo perflens-admin switch-mode <模式> --dry-run`；切换成功后在已初始化项目运行
 `perflens init --update`。事务回滚、`perf_event_paranoid` 前置检查和证据保留规则见
 [《Collector 权限模式选择与切换》](collector-mode-lifecycle.zh-CN.md)。下文的
 `stage-collector-assets`/`deploy --config` 流程继续作为自定义策略和离线审查的高级入口。
 
-## `v0.3.0` 预发布源码中的安装向导
+## `v0.3.0` 安装向导
 
-v0.3.0 源码已把首次配置改成“功能配置优先、权限实现随后推荐”的两阶段向导。DEB 安装
+v0.3.0 已把首次配置改成“功能配置优先、权限实现随后推荐”的两阶段向导。DEB 安装
 本身仍然不交互、不生成策略、不启动服务、不修改 sysctl；安装完成只提示管理员运行：
 
 ```bash
@@ -68,8 +68,8 @@ sudo perflens-admin setup \
 选择完整配置必须确认 trace 的线程元数据、调用路径、磁盘和采集开销风险。在
 `paranoid3_helper` 下还需要同时传入 `--acknowledge-privileged-helper-risk` 和
 `--acknowledge-trace-risk`。现有 Rust Helper 保持只处理 `stat/record`，高级模式由独立
-Trace Helper 处理。这些接口已在 v0.3.0 源码实现，但当前 `0.2.0` 安装包不能运行；正式
-用户仍需等待 v0.3.0 的完整 CI、DEB 和真实主机发布门禁。
+Trace Helper 处理。这些接口随 v0.3.0 发布；每台部署主机仍须通过明确授权的真实短时
+验收后才能依赖高级模式。
 
 Trace Helper 的 capability 按权限模式固定：`cap_perfmon` 为 `CAP_BPF CAP_PERFMON`；
 `paranoid3_helper` 因 Debian level 3 会提前拒绝 tracepoint `perf_event_open`，使用
@@ -93,7 +93,7 @@ sudo perflens-admin switch-profile cpu_only
 ## `v0.3.1` 计划中的 Docker 部署边界
 
 `v0.3.1` 计划增加本地 Linux Docker Engine、cgroup v2 下单个明确容器进程的采集。
-这些接口当前尚未实现，现有安装包和 v0.3.0 预发布源码都不能把 Docker 主动采集写成
+这些接口当前尚未实现，v0.3.0 不能把 Docker 主动采集写成
 正式能力。完整合同见
 [《v0.3.1 Docker 进程采集与分析路线图》](docker-container-roadmap.zh-CN.md)。
 
@@ -127,7 +127,7 @@ Docker 是 `host/docker` 目标运行时选择，不是第三种 Collector 权�
 ```bash
 sudo python3 -m venv /opt/perflens
 sudo /opt/perflens/bin/python -m pip install \
-  ./dist/perflens-0.2.0-py3-none-any.whl
+  ./dist/perflens-0.3.0-py3-none-any.whl
 ```
 
 这里的版本号只是示例，应替换为实际构建版本。正式离线部署应同时提供 wheelhouse 或完整系统包，不应在安装脚本中隐式访问网络。

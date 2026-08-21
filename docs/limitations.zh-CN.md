@@ -36,9 +36,9 @@ Profile 比较描述所选事件的相对分布，不能证明绝对耗时发生
 均值使用近似正态 95% 区间，同时检查实际影响阈值和环境可比性；没有工作负载匹配且
 保持正确性的 A/B 证据时，不会声称优化已经验证成功。
 
-发布版 `0.2.0` 正式、默认启用的 Collector 模式只有 `stat` 和 `record`。当前 v0.3.0
-预发布源码已经为 `sched`、`off_cpu`、`lock` 增加独立 Trace Helper、目标过滤、专用
-确定性分析和一致性验证，但仍须通过完整发布门禁。即使验证通过，丢失、截断、边界缺失
+发布版 `0.3.0` 正式支持 `stat` 和 `record`，并通过可选的 `full_diagnostics` 配置为
+`sched`、`off_cpu`、`lock` 提供独立 Trace Helper、目标过滤、专用确定性分析和一致性验证。
+即使验证通过，丢失、截断、边界缺失
 或无法配对的证据仍必须报告 `partial`；futex 只能是用户态锁候选，缺少真实来源时不能
 猜测 owner 或持锁时间。详见
 [Collector 与用户态锁能力路线图](collector-capability-roadmap.zh-CN.md)。

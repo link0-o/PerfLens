@@ -15,10 +15,10 @@
 | MCP | Official Python SDK 2.x, local stdio transport |
 | Skill | Project Skill for Codex `.agents/skills` and Claude Code `.claude/skills`, validated by `skill-creator` |
 | AI client config | Codex project `.codex/config.toml`; Claude Code project `.mcp.json` |
-| Active collection | Release `0.2.0` supports `record/stat`; pre-release v0.3.0 adds `sched/off_cpu/lock` through a separate Trace Helper and still awaits release gates |
+| Active collection | Release `0.3.0` supports `record/stat` and adds opt-in `sched/off_cpu/lock` through a separate Trace Helper |
 | Automatic collection | Host-only today: ordinary-user launcher plus a host-PID-only Linux Collector Broker using `SO_PEERCRED`; systemd template provided |
-| Collector policy | Current version 1; generated policy permits only `record` and `stat`; missing version is accepted as legacy version 1 and unsupported versions are rejected |
-| paranoid=3 Helper | The existing Rust Helper remains permanently limited to `record/stat`; pre-release v0.3.0 uses another service/protocol/socket/spool for its Trace Helper |
+| Collector policy | Current version 1; `cpu_only` permits `record/stat`, while `full_diagnostics` additionally permits `sched/off_cpu/lock`; missing version is accepted as legacy version 1 and unsupported versions are rejected |
+| paranoid=3 Helper | The existing Rust Helper remains permanently limited to `record/stat`; v0.3.0 uses another service/protocol/socket/spool for its Trace Helper |
 | Target runtime | Current formal scope is a Linux host PID; one process in a local Docker Engine with cgroup v2 is planned for v0.3.1, not available today |
 | Native DEB | Debian 13 `amd64`, system Python 3.13; split exact-version Collector package |
 | Artifact schema | 1.0 |
@@ -34,7 +34,7 @@ an executable perf test double. Manual Debian 13 host acceptance also completed
 short software `stat` and `cpu-clock record` collection through the
 `paranoid3_helper` when the hardware PMU produced no usable counts. That is not
 a compatibility claim for every kernel, VM, PMU, LSM, or advanced trace mode;
-there is no stable real-host claim for `sched`, `lock`, or `off_cpu` yet.
+each `full_diagnostics` deployment requires its own short real-host acceptance.
 
 Current container compatibility means only container/build path mapping while analyzing an
 existing profile. PerfLens does not yet discover Docker processes, launch containers, connect to a
