@@ -115,6 +115,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "perflens-container-gate"
+version = "0.3.0"
+
+[[package]]
 name = "perflens-privileged-helper"
 version = "0.3.0"
 dependencies = [

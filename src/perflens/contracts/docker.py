@@ -344,6 +344,7 @@ class ContainerWorkloadSpecArtifact(ContractModel):
     created_at: str
     project_identity_sha256: Sha256
     image_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    container_gate_sha256: Sha256
     entrypoint: str
     arguments: tuple[str, ...] = ()
     working_directory: str
@@ -351,7 +352,7 @@ class ContainerWorkloadSpecArtifact(ContractModel):
     workspace_read_only: Literal[True] = True
     scratch_container_path: Literal["/perflens-scratch"] = "/perflens-scratch"
     network_mode: Literal["none"] = "none"
-    container_user: str = Field(min_length=1, max_length=128)
+    container_user: str = Field(pattern=r"^[0-9]{1,10}(?::[0-9]{1,10})?$")
     resources: ContainerResourceLimits
     allowed_modes: tuple[CollectionMode, ...]
     authorization_mode: AuthorizationMode
@@ -375,6 +376,9 @@ class ContainerWorkloadSpecArtifact(ContractModel):
             raise ValueError("container workload arguments exceed bounded limits")
         if any("\x00" in value or len(value) > 4096 for value in self.arguments):
             raise ValueError("container workload arguments must be bounded NUL-free strings")
+        user_ids = tuple(int(value) for value in self.container_user.split(":"))
+        if any(value > 4_294_967_295 for value in user_ids):
+            raise ValueError("container workload UID/GID exceeds the Linux identifier range")
         if not self.allowed_modes:
             raise ValueError("container workload must allow at least one collection mode")
         if len(set(self.allowed_modes)) != len(self.allowed_modes):

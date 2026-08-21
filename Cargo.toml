@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "rust/perflens-container-gate",
     "rust/perflens-privileged-helper",
     "rust/perflens-trace-helper",
 ]

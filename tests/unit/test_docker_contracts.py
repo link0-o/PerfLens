@@ -115,6 +115,7 @@ def _workload() -> dict[str, Any]:
         "created_at": "2026-08-21T00:00:00+00:00",
         "project_identity_sha256": SHA_A,
         "image_digest": "sha256:" + "d" * 64,
+        "container_gate_sha256": "e" * 64,
         "entrypoint": "/usr/bin/python3",
         "arguments": ["/workspace/bench.py", "--rounds", "3"],
         "working_directory": "/workspace",

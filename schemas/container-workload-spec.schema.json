@@ -83,9 +83,13 @@
       "title": "Cleanup Policy",
       "type": "string"
     },
+    "container_gate_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Container Gate Sha256",
+      "type": "string"
+    },
     "container_user": {
-      "maxLength": 128,
-      "minLength": 1,
+      "pattern": "^[0-9]{1,10}(?::[0-9]{1,10})?$",
       "title": "Container User",
       "type": "string"
     },
@@ -211,6 +215,7 @@
     "created_at",
     "project_identity_sha256",
     "image_digest",
+    "container_gate_sha256",
     "entrypoint",
     "working_directory",
     "container_user",
