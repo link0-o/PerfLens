@@ -59,12 +59,18 @@ from perflens.contracts.artifacts import (
     SourceContextArtifact,
     SourceResolutionArtifact,
 )
+from perflens.contracts.docker import DockerRuntimeCapabilityArtifact
 from perflens.contracts.trace import (
     LockAnalysisArtifact,
     OffCpuAnalysisArtifact,
     SchedulerAnalysisArtifact,
     TraceAnalysisVerificationArtifact,
     TraceEvidenceArtifact,
+)
+from perflens.docker.capability import discover_docker_capability
+from perflens.docker.project_config import (
+    assert_docker_project_policy_current,
+    load_docker_project_policy,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.storage import ArtifactStore, PathPolicy
@@ -103,6 +109,8 @@ class ServerConfig:
     allow_pid_attach: bool = False
     allow_automatic_collection: bool = False
     allow_project_execution: bool = False
+    allow_docker_targets: bool = False
+    docker_project_config: Path | None = None
     collector_socket: Path | None = None
     automatic_collection_policy: AutomaticCollectionPolicy = field(
         default_factory=AutomaticCollectionPolicy
@@ -125,6 +133,22 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         )
     if config.allow_project_execution and not config.allow_automatic_collection:
         raise ValueError("Project execution requires automatic collection to be enabled")
+    if config.allow_docker_targets and (
+        not config.allow_automatic_collection or config.docker_project_config is None
+    ):
+        raise ValueError(
+            "Docker targets require automatic collection and one project policy path"
+        )
+    if not config.allow_docker_targets and config.docker_project_config is not None:
+        raise ValueError("Docker project policy cannot be set while Docker targets are disabled")
+    docker_policy = (
+        load_docker_project_policy(
+            config.docker_project_config,
+            allowed_roots=config.allowed_roots,
+        )
+        if config.docker_project_config is not None
+        else None
+    )
     policy = PathPolicy(config.allowed_roots)
     store = ArtifactStore(
         config.artifact_root,
@@ -165,6 +189,25 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     )
     async def inspect_capabilities() -> CollectionCapabilityArtifact:
         return inspect_collection_capabilities(config.perf_path)
+
+    @server.tool(
+        name="inspect_docker_capability",
+        description=(
+            "Inspect the fixed local Docker endpoint and cgroup-v2 support without starting, "
+            "stopping, building, pulling, or profiling a container."
+        ),
+        annotations=READ_ONLY,
+        meta={"perflens/permission": "READ_ONLY"},
+        structured_output=True,
+    )
+    async def inspect_docker_capability() -> DockerRuntimeCapabilityArtifact:
+        _require_docker_targets(config)
+        assert docker_policy is not None
+        assert_docker_project_policy_current(
+            docker_policy,
+            allowed_roots=config.allowed_roots,
+        )
+        return discover_docker_capability()
 
     @server.tool(
         name="plan_automatic_collection",
@@ -1046,6 +1089,19 @@ def _require_project_execution(config: ServerConfig) -> None:
         )
 
 
+def _require_docker_targets(config: ServerConfig) -> None:
+    if not config.allow_docker_targets or config.docker_project_config is None:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "authorization",
+            "Docker target runtime is disabled by project MCP policy",
+            recoverable=True,
+            suggested_actions=(
+                "Run perflens init --docker in this project and restart the client.",
+            ),
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the PerfLens MCP server over stdio")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -1057,6 +1113,8 @@ def main() -> None:
     parser.add_argument("--allow-pid-attach", action="store_true")
     parser.add_argument("--allow-automatic-collection", action="store_true")
     parser.add_argument("--allow-project-execution", action="store_true")
+    parser.add_argument("--allow-docker-targets", action="store_true")
+    parser.add_argument("--docker-project-config", type=Path)
     parser.add_argument("--collector-socket", type=Path)
     parser.add_argument(
         "--automatic-mode",
@@ -1085,6 +1143,8 @@ def main() -> None:
             allow_pid_attach=arguments.allow_pid_attach,
             allow_automatic_collection=arguments.allow_automatic_collection,
             allow_project_execution=arguments.allow_project_execution,
+            allow_docker_targets=arguments.allow_docker_targets,
+            docker_project_config=arguments.docker_project_config,
             collector_socket=arguments.collector_socket,
             automatic_collection_policy=AutomaticCollectionPolicy(
                 enabled=arguments.allow_automatic_collection,

@@ -9,10 +9,14 @@ import sys
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from mcp.client import Client
 from tests.support.trace import make_scheduler_trace_evidence
 
 from perflens.collection.collector import ACTIVE_COLLECTION_AUTHORIZATION
+from perflens.collection.planning import AutomaticCollectionPolicy
+from perflens.docker.capability import discover_docker_capability
+from perflens.docker.project_config import render_default_docker_project_policy
 from perflens.mcp.server import ServerConfig, create_server
 from perflens.mcp.storage import ArtifactStore, PathPolicy
 
@@ -48,6 +52,7 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "compare_benchmarks",
                 "collect_profile",
                 "inspect_collection_capabilities",
+                "inspect_docker_capability",
                 "plan_automatic_collection",
                 "execute_collection_plan",
                 "collect_project_workload",
@@ -73,10 +78,13 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert active_annotations.idempotent_hint is False
             assert tools["collect_profile"].meta == {"perflens/permission": "ACTIVE_COLLECTION"}
             capability_annotations = tools["inspect_collection_capabilities"].annotations
+            docker_annotations = tools["inspect_docker_capability"].annotations
             plan_annotations = tools["plan_automatic_collection"].annotations
             assert capability_annotations is not None
+            assert docker_annotations is not None
             assert plan_annotations is not None
             assert capability_annotations.read_only_hint is True
+            assert docker_annotations.read_only_hint is True
             assert plan_annotations.read_only_hint is True
             assert tools["execute_collection_plan"].meta == {
                 "perflens/permission": "AUTOMATIC_COLLECTION"
@@ -95,6 +103,64 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["verify_trace_analysis"].meta == {
                 "perflens/permission": "READ_ONLY"
             }
+
+    asyncio.run(exercise())
+
+
+def test_docker_capability_requires_project_opt_in(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    policy = tmp_path / "perflens-setup/container-workload.toml"
+    policy.parent.mkdir()
+    policy.write_text(render_default_docker_project_policy(), encoding="utf-8")
+    policy.chmod(0o600)
+    expected = discover_docker_capability(
+        rootful_socket=tmp_path / "missing-rootful.sock",
+        rootless_socket=tmp_path / "missing-rootless.sock",
+    )
+    monkeypatch.setattr(
+        "perflens.mcp.server.discover_docker_capability",
+        lambda: expected,
+    )
+
+    denied_server = create_server(ServerConfig((tmp_path,), artifact_root))
+    allowed_server = create_server(
+        ServerConfig(
+            (tmp_path,),
+            artifact_root,
+            allow_writes=True,
+            allow_process_execution=True,
+            allow_active_collection=True,
+            allow_automatic_collection=True,
+            allow_docker_targets=True,
+            docker_project_config=policy,
+            collector_socket=tmp_path / "collector.sock",
+            automatic_collection_policy=AutomaticCollectionPolicy(enabled=True),
+        )
+    )
+
+    async def exercise() -> None:
+        async with Client(denied_server) as client:
+            denied = await client.call_tool("inspect_docker_capability", {})
+            assert denied.is_error
+            assert "disabled by project MCP policy" in str(denied.content)
+        async with Client(allowed_server) as client:
+            allowed = await client.call_tool("inspect_docker_capability", {})
+            assert not allowed.is_error
+            payload = _structured(allowed)
+            assert payload["schema_version"] == "1.0"
+            assert payload["status"] == "unavailable"
+            policy.write_text(
+                render_default_docker_project_policy() + "\n# changed after startup\n",
+                encoding="utf-8",
+            )
+            policy.chmod(0o600)
+            replaced = await client.call_tool("inspect_docker_capability", {})
+            assert replaced.is_error
+            assert "changed after MCP startup" in str(replaced.content)
 
     asyncio.run(exercise())
 

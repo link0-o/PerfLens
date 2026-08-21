@@ -312,6 +312,8 @@ def render_codex_config(
     automatic_max_frequency_hz: int = DEFAULT_AUTOMATIC_MAX_FREQUENCY_HZ,
     automatic_max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
     automatic_plan_ttl_seconds: int = DEFAULT_AUTOMATIC_PLAN_TTL_SECONDS,
+    allow_docker_targets: bool = False,
+    docker_project_config: Path | None = None,
     mcp_command: Path | None = None,
 ) -> str:
     """Return a project-scoped TOML snippet for the installed MCP executable."""
@@ -329,6 +331,8 @@ def render_codex_config(
         automatic_max_frequency_hz=automatic_max_frequency_hz,
         automatic_max_output_bytes=automatic_max_output_bytes,
         automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
+        allow_docker_targets=allow_docker_targets,
+        docker_project_config=docker_project_config,
         mcp_command=mcp_command,
     )
     formatted_arguments = ",\n".join(f"  {_toml_string(value)}" for value in launch.arguments)
@@ -359,6 +363,8 @@ def build_mcp_launch_configuration(
     automatic_max_frequency_hz: int = DEFAULT_AUTOMATIC_MAX_FREQUENCY_HZ,
     automatic_max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
     automatic_plan_ttl_seconds: int = DEFAULT_AUTOMATIC_PLAN_TTL_SECONDS,
+    allow_docker_targets: bool = False,
+    docker_project_config: Path | None = None,
     mcp_command: Path | None = None,
 ) -> McpLaunchConfiguration:
     """Build one client-neutral, project-bounded MCP launch configuration."""
@@ -376,6 +382,18 @@ def build_mcp_launch_configuration(
             ErrorCode.INVALID_INPUT,
             "codex_config",
             "Existing PID attachment requires automatic collection",
+        )
+    if allow_docker_targets and not automatic_collection:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "codex_config",
+            "Docker target support requires automatic collection",
+        )
+    if allow_docker_targets != (docker_project_config is not None):
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "codex_config",
+            "Docker target support requires exactly one project policy path",
         )
     arguments = [
         "--allowed-root",
@@ -440,7 +458,35 @@ def build_mcp_launch_configuration(
             arguments.extend(("--automatic-mode", mode))
         if allow_project_execution:
             arguments.append("--allow-project-execution")
+        if allow_docker_targets:
+            assert docker_project_config is not None
+            safe_docker_config = _project_policy_path(
+                safe_workspace,
+                docker_project_config,
+            )
+            arguments.extend(
+                ("--allow-docker-targets", "--docker-project-config", str(safe_docker_config))
+            )
     return McpLaunchConfiguration(safe_command, tuple(arguments))
+
+
+def _project_policy_path(workspace: Path, path: Path) -> Path:
+    candidate = path if path.is_absolute() else workspace / path
+    try:
+        resolved = candidate.expanduser().resolve(strict=False)
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "codex_config",
+            "Docker project policy path cannot be resolved safely",
+        ) from exc
+    if not resolved.is_relative_to(workspace) or resolved == workspace:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "codex_config",
+            "Docker project policy must be a file inside the selected workspace",
+        )
+    return resolved
 
 
 def _existing_directory(path: Path, *, label: str) -> Path:

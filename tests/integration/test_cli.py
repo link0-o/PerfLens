@@ -206,6 +206,38 @@ def test_init_exposes_bounded_collection_policy_and_optional_pid_attach(
     assert '"--allow-pid-attach"' in config
 
 
+def test_init_docker_generates_project_policy_without_touching_a_container(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    initialized = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--docker",
+            "--client",
+            "codex",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+
+    assert initialized.exit_code == 0, initialized.output
+    policy = project / "perflens-setup/container-workload.toml"
+    assert "Docker 目标运行时: 已启用" in initialized.output
+    assert f"Docker 项目策略: {policy}" in initialized.output
+    assert policy.is_file()
+    assert 'default_authorization_mode = "per_run"' in policy.read_text(encoding="utf-8")
+    assert "--allow-docker-targets" in (project / ".codex/config.toml").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_init_activates_selected_clients_only_inside_the_project(tmp_path: Path) -> None:
     project = tmp_path / "claude-project"
     project.mkdir()

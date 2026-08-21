@@ -1191,10 +1191,20 @@ class SetupArtifact(ContractModel):
     automatic_collection_enabled: bool = False
     collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon"
     collector_feature_profile: Literal["cpu_only", "full_diagnostics"] = "cpu_only"
+    docker_runtime_enabled: bool = False
+    container_workload_config_path: str | None = None
     collection_status: Literal["available", "conditional", "blocked"]
     blocked_modes: tuple[str, ...] = ()
     generated_files: tuple[str, ...]
     next_steps: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def validate_docker_setup(self) -> SetupArtifact:
+        if self.docker_runtime_enabled != (self.container_workload_config_path is not None):
+            raise ValueError(
+                "Docker onboarding requires exactly one managed container workload config"
+            )
+        return self
 
 
 class ProjectDetachmentArtifact(ContractModel):

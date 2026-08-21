@@ -37,6 +37,7 @@ from perflens.distribution.skill import (
     recorded_project_skill_path,
     refresh_project_skill,
 )
+from perflens.docker.project_config import render_default_docker_project_policy
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _MAX_GUIDE_BYTES = 256 << 10
@@ -48,6 +49,7 @@ _COLLECTOR_SPOOL_ROOT = Path("/var/lib/perflens")
 _HELPER_SPOOL_ROOT = Path("/var/lib/perflens-helper")
 _DEPLOYED_COLLECTOR_CONFIG = Path("/etc/perflens/collector.toml")
 _DEPLOYED_FEATURE_PROFILE = Path("/etc/perflens/profile.toml")
+_DOCKER_PROJECT_CONFIG_NAME = "container-workload.toml"
 
 
 def run_project_setup(
@@ -74,6 +76,7 @@ def run_project_setup(
     collector_command: Path | None = None,
     perf_path: Path = Path("/usr/bin/perf"),
     collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] | None = None,
+    enable_docker: bool = False,
     update_existing: bool = False,
 ) -> SetupArtifact:
     """Create a bounded onboarding bundle inside one selected project."""
@@ -100,6 +103,15 @@ def run_project_setup(
             else "cpu_only"
         )
     )
+    docker_runtime_enabled = enable_docker or bool(
+        previous_artifact is not None and previous_artifact.docker_runtime_enabled
+    )
+    previous_docker_config = _previous_docker_config(
+        project,
+        previous_artifact,
+        enabled=docker_runtime_enabled,
+    )
+    docker_project_config = output / _DOCKER_PROJECT_CONFIG_NAME
     selected_automatic_modes = (
         automatic_modes
         if automatic_modes is not None
@@ -178,6 +190,8 @@ def run_project_setup(
         automatic_max_frequency_hz=automatic_max_frequency_hz,
         automatic_max_output_bytes=automatic_max_output_bytes,
         automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
+        allow_docker_targets=docker_runtime_enabled,
+        docker_project_config=(docker_project_config if docker_runtime_enabled else None),
         collector_spool_root=collector_spool_root,
         mcp_command=mcp_command,
     )
@@ -195,6 +209,8 @@ def run_project_setup(
         automatic_max_frequency_hz=automatic_max_frequency_hz,
         automatic_max_output_bytes=automatic_max_output_bytes,
         automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
+        allow_docker_targets=docker_runtime_enabled,
+        docker_project_config=(docker_project_config if docker_runtime_enabled else None),
         collector_spool_root=collector_spool_root,
         mcp_command=mcp_command,
     )
@@ -222,6 +238,12 @@ def run_project_setup(
         codex_selected=codex_enabled,
         claude_selected=claude_enabled,
     )
+    if docker_runtime_enabled:
+        next_steps = (
+            *next_steps,
+            "Review container-workload.toml, restart the selected client, then inspect Docker "
+            "capability before authorizing a container workload.",
+        )
 
     backup = _setup_backup_path(output) if previous_artifact is not None else None
     created = False
@@ -230,6 +252,7 @@ def run_project_setup(
     applied_codex_config = False
     applied_claude_config = False
     moved_collector_assets = False
+    moved_docker_config = False
     try:
         if backup is not None:
             output.rename(backup)
@@ -240,6 +263,11 @@ def run_project_setup(
             if backup is not None
             and not prepare_collector
             and (backup / "collector-assets").is_dir()
+            else None
+        )
+        preserved_docker_config = (
+            backup / _DOCKER_PROJECT_CONFIG_NAME
+            if backup is not None and previous_docker_config is not None
             else None
         )
         mcp_config_path = output / "codex-mcp.toml"
@@ -266,6 +294,7 @@ def run_project_setup(
                 codex_enabled,
                 claude_enabled,
                 collector_privilege_mode,
+                docker_runtime_enabled,
             ),
             chinese_guide_path,
             max_output_bytes=_MAX_GUIDE_BYTES,
@@ -284,6 +313,7 @@ def run_project_setup(
                 codex_enabled,
                 claude_enabled,
                 collector_privilege_mode,
+                docker_runtime_enabled,
             ),
             english_guide_path,
             max_output_bytes=_MAX_GUIDE_BYTES,
@@ -294,6 +324,16 @@ def run_project_setup(
             claude_mcp_config_path,
             max_output_bytes=_MAX_GUIDE_BYTES,
         )
+        if docker_runtime_enabled:
+            if preserved_docker_config is not None:
+                preserved_docker_config.rename(docker_project_config)
+                moved_docker_config = True
+            else:
+                write_text_atomic(
+                    render_default_docker_project_policy(),
+                    docker_project_config,
+                    max_output_bytes=_MAX_GUIDE_BYTES,
+                )
 
         collector_assets_path: Path | None = None
         if prepare_collector:
@@ -334,6 +374,8 @@ def run_project_setup(
             english_guide_path,
             claude_mcp_config_path,
         ]
+        if docker_runtime_enabled:
+            generated.append(docker_project_config)
         if codex_plan is not None and codex_plan.status != "existing":
             generated.append(codex_plan.path)
         if claude_plan is not None and claude_plan.status != "existing":
@@ -379,6 +421,10 @@ def run_project_setup(
             automatic_collection_enabled=automatic_collection,
             collector_privilege_mode=collector_privilege_mode,
             collector_feature_profile=collector_feature_profile,
+            docker_runtime_enabled=docker_runtime_enabled,
+            container_workload_config_path=(
+                str(docker_project_config) if docker_runtime_enabled else None
+            ),
             collection_status=collection_status,
             blocked_modes=blocked_modes,
             generated_files=tuple(str(path) for path in generated),
@@ -434,6 +480,8 @@ def run_project_setup(
             _rollback_config_plan(codex_plan)
         if moved_collector_assets and backup is not None and (output / "collector-assets").is_dir():
             (output / "collector-assets").rename(backup / "collector-assets")
+        if moved_docker_config and backup is not None and docker_project_config.is_file():
+            docker_project_config.rename(backup / _DOCKER_PROJECT_CONFIG_NAME)
         if created:
             shutil.rmtree(output, ignore_errors=True)
         if backup is not None and backup.exists() and not output.exists():
@@ -651,6 +699,7 @@ def _validate_setup_update_contents(output: Path) -> None:
         "claude-mcp.json",
         "codex-mcp.toml",
         "collection-capabilities.json",
+        _DOCKER_PROJECT_CONFIG_NAME,
         "collector-assets",
         "setup.json",
         "下一步.zh-CN.md",
@@ -684,6 +733,56 @@ def _validate_setup_update_contents(output: Path) -> None:
             "Existing Collector staging assets are unsafe and were preserved",
             details={"path": str(assets)},
         )
+
+
+def _previous_docker_config(
+    project: Path,
+    artifact: SetupArtifact | None,
+    *,
+    enabled: bool,
+) -> Path | None:
+    if artifact is None:
+        return None
+    path = Path(artifact.output_directory) / _DOCKER_PROJECT_CONFIG_NAME
+    recorded = artifact.container_workload_config_path
+    if not artifact.docker_runtime_enabled:
+        if path.exists() or path.is_symlink():
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "setup",
+                "Unowned Docker project policy was preserved",
+                details={"path": str(path)},
+            )
+        return None
+    if not enabled or recorded != str(path) or not path.is_relative_to(project):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Recorded Docker project policy ownership is invalid",
+            details={"path": str(path)},
+        )
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Recorded Docker project policy is missing",
+            details={"path": str(path)},
+        ) from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o022
+        or metadata.st_size > _MAX_GUIDE_BYTES
+    ):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Recorded Docker project policy is unsafe",
+            details={"path": str(path)},
+        )
+    return path
 
 
 def _output_path(project: Path, requested: Path | None) -> Path:
@@ -995,6 +1094,7 @@ def _chinese_guide(
     codex_selected: bool = True,
     claude_selected: bool = False,
     collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon",
+    docker_runtime_enabled: bool = False,
 ) -> str:
     layout_note = _chinese_layout_note(admin_command, collector_command)
     policy_path = output / "collector-assets" / "collector.toml"
@@ -1073,6 +1173,26 @@ PID 并交给 Collector。用户不需要查找或输入 PID。
 
 本次 MCP 配置没有开启项目自动运行。需要该能力时，请使用一个新的输出目录重新运行
 `perflens setup --automatic-collection`，并先完成 Collector 部署。
+"""
+    )
+    docker_section = (
+        f"""
+## 7. 本地 Docker 目标
+
+已生成 `{output / _DOCKER_PROJECT_CONFIG_NAME}`，并只在当前项目的 Codex/Claude MCP
+配置中启用 Docker 目标工具。初始化没有连接 Docker、操作容器、构建或拉取镜像，
+也没有修改 Docker 用户组。
+
+重启所选客户端后，可以说“使用 PerfLens 深度优化当前项目的容器负载”。PerfLens 会先
+只读检查本地 Linux Docker Engine 与 cgroup v2，再显示具体目标和 `per_run` 或
+`bounded_session` 授权摘要；未经确认不会开始采集。
+"""
+        if docker_runtime_enabled
+        else """
+## 7. 本地 Docker 目标
+
+本项目没有启用 Docker 目标。需要时运行 `perflens init --docker --update`；该命令只
+生成项目策略，不会操作容器。
 """
     )
     codex_section = (
@@ -1169,13 +1289,14 @@ PerfLens Skill 位于项目的 `.agents/skills/{SKILL_NAME}`。可以对 Codex �
 检查到另一次旧引导。该命令不会运行 perf、修改系统或写入 Collector spool。
 
 {project_section}
-## 7. 采集时长
+{docker_section}
+## 8. 采集时长
 
 实时采集不是固定 10 秒。自动计划默认 10 秒，用户可以在请求中调整，
 但 MCP 和 Collector 都会执行各自的时长上限；当前默认上限是 30 秒。
 `accept-collector` 使用内置测试负载完成部署验收，不需要输入 PID；默认 1 秒且最多 5 秒。
 
-## 8. 获取帮助
+## 9. 获取帮助
 
 ```bash
 perflens --help
@@ -1238,6 +1359,7 @@ def _english_guide(
     codex_selected: bool = True,
     claude_selected: bool = False,
     collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon",
+    docker_runtime_enabled: bool = False,
 ) -> str:
     status_command = _status_command(project, output)
     layout = (
@@ -1281,6 +1403,16 @@ def _english_guide(
             "`perflens init --client claude-code` in a new project to opt in."
         )
     )
+    docker = (
+        "Local Docker targeting is enabled by the identity-pinned project policy at "
+        f"`{output / _DOCKER_PROJECT_CONFIG_NAME}`. Initialization did not connect to Docker, "
+        "operate a container, build or pull an image, or modify Docker groups. Restart the "
+        "client and inspect Docker capability before authorizing per-run or bounded-session "
+        "collection."
+        if docker_runtime_enabled
+        else "Local Docker targeting is disabled. Run `perflens init --docker --update` to "
+        "generate a project policy without operating a container."
+    )
     return f"""# PerfLens next steps
 
 Project: `{project}`
@@ -1296,6 +1428,7 @@ Project: `{project}`
    per-call authorization.
 7. Recheck this exact onboarding bundle with `{status_command}`. Keep
    `--setup-directory` when a custom output directory was used; the command is read-only.
+8. {docker}
 
 Run `perflens --help`, `perflens doctor`, `perflens init --help`, or
 `perflens setup --help` for command help.

@@ -387,6 +387,16 @@ def init_command(
             help="同时生成供管理员审查的 Collector 部署资产, 不会执行 sudo。",
         ),
     ] = False,
+    enable_docker: Annotated[
+        bool,
+        typer.Option(
+            "--docker",
+            help=(
+                "为当前项目生成本地 Docker 目标策略并启用 MCP Docker 工具; "
+                "不会启动、构建或拉取容器。"
+            ),
+        ),
+    ] = False,
     collector_privilege_mode: Annotated[
         Literal["cap_perfmon", "paranoid3_helper"] | None,
         typer.Option(
@@ -438,6 +448,7 @@ def init_command(
             automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
             perf_path=perf_path,
             collector_privilege_mode=collector_privilege_mode,
+            enable_docker=enable_docker,
             update_existing=update_existing,
         )
     except PerfLensError as exc:
@@ -454,6 +465,9 @@ def init_command(
         typer.echo(f"Claude Code MCP: {artifact.claude_project_config_path}")
     typer.echo(f"Collector 权限模式: {artifact.collector_privilege_mode}")
     typer.echo(f"Collector 功能配置: {artifact.collector_feature_profile}")
+    typer.echo(f"Docker 目标运行时: {'已启用' if artifact.docker_runtime_enabled else '未启用'}")
+    if artifact.container_workload_config_path is not None:
+        typer.echo(f"Docker 项目策略: {artifact.container_workload_config_path}")
     typer.echo(f"自动采集: {'已启用 (仍需每次工作负载授权)' if automatic_collection else '未启用'}")
     typer.echo(f"中文下一步: {Path(artifact.output_directory) / '下一步.zh-CN.md'}")
 

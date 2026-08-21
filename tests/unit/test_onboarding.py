@@ -71,6 +71,67 @@ def test_setup_creates_guided_bundle_and_installs_skill(tmp_path: Path) -> None:
     assert f"perflens status --project {project} --setup-directory {project / 'setup-two'}" in guide
 
 
+def test_setup_enables_docker_policy_and_preserves_user_edits_on_update(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    first = run_project_setup(
+        project,
+        automatic_collection=True,
+        enable_docker=True,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+
+    policy = project / "perflens-setup/container-workload.toml"
+    assert first.docker_runtime_enabled is True
+    assert first.container_workload_config_path == str(policy)
+    assert policy.stat().st_mode & 0o777 == 0o600
+    assert 'target_runtime = "docker"' in policy.read_text(encoding="utf-8")
+    codex_config = (project / ".codex/config.toml").read_text(encoding="utf-8")
+    claude_config = (project / "perflens-setup/claude-mcp.json").read_text(
+        encoding="utf-8"
+    )
+    assert '"--allow-docker-targets"' in codex_config
+    assert str(policy) in codex_config
+    assert "--allow-docker-targets" in claude_config
+
+    policy.write_text(
+        policy.read_text(encoding="utf-8") + "\n# user reviewed\n",
+        encoding="utf-8",
+    )
+    policy.chmod(0o600)
+    updated = run_project_setup(
+        project,
+        automatic_collection=True,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+        update_existing=True,
+    )
+
+    assert updated.docker_runtime_enabled is True
+    assert policy.read_text(encoding="utf-8").endswith("# user reviewed\n")
+
+
+def test_setup_rejects_docker_runtime_without_automatic_collection(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    with pytest.raises(PerfLensError) as captured:
+        run_project_setup(
+            project,
+            enable_docker=True,
+            automatic_collection=False,
+            mcp_command=Path(sys.executable),
+            perf_path=Path("/bin/true"),
+        )
+
+    assert captured.value.code is ErrorCode.INVALID_INPUT
+    assert not (project / "perflens-setup").exists()
+
+
 def test_setup_uses_trusted_native_package_layout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -75,6 +75,8 @@ def render_claude_config(
     automatic_max_frequency_hz: int = 99,
     automatic_max_output_bytes: int = 256 << 20,
     automatic_plan_ttl_seconds: int = 120,
+    allow_docker_targets: bool = False,
+    docker_project_config: Path | None = None,
     mcp_command: Path | None = None,
 ) -> str:
     """Return a standalone Claude Code project MCP JSON document."""
@@ -92,6 +94,8 @@ def render_claude_config(
         automatic_max_frequency_hz=automatic_max_frequency_hz,
         automatic_max_output_bytes=automatic_max_output_bytes,
         automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
+        allow_docker_targets=allow_docker_targets,
+        docker_project_config=docker_project_config,
         mcp_command=mcp_command,
     )
     return _render_document(

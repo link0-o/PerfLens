@@ -20,3 +20,8 @@ def isolate_host_collector_policy(monkeypatch: pytest.MonkeyPatch) -> None:
         "detect_deployed_collector_privilege_mode",
         lambda: None,
     )
+    monkeypatch.setattr(
+        onboarding,
+        "detect_deployed_collector_feature_profile",
+        lambda *args, **kwargs: None,
+    )
