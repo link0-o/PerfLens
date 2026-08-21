@@ -622,6 +622,20 @@ class CollectionPlanArtifact(ContractModel):
     target_pid: int = Field(gt=0)
     target_uid: int = Field(ge=0)
     target_start_time_ticks: int = Field(gt=0)
+    target_runtime: Literal["host", "docker"] = "host"
+    container_target_id: str | None = Field(
+        default=None,
+        pattern=r"^container-target-[a-f0-9]{20}$",
+    )
+    container_identity_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    container_target_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    container_pid: int | None = Field(default=None, gt=0)
     backend: Literal["privileged_broker"]
     duration_seconds: float = Field(gt=0, le=86_400)
     frequency_hz: int | None = Field(default=None, ge=1, le=10_000)
@@ -642,6 +656,21 @@ class CollectionPlanArtifact(ContractModel):
     ]
     warnings: tuple[str, ...] = ()
 
+    @model_validator(mode="after")
+    def validate_target_runtime(self) -> CollectionPlanArtifact:
+        binding = (
+            self.container_target_id,
+            self.container_identity_sha256,
+            self.container_target_fingerprint,
+            self.container_pid,
+        )
+        if self.target_runtime == "host":
+            if any(value is not None for value in binding):
+                raise ValueError("host collection plan cannot carry a Docker target binding")
+        elif any(value is None for value in binding):
+            raise ValueError("Docker collection plan requires a complete target binding")
+        return self
+
 
 class CollectionArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
@@ -653,6 +682,20 @@ class CollectionArtifact(ContractModel):
     target_argument_count: int = Field(ge=0)
     target_argv_sha256: str | None = None
     target_pid: int | None = Field(default=None, gt=0)
+    target_runtime: Literal["host", "docker"] = "host"
+    container_target_id: str | None = Field(
+        default=None,
+        pattern=r"^container-target-[a-f0-9]{20}$",
+    )
+    container_identity_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    container_target_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    container_pid: int | None = Field(default=None, gt=0)
     output_path: str
     output_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     output_bytes: int = Field(gt=0)
@@ -676,6 +719,24 @@ class CollectionArtifact(ContractModel):
     diagnostics: tuple[str, ...] = ()
     diagnostics_truncated: bool = False
     warnings: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_target_runtime(self) -> CollectionArtifact:
+        binding = (
+            self.container_target_id,
+            self.container_identity_sha256,
+            self.container_target_fingerprint,
+            self.container_pid,
+        )
+        if self.target_runtime == "host":
+            if any(value is not None for value in binding):
+                raise ValueError("host Collection cannot carry a Docker target binding")
+        else:
+            if self.target_type != "pid" or self.target_pid is None:
+                raise ValueError("Docker Collection must bind an explicit host PID")
+            if any(value is None for value in binding):
+                raise ValueError("Docker Collection requires a complete target binding")
+        return self
 
 
 class ProjectRunArtifact(ContractModel):

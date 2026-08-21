@@ -116,6 +116,58 @@
       "title": "Collection Id",
       "type": "string"
     },
+    "container_identity_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Container Identity Sha256"
+    },
+    "container_pid": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Container Pid"
+    },
+    "container_target_fingerprint": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Container Target Fingerprint"
+    },
+    "container_target_id": {
+      "anyOf": [
+        {
+          "pattern": "^container-target-[a-f0-9]{20}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Container Target Id"
+    },
     "diagnostics": {
       "default": [],
       "items": {
@@ -325,6 +377,15 @@
       ],
       "default": null,
       "title": "Target Pid"
+    },
+    "target_runtime": {
+      "default": "host",
+      "enum": [
+        "host",
+        "docker"
+      ],
+      "title": "Target Runtime",
+      "type": "string"
     },
     "target_type": {
       "enum": [

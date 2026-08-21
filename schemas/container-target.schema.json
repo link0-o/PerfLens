@@ -1,0 +1,217 @@
+{
+  "$defs": {
+    "ContainerCgroupIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Identity Sha256",
+          "type": "string"
+        },
+        "inode": {
+          "exclusiveMinimum": 0,
+          "title": "Inode",
+          "type": "integer"
+        },
+        "version": {
+          "const": "v2",
+          "default": "v2",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "inode",
+        "identity_sha256"
+      ],
+      "title": "ContainerCgroupIdentity",
+      "type": "object"
+    },
+    "ContainerNamespaceIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "cgroup_namespace_inode": {
+          "exclusiveMinimum": 0,
+          "title": "Cgroup Namespace Inode",
+          "type": "integer"
+        },
+        "mount_namespace_inode": {
+          "exclusiveMinimum": 0,
+          "title": "Mount Namespace Inode",
+          "type": "integer"
+        },
+        "pid_namespace_inode": {
+          "exclusiveMinimum": 0,
+          "title": "Pid Namespace Inode",
+          "type": "integer"
+        },
+        "user_namespace_inode": {
+          "exclusiveMinimum": 0,
+          "title": "User Namespace Inode",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pid_namespace_inode",
+        "user_namespace_inode",
+        "mount_namespace_inode",
+        "cgroup_namespace_inode"
+      ],
+      "title": "ContainerNamespaceIdentity",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Public proof that one container process maps to one immutable host PID.",
+  "properties": {
+    "adapter_recipe_id": {
+      "enum": [
+        "local-docker-read-v1",
+        "local-docker-managed-v1"
+      ],
+      "title": "Adapter Recipe Id",
+      "type": "string"
+    },
+    "adapter_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Adapter Sha256",
+      "type": "string"
+    },
+    "allowed_conclusions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Conclusions",
+      "type": "array"
+    },
+    "cgroup": {
+      "$ref": "#/$defs/ContainerCgroupIdentity"
+    },
+    "container_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Container Identity Sha256",
+      "type": "string"
+    },
+    "container_pid": {
+      "exclusiveMinimum": 0,
+      "title": "Container Pid",
+      "type": "integer"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "executable_name": {
+      "pattern": "^[^/\\x00]{1,255}$",
+      "title": "Executable Name",
+      "type": "string"
+    },
+    "forbidden_conclusions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Forbidden Conclusions",
+      "type": "array"
+    },
+    "host_pid": {
+      "exclusiveMinimum": 0,
+      "title": "Host Pid",
+      "type": "integer"
+    },
+    "host_start_time_ticks": {
+      "exclusiveMinimum": 0,
+      "title": "Host Start Time Ticks",
+      "type": "integer"
+    },
+    "host_uid": {
+      "minimum": 0,
+      "title": "Host Uid",
+      "type": "integer"
+    },
+    "identity_fingerprint": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Identity Fingerprint",
+      "type": "string"
+    },
+    "image_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Image Identity Sha256",
+      "type": "string"
+    },
+    "namespace": {
+      "$ref": "#/$defs/ContainerNamespaceIdentity"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "rootful_risk_authorized": {
+      "default": false,
+      "title": "Rootful Risk Authorized",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "target_id": {
+      "pattern": "^container-target-[a-f0-9]{20}$",
+      "title": "Target Id",
+      "type": "string"
+    },
+    "target_kind": {
+      "enum": [
+        "existing_container",
+        "managed_temporary_container"
+      ],
+      "title": "Target Kind",
+      "type": "string"
+    },
+    "uid_mapping": {
+      "enum": [
+        "rootless_same_uid",
+        "rootful_same_uid",
+        "rootful_cross_uid"
+      ],
+      "title": "Uid Mapping",
+      "type": "string"
+    },
+    "validation_status": {
+      "const": "verified",
+      "default": "verified",
+      "title": "Validation Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "target_id",
+    "created_at",
+    "target_kind",
+    "container_identity_sha256",
+    "image_identity_sha256",
+    "container_pid",
+    "host_pid",
+    "host_uid",
+    "host_start_time_ticks",
+    "executable_name",
+    "namespace",
+    "cgroup",
+    "uid_mapping",
+    "adapter_recipe_id",
+    "adapter_sha256",
+    "identity_fingerprint",
+    "content_sha256"
+  ],
+  "title": "ContainerTargetArtifact",
+  "type": "object"
+}

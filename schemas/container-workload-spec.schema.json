@@ -1,0 +1,225 @@
+{
+  "$defs": {
+    "ContainerResourceLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "cpus": {
+          "exclusiveMinimum": 0,
+          "maximum": 1024,
+          "title": "Cpus",
+          "type": "number"
+        },
+        "memory_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 1125899906842624,
+          "title": "Memory Bytes",
+          "type": "integer"
+        },
+        "pids": {
+          "exclusiveMinimum": 0,
+          "maximum": 1000000,
+          "title": "Pids",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cpus",
+        "memory_bytes",
+        "pids"
+      ],
+      "title": "ContainerResourceLimits",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Fixed managed-container recipe; no arbitrary Docker argument surface exists.",
+  "properties": {
+    "allowed_modes": {
+      "items": {
+        "enum": [
+          "stat",
+          "record",
+          "sched",
+          "off_cpu",
+          "lock"
+        ],
+        "type": "string"
+      },
+      "title": "Allowed Modes",
+      "type": "array"
+    },
+    "arguments": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Arguments",
+      "type": "array"
+    },
+    "authorization_mode": {
+      "enum": [
+        "per_run",
+        "bounded_session"
+      ],
+      "title": "Authorization Mode",
+      "type": "string"
+    },
+    "benchmark_output_contract_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Benchmark Output Contract Sha256"
+    },
+    "cleanup_policy": {
+      "const": "verified_session_containers_only",
+      "default": "verified_session_containers_only",
+      "title": "Cleanup Policy",
+      "type": "string"
+    },
+    "container_user": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Container User",
+      "type": "string"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "correctness_command_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Correctness Command Sha256"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "entrypoint": {
+      "title": "Entrypoint",
+      "type": "string"
+    },
+    "hard_expiry_seconds": {
+      "default": 7200,
+      "exclusiveMinimum": 0,
+      "maximum": 7200,
+      "title": "Hard Expiry Seconds",
+      "type": "integer"
+    },
+    "image_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Image Digest",
+      "type": "string"
+    },
+    "max_active_seconds": {
+      "default": 1200,
+      "exclusiveMinimum": 0,
+      "maximum": 1200,
+      "title": "Max Active Seconds",
+      "type": "integer"
+    },
+    "max_workload_runs": {
+      "default": 6,
+      "exclusiveMinimum": 0,
+      "maximum": 6,
+      "title": "Max Workload Runs",
+      "type": "integer"
+    },
+    "network_mode": {
+      "const": "none",
+      "default": "none",
+      "title": "Network Mode",
+      "type": "string"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "project_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Project Identity Sha256",
+      "type": "string"
+    },
+    "resources": {
+      "$ref": "#/$defs/ContainerResourceLimits"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scratch_container_path": {
+      "const": "/perflens-scratch",
+      "default": "/perflens-scratch",
+      "title": "Scratch Container Path",
+      "type": "string"
+    },
+    "trace_max_duration_seconds": {
+      "default": 10,
+      "exclusiveMinimum": 0,
+      "maximum": 10,
+      "title": "Trace Max Duration Seconds",
+      "type": "integer"
+    },
+    "working_directory": {
+      "title": "Working Directory",
+      "type": "string"
+    },
+    "workload_fingerprint": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Workload Fingerprint",
+      "type": "string"
+    },
+    "workload_spec_id": {
+      "pattern": "^container-workload-[a-f0-9]{20}$",
+      "title": "Workload Spec Id",
+      "type": "string"
+    },
+    "workspace_container_path": {
+      "const": "/workspace",
+      "default": "/workspace",
+      "title": "Workspace Container Path",
+      "type": "string"
+    },
+    "workspace_read_only": {
+      "const": true,
+      "default": true,
+      "title": "Workspace Read Only",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "workload_spec_id",
+    "created_at",
+    "project_identity_sha256",
+    "image_digest",
+    "entrypoint",
+    "working_directory",
+    "container_user",
+    "resources",
+    "allowed_modes",
+    "authorization_mode",
+    "workload_fingerprint",
+    "content_sha256"
+  ],
+  "title": "ContainerWorkloadSpecArtifact",
+  "type": "object"
+}

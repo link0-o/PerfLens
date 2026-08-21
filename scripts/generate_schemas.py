@@ -62,6 +62,15 @@ from perflens.contracts.artifacts import (
     StackSample,
     VerificationCheck,
 )
+from perflens.contracts.docker import (
+    ContainerOptimizationSessionArtifact,
+    ContainerProcessInventoryArtifact,
+    ContainerResourceContextArtifact,
+    ContainerRunArtifact,
+    ContainerTargetArtifact,
+    ContainerWorkloadSpecArtifact,
+    DockerRuntimeCapabilityArtifact,
+)
 from perflens.contracts.runtime_locks import (
     RuntimeAdapterCapabilityArtifact,
     RuntimeLockAnalysisArtifact,
@@ -150,6 +159,13 @@ MODELS = {
         RuntimeLockAnalysisVerificationArtifact
     ),
     "runtime-lock-import-header.schema.json": RuntimeLockImportHeader,
+    "docker-runtime-capability.schema.json": DockerRuntimeCapabilityArtifact,
+    "container-target.schema.json": ContainerTargetArtifact,
+    "container-process-inventory.schema.json": ContainerProcessInventoryArtifact,
+    "container-resource-context.schema.json": ContainerResourceContextArtifact,
+    "container-workload-spec.schema.json": ContainerWorkloadSpecArtifact,
+    "container-optimization-session.schema.json": ContainerOptimizationSessionArtifact,
+    "container-run.schema.json": ContainerRunArtifact,
 }
 
 

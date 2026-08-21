@@ -1,0 +1,145 @@
+{
+  "$defs": {
+    "ContainerProcessCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "container_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Container Pid",
+          "type": "integer"
+        },
+        "cpu_delta_ticks": {
+          "minimum": 0,
+          "title": "Cpu Delta Ticks",
+          "type": "integer"
+        },
+        "executable_name": {
+          "pattern": "^[^/\\x00]{1,255}$",
+          "title": "Executable Name",
+          "type": "string"
+        },
+        "host_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Host Pid",
+          "type": "integer"
+        },
+        "recommendation": {
+          "enum": [
+            "dominant",
+            "candidate"
+          ],
+          "title": "Recommendation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "container_pid",
+        "host_pid",
+        "executable_name",
+        "cpu_delta_ticks",
+        "recommendation"
+      ],
+      "title": "ContainerProcessCandidate",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "automatic_recommendation": {
+      "enum": [
+        "unique",
+        "dominant",
+        "ambiguous",
+        "none"
+      ],
+      "title": "Automatic Recommendation",
+      "type": "string"
+    },
+    "candidate_count": {
+      "minimum": 0,
+      "title": "Candidate Count",
+      "type": "integer"
+    },
+    "candidates": {
+      "items": {
+        "$ref": "#/$defs/ContainerProcessCandidate"
+      },
+      "title": "Candidates",
+      "type": "array"
+    },
+    "candidates_truncated": {
+      "title": "Candidates Truncated",
+      "type": "boolean"
+    },
+    "container_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Container Identity Sha256",
+      "type": "string"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "inventory_id": {
+      "pattern": "^container-inventory-[a-f0-9]{20}$",
+      "title": "Inventory Id",
+      "type": "string"
+    },
+    "limitations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "observation_duration_ms": {
+      "exclusiveMinimum": 0,
+      "maximum": 10000,
+      "title": "Observation Duration Ms",
+      "type": "integer"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "recommended_host_pid": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Recommended Host Pid"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "inventory_id",
+    "created_at",
+    "container_identity_sha256",
+    "observation_duration_ms",
+    "candidates",
+    "candidate_count",
+    "candidates_truncated",
+    "automatic_recommendation",
+    "content_sha256"
+  ],
+  "title": "ContainerProcessInventoryArtifact",
+  "type": "object"
+}

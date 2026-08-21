@@ -1,0 +1,179 @@
+{
+  "$defs": {
+    "DockerToolIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "binary_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Binary Sha256",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "version",
+        "binary_sha256"
+      ],
+      "title": "DockerToolIdentity",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Read-only capability result for one fixed local Docker endpoint.",
+  "properties": {
+    "api_version": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Api Version"
+    },
+    "build_or_pull_supported": {
+      "const": false,
+      "default": false,
+      "title": "Build Or Pull Supported",
+      "type": "boolean"
+    },
+    "capability_id": {
+      "pattern": "^docker-capability-[a-f0-9]{20}$",
+      "title": "Capability Id",
+      "type": "string"
+    },
+    "cgroup_version": {
+      "default": "unknown",
+      "enum": [
+        "v2",
+        "v1",
+        "unknown"
+      ],
+      "title": "Cgroup Version",
+      "type": "string"
+    },
+    "checked_at": {
+      "title": "Checked At",
+      "type": "string"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "daemon_mode": {
+      "enum": [
+        "rootful",
+        "rootless",
+        "unknown"
+      ],
+      "title": "Daemon Mode",
+      "type": "string"
+    },
+    "docker_cli": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DockerToolIdentity"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "endpoint_kind": {
+      "enum": [
+        "local_rootful",
+        "local_rootless",
+        "unsupported",
+        "missing"
+      ],
+      "title": "Endpoint Kind",
+      "type": "string"
+    },
+    "existing_container_discovery": {
+      "default": false,
+      "title": "Existing Container Discovery",
+      "type": "boolean"
+    },
+    "limitations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "managed_container_execution": {
+      "default": false,
+      "title": "Managed Container Execution",
+      "type": "boolean"
+    },
+    "next_steps": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "remote_endpoint_supported": {
+      "const": false,
+      "default": false,
+      "title": "Remote Endpoint Supported",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "server_operating_system": {
+      "default": "unknown",
+      "enum": [
+        "linux",
+        "unknown"
+      ],
+      "title": "Server Operating System",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "available",
+        "partial",
+        "unavailable"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "capability_id",
+    "checked_at",
+    "status",
+    "endpoint_kind",
+    "daemon_mode",
+    "content_sha256"
+  ],
+  "title": "DockerRuntimeCapabilityArtifact",
+  "type": "object"
+}

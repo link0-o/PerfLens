@@ -1,0 +1,193 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "active_seconds_used": {
+      "maximum": 1200,
+      "minimum": 0,
+      "title": "Active Seconds Used",
+      "type": "integer"
+    },
+    "allowed_modes": {
+      "items": {
+        "enum": [
+          "stat",
+          "record",
+          "sched",
+          "off_cpu",
+          "lock"
+        ],
+        "type": "string"
+      },
+      "title": "Allowed Modes",
+      "type": "array"
+    },
+    "authorization_mode": {
+      "enum": [
+        "per_run",
+        "bounded_session"
+      ],
+      "title": "Authorization Mode",
+      "type": "string"
+    },
+    "authorization_receipt_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Authorization Receipt Sha256",
+      "type": "string"
+    },
+    "client_connection_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Client Connection Identity Sha256",
+      "type": "string"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "evidence_bytes_used": {
+      "maximum": 1099511627776,
+      "minimum": 0,
+      "title": "Evidence Bytes Used",
+      "type": "integer"
+    },
+    "existing_target_identity_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Existing Target Identity Sha256"
+    },
+    "expires_at": {
+      "title": "Expires At",
+      "type": "string"
+    },
+    "instance_count": {
+      "maximum": 6,
+      "minimum": 0,
+      "title": "Instance Count",
+      "type": "integer"
+    },
+    "invalidation_reason": {
+      "anyOf": [
+        {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Invalidation Reason"
+    },
+    "max_active_seconds": {
+      "exclusiveMinimum": 0,
+      "maximum": 1200,
+      "title": "Max Active Seconds",
+      "type": "integer"
+    },
+    "max_evidence_bytes": {
+      "exclusiveMinimum": 0,
+      "maximum": 1099511627776,
+      "title": "Max Evidence Bytes",
+      "type": "integer"
+    },
+    "max_workload_runs": {
+      "exclusiveMinimum": 0,
+      "maximum": 6,
+      "title": "Max Workload Runs",
+      "type": "integer"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "project_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Project Identity Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "session_id": {
+      "pattern": "^container-session-[a-f0-9]{20}$",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "active",
+        "revoked",
+        "expired",
+        "exhausted"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "target_kind": {
+      "enum": [
+        "existing_container",
+        "managed_temporary_container"
+      ],
+      "title": "Target Kind",
+      "type": "string"
+    },
+    "workload_runs_used": {
+      "maximum": 6,
+      "minimum": 0,
+      "title": "Workload Runs Used",
+      "type": "integer"
+    },
+    "workload_spec_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workload Spec Sha256"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "session_id",
+    "created_at",
+    "expires_at",
+    "target_kind",
+    "authorization_mode",
+    "project_identity_sha256",
+    "client_connection_identity_sha256",
+    "authorization_receipt_sha256",
+    "allowed_modes",
+    "state",
+    "max_workload_runs",
+    "workload_runs_used",
+    "max_active_seconds",
+    "active_seconds_used",
+    "max_evidence_bytes",
+    "evidence_bytes_used",
+    "instance_count",
+    "content_sha256"
+  ],
+  "title": "ContainerOptimizationSessionArtifact",
+  "type": "object"
+}
