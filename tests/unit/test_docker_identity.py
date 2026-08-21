@@ -16,6 +16,7 @@ from perflens.docker.adapter import (
 )
 from perflens.docker.identity import (
     LinuxContainerIdentityReader,
+    build_managed_container_target_artifact,
     parse_container_instance,
     parse_container_top,
     resolve_existing_container_target,
@@ -236,6 +237,72 @@ def test_resolver_emits_privacy_safe_content_bound_target(tmp_path: Path) -> Non
     assert "/run/docker.sock" not in serialized
     assert "SECRET" not in serialized
     assert "/private/host/path" not in serialized
+
+
+def test_managed_target_uses_separate_fixed_recipe_without_private_identity(
+    tmp_path: Path,
+) -> None:
+    reader, proc_root, _ = _identity_filesystem(tmp_path)
+    _write_process(
+        proc_root,
+        host_pid=1001,
+        container_pid=1,
+        start_time=9001,
+        executable_name="perflens-gate",
+    )
+    adapter = _adapter()
+    instance = parse_container_instance(_inspect())
+    target = reader.inspect_process(1001)
+    artifact = build_managed_container_target_artifact(
+        adapter=adapter,
+        instance=instance,
+        target=target,
+        created_at=datetime(2026, 8, 21, tzinfo=UTC),
+    )
+    assert artifact.target_kind == "managed_temporary_container"
+    assert artifact.adapter_recipe_id == "local-docker-managed-v1"
+    assert artifact.content_sha256 == contract_content_sha256(
+        artifact,
+        exclude={"content_sha256"},
+    )
+    serialized = artifact.model_dump_json()
+    assert _CONTAINER_ID not in serialized
+    assert "/docker/test-container" not in serialized
+
+
+def test_managed_target_rejects_non_init_process_and_naive_timestamp(
+    tmp_path: Path,
+) -> None:
+    reader, proc_root, _ = _identity_filesystem(tmp_path)
+    _write_process(
+        proc_root,
+        host_pid=1001,
+        container_pid=1,
+        start_time=9001,
+        executable_name="perflens-gate",
+    )
+    _write_process(
+        proc_root,
+        host_pid=1002,
+        container_pid=2,
+        start_time=9002,
+        executable_name="child",
+    )
+    adapter = _adapter()
+    instance = parse_container_instance(_inspect())
+    with pytest.raises(PerfLensError):
+        build_managed_container_target_artifact(
+            adapter=adapter,
+            instance=instance,
+            target=reader.inspect_process(1002),
+        )
+    with pytest.raises(PerfLensError):
+        build_managed_container_target_artifact(
+            adapter=adapter,
+            instance=instance,
+            target=reader.inspect_process(1001),
+            created_at=datetime(2026, 8, 21),
+        )
 
 
 def test_resolver_requires_explicit_selection_for_multiple_processes(tmp_path: Path) -> None:

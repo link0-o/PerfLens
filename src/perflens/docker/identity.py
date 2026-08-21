@@ -14,11 +14,11 @@ import stat
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from perflens import __version__
 from perflens.application.evidence import contract_content_sha256
-from perflens.contracts.docker import ContainerTargetArtifact
+from perflens.contracts.docker import ContainerTargetArtifact, DockerTargetKind
 from perflens.docker.adapter import DockerCommandAdapter
 from perflens.domain.errors import ErrorCode, PerfLensError
 
@@ -27,7 +27,8 @@ _IMAGE_DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
 _NAMESPACE_LINK = re.compile(r"^(?P<kind>pid|user|mnt|cgroup):\[(?P<inode>[1-9][0-9]*)\]$")
 _MAX_PROC_FILE_BYTES = 64 << 10
 _MAX_TOP_ROWS = 256
-_RECIPE_ID = "local-docker-read-v1"
+_READ_RECIPE_ID = "local-docker-read-v1"
+_MANAGED_RECIPE_ID = "local-docker-managed-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,25 +328,18 @@ def resolve_existing_container_target(
             "Docker Linux process identity changed before target publication",
             recoverable=True,
         )
-    uid = os.geteuid() if invoking_uid is None else invoking_uid
-    endpoint_kind = adapter.endpoint_identity.kind
-    if endpoint_kind == "local_rootless":
-        if target_identity.host_uid != uid:
-            raise _identity_error("Rootless Docker target is not owned by the invoking user")
-        uid_mapping = "rootless_same_uid"
-    elif target_identity.host_uid == uid:
-        uid_mapping = "rootful_same_uid"
-    else:
-        if not allow_rootful_cross_uid:
-            raise _identity_error(
-                "Rootful cross-UID Docker target requires explicit administrator policy"
-            )
-        uid_mapping = "rootful_cross_uid"
+    uid_mapping = classify_container_uid_mapping(
+        adapter,
+        target_identity,
+        invoking_uid=invoking_uid,
+        allow_rootful_cross_uid=allow_rootful_cross_uid,
+    )
     timestamp = created_at or datetime.now(tz=UTC)
-    artifact = _build_target_artifact(
+    artifact = _build_container_target_artifact(
         adapter=adapter,
         instance=instance,
         target=target_identity,
+        target_kind="existing_container",
         uid_mapping=uid_mapping,
         rootful_risk_authorized=uid_mapping == "rootful_cross_uid",
         created_at=timestamp,
@@ -404,15 +398,80 @@ def container_identity_sha256(
     )
 
 
-def _build_target_artifact(
+def classify_container_uid_mapping(
+    adapter: DockerCommandAdapter,
+    target: KernelProcessIdentity,
+    *,
+    invoking_uid: int | None = None,
+    allow_rootful_cross_uid: bool = False,
+) -> Literal["rootless_same_uid", "rootful_same_uid", "rootful_cross_uid"]:
+    uid = os.geteuid() if invoking_uid is None else invoking_uid
+    endpoint_kind = adapter.endpoint_identity.kind
+    if endpoint_kind == "local_rootless":
+        if target.host_uid != uid:
+            raise _identity_error("Rootless Docker target is not owned by the invoking user")
+        return "rootless_same_uid"
+    if target.host_uid == uid:
+        return "rootful_same_uid"
+    if not allow_rootful_cross_uid:
+        raise _identity_error(
+            "Rootful cross-UID Docker target requires explicit administrator policy"
+        )
+    return "rootful_cross_uid"
+
+
+def build_managed_container_target_artifact(
     *,
     adapter: DockerCommandAdapter,
     instance: PrivateContainerInstance,
     target: KernelProcessIdentity,
-    uid_mapping: str,
+    invoking_uid: int | None = None,
+    allow_rootful_cross_uid: bool = False,
+    created_at: datetime | None = None,
+) -> ContainerTargetArtifact:
+    if (
+        target.host_pid != instance.init_host_pid
+        or target.container_pid != 1
+        or len(target.nspid) < 2
+    ):
+        raise _identity_error(
+            "Managed Docker target must be the isolated container-init Gate process"
+        )
+    timestamp = created_at or datetime.now(tz=UTC)
+    if timestamp.tzinfo is None:
+        raise _identity_error("Managed Docker target timestamp must include a timezone")
+    uid_mapping = classify_container_uid_mapping(
+        adapter,
+        target,
+        invoking_uid=invoking_uid,
+        allow_rootful_cross_uid=allow_rootful_cross_uid,
+    )
+    return _build_container_target_artifact(
+        adapter=adapter,
+        instance=instance,
+        target=target,
+        target_kind="managed_temporary_container",
+        uid_mapping=uid_mapping,
+        rootful_risk_authorized=uid_mapping == "rootful_cross_uid",
+        created_at=timestamp,
+    )
+
+
+def _build_container_target_artifact(
+    *,
+    adapter: DockerCommandAdapter,
+    instance: PrivateContainerInstance,
+    target: KernelProcessIdentity,
+    target_kind: DockerTargetKind,
+    uid_mapping: Literal["rootless_same_uid", "rootful_same_uid", "rootful_cross_uid"],
     rootful_risk_authorized: bool,
     created_at: datetime,
 ) -> ContainerTargetArtifact:
+    recipe_id = (
+        _READ_RECIPE_ID
+        if target_kind == "existing_container"
+        else _MANAGED_RECIPE_ID
+    )
     endpoint = adapter.endpoint_identity
     container_identity = container_identity_sha256(adapter, instance)
     image_identity = instance.image_digest.removeprefix("sha256:")
@@ -423,10 +482,14 @@ def _build_target_artifact(
         str(target.cgroup_inode),
     )
     adapter_identity = _sha256_text(
-        _RECIPE_ID,
+        recipe_id,
         adapter.cli_identity.sha256,
         endpoint.kind,
-        "version|info|container-inspect|container-top-pid-ppid-comm",
+        (
+            "version|info|container-inspect|container-top-pid-ppid-comm"
+            if target_kind == "existing_container"
+            else "container-create|start|inspect|top|wait|stop|remove|gate-v1"
+        ),
     )
     fingerprint = _sha256_text(
         container_identity,
@@ -450,7 +513,7 @@ def _build_target_artifact(
             "perflens_version": __version__,
             "target_id": f"container-target-{target_id}",
             "created_at": timestamp,
-            "target_kind": "existing_container",
+            "target_kind": target_kind,
             "container_identity_sha256": container_identity,
             "image_identity_sha256": image_identity,
             "container_pid": target.container_pid,
@@ -471,12 +534,19 @@ def _build_target_artifact(
             },
             "uid_mapping": uid_mapping,
             "rootful_risk_authorized": rootful_risk_authorized,
-            "adapter_recipe_id": _RECIPE_ID,
+            "adapter_recipe_id": recipe_id,
             "adapter_sha256": adapter_identity,
             "identity_fingerprint": fingerprint,
             "allowed_conclusions": (
-                "The selected host PID was verified inside the named local container.",
+                "The selected host PID was verified inside the local container instance.",
                 "The target PID incarnation, namespace, and cgroup-v2 identity were bound.",
+                *(
+                    (
+                        "The managed target was bound before its fixed Container Gate release.",
+                    )
+                    if target_kind == "managed_temporary_container"
+                    else ()
+                ),
             ),
             "forbidden_conclusions": (
                 "Container-wide performance attribution is not implied by one process target.",
