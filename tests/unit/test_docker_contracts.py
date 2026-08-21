@@ -372,24 +372,47 @@ def _plan() -> dict[str, Any]:
     }
 
 
+def _collection_target_binding() -> dict[str, Any]:
+    target = _target()
+    return {
+        "target_id": target["target_id"],
+        "target_kind": target["target_kind"],
+        "target_content_sha256": target["content_sha256"],
+        "container_identity_sha256": target["container_identity_sha256"],
+        "image_identity_sha256": target["image_identity_sha256"],
+        "identity_fingerprint": target["identity_fingerprint"],
+        "container_pid": target["container_pid"],
+        "host_pid": target["host_pid"],
+        "host_uid": target["host_uid"],
+        "host_start_time_ticks": target["host_start_time_ticks"],
+        "executable_name": target["executable_name"],
+        "namespace": target["namespace"],
+        "cgroup": target["cgroup"],
+        "uid_mapping": target["uid_mapping"],
+        "rootful_risk_authorized": target.get("rootful_risk_authorized", False),
+        "adapter_recipe_id": target["adapter_recipe_id"],
+        "adapter_sha256": target["adapter_sha256"],
+    }
+
+
 def test_collection_plan_docker_binding_is_complete_and_host_is_backward_compatible() -> None:
     assert CollectionPlanArtifact.model_validate(_plan()).target_runtime == "host"
     docker = _plan()
     docker.update(
         target_runtime="docker",
-        container_target_id="container-target-" + "a" * 20,
-        container_identity_sha256=SHA_A,
-        container_target_fingerprint=SHA_B,
-        container_pid=12,
+        target_start_time_ticks=9876,
+        container_target=_collection_target_binding(),
     )
-    assert CollectionPlanArtifact.model_validate(docker).container_pid == 12
-    docker.pop("container_pid")
+    validated = CollectionPlanArtifact.model_validate(docker)
+    assert validated.container_target is not None
+    assert validated.container_target.container_pid == 12
+    docker["container_target"]["namespace"].pop("mount_namespace_inode")
     with pytest.raises(ValidationError):
         CollectionPlanArtifact.model_validate(docker)
 
 
 def test_collection_artifact_rejects_partial_docker_binding() -> None:
-    collection = {
+    collection: dict[str, Any] = {
         "schema_version": "1.0",
         "collection_id": "collection-a",
         "mode": "stat",
@@ -397,9 +420,6 @@ def test_collection_artifact_rejects_partial_docker_binding() -> None:
         "target_argument_count": 0,
         "target_pid": 1234,
         "target_runtime": "docker",
-        "container_target_id": "container-target-" + "a" * 20,
-        "container_identity_sha256": SHA_A,
-        "container_target_fingerprint": SHA_B,
         "output_path": "/tmp/a.stat.csv",
         "output_sha256": SHA_C,
         "output_bytes": 10,
@@ -413,7 +433,7 @@ def test_collection_artifact_rejects_partial_docker_binding() -> None:
     }
     with pytest.raises(ValidationError):
         CollectionArtifact.model_validate(collection)
-    collection["container_pid"] = 12
+    collection["container_target"] = _collection_target_binding()
     assert CollectionArtifact.model_validate(collection).target_runtime == "docker"
 
 

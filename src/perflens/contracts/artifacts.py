@@ -614,6 +614,60 @@ class CollectionCapabilityArtifact(ContractModel):
     recommendations: tuple[str, ...] = ()
 
 
+class ContainerCollectionNamespaceBinding(ContractModel):
+    pid_namespace_inode: int = Field(gt=0)
+    user_namespace_inode: int = Field(gt=0)
+    mount_namespace_inode: int = Field(gt=0)
+    cgroup_namespace_inode: int = Field(gt=0)
+
+
+class ContainerCollectionCgroupBinding(ContractModel):
+    version: Literal["v2"] = "v2"
+    inode: int = Field(gt=0)
+    identity_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class ContainerCollectionTargetBinding(ContractModel):
+    """Privacy-safe Linux identity required to revalidate one Docker target."""
+
+    target_id: str = Field(pattern=r"^container-target-[a-f0-9]{20}$")
+    target_kind: Literal["existing_container", "managed_temporary_container"]
+    target_content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    container_identity_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    image_identity_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    identity_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    container_pid: int = Field(gt=0)
+    host_pid: int = Field(gt=0)
+    host_uid: int = Field(ge=0)
+    host_start_time_ticks: int = Field(gt=0)
+    executable_name: str = Field(pattern=r"^[^/\x00]{1,255}$")
+    namespace: ContainerCollectionNamespaceBinding
+    cgroup: ContainerCollectionCgroupBinding
+    uid_mapping: Literal[
+        "rootless_same_uid",
+        "rootful_same_uid",
+        "rootful_cross_uid",
+    ]
+    rootful_risk_authorized: bool = False
+    adapter_recipe_id: Literal["local-docker-read-v1", "local-docker-managed-v1"]
+    adapter_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @model_validator(mode="after")
+    def validate_container_binding(self) -> ContainerCollectionTargetBinding:
+        expected_recipe = (
+            "local-docker-read-v1"
+            if self.target_kind == "existing_container"
+            else "local-docker-managed-v1"
+        )
+        if self.adapter_recipe_id != expected_recipe:
+            raise ValueError("Docker collection target kind and adapter recipe differ")
+        if self.uid_mapping == "rootful_cross_uid" and not self.rootful_risk_authorized:
+            raise ValueError("cross-UID Docker collection requires explicit rootful risk approval")
+        if self.uid_mapping != "rootful_cross_uid" and self.rootful_risk_authorized:
+            raise ValueError("same-UID Docker collection cannot claim cross-UID risk approval")
+        return self
+
+
 class CollectionPlanArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     plan_id: str = Field(pattern=r"^plan-[a-f0-9]{20}$")
@@ -623,19 +677,7 @@ class CollectionPlanArtifact(ContractModel):
     target_uid: int = Field(ge=0)
     target_start_time_ticks: int = Field(gt=0)
     target_runtime: Literal["host", "docker"] = "host"
-    container_target_id: str | None = Field(
-        default=None,
-        pattern=r"^container-target-[a-f0-9]{20}$",
-    )
-    container_identity_sha256: str | None = Field(
-        default=None,
-        pattern=r"^[a-f0-9]{64}$",
-    )
-    container_target_fingerprint: str | None = Field(
-        default=None,
-        pattern=r"^[a-f0-9]{64}$",
-    )
-    container_pid: int | None = Field(default=None, gt=0)
+    container_target: ContainerCollectionTargetBinding | None = None
     backend: Literal["privileged_broker"]
     duration_seconds: float = Field(gt=0, le=86_400)
     frequency_hz: int | None = Field(default=None, ge=1, le=10_000)
@@ -658,17 +700,17 @@ class CollectionPlanArtifact(ContractModel):
 
     @model_validator(mode="after")
     def validate_target_runtime(self) -> CollectionPlanArtifact:
-        binding = (
-            self.container_target_id,
-            self.container_identity_sha256,
-            self.container_target_fingerprint,
-            self.container_pid,
-        )
         if self.target_runtime == "host":
-            if any(value is not None for value in binding):
+            if self.container_target is not None:
                 raise ValueError("host collection plan cannot carry a Docker target binding")
-        elif any(value is None for value in binding):
+        elif self.container_target is None:
             raise ValueError("Docker collection plan requires a complete target binding")
+        elif (
+            self.target_pid != self.container_target.host_pid
+            or self.target_uid != self.container_target.host_uid
+            or self.target_start_time_ticks != self.container_target.host_start_time_ticks
+        ):
+            raise ValueError("Docker collection plan target identity fields differ")
         return self
 
 
@@ -683,19 +725,7 @@ class CollectionArtifact(ContractModel):
     target_argv_sha256: str | None = None
     target_pid: int | None = Field(default=None, gt=0)
     target_runtime: Literal["host", "docker"] = "host"
-    container_target_id: str | None = Field(
-        default=None,
-        pattern=r"^container-target-[a-f0-9]{20}$",
-    )
-    container_identity_sha256: str | None = Field(
-        default=None,
-        pattern=r"^[a-f0-9]{64}$",
-    )
-    container_target_fingerprint: str | None = Field(
-        default=None,
-        pattern=r"^[a-f0-9]{64}$",
-    )
-    container_pid: int | None = Field(default=None, gt=0)
+    container_target: ContainerCollectionTargetBinding | None = None
     output_path: str
     output_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     output_bytes: int = Field(gt=0)
@@ -722,20 +752,16 @@ class CollectionArtifact(ContractModel):
 
     @model_validator(mode="after")
     def validate_target_runtime(self) -> CollectionArtifact:
-        binding = (
-            self.container_target_id,
-            self.container_identity_sha256,
-            self.container_target_fingerprint,
-            self.container_pid,
-        )
         if self.target_runtime == "host":
-            if any(value is not None for value in binding):
+            if self.container_target is not None:
                 raise ValueError("host Collection cannot carry a Docker target binding")
         else:
             if self.target_type != "pid" or self.target_pid is None:
                 raise ValueError("Docker Collection must bind an explicit host PID")
-            if any(value is None for value in binding):
+            if self.container_target is None:
                 raise ValueError("Docker Collection requires a complete target binding")
+            if self.target_pid != self.container_target.host_pid:
+                raise ValueError("Docker Collection host PID differs from its target binding")
         return self
 
 

@@ -42,6 +42,10 @@ def test_trace_helper_valid_golden_frames_and_unavailable_health() -> None:
         (fixture_root / "valid/sched.jsonl").read_bytes(),
         now_unix_milliseconds=_NOW_MILLISECONDS,
     )
+    docker_collect = parse_trace_helper_request_frame(
+        (fixture_root / "valid/docker-sched.jsonl").read_bytes(),
+        now_unix_milliseconds=_NOW_MILLISECONDS,
+    )
     response = parse_trace_helper_response_frame(
         (fixture_root / "responses/health-unavailable.jsonl").read_bytes()
     )
@@ -49,6 +53,8 @@ def test_trace_helper_valid_golden_frames_and_unavailable_health() -> None:
     assert isinstance(health, TraceHelperHealthRequest)
     assert isinstance(collect, TraceHelperCollectPidRequest)
     assert collect.mode == "sched"
+    assert isinstance(docker_collect, TraceHelperCollectPidRequest)
+    assert docker_collect.target.target_runtime == "docker"
     assert isinstance(response.result, TraceHelperHealthResult)
     assert response.result.capture_backend_status == "unavailable"
     assert response.result.supported_modes == ()
@@ -74,9 +80,9 @@ def test_trace_helper_invalid_golden_frames_are_rejected(fixture: Path) -> None:
 @pytest.mark.parametrize(
     "frame",
     [
-        b'{"schema_version":"1.0","operation":"health","request_id":"request-0123456789abcdef"}',
-        b'{"schema_version":"1.0","operation":"health","request_id":"request-0123456789abcdef"}\n{}\n',
-        b'{"schema_version":"1.0","operation":"health","request_id":"request-0123456789abcdef","request_id":"request-fedcba9876543210"}\n',
+        b'{"schema_version":"1.1","operation":"health","request_id":"request-0123456789abcdef"}',
+        b'{"schema_version":"1.1","operation":"health","request_id":"request-0123456789abcdef"}\n{}\n',
+        b'{"schema_version":"1.1","operation":"health","request_id":"request-0123456789abcdef","request_id":"request-fedcba9876543210"}\n',
     ],
 )
 def test_trace_helper_rejects_missing_extra_and_duplicate_frames(frame: bytes) -> None:

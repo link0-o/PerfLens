@@ -45,12 +45,36 @@ from perflens.trace_helper.client import TraceHelperClient
 from perflens.trace_helper.policy import TraceMode, TracePolicy
 from perflens.trace_helper.protocol import (
     TraceHelperCollectPidRequest,
+    TraceHelperDockerTarget,
     TraceHelperHealthResult,
     TraceHelperTarget,
 )
 
 _MAX_PUBLIC_EVIDENCE_BYTES = 256 << 20
 _NORMALIZATION_VERSION = "trace-normalizer-v1"
+
+
+def _trace_helper_target_from_plan(
+    plan: CollectionPlanArtifact,
+) -> TraceHelperTarget | TraceHelperDockerTarget:
+    if plan.target_runtime == "docker":
+        if plan.container_target is None:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "trace_backend",
+                "Docker trace plan lost its container identity binding",
+            )
+        return TraceHelperDockerTarget(
+            pid=plan.target_pid,
+            uid=plan.target_uid,
+            start_time_ticks=plan.target_start_time_ticks,
+            container=plan.container_target,
+        )
+    return TraceHelperTarget(
+        pid=plan.target_pid,
+        uid=plan.target_uid,
+        start_time_ticks=plan.target_start_time_ticks,
+    )
 
 
 class TraceCollectionCoordinator:
@@ -118,15 +142,12 @@ class TraceCollectionCoordinator:
         self._authorize(peer_uid, plan)
         assert_plan_current(plan)
         trace_plan_id = _trace_plan_id(plan)
+        helper_target = _trace_helper_target_from_plan(plan)
         request = TraceHelperCollectPidRequest(
             request_id=f"request-{hashlib.sha256(plan.plan_id.encode()).hexdigest()[:24]}",
             plan_id=trace_plan_id,
             caller_uid=peer_uid,
-            target=TraceHelperTarget(
-                pid=plan.target_pid,
-                uid=plan.target_uid,
-                start_time_ticks=plan.target_start_time_ticks,
-            ),
+            target=helper_target,
             mode=mode,
             duration_milliseconds=max(1, math.ceil(plan.duration_seconds * 1000)),
             max_output_bytes=plan.max_output_bytes,

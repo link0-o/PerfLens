@@ -16,6 +16,8 @@ from perflens.docker.adapter import (
 )
 from perflens.docker.identity import (
     LinuxContainerIdentityReader,
+    assert_container_target_current,
+    bind_container_collection_target,
     build_managed_container_target_artifact,
     parse_container_instance,
     parse_container_top,
@@ -237,6 +239,66 @@ def test_resolver_emits_privacy_safe_content_bound_target(tmp_path: Path) -> Non
     assert "/run/docker.sock" not in serialized
     assert "SECRET" not in serialized
     assert "/private/host/path" not in serialized
+
+
+def test_collection_binding_revalidates_every_linux_identity_field(tmp_path: Path) -> None:
+    reader, proc_root, _ = _identity_filesystem(tmp_path)
+    _write_process(
+        proc_root,
+        host_pid=1001,
+        container_pid=1,
+        start_time=9001,
+        executable_name="init",
+    )
+    _write_process(
+        proc_root,
+        host_pid=1002,
+        container_pid=12,
+        start_time=9002,
+        executable_name="worker",
+    )
+    target = resolve_existing_container_target(
+        _adapter(),
+        "service",
+        host_pid=1002,
+        reader=reader,
+        created_at=datetime(2026, 8, 21, tzinfo=UTC),
+    ).artifact
+
+    binding = bind_container_collection_target(target, reader=reader)
+    assert binding.host_pid == 1002
+    assert binding.container_pid == 12
+    assert binding.namespace.pid_namespace_inode == 101
+    assert binding.target_content_sha256 == target.content_sha256
+    assert_container_target_current(binding, reader=reader)
+
+    (proc_root / "1002/stat").write_text(
+        _stat_text(1002, 9003),
+        encoding="ascii",
+    )
+    with pytest.raises(PerfLensError, match="identity changed"):
+        assert_container_target_current(binding, reader=reader)
+
+
+def test_collection_binding_rejects_tampered_public_target(tmp_path: Path) -> None:
+    reader, proc_root, _ = _identity_filesystem(tmp_path)
+    _write_process(
+        proc_root,
+        host_pid=1001,
+        container_pid=1,
+        start_time=9001,
+        executable_name="init",
+    )
+    target = resolve_existing_container_target(
+        _adapter(),
+        "service",
+        host_pid=1001,
+        reader=reader,
+        created_at=datetime(2026, 8, 21, tzinfo=UTC),
+    ).artifact
+    tampered = target.model_copy(update={"executable_name": "different"})
+    with pytest.raises(PerfLensError, match="content digest"):
+        bind_container_collection_target(tampered, reader=reader)
 
 
 def test_managed_target_uses_separate_fixed_recipe_without_private_identity(

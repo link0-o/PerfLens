@@ -18,6 +18,11 @@ from typing import Any, Literal, cast
 
 from perflens import __version__
 from perflens.application.evidence import contract_content_sha256
+from perflens.contracts.artifacts import (
+    ContainerCollectionCgroupBinding,
+    ContainerCollectionNamespaceBinding,
+    ContainerCollectionTargetBinding,
+)
 from perflens.contracts.docker import ContainerTargetArtifact, DockerTargetKind
 from perflens.docker.adapter import DockerCommandAdapter
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -73,6 +78,113 @@ class ResolvedContainerTarget:
     instance: PrivateContainerInstance
     kernel: KernelProcessIdentity
     artifact: ContainerTargetArtifact
+
+
+def bind_container_collection_target(
+    target: ContainerTargetArtifact,
+    *,
+    reader: LinuxContainerIdentityReader | None = None,
+) -> ContainerCollectionTargetBinding:
+    """Revalidate a public Docker target and project only its collection identity."""
+    current = assert_container_target_current(target, reader=reader)
+    return ContainerCollectionTargetBinding(
+        target_id=target.target_id,
+        target_kind=target.target_kind,
+        target_content_sha256=target.content_sha256,
+        container_identity_sha256=target.container_identity_sha256,
+        image_identity_sha256=target.image_identity_sha256,
+        identity_fingerprint=target.identity_fingerprint,
+        container_pid=current.container_pid,
+        host_pid=current.host_pid,
+        host_uid=current.host_uid,
+        host_start_time_ticks=current.host_start_time_ticks,
+        executable_name=current.executable_name,
+        namespace=ContainerCollectionNamespaceBinding(
+            pid_namespace_inode=current.namespace.pid,
+            user_namespace_inode=current.namespace.user,
+            mount_namespace_inode=current.namespace.mount,
+            cgroup_namespace_inode=current.namespace.cgroup,
+        ),
+        cgroup=ContainerCollectionCgroupBinding(
+            inode=current.cgroup_inode,
+            identity_sha256=target.cgroup.identity_sha256,
+        ),
+        uid_mapping=target.uid_mapping,
+        rootful_risk_authorized=target.rootful_risk_authorized,
+        adapter_recipe_id=target.adapter_recipe_id,
+        adapter_sha256=target.adapter_sha256,
+    )
+
+
+def assert_container_target_current(
+    target: ContainerTargetArtifact | ContainerCollectionTargetBinding,
+    *,
+    reader: LinuxContainerIdentityReader | None = None,
+) -> KernelProcessIdentity:
+    """Recheck every public Linux identity field without consulting Docker metadata."""
+    if isinstance(target, ContainerTargetArtifact):
+        expected_content_sha256 = contract_content_sha256(
+            target,
+            exclude={"content_sha256"},
+        )
+        if target.content_sha256 != expected_content_sha256:
+            raise _identity_error("Docker target artifact content digest does not match")
+
+    identity_reader = reader or LinuxContainerIdentityReader()
+    current = identity_reader.inspect_process(target.host_pid)
+    expected_namespace = (
+        target.namespace.pid_namespace_inode,
+        target.namespace.user_namespace_inode,
+        target.namespace.mount_namespace_inode,
+        target.namespace.cgroup_namespace_inode,
+    )
+    current_namespace = (
+        current.namespace.pid,
+        current.namespace.user,
+        current.namespace.mount,
+        current.namespace.cgroup,
+    )
+    if (
+        current.host_uid != target.host_uid
+        or current.host_start_time_ticks != target.host_start_time_ticks
+        or current.container_pid != target.container_pid
+        or current.executable_name != target.executable_name
+        or len(current.nspid) < 2
+        or current_namespace != expected_namespace
+        or current.cgroup_inode != target.cgroup.inode
+    ):
+        raise _identity_error(
+            "Docker target Linux identity changed after publication",
+            recoverable=True,
+        )
+    cgroup_identity = _sha256_text(
+        "cgroup-v2",
+        target.container_identity_sha256,
+        current.cgroup_relative_path,
+        str(current.cgroup_inode),
+    )
+    fingerprint = _sha256_text(
+        target.container_identity_sha256,
+        target.image_identity_sha256,
+        str(current.host_pid),
+        str(current.host_uid),
+        str(current.host_start_time_ticks),
+        str(current.container_pid),
+        str(current.namespace.pid),
+        str(current.namespace.user),
+        str(current.namespace.mount),
+        str(current.namespace.cgroup),
+        str(current.cgroup_inode),
+        cgroup_identity,
+    )
+    if (
+        cgroup_identity != target.cgroup.identity_sha256
+        or fingerprint != target.identity_fingerprint
+    ):
+        raise _identity_error("Docker target identity digest does not match Linux state")
+    if target.target_kind == "managed_temporary_container" and current.container_pid != 1:
+        raise _identity_error("Managed Docker collection target is no longer container init")
+    return current
 
 
 class LinuxContainerIdentityReader:

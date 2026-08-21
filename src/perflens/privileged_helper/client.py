@@ -18,6 +18,7 @@ from perflens.privileged_helper.protocol import (
     HelperCollectionReadyResult,
     HelperCollectionResult,
     HelperCollectPidRequest,
+    HelperDockerTarget,
     HelperHealthRequest,
     HelperHealthResult,
     HelperResponse,
@@ -26,6 +27,29 @@ from perflens.privileged_helper.protocol import (
 )
 
 _PEER_CREDENTIALS = struct.Struct("3i")
+
+
+def _helper_target_from_plan(
+    plan: CollectionPlanArtifact,
+) -> HelperTarget | HelperDockerTarget:
+    if plan.target_runtime == "docker":
+        if plan.container_target is None:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "privileged_helper",
+                "Docker plan lost its container identity binding",
+            )
+        return HelperDockerTarget(
+            pid=plan.target_pid,
+            uid=plan.target_uid,
+            start_time_ticks=plan.target_start_time_ticks,
+            container=plan.container_target,
+        )
+    return HelperTarget(
+        pid=plan.target_pid,
+        uid=plan.target_uid,
+        start_time_ticks=plan.target_start_time_ticks,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,15 +133,12 @@ class HelperClient:
                 "Privileged Helper supports only record and stat PID plans",
             )
         helper_mode = "record" if plan.mode == "record" else "stat"
+        target = _helper_target_from_plan(plan)
         request = HelperCollectPidRequest(
             request_id=f"request-{secrets.token_hex(16)}",
             plan_id=plan.plan_id,
             caller_uid=caller_uid,
-            target=HelperTarget(
-                pid=plan.target_pid,
-                uid=plan.target_uid,
-                start_time_ticks=plan.target_start_time_ticks,
-            ),
+            target=target,
             mode=helper_mode,
             duration_milliseconds=duration_milliseconds,
             frequency_hz=plan.frequency_hz,

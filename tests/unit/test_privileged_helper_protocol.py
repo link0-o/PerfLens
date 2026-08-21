@@ -44,6 +44,8 @@ def test_privileged_helper_valid_golden_frames() -> None:
     assert isinstance(parsed["health.jsonl"], HelperHealthRequest)
     assert isinstance(parsed["record.jsonl"], HelperCollectPidRequest)
     assert isinstance(parsed["stat.jsonl"], HelperCollectPidRequest)
+    assert isinstance(parsed["docker-stat.jsonl"], HelperCollectPidRequest)
+    assert parsed["docker-stat.jsonl"].target.target_runtime == "docker"
     assert parsed["record.jsonl"].report_ready is True
 
     response_fixture = root.parent / "responses/collection-ready.jsonl"
@@ -65,7 +67,7 @@ def test_privileged_helper_invalid_golden_frames_are_rejected(fixture: Path) -> 
 
 
 def test_privileged_helper_rejects_missing_newline_and_trailing_frame() -> None:
-    valid = b'{"schema_version":"1.2","operation":"health","request_id":"request-0123456789abcdef"}'
+    valid = b'{"schema_version":"1.3","operation":"health","request_id":"request-0123456789abcdef"}'
     with pytest.raises(PerfLensError):
         parse_helper_request_frame(valid, now_unix_milliseconds=_NOW_MILLISECONDS)
     with pytest.raises(PerfLensError):
@@ -220,7 +222,12 @@ def test_helper_collect_request_rejects_inconsistent_fallback_policy(
         "request_id": "request-0123456789abcdef",
         "plan_id": "plan-0123456789abcdefabcd",
         "caller_uid": 1000,
-        "target": {"pid": 1234, "uid": 1000, "start_time_ticks": 5678},
+        "target": {
+            "target_runtime": "host",
+            "pid": 1234,
+            "uid": 1000,
+            "start_time_ticks": 5678,
+        },
         "duration_milliseconds": 1000,
         "max_output_bytes": 1024,
         "expires_at_unix_milliseconds": _NOW_MILLISECONDS + 1000,

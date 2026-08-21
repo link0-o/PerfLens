@@ -7,10 +7,10 @@ from typing import Annotated, Any, Literal, cast
 
 from pydantic import Field, TypeAdapter, model_validator
 
-from perflens.contracts.artifacts import ContractModel
+from perflens.contracts.artifacts import ContainerCollectionTargetBinding, ContractModel
 from perflens.domain.errors import ErrorCode, PerfLensError
 
-HELPER_SCHEMA_VERSION = "1.2"
+HELPER_SCHEMA_VERSION = "1.3"
 MAX_HELPER_MESSAGE_BYTES = 64 << 10
 MAX_HELPER_PLAN_TTL_MILLISECONDS = 120_000
 MAX_HELPER_DURATION_MILLISECONDS = 86_400_000
@@ -29,24 +29,49 @@ _SOFTWARE_STAT_EVENTS = (
 
 
 class HelperTarget(ContractModel):
+    target_runtime: Literal["host"] = "host"
     pid: int = Field(gt=0, le=2_147_483_647)
     uid: int = Field(ge=0, le=4_294_967_295)
     start_time_ticks: int = Field(gt=0, le=18_446_744_073_709_551_615)
 
 
+class HelperDockerTarget(ContractModel):
+    target_runtime: Literal["docker"] = "docker"
+    pid: int = Field(gt=0, le=2_147_483_647)
+    uid: int = Field(ge=0, le=4_294_967_295)
+    start_time_ticks: int = Field(gt=0, le=18_446_744_073_709_551_615)
+    container: ContainerCollectionTargetBinding
+
+    @model_validator(mode="after")
+    def bind_linux_identity(self) -> HelperDockerTarget:
+        if (
+            self.pid != self.container.host_pid
+            or self.uid != self.container.host_uid
+            or self.start_time_ticks != self.container.host_start_time_ticks
+        ):
+            raise ValueError("Helper Docker target differs from its Linux identity binding")
+        return self
+
+
+HelperCollectionTarget = Annotated[
+    HelperTarget | HelperDockerTarget,
+    Field(discriminator="target_runtime"),
+]
+
+
 class HelperHealthRequest(ContractModel):
-    schema_version: Literal["1.2"] = HELPER_SCHEMA_VERSION
+    schema_version: Literal["1.3"] = HELPER_SCHEMA_VERSION
     operation: Literal["health"] = "health"
     request_id: str = Field(pattern=r"^request-[a-f0-9]{16,64}$")
 
 
 class HelperCollectPidRequest(ContractModel):
-    schema_version: Literal["1.2"] = HELPER_SCHEMA_VERSION
+    schema_version: Literal["1.3"] = HELPER_SCHEMA_VERSION
     operation: Literal["collect_pid"] = "collect_pid"
     request_id: str = Field(pattern=r"^request-[a-f0-9]{16,64}$")
     plan_id: str = Field(pattern=r"^plan-[a-f0-9]{20}$")
     caller_uid: int = Field(ge=0, le=4_294_967_295)
-    target: HelperTarget
+    target: HelperCollectionTarget
     mode: Literal["record", "stat"]
     duration_milliseconds: int = Field(gt=0, le=MAX_HELPER_DURATION_MILLISECONDS)
     frequency_hz: int | None = Field(default=None, ge=1, le=MAX_HELPER_FREQUENCY_HZ)
@@ -63,6 +88,18 @@ class HelperCollectPidRequest(ContractModel):
 
     @model_validator(mode="after")
     def validate_mode_fields(self) -> HelperCollectPidRequest:
+        if isinstance(self.target, HelperTarget):
+            if self.caller_uid != self.target.uid:
+                raise ValueError("Host Helper target UID must match its caller")
+        elif self.target.container.uid_mapping == "rootful_cross_uid":
+            if (
+                self.target.uid != 0
+                or not self.target.container.rootful_risk_authorized
+                or self.caller_uid == self.target.uid
+            ):
+                raise ValueError("Cross-UID Docker Helper target is not a bounded rootful target")
+        elif self.caller_uid != self.target.uid:
+            raise ValueError("Same-UID Docker Helper target UID must match its caller")
         all_events = (*self.events, *self.fallback_events)
         if any(not event or len(event) > 128 or "\0" in event for event in all_events):
             raise ValueError("Helper events must be non-empty, bounded, and contain no NUL")
@@ -191,7 +228,7 @@ class HelperErrorBody(ContractModel):
 
 
 class HelperResponse(ContractModel):
-    schema_version: Literal["1.2"] = HELPER_SCHEMA_VERSION
+    schema_version: Literal["1.3"] = HELPER_SCHEMA_VERSION
     request_id: str = Field(pattern=r"^(unknown|request-[a-f0-9]{16,64})$")
     ok: bool
     result: (

@@ -21,7 +21,7 @@ use crate::execution::{
     prepare_production_environment,
 };
 
-pub const HELPER_SCHEMA_VERSION: &str = "1.2";
+pub const HELPER_SCHEMA_VERSION: &str = "1.3";
 pub const MAX_HELPER_MESSAGE_BYTES: usize = 64 << 10;
 pub const MAX_HELPER_PLAN_TTL_MILLISECONDS: u64 = 120_000;
 pub const MAX_HELPER_DURATION_MILLISECONDS: u64 = 86_400_000;
@@ -34,9 +34,79 @@ pub const PRIVATE_HELPER_SOCKET: &str = "/run/perflens-helper/helper.sock";
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HelperTarget {
+    pub target_runtime: TargetRuntime,
     pub pid: u32,
     pub uid: u32,
     pub start_time_ticks: u64,
+    pub container: Option<Box<ContainerTargetBinding>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetRuntime {
+    Host,
+    Docker,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DockerTargetKind {
+    ExistingContainer,
+    ManagedTemporaryContainer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DockerUidMapping {
+    RootlessSameUid,
+    RootfulSameUid,
+    RootfulCrossUid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DockerAdapterRecipe {
+    LocalDockerReadV1,
+    LocalDockerManagedV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContainerNamespaceBinding {
+    pub pid_namespace_inode: u64,
+    pub user_namespace_inode: u64,
+    pub mount_namespace_inode: u64,
+    pub cgroup_namespace_inode: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContainerCgroupBinding {
+    pub version: String,
+    pub inode: u64,
+    pub identity_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContainerTargetBinding {
+    pub target_id: String,
+    pub target_kind: DockerTargetKind,
+    pub target_content_sha256: String,
+    pub container_identity_sha256: String,
+    pub image_identity_sha256: String,
+    pub identity_fingerprint: String,
+    pub container_pid: u32,
+    pub host_pid: u32,
+    pub host_uid: u32,
+    pub host_start_time_ticks: u64,
+    pub executable_name: String,
+    pub namespace: ContainerNamespaceBinding,
+    pub cgroup: ContainerCgroupBinding,
+    pub uid_mapping: DockerUidMapping,
+    pub rootful_risk_authorized: bool,
+    pub adapter_recipe_id: DockerAdapterRecipe,
+    pub adapter_sha256: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -587,7 +657,6 @@ fn validate_request(
             if !valid_identifier(plan_id, "plan-", 20, 20)
                 || target.pid == 0
                 || target.pid > i32::MAX.cast_unsigned()
-                || *caller_uid != target.uid
                 || target.start_time_ticks == 0
                 || *duration_milliseconds == 0
                 || *duration_milliseconds > MAX_HELPER_DURATION_MILLISECONDS
@@ -596,6 +665,7 @@ fn validate_request(
             {
                 return Err(schema_error());
             }
+            validate_target(target, *caller_uid)?;
             validate_mode_fields(ModeFields {
                 mode: *mode,
                 frequency_hz: *frequency_hz,
@@ -616,6 +686,65 @@ fn validate_request(
         }
     }
     Ok(())
+}
+
+fn validate_target(target: &HelperTarget, caller_uid: u32) -> Result<(), ProtocolError> {
+    match (&target.target_runtime, &target.container) {
+        (TargetRuntime::Host, None) if caller_uid == target.uid => Ok(()),
+        (TargetRuntime::Docker, Some(container)) => {
+            let recipe_matches = matches!(
+                (container.target_kind, container.adapter_recipe_id),
+                (
+                    DockerTargetKind::ExistingContainer,
+                    DockerAdapterRecipe::LocalDockerReadV1
+                ) | (
+                    DockerTargetKind::ManagedTemporaryContainer,
+                    DockerAdapterRecipe::LocalDockerManagedV1
+                )
+            );
+            let risk_matches = match container.uid_mapping {
+                DockerUidMapping::RootfulCrossUid => {
+                    container.rootful_risk_authorized && target.uid == 0 && caller_uid != target.uid
+                }
+                DockerUidMapping::RootlessSameUid | DockerUidMapping::RootfulSameUid => {
+                    !container.rootful_risk_authorized && caller_uid == target.uid
+                }
+            };
+            let hashes = [
+                &container.target_content_sha256,
+                &container.container_identity_sha256,
+                &container.image_identity_sha256,
+                &container.identity_fingerprint,
+                &container.cgroup.identity_sha256,
+                &container.adapter_sha256,
+            ];
+            if container.host_pid != target.pid
+                || container.host_uid != target.uid
+                || container.host_start_time_ticks != target.start_time_ticks
+                || container.container_pid == 0
+                || !valid_identifier(&container.target_id, "container-target-", 20, 20)
+                || hashes.into_iter().any(|value| !valid_sha256(value))
+                || container.cgroup.version != "v2"
+                || container.cgroup.inode == 0
+                || container.namespace.pid_namespace_inode == 0
+                || container.namespace.user_namespace_inode == 0
+                || container.namespace.mount_namespace_inode == 0
+                || container.namespace.cgroup_namespace_inode == 0
+                || container.executable_name.is_empty()
+                || container.executable_name.len() > 255
+                || container
+                    .executable_name
+                    .bytes()
+                    .any(|byte| byte == b'/' || byte < 0x20 || byte == 0x7f)
+                || !recipe_matches
+                || !risk_matches
+            {
+                return Err(schema_error());
+            }
+            Ok(())
+        }
+        _ => Err(schema_error()),
+    }
 }
 
 fn validate_common(schema_version: &str, request_id: &str) -> Result<(), ProtocolError> {
@@ -733,6 +862,13 @@ fn valid_identifier(value: &str, prefix: &str, minimum: usize, maximum: usize) -
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 const fn schema_error() -> ProtocolError {
     ProtocolError::new(
         ProtocolErrorKind::Schema,
@@ -784,6 +920,8 @@ mod tests {
             include_bytes!("../../../tests/fixtures/privileged_helper/valid/stat.jsonl").as_slice(),
             include_bytes!("../../../tests/fixtures/privileged_helper/valid/record.jsonl")
                 .as_slice(),
+            include_bytes!("../../../tests/fixtures/privileged_helper/valid/docker-stat.jsonl")
+                .as_slice(),
         ];
         let parsed = fixtures
             .iter()
@@ -793,6 +931,7 @@ mod tests {
         assert!(matches!(parsed[0], HelperRequest::Health { .. }));
         assert!(matches!(parsed[1], HelperRequest::CollectPid { .. }));
         assert!(matches!(parsed[2], HelperRequest::CollectPid { .. }));
+        assert!(matches!(parsed[3], HelperRequest::CollectPid { .. }));
     }
 
     #[test]
@@ -834,6 +973,10 @@ mod tests {
                 "../../../tests/fixtures/privileged_helper/invalid/duplicate-request-id.jsonl"
             )
             .as_slice(),
+            include_bytes!(
+                "../../../tests/fixtures/privileged_helper/invalid/docker-target-mismatch.jsonl"
+            )
+            .as_slice(),
             include_bytes!("../../../tests/fixtures/privileged_helper/invalid/expired.jsonl")
                 .as_slice(),
             include_bytes!(
@@ -864,7 +1007,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_or_multiple_frame_terminators() {
-        let frame = br#"{"schema_version":"1.2","operation":"health","request_id":"request-0123456789abcdef"}"#;
+        let frame = br#"{"schema_version":"1.3","operation":"health","request_id":"request-0123456789abcdef"}"#;
         let error = parse_request_frame(frame, NOW_MILLISECONDS).expect_err("newline is required");
         assert_eq!(error.kind(), ProtocolErrorKind::Frame);
 
@@ -896,7 +1039,7 @@ mod tests {
             .expect("server join")
             .expect("server response");
         assert!(response.ends_with('\n'));
-        assert!(response.contains("\"schema_version\":\"1.2\""));
+        assert!(response.contains("\"schema_version\":\"1.3\""));
         assert!(response.contains("\"privilege_mode\":\"paranoid3_helper\""));
         assert!(!response.contains("profile"));
     }

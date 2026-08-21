@@ -7,10 +7,10 @@ from typing import Annotated, Any, Literal, cast
 
 from pydantic import Field, TypeAdapter, model_validator
 
-from perflens.contracts.artifacts import ContractModel
+from perflens.contracts.artifacts import ContainerCollectionTargetBinding, ContractModel
 from perflens.domain.errors import ErrorCode, PerfLensError
 
-TRACE_HELPER_SCHEMA_VERSION = "1.0"
+TRACE_HELPER_SCHEMA_VERSION = "1.1"
 MAX_TRACE_HELPER_MESSAGE_BYTES = 64 << 10
 MAX_TRACE_HELPER_PLAN_TTL_MILLISECONDS = 120_000
 MAX_TRACE_HELPER_DURATION_MILLISECONDS = 10_000
@@ -19,24 +19,49 @@ MAX_TRACE_HELPER_OBSERVED_TIDS = 65_536
 
 
 class TraceHelperTarget(ContractModel):
+    target_runtime: Literal["host"] = "host"
     pid: int = Field(gt=0, le=2_147_483_647)
     uid: int = Field(ge=0, le=4_294_967_295)
     start_time_ticks: int = Field(gt=0, le=18_446_744_073_709_551_615)
 
 
+class TraceHelperDockerTarget(ContractModel):
+    target_runtime: Literal["docker"] = "docker"
+    pid: int = Field(gt=0, le=2_147_483_647)
+    uid: int = Field(ge=0, le=4_294_967_295)
+    start_time_ticks: int = Field(gt=0, le=18_446_744_073_709_551_615)
+    container: ContainerCollectionTargetBinding
+
+    @model_validator(mode="after")
+    def bind_linux_identity(self) -> TraceHelperDockerTarget:
+        if (
+            self.pid != self.container.host_pid
+            or self.uid != self.container.host_uid
+            or self.start_time_ticks != self.container.host_start_time_ticks
+        ):
+            raise ValueError("Trace Helper Docker target differs from its Linux identity binding")
+        return self
+
+
+TraceHelperCollectionTarget = Annotated[
+    TraceHelperTarget | TraceHelperDockerTarget,
+    Field(discriminator="target_runtime"),
+]
+
+
 class TraceHelperHealthRequest(ContractModel):
-    schema_version: Literal["1.0"] = TRACE_HELPER_SCHEMA_VERSION
+    schema_version: Literal["1.1"] = TRACE_HELPER_SCHEMA_VERSION
     operation: Literal["health"] = "health"
     request_id: str = Field(pattern=r"^request-[a-f0-9]{16,64}$")
 
 
 class TraceHelperCollectPidRequest(ContractModel):
-    schema_version: Literal["1.0"] = TRACE_HELPER_SCHEMA_VERSION
+    schema_version: Literal["1.1"] = TRACE_HELPER_SCHEMA_VERSION
     operation: Literal["collect_pid"] = "collect_pid"
     request_id: str = Field(pattern=r"^request-[a-f0-9]{16,64}$")
     plan_id: str = Field(pattern=r"^trace-plan-[a-f0-9]{20}$")
     caller_uid: int = Field(ge=0, le=4_294_967_295)
-    target: TraceHelperTarget
+    target: TraceHelperCollectionTarget
     mode: Literal["sched", "off_cpu", "lock"]
     duration_milliseconds: int = Field(
         gt=0,
@@ -49,9 +74,21 @@ class TraceHelperCollectPidRequest(ContractModel):
     report_ready: bool = Field(strict=True)
 
     @model_validator(mode="after")
-    def require_caller_to_match_target(self) -> TraceHelperCollectPidRequest:
-        if self.caller_uid != self.target.uid:
-            raise ValueError("Trace Helper caller UID must match the target UID")
+    def require_bounded_caller_target_relation(self) -> TraceHelperCollectPidRequest:
+        if isinstance(self.target, TraceHelperTarget):
+            if self.caller_uid != self.target.uid:
+                raise ValueError("Host Trace Helper caller UID must match the target UID")
+        elif self.target.container.uid_mapping == "rootful_cross_uid":
+            if (
+                self.target.uid != 0
+                or not self.target.container.rootful_risk_authorized
+                or self.caller_uid == self.target.uid
+            ):
+                raise ValueError(
+                    "Cross-UID Docker Trace target is not a bounded rootful target"
+                )
+        elif self.caller_uid != self.target.uid:
+            raise ValueError("Same-UID Docker Trace target UID must match its caller")
         return self
 
 
@@ -140,7 +177,7 @@ class TraceHelperErrorBody(ContractModel):
 
 
 class TraceHelperResponse(ContractModel):
-    schema_version: Literal["1.0"] = TRACE_HELPER_SCHEMA_VERSION
+    schema_version: Literal["1.1"] = TRACE_HELPER_SCHEMA_VERSION
     request_id: str = Field(pattern=r"^(unknown|request-[a-f0-9]{16,64})$")
     ok: bool
     result: (

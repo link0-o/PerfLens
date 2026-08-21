@@ -14,7 +14,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Literal, cast
 
 import pytest
 from pydantic import ValidationError
@@ -43,7 +43,13 @@ from perflens.collector_broker.server import (
     _read_frame,
 )
 from perflens.collector_broker.state import replay_marker_name
-from perflens.contracts.artifacts import CollectionArtifact, CollectionPlanArtifact
+from perflens.contracts.artifacts import (
+    CollectionArtifact,
+    CollectionPlanArtifact,
+    ContainerCollectionCgroupBinding,
+    ContainerCollectionNamespaceBinding,
+    ContainerCollectionTargetBinding,
+)
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 
@@ -90,6 +96,54 @@ def _plan() -> CollectionPlanArtifact:
         expires_at=(datetime.now(tz=UTC) + timedelta(minutes=1)).isoformat(),
         policy_status="allowed",
         required_privilege="cap_perfmon",
+    )
+
+
+def _docker_plan(
+    *,
+    target_uid: int,
+    uid_mapping: Literal[
+        "rootless_same_uid",
+        "rootful_same_uid",
+        "rootful_cross_uid",
+    ],
+    rootful_risk_authorized: bool,
+) -> CollectionPlanArtifact:
+    target = ContainerCollectionTargetBinding(
+        target_id="container-target-0123456789abcdefabcd",
+        target_kind="existing_container",
+        target_content_sha256="a" * 64,
+        container_identity_sha256="b" * 64,
+        image_identity_sha256="c" * 64,
+        identity_fingerprint="d" * 64,
+        container_pid=1,
+        host_pid=4242,
+        host_uid=target_uid,
+        host_start_time_ticks=12345,
+        executable_name="worker",
+        namespace=ContainerCollectionNamespaceBinding(
+            pid_namespace_inode=101,
+            user_namespace_inode=102,
+            mount_namespace_inode=103,
+            cgroup_namespace_inode=104,
+        ),
+        cgroup=ContainerCollectionCgroupBinding(
+            inode=105,
+            identity_sha256="e" * 64,
+        ),
+        uid_mapping=uid_mapping,
+        rootful_risk_authorized=rootful_risk_authorized,
+        adapter_recipe_id="local-docker-read-v1",
+        adapter_sha256="f" * 64,
+    )
+    return _plan().model_copy(
+        update={
+            "target_pid": target.host_pid,
+            "target_uid": target.host_uid,
+            "target_start_time_ticks": target.host_start_time_ticks,
+            "target_runtime": "docker",
+            "container_target": target,
+        }
     )
 
 
@@ -172,6 +226,30 @@ def test_broker_authorization_denies_every_out_of_policy_dimension(tmp_path: Pat
         os.geteuid(),
         base.model_copy(update={"target_uid": os.geteuid() + 1}),
     )
+
+
+def test_broker_authorizes_rootless_docker_but_keeps_rootful_fail_closed(
+    tmp_path: Path,
+) -> None:
+    peer_uid = 1234
+    base_policy = replace(_policy(tmp_path), allowed_uids=(peer_uid,))
+    rootless = _docker_plan(
+        target_uid=peer_uid,
+        uid_mapping="rootless_same_uid",
+        rootful_risk_authorized=False,
+    )
+    _broker_with_policy(base_policy)._authorize(peer_uid, rootless)
+
+    rootful = _docker_plan(
+        target_uid=0,
+        uid_mapping="rootful_cross_uid",
+        rootful_risk_authorized=True,
+    )
+    generic_cross_uid = replace(base_policy, allow_other_target_uids=True)
+    with pytest.raises(PerfLensError, match="not enabled"):
+        _broker_with_policy(generic_cross_uid)._authorize(peer_uid, rootful)
+    with pytest.raises(PerfLensError, match="not enabled"):
+        _broker_with_policy(base_policy)._authorize(peer_uid, rootful)
 
 
 def test_broker_health_allows_root_admin_without_relaxing_user_policy(

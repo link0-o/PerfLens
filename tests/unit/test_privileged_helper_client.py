@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# pyright: reportPrivateUsage=false
 import json
 import os
 import socket
@@ -11,16 +12,22 @@ from typing import Literal
 import pytest
 
 import perflens.privileged_helper as privileged_helper
-from perflens.contracts.artifacts import CollectionPlanArtifact
+from perflens.contracts.artifacts import (
+    CollectionPlanArtifact,
+    ContainerCollectionTargetBinding,
+)
 from perflens.domain.errors import ErrorCode, PerfLensError
-from perflens.privileged_helper.client import HelperClient
+from perflens.privileged_helper.client import HelperClient, _helper_target_from_plan
 from perflens.privileged_helper.protocol import (
     HELPER_SCHEMA_VERSION,
     HelperCollectionReadyResult,
     HelperCollectionResult,
+    HelperCollectPidRequest,
+    HelperDockerTarget,
     HelperErrorBody,
     HelperHealthResult,
     HelperResponse,
+    parse_helper_request_frame,
 )
 
 
@@ -112,6 +119,33 @@ def _collection_plan(*, mode: Literal["stat", "sched"] = "stat") -> CollectionPl
         policy_status="allowed",
         required_privilege="cap_sys_admin_or_policy_change",
     )
+
+
+def test_helper_client_preserves_complete_docker_target_binding() -> None:
+    fixture = (
+        Path(__file__).parents[1]
+        / "fixtures/privileged_helper/valid/docker-stat.jsonl"
+    )
+    request = parse_helper_request_frame(
+        fixture.read_bytes(),
+        now_unix_milliseconds=4_102_444_700_000,
+    )
+    assert isinstance(request, HelperCollectPidRequest)
+    assert isinstance(request.target, HelperDockerTarget)
+    binding = ContainerCollectionTargetBinding.model_validate(
+        request.target.container.model_dump()
+    )
+    plan = _collection_plan().model_copy(
+        update={
+            "target_pid": request.target.pid,
+            "target_uid": request.target.uid,
+            "target_start_time_ticks": request.target.start_time_ticks,
+            "target_runtime": "docker",
+            "container_target": binding,
+        }
+    )
+
+    assert _helper_target_from_plan(plan) == request.target
 
 
 def test_helper_client_submits_typed_collection_and_binds_result(tmp_path: Path) -> None:

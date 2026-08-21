@@ -17,8 +17,14 @@ from perflens.collector_broker.client import (
     _verify_trace_evidence_receipt,
 )
 from perflens.collector_broker.protocol import BrokerTraceEvidenceReference
-from perflens.collector_broker.trace import TraceCollectionCoordinator
-from perflens.contracts.artifacts import CollectionPlanArtifact
+from perflens.collector_broker.trace import (
+    TraceCollectionCoordinator,
+    _trace_helper_target_from_plan,
+)
+from perflens.contracts.artifacts import (
+    CollectionPlanArtifact,
+    ContainerCollectionTargetBinding,
+)
 from perflens.contracts.trace import TraceEvidenceArtifact
 from perflens.domain.errors import PerfLensError
 from perflens.trace_helper.client import TraceHelperClient
@@ -26,7 +32,9 @@ from perflens.trace_helper.policy import TracePolicy
 from perflens.trace_helper.protocol import (
     TraceHelperCollectionResult,
     TraceHelperCollectPidRequest,
+    TraceHelperDockerTarget,
     TraceHelperHealthResult,
+    parse_trace_helper_request_frame,
 )
 
 
@@ -128,6 +136,33 @@ def _trace_plan() -> CollectionPlanArtifact:
         policy_status="allowed",
         required_privilege="cap_perfmon",
     )
+
+
+def test_trace_coordinator_preserves_complete_docker_target_binding() -> None:
+    fixture = (
+        Path(__file__).parents[1]
+        / "fixtures/trace_helper/valid/docker-sched.jsonl"
+    )
+    request = parse_trace_helper_request_frame(
+        fixture.read_bytes(),
+        now_unix_milliseconds=4_102_444_700_000,
+    )
+    assert isinstance(request, TraceHelperCollectPidRequest)
+    assert isinstance(request.target, TraceHelperDockerTarget)
+    binding = ContainerCollectionTargetBinding.model_validate(
+        request.target.container.model_dump()
+    )
+    plan = _trace_plan().model_copy(
+        update={
+            "target_pid": request.target.pid,
+            "target_uid": request.target.uid,
+            "target_start_time_ticks": request.target.start_time_ticks,
+            "target_runtime": "docker",
+            "container_target": binding,
+        }
+    )
+
+    assert _trace_helper_target_from_plan(plan) == request.target
 
 
 def _coordinator(tmp_path: Path, plan: CollectionPlanArtifact) -> TraceCollectionCoordinator:

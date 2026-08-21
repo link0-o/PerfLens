@@ -19,7 +19,8 @@ use nix::unistd::{Pid, getegid, geteuid};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ActualEventSource, CallGraph, CollectionMode, HelperTarget, RecordEvent, RequestedEventSource,
+    ActualEventSource, CallGraph, CollectionMode, DockerTargetKind, HelperTarget, RecordEvent,
+    RequestedEventSource, TargetRuntime,
 };
 
 const SPOOL_ROOT: &str = "/var/lib/perflens-helper";
@@ -218,14 +219,22 @@ fn validate_plan(plan: &ExecutionPlan, allowed_uid: u32) -> Result<(), Execution
 }
 
 fn assert_pid_identity(target: &HelperTarget) -> Result<(), ExecutionError> {
+    assert_pid_identity_at(target, Path::new("/proc"), Path::new("/sys/fs/cgroup"))
+}
+
+fn assert_pid_identity_at(
+    target: &HelperTarget,
+    proc_root: &Path,
+    cgroup_root: &Path,
+) -> Result<(), ExecutionError> {
     if target.pid == std::process::id() {
         return Err(denied("Privileged Helper cannot profile its own process"));
     }
-    let proc_root = PathBuf::from(format!("/proc/{}", target.pid));
-    let metadata = proc_root
+    let process_root = proc_root.join(target.pid.to_string());
+    let metadata = process_root
         .metadata()
         .map_err(|_error| denied("Target PID identity cannot be inspected"))?;
-    let stat_text = fs::read_to_string(proc_root.join("stat"))
+    let stat_text = fs::read_to_string(process_root.join("stat"))
         .map_err(|_error| denied("Target PID identity cannot be inspected"))?;
     let closing = stat_text
         .rfind(')')
@@ -238,7 +247,202 @@ fn assert_pid_identity(target: &HelperTarget) -> Result<(), ExecutionError> {
     if metadata.uid() != target.uid || start_time_ticks != target.start_time_ticks {
         return Err(denied("Target PID owner or start time changed"));
     }
+    match (&target.target_runtime, &target.container) {
+        (TargetRuntime::Host, None) => {}
+        (TargetRuntime::Docker, Some(container)) => {
+            assert_docker_identity(&process_root, cgroup_root, target, container)?;
+        }
+        _ => return Err(denied("Target runtime and container binding differ")),
+    }
     Ok(())
+}
+
+fn assert_docker_identity(
+    proc_root: &Path,
+    cgroup_root: &Path,
+    target: &HelperTarget,
+    container: &crate::ContainerTargetBinding,
+) -> Result<(), ExecutionError> {
+    let status = fs::read_to_string(proc_root.join("status"))
+        .map_err(|_error| denied("Docker target status cannot be inspected"))?;
+    let uid_values = parse_u32_status_field(&status, "Uid:")?;
+    let namespace_pids = parse_u32_status_field(&status, "NSpid:")?;
+    if uid_values.len() != 4
+        || uid_values.iter().any(|uid| *uid != target.uid)
+        || namespace_pids.len() < 2
+        || namespace_pids.first() != Some(&target.pid)
+        || namespace_pids.last() != Some(&container.container_pid)
+    {
+        return Err(denied("Docker target UID or NSpid identity changed"));
+    }
+    for (name, expected_inode) in [
+        ("pid", container.namespace.pid_namespace_inode),
+        ("user", container.namespace.user_namespace_inode),
+        ("mnt", container.namespace.mount_namespace_inode),
+        ("cgroup", container.namespace.cgroup_namespace_inode),
+    ] {
+        if namespace_inode(proc_root, name)? != expected_inode {
+            return Err(denied("Docker target namespace identity changed"));
+        }
+    }
+    let executable_name = fs::read_to_string(proc_root.join("comm"))
+        .map_err(|_error| denied("Docker target executable name cannot be inspected"))?;
+    if executable_name
+        .strip_suffix('\n')
+        .unwrap_or(&executable_name)
+        != container.executable_name
+    {
+        return Err(denied("Docker target executable identity changed"));
+    }
+    let cgroup_identity = assert_docker_cgroup(proc_root, cgroup_root, container)?;
+    let fingerprint = docker_identity_fingerprint(target, container, &cgroup_identity);
+    if fingerprint != container.identity_fingerprint
+        || (container.target_kind == DockerTargetKind::ManagedTemporaryContainer
+            && container.container_pid != 1)
+    {
+        return Err(denied("Docker target identity fingerprint changed"));
+    }
+    Ok(())
+}
+
+fn parse_u32_status_field(text: &str, prefix: &str) -> Result<Vec<u32>, ExecutionError> {
+    text.lines()
+        .find_map(|line| line.strip_prefix(prefix))
+        .ok_or_else(|| denied("Docker target status field is missing"))?
+        .split_whitespace()
+        .map(|value| {
+            value
+                .parse::<u32>()
+                .map_err(|_error| denied("Docker target status field is malformed"))
+        })
+        .collect()
+}
+
+fn assert_docker_cgroup(
+    proc_root: &Path,
+    cgroup_root: &Path,
+    container: &crate::ContainerTargetBinding,
+) -> Result<String, ExecutionError> {
+    let cgroup_text = fs::read_to_string(proc_root.join("cgroup"))
+        .map_err(|_error| denied("Docker target cgroup cannot be inspected"))?;
+    let cgroup_path = parse_cgroup_v2_path(&cgroup_text)?;
+    let cgroup_directory = cgroup_root.join(cgroup_path.trim_start_matches('/'));
+    let resolved = cgroup_directory
+        .canonicalize()
+        .map_err(|_error| denied("Docker target cgroup directory cannot be resolved"))?;
+    let metadata = cgroup_directory
+        .metadata()
+        .map_err(|_error| denied("Docker target cgroup directory cannot be inspected"))?;
+    if resolved != cgroup_directory
+        || !metadata.is_dir()
+        || metadata.ino() != container.cgroup.inode
+    {
+        return Err(denied("Docker target cgroup inode changed"));
+    }
+    let inode = container.cgroup.inode.to_string();
+    let identity = sha256_nul(&[
+        "cgroup-v2",
+        &container.container_identity_sha256,
+        cgroup_path,
+        &inode,
+    ]);
+    if identity != container.cgroup.identity_sha256 {
+        return Err(denied("Docker target cgroup identity digest changed"));
+    }
+    Ok(identity)
+}
+
+fn docker_identity_fingerprint(
+    target: &HelperTarget,
+    container: &crate::ContainerTargetBinding,
+    cgroup_identity: &str,
+) -> String {
+    let fields = [
+        target.pid.to_string(),
+        target.uid.to_string(),
+        target.start_time_ticks.to_string(),
+        container.container_pid.to_string(),
+        container.namespace.pid_namespace_inode.to_string(),
+        container.namespace.user_namespace_inode.to_string(),
+        container.namespace.mount_namespace_inode.to_string(),
+        container.namespace.cgroup_namespace_inode.to_string(),
+        container.cgroup.inode.to_string(),
+    ];
+    sha256_nul(&[
+        &container.container_identity_sha256,
+        &container.image_identity_sha256,
+        &fields[0],
+        &fields[1],
+        &fields[2],
+        &fields[3],
+        &fields[4],
+        &fields[5],
+        &fields[6],
+        &fields[7],
+        &fields[8],
+        cgroup_identity,
+    ])
+}
+
+fn namespace_inode(proc_root: &Path, namespace: &str) -> Result<u64, ExecutionError> {
+    let value = fs::read_link(proc_root.join("ns").join(namespace))
+        .map_err(|_error| denied("Docker target namespace cannot be inspected"))?;
+    let text = value
+        .to_str()
+        .ok_or_else(|| denied("Docker target namespace identity is malformed"))?;
+    let prefix = format!("{namespace}:[");
+    text.strip_prefix(&prefix)
+        .and_then(|tail| tail.strip_suffix(']'))
+        .and_then(|inode| inode.parse::<u64>().ok())
+        .filter(|inode| *inode > 0)
+        .ok_or_else(|| denied("Docker target namespace identity is malformed"))
+}
+
+fn parse_cgroup_v2_path(text: &str) -> Result<&str, ExecutionError> {
+    let mut lines = text.lines().filter(|line| !line.is_empty());
+    let line = lines
+        .next()
+        .ok_or_else(|| denied("Docker target cgroup identity is missing"))?;
+    let value = line
+        .strip_prefix("0::")
+        .ok_or_else(|| denied("Docker target is not in one cgroup-v2 hierarchy"))?;
+    if lines.next().is_some()
+        || !value.starts_with('/')
+        || value.contains('\0')
+        || value.len() > 4096
+        || value.contains("//")
+        || (value != "/" && value.ends_with('/'))
+        || Path::new(value).components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        })
+    {
+        return Err(denied("Docker target cgroup-v2 path is unsafe"));
+    }
+    Ok(value)
+}
+
+fn sha256_nul(parts: &[&str]) -> String {
+    let mut digest = Sha256::new();
+    for (index, part) in parts.iter().enumerate() {
+        if index > 0 {
+            digest.update([0]);
+        }
+        digest.update(part.as_bytes());
+    }
+    hex_sha256(digest.finalize().as_slice())
+}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 fn trusted_root_executable(path: &Path) -> Result<PathBuf, ExecutionError> {
@@ -1279,7 +1483,7 @@ const fn resource_error(message: &'static str) -> ExecutionError {
 #[cfg(test)]
 mod tests {
     use std::io::{BufReader, Write};
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
@@ -1288,30 +1492,189 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use nix::sys::signal::Signal;
+    use nix::unistd::geteuid;
 
     use super::{
         ExecutionPlan, MAX_DURATION_MILLISECONDS, REPLAY_RETENTION, SOFTWARE_STAT_EVENTS,
-        authorize_spool_capacity, consume_plan, denied, execute_perf, execute_perf_with_ready,
-        perf_status_succeeded, prune_replay_markers, read_perf_control_ack,
-        recover_stale_temporary_files, stat_output_has_usable_requested_hardware_counts,
-        trusted_root_executable, validate_plan, validate_spool_entries,
+        assert_pid_identity_at, authorize_spool_capacity, consume_plan, denied,
+        docker_identity_fingerprint, execute_perf, execute_perf_with_ready, perf_status_succeeded,
+        prune_replay_markers, read_perf_control_ack, recover_stale_temporary_files, sha256_nul,
+        stat_output_has_usable_requested_hardware_counts, trusted_root_executable, validate_plan,
+        validate_spool_entries,
     };
     use crate::{
-        ActualEventSource, CallGraph, CollectionMode, HelperTarget, RecordEvent,
-        RequestedEventSource,
+        ActualEventSource, CallGraph, CollectionMode, ContainerCgroupBinding,
+        ContainerNamespaceBinding, ContainerTargetBinding, DockerAdapterRecipe, DockerTargetKind,
+        DockerUidMapping, HelperTarget, RecordEvent, RequestedEventSource, TargetRuntime,
     };
 
     static TEST_ID: AtomicU64 = AtomicU64::new(0);
     static EXECUTION_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct DockerIdentityFixture {
+        root: std::path::PathBuf,
+        proc_root: std::path::PathBuf,
+        cgroup_root: std::path::PathBuf,
+        process_root: std::path::PathBuf,
+        target: HelperTarget,
+    }
+
+    impl Drop for DockerIdentityFixture {
+        fn drop(&mut self) {
+            let _ignored = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn docker_identity_fixture() -> DockerIdentityFixture {
+        let root = std::env::temp_dir().join(format!(
+            "perflens-helper-docker-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let proc_root = root.join("proc");
+        let cgroup_root = root.join("cgroup");
+        let process_root = proc_root.join("4242");
+        let namespace_root = process_root.join("ns");
+        let cgroup_directory = cgroup_root.join("docker/session");
+        std::fs::create_dir_all(&namespace_root).expect("create fake proc namespace root");
+        std::fs::create_dir_all(&cgroup_directory).expect("create fake cgroup");
+        let uid = geteuid().as_raw();
+        std::fs::write(
+            process_root.join("stat"),
+            format!("4242 (worker) S {} 98765\n", vec!["0"; 18].join(" ")),
+        )
+        .expect("write fake stat");
+        std::fs::write(
+            process_root.join("status"),
+            format!("Tgid:\t4242\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\nNSpid:\t4242\t1\n"),
+        )
+        .expect("write fake status");
+        std::fs::write(process_root.join("comm"), "worker\n").expect("write fake comm");
+        std::fs::write(process_root.join("cgroup"), "0::/docker/session\n")
+            .expect("write fake cgroup membership");
+        for (name, inode) in [("pid", 101), ("user", 102), ("mnt", 103), ("cgroup", 104)] {
+            symlink(format!("{name}:[{inode}]"), namespace_root.join(name))
+                .expect("write fake namespace link");
+        }
+        let cgroup_inode = cgroup_directory
+            .metadata()
+            .expect("fake cgroup metadata")
+            .ino();
+        let container_identity = "a".repeat(64);
+        let cgroup_identity = sha256_nul(&[
+            "cgroup-v2",
+            &container_identity,
+            "/docker/session",
+            &cgroup_inode.to_string(),
+        ]);
+        let mut container = ContainerTargetBinding {
+            target_id: "container-target-0123456789abcdefabcd".to_owned(),
+            target_kind: DockerTargetKind::ManagedTemporaryContainer,
+            target_content_sha256: "b".repeat(64),
+            container_identity_sha256: container_identity,
+            image_identity_sha256: "c".repeat(64),
+            identity_fingerprint: String::new(),
+            container_pid: 1,
+            host_pid: 4242,
+            host_uid: uid,
+            host_start_time_ticks: 98_765,
+            executable_name: "worker".to_owned(),
+            namespace: ContainerNamespaceBinding {
+                pid_namespace_inode: 101,
+                user_namespace_inode: 102,
+                mount_namespace_inode: 103,
+                cgroup_namespace_inode: 104,
+            },
+            cgroup: ContainerCgroupBinding {
+                version: "v2".to_owned(),
+                inode: cgroup_inode,
+                identity_sha256: cgroup_identity.clone(),
+            },
+            uid_mapping: DockerUidMapping::RootlessSameUid,
+            rootful_risk_authorized: false,
+            adapter_recipe_id: DockerAdapterRecipe::LocalDockerManagedV1,
+            adapter_sha256: "d".repeat(64),
+        };
+        let mut target = HelperTarget {
+            target_runtime: TargetRuntime::Docker,
+            pid: 4242,
+            uid,
+            start_time_ticks: 98_765,
+            container: None,
+        };
+        container.identity_fingerprint =
+            docker_identity_fingerprint(&target, &container, &cgroup_identity);
+        target.container = Some(Box::new(container));
+        DockerIdentityFixture {
+            root,
+            proc_root,
+            cgroup_root,
+            process_root,
+            target,
+        }
+    }
+
+    #[test]
+    fn docker_identity_is_revalidated_from_proc_and_cgroup_state() {
+        let fixture = docker_identity_fixture();
+        assert_pid_identity_at(&fixture.target, &fixture.proc_root, &fixture.cgroup_root)
+            .expect("matching Docker identity");
+    }
+
+    #[test]
+    fn docker_identity_rejects_pid_reuse_namespace_and_cgroup_changes() {
+        let fixture = docker_identity_fixture();
+        std::fs::write(
+            fixture.process_root.join("stat"),
+            format!("4242 (worker) S {} 98766\n", vec!["0"; 18].join(" ")),
+        )
+        .expect("replace start time");
+        assert!(
+            assert_pid_identity_at(&fixture.target, &fixture.proc_root, &fixture.cgroup_root)
+                .is_err()
+        );
+        std::fs::write(
+            fixture.process_root.join("stat"),
+            format!("4242 (worker) S {} 98765\n", vec!["0"; 18].join(" ")),
+        )
+        .expect("restore start time");
+        std::fs::remove_file(fixture.process_root.join("ns/pid")).expect("remove namespace link");
+        symlink("pid:[999]", fixture.process_root.join("ns/pid")).expect("replace namespace link");
+        assert!(
+            assert_pid_identity_at(&fixture.target, &fixture.proc_root, &fixture.cgroup_root)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn docker_identity_rejects_executable_and_unsafe_cgroup_changes() {
+        let fixture = docker_identity_fixture();
+        std::fs::write(fixture.process_root.join("comm"), "replacement\n")
+            .expect("replace executable name");
+        assert!(
+            assert_pid_identity_at(&fixture.target, &fixture.proc_root, &fixture.cgroup_root)
+                .is_err()
+        );
+        std::fs::write(fixture.process_root.join("comm"), "worker\n")
+            .expect("restore executable name");
+        std::fs::write(fixture.process_root.join("cgroup"), "0::/docker//session\n")
+            .expect("write unsafe cgroup path");
+        assert!(
+            assert_pid_identity_at(&fixture.target, &fixture.proc_root, &fixture.cgroup_root)
+                .is_err()
+        );
+    }
 
     fn record_plan() -> ExecutionPlan {
         ExecutionPlan {
             plan_id: "plan-0123456789abcdefabcd".to_owned(),
             caller_uid: 1000,
             target: HelperTarget {
+                target_runtime: TargetRuntime::Host,
                 pid: 1234,
                 uid: 1000,
                 start_time_ticks: 123,
+                container: None,
             },
             mode: CollectionMode::Record,
             duration_milliseconds: 1000,

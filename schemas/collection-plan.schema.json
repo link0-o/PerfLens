@@ -1,4 +1,183 @@
 {
+  "$defs": {
+    "ContainerCollectionCgroupBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Identity Sha256",
+          "type": "string"
+        },
+        "inode": {
+          "exclusiveMinimum": 0,
+          "title": "Inode",
+          "type": "integer"
+        },
+        "version": {
+          "const": "v2",
+          "default": "v2",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "inode",
+        "identity_sha256"
+      ],
+      "title": "ContainerCollectionCgroupBinding",
+      "type": "object"
+    },
+    "ContainerCollectionNamespaceBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "cgroup_namespace_inode": {
+          "exclusiveMinimum": 0,
+          "title": "Cgroup Namespace Inode",
+          "type": "integer"
+        },
+        "mount_namespace_inode": {
+          "exclusiveMinimum": 0,
+          "title": "Mount Namespace Inode",
+          "type": "integer"
+        },
+        "pid_namespace_inode": {
+          "exclusiveMinimum": 0,
+          "title": "Pid Namespace Inode",
+          "type": "integer"
+        },
+        "user_namespace_inode": {
+          "exclusiveMinimum": 0,
+          "title": "User Namespace Inode",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pid_namespace_inode",
+        "user_namespace_inode",
+        "mount_namespace_inode",
+        "cgroup_namespace_inode"
+      ],
+      "title": "ContainerCollectionNamespaceBinding",
+      "type": "object"
+    },
+    "ContainerCollectionTargetBinding": {
+      "additionalProperties": false,
+      "description": "Privacy-safe Linux identity required to revalidate one Docker target.",
+      "properties": {
+        "adapter_recipe_id": {
+          "enum": [
+            "local-docker-read-v1",
+            "local-docker-managed-v1"
+          ],
+          "title": "Adapter Recipe Id",
+          "type": "string"
+        },
+        "adapter_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Adapter Sha256",
+          "type": "string"
+        },
+        "cgroup": {
+          "$ref": "#/$defs/ContainerCollectionCgroupBinding"
+        },
+        "container_identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Container Identity Sha256",
+          "type": "string"
+        },
+        "container_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Container Pid",
+          "type": "integer"
+        },
+        "executable_name": {
+          "pattern": "^[^/\\x00]{1,255}$",
+          "title": "Executable Name",
+          "type": "string"
+        },
+        "host_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Host Pid",
+          "type": "integer"
+        },
+        "host_start_time_ticks": {
+          "exclusiveMinimum": 0,
+          "title": "Host Start Time Ticks",
+          "type": "integer"
+        },
+        "host_uid": {
+          "minimum": 0,
+          "title": "Host Uid",
+          "type": "integer"
+        },
+        "identity_fingerprint": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Identity Fingerprint",
+          "type": "string"
+        },
+        "image_identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Image Identity Sha256",
+          "type": "string"
+        },
+        "namespace": {
+          "$ref": "#/$defs/ContainerCollectionNamespaceBinding"
+        },
+        "rootful_risk_authorized": {
+          "default": false,
+          "title": "Rootful Risk Authorized",
+          "type": "boolean"
+        },
+        "target_content_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Target Content Sha256",
+          "type": "string"
+        },
+        "target_id": {
+          "pattern": "^container-target-[a-f0-9]{20}$",
+          "title": "Target Id",
+          "type": "string"
+        },
+        "target_kind": {
+          "enum": [
+            "existing_container",
+            "managed_temporary_container"
+          ],
+          "title": "Target Kind",
+          "type": "string"
+        },
+        "uid_mapping": {
+          "enum": [
+            "rootless_same_uid",
+            "rootful_same_uid",
+            "rootful_cross_uid"
+          ],
+          "title": "Uid Mapping",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_id",
+        "target_kind",
+        "target_content_sha256",
+        "container_identity_sha256",
+        "image_identity_sha256",
+        "identity_fingerprint",
+        "container_pid",
+        "host_pid",
+        "host_uid",
+        "host_start_time_ticks",
+        "executable_name",
+        "namespace",
+        "cgroup",
+        "uid_mapping",
+        "adapter_recipe_id",
+        "adapter_sha256"
+      ],
+      "title": "ContainerCollectionTargetBinding",
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "backend": {
@@ -23,57 +202,16 @@
       "default": null,
       "title": "Call Graph"
     },
-    "container_identity_sha256": {
+    "container_target": {
       "anyOf": [
         {
-          "pattern": "^[a-f0-9]{64}$",
-          "type": "string"
+          "$ref": "#/$defs/ContainerCollectionTargetBinding"
         },
         {
           "type": "null"
         }
       ],
-      "default": null,
-      "title": "Container Identity Sha256"
-    },
-    "container_pid": {
-      "anyOf": [
-        {
-          "exclusiveMinimum": 0,
-          "type": "integer"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Container Pid"
-    },
-    "container_target_fingerprint": {
-      "anyOf": [
-        {
-          "pattern": "^[a-f0-9]{64}$",
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Container Target Fingerprint"
-    },
-    "container_target_id": {
-      "anyOf": [
-        {
-          "pattern": "^container-target-[a-f0-9]{20}$",
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Container Target Id"
+      "default": null
     },
     "duration_seconds": {
       "exclusiveMinimum": 0,

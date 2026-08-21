@@ -3,6 +3,7 @@ from __future__ import annotations
 # pyright: reportPrivateUsage=false
 import os
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,7 +18,11 @@ from perflens.collection.planning import (
 from perflens.contracts.artifacts import (
     CollectionCapabilityArtifact,
     CollectionModeCapability,
+    ContainerCollectionCgroupBinding,
+    ContainerCollectionNamespaceBinding,
+    ContainerCollectionTargetBinding,
 )
+from perflens.contracts.docker import ContainerTargetArtifact
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 
@@ -41,6 +46,74 @@ def _capabilities() -> CollectionCapabilityArtifact:
     )
 
 
+def _docker_target(
+    *,
+    host_uid: int | None = None,
+    rootful_cross_uid: bool = False,
+) -> ContainerTargetArtifact:
+    uid = os.geteuid() if host_uid is None else host_uid
+    return ContainerTargetArtifact.model_validate(
+        {
+            "perflens_version": "0.3.1",
+            "target_id": "container-target-" + "a" * 20,
+            "created_at": "2026-08-21T00:00:00+00:00",
+            "target_kind": "existing_container",
+            "container_identity_sha256": "a" * 64,
+            "image_identity_sha256": "b" * 64,
+            "container_pid": 12,
+            "host_pid": 4321,
+            "host_uid": uid,
+            "host_start_time_ticks": 9876,
+            "executable_name": "worker",
+            "namespace": {
+                "pid_namespace_inode": 101,
+                "user_namespace_inode": 102,
+                "mount_namespace_inode": 103,
+                "cgroup_namespace_inode": 104,
+            },
+            "cgroup": {"inode": 105, "identity_sha256": "c" * 64},
+            "uid_mapping": (
+                "rootful_cross_uid" if rootful_cross_uid else "rootless_same_uid"
+            ),
+            "rootful_risk_authorized": rootful_cross_uid,
+            "adapter_recipe_id": "local-docker-read-v1",
+            "adapter_sha256": "d" * 64,
+            "identity_fingerprint": "e" * 64,
+            "content_sha256": "f" * 64,
+        }
+    )
+
+
+def _collection_binding(target: ContainerTargetArtifact) -> ContainerCollectionTargetBinding:
+    return ContainerCollectionTargetBinding(
+        target_id=target.target_id,
+        target_kind=target.target_kind,
+        target_content_sha256=target.content_sha256,
+        container_identity_sha256=target.container_identity_sha256,
+        image_identity_sha256=target.image_identity_sha256,
+        identity_fingerprint=target.identity_fingerprint,
+        container_pid=target.container_pid,
+        host_pid=target.host_pid,
+        host_uid=target.host_uid,
+        host_start_time_ticks=target.host_start_time_ticks,
+        executable_name=target.executable_name,
+        namespace=ContainerCollectionNamespaceBinding(
+            pid_namespace_inode=101,
+            user_namespace_inode=102,
+            mount_namespace_inode=103,
+            cgroup_namespace_inode=104,
+        ),
+        cgroup=ContainerCollectionCgroupBinding(
+            inode=105,
+            identity_sha256="c" * 64,
+        ),
+        uid_mapping=target.uid_mapping,
+        rootful_risk_authorized=target.rootful_risk_authorized,
+        adapter_recipe_id=target.adapter_recipe_id,
+        adapter_sha256=target.adapter_sha256,
+    )
+
+
 def test_plan_binds_pid_identity_and_policy_limits() -> None:
     plan = create_collection_plan(
         CollectionPlanRequest(mode="record", pid=os.getppid(), duration_seconds=5),
@@ -61,6 +134,70 @@ def test_plan_binds_pid_identity_and_policy_limits() -> None:
     assert plan.fallback_record_event == "cpu-clock"
     assert any("broker" in warning for warning in plan.warnings)
     assert_plan_current(plan, now=datetime(2026, 8, 2, 0, 1, tzinfo=UTC))
+
+
+def test_docker_plan_binds_full_kernel_identity_and_revalidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = _docker_target()
+    binding = _collection_binding(target)
+
+    def bind_target(_target: ContainerTargetArtifact) -> ContainerCollectionTargetBinding:
+        return binding
+
+    def current_target(_target: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            host_uid=binding.host_uid,
+            host_start_time_ticks=binding.host_start_time_ticks,
+        )
+
+    monkeypatch.setattr(planning, "bind_container_collection_target", bind_target)
+    monkeypatch.setattr(
+        planning,
+        "assert_container_target_current",
+        current_target,
+    )
+
+    plan = create_collection_plan(
+        CollectionPlanRequest(mode="record", pid=target.host_pid, container_target=target),
+        policy=AutomaticCollectionPolicy(enabled=True),
+        capabilities=_capabilities(),
+        now=datetime(2026, 8, 21, tzinfo=UTC),
+    )
+
+    assert plan.policy_status == "allowed"
+    assert plan.target_runtime == "docker"
+    assert plan.container_target == binding
+    assert plan.plan_id.startswith("plan-")
+    assert_plan_current(plan, now=datetime(2026, 8, 21, 0, 1, tzinfo=UTC))
+
+
+def test_docker_plan_rejects_pid_mismatch_and_gates_rootful_cross_uid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = _docker_target(host_uid=os.geteuid() + 1, rootful_cross_uid=True)
+    binding = _collection_binding(target)
+
+    def bind_target(_target: ContainerTargetArtifact) -> ContainerCollectionTargetBinding:
+        return binding
+
+    monkeypatch.setattr(planning, "bind_container_collection_target", bind_target)
+
+    with pytest.raises(PerfLensError, match="host PID differs"):
+        create_collection_plan(
+            CollectionPlanRequest(mode="record", pid=target.host_pid + 1, container_target=target),
+            policy=AutomaticCollectionPolicy(enabled=True),
+            capabilities=_capabilities(),
+        )
+
+    denied = create_collection_plan(
+        CollectionPlanRequest(mode="record", pid=target.host_pid, container_target=target),
+        policy=AutomaticCollectionPolicy(enabled=True, allow_other_uids=True),
+        capabilities=_capabilities(),
+    )
+    assert denied.policy_status == "denied"
+    assert any("cross-UID" in warning for warning in denied.warnings)
+
 
 
 def test_plan_is_denied_outside_categorical_policy() -> None:

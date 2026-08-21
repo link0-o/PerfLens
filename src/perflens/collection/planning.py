@@ -20,6 +20,11 @@ from perflens.collection.collector import (
     CollectionMode,
 )
 from perflens.contracts.artifacts import CollectionCapabilityArtifact, CollectionPlanArtifact
+from perflens.contracts.docker import ContainerTargetArtifact
+from perflens.docker.identity import (
+    assert_container_target_current,
+    bind_container_collection_target,
+)
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _TRACE_MAX_DURATION_SECONDS = 10.0
@@ -50,6 +55,7 @@ class CollectionPlanRequest:
     events: tuple[str, ...] = HARDWARE_STAT_EVENTS
     event_source: Literal["auto", "hardware_required", "software_only"] = "auto"
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
+    container_target: ContainerTargetArtifact | None = None
 
 
 def create_collection_plan(
@@ -62,15 +68,36 @@ def create_collection_plan(
     """Bind an automatic request to a specific PID incarnation and policy snapshot."""
     _validate_policy(policy)
     _validate_request(request)
-    target_uid, start_time_ticks = inspect_pid_identity(request.pid)
+    if request.container_target is None:
+        target_uid, start_time_ticks = inspect_pid_identity(request.pid)
+        container_target = None
+        target_runtime: Literal["host", "docker"] = "host"
+    else:
+        if request.container_target.host_pid != request.pid:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "collection_plan",
+                "Docker target host PID differs from the collection request",
+            )
+        container_target = bind_container_collection_target(request.container_target)
+        target_uid = container_target.host_uid
+        start_time_ticks = container_target.host_start_time_ticks
+        target_runtime = "docker"
     warnings: list[str] = []
     allowed = policy.enabled
     if request.mode not in policy.allowed_modes:
         allowed = False
         warnings.append(f"Mode {request.mode} is outside the MCP automatic-collection policy.")
-    if target_uid != os.geteuid() and not policy.allow_other_uids:
-        allowed = False
-        warnings.append("The target PID is owned by a different user.")
+    if target_uid != os.geteuid():
+        if container_target is None:
+            if not policy.allow_other_uids:
+                allowed = False
+                warnings.append("The target PID is owned by a different user.")
+        else:
+            allowed = False
+            warnings.append(
+                "Rootful cross-UID Docker collection is not enabled by this policy stage."
+            )
     if request.duration_seconds > policy.max_duration_seconds:
         allowed = False
         warnings.append("The requested duration exceeds the MCP policy limit.")
@@ -147,6 +174,9 @@ def create_collection_plan(
             str(record_event),
             str(fallback_record_event),
             str(max_output_bytes),
+            target_runtime,
+            container_target.target_content_sha256 if container_target is not None else "",
+            container_target.identity_fingerprint if container_target is not None else "",
             created.isoformat(),
         )
     )
@@ -157,6 +187,8 @@ def create_collection_plan(
         target_pid=request.pid,
         target_uid=target_uid,
         target_start_time_ticks=start_time_ticks,
+        target_runtime=target_runtime,
+        container_target=container_target,
         backend="privileged_broker",
         duration_seconds=request.duration_seconds,
         frequency_hz=frequency,
@@ -243,7 +275,18 @@ def assert_plan_current(plan: CollectionPlanArtifact, *, now: datetime | None = 
             recoverable=True,
             details={"plan_id": plan.plan_id},
         )
-    target_uid, start_time_ticks = inspect_pid_identity(plan.target_pid)
+    if plan.target_runtime == "docker":
+        if plan.container_target is None:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "authorization",
+                "Docker collection plan lost its required target binding",
+            )
+        current = assert_container_target_current(plan.container_target)
+        target_uid = current.host_uid
+        start_time_ticks = current.host_start_time_ticks
+    else:
+        target_uid, start_time_ticks = inspect_pid_identity(plan.target_pid)
     if target_uid != plan.target_uid or start_time_ticks != plan.target_start_time_ticks:
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
@@ -263,12 +306,25 @@ def _validate_policy(policy: AutomaticCollectionPolicy) -> None:
         or policy.max_output_bytes < 1
         or policy.plan_ttl_seconds < 1
         or policy.plan_ttl_seconds > 3600
+        or type(policy.allow_other_uids) is not bool
         or type(policy.allow_software_fallback) is not bool
     ):
         raise ValueError("Automatic collection policy limits are invalid")
 
 
+def _is_container_target(value: object) -> bool:
+    return isinstance(value, ContainerTargetArtifact)
+
+
 def _validate_request(request: CollectionPlanRequest) -> None:
+    if request.container_target is not None and not _is_container_target(
+        request.container_target
+    ):
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "collection_plan",
+            "Docker collection target must be a validated ContainerTarget Artifact",
+        )
     if not math.isfinite(request.duration_seconds) or not 0 < request.duration_seconds <= 86_400:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,

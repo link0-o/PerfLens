@@ -437,7 +437,17 @@ class CollectorBrokerServer:
                 "Unable to apply the configured collection artifact permissions",
                 details={"path": artifact.output_path},
             ) from exc
-        return artifact
+        return CollectionArtifact.model_validate(
+            {
+                **artifact.model_dump(mode="json"),
+                "target_runtime": plan.target_runtime,
+                "container_target": (
+                    plan.container_target.model_dump(mode="json")
+                    if plan.container_target is not None
+                    else None
+                ),
+            }
+        )
 
     def _probe_hardware_pmu(
         self,
@@ -533,6 +543,8 @@ class CollectorBrokerServer:
             target_type="pid",
             target_argument_count=0,
             target_pid=plan.target_pid,
+            target_runtime=plan.target_runtime,
+            container_target=plan.container_target,
             output_path=str(output_path),
             output_sha256=result.output_sha256,
             output_bytes=result.output_bytes,
@@ -691,7 +703,31 @@ class CollectorBrokerServer:
                 "Collection mode is not allowed by collector policy",
                 recoverable=True,
             )
-        if not self._policy.allow_other_target_uids and plan.target_uid != peer_uid:
+        if plan.target_runtime == "docker":
+            container = plan.container_target
+            if container is None:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "authorization",
+                    "Docker collection plan is missing its target identity binding",
+                    recoverable=True,
+                )
+            if plan.target_uid == peer_uid:
+                if container.uid_mapping == "rootful_cross_uid":
+                    raise PerfLensError(
+                        ErrorCode.PATH_SAFETY_VIOLATION,
+                        "authorization",
+                        "Cross-UID Docker identity cannot be used as a same-UID target",
+                        recoverable=True,
+                    )
+            else:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "authorization",
+                    "Rootful cross-UID Docker collection is not enabled by this policy stage",
+                    recoverable=True,
+                )
+        elif not self._policy.allow_other_target_uids and plan.target_uid != peer_uid:
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,
                 "authorization",
