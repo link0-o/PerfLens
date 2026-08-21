@@ -88,6 +88,7 @@ class TraceCollectionCoordinator:
         public_spool: Path,
         public_artifact_mode: int,
         expected_helper_uid: int,
+        allow_rootful_container_targets: bool = False,
         producer_path: Path = Path("/usr/lib/perflens/perflens-trace-helper"),
         converter_path: Path | None = None,
     ) -> None:
@@ -110,6 +111,9 @@ class TraceCollectionCoordinator:
             raise ValueError("public Trace artifact mode must be 0440 or 0640")
         self._public_artifact_mode = public_artifact_mode
         self._expected_helper_uid = expected_helper_uid
+        if type(allow_rootful_container_targets) is not bool:
+            raise ValueError("rootful-container Trace policy must be boolean")
+        self._allow_rootful_container_targets = allow_rootful_container_targets
         self._private_spool_gid = _trusted_private_spool(policy.private_spool, expected_helper_uid)
         self._producer_path = producer_path
         self._producer_sha256 = _trusted_code_sha256(
@@ -225,14 +229,30 @@ class TraceCollectionCoordinator:
             ),
             limits=limits,
             perflens_version=__version__,
+            container_target=plan.container_target,
         )
         assert_plan_current(plan)
         return self._publish(plan, evidence)
 
     def _authorize(self, peer_uid: int, plan: CollectionPlanArtifact) -> None:
+        target_allowed = plan.target_uid == peer_uid
+        if plan.target_runtime == "docker" and plan.container_target is not None:
+            container = plan.container_target
+            if plan.target_uid == peer_uid:
+                target_allowed = (
+                    container.uid_mapping != "rootful_cross_uid"
+                    and not container.rootful_risk_authorized
+                )
+            else:
+                target_allowed = (
+                    self._allow_rootful_container_targets
+                    and plan.target_uid == 0
+                    and container.uid_mapping == "rootful_cross_uid"
+                    and container.rootful_risk_authorized
+                )
         if (
             peer_uid != self._policy.allowed_uid
-            or plan.target_uid != peer_uid
+            or not target_allowed
             or plan.mode not in self._policy.allowed_modes
             or plan.duration_seconds > self._policy.max_duration_seconds
             or plan.max_output_bytes > self._policy.max_output_bytes

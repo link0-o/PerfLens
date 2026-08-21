@@ -12,7 +12,11 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
-from perflens.contracts.artifacts import SCHEMA_VERSION, ContractModel
+from perflens.contracts.artifacts import (
+    SCHEMA_VERSION,
+    ContainerCollectionTargetBinding,
+    ContractModel,
+)
 
 Sha256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 ArtifactId = Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*-[a-f0-9]{16,64}$")]
@@ -27,6 +31,8 @@ class TraceTargetIdentity(ContractModel):
     target_pid: int = Field(gt=0)
     target_uid: int = Field(ge=0)
     target_start_time_ticks: int = Field(gt=0)
+    target_runtime: Literal["host", "docker"] = "host"
+    container_target: ContainerCollectionTargetBinding | None = None
     # A zero-event, explicitly partial trace may have observed no target thread at all.  Once
     # events exist, the artifact validators below require every event TID to appear here.
     observed_target_tids: tuple[int, ...] = ()
@@ -39,6 +45,17 @@ class TraceTargetIdentity(ContractModel):
             raise ValueError("observed target TIDs must be unique")
         if tuple(sorted(self.observed_target_tids)) != self.observed_target_tids:
             raise ValueError("observed target TIDs must be sorted")
+        if self.target_runtime == "host":
+            if self.container_target is not None:
+                raise ValueError("host trace target cannot carry a Docker identity")
+        elif self.container_target is None:
+            raise ValueError("Docker trace target requires a complete container identity")
+        elif (
+            self.target_pid != self.container_target.host_pid
+            or self.target_uid != self.container_target.host_uid
+            or self.target_start_time_ticks != self.container_target.host_start_time_ticks
+        ):
+            raise ValueError("Docker trace target identity fields differ")
         return self
 
 

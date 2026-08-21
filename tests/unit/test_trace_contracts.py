@@ -498,6 +498,8 @@ def test_target_tid_allowlist_is_unique_sorted_and_positive() -> None:
         TraceTargetIdentity.model_validate({**base, "observed_target_tids": [124, 123]})
     with pytest.raises(ValidationError, match="unique"):
         TraceTargetIdentity.model_validate({**base, "observed_target_tids": [123, 123]})
+    with pytest.raises(ValidationError, match="requires a complete container identity"):
+        TraceTargetIdentity.model_validate({**base, "target_runtime": "docker"})
 
 
 def test_trace_evidence_rejects_out_of_order_or_foreign_events() -> None:

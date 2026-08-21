@@ -11,6 +11,8 @@ from typing import cast
 
 import pytest
 
+from perflens.application.analyze_trace import build_trace_analysis
+from perflens.application.verify_trace import verify_trace_analysis_artifact
 from perflens.collection.planning import inspect_pid_identity
 from perflens.collector_broker.client import (
     _SocketIdentity,
@@ -28,7 +30,7 @@ from perflens.contracts.artifacts import (
 from perflens.contracts.trace import TraceEvidenceArtifact
 from perflens.domain.errors import PerfLensError
 from perflens.trace_helper.client import TraceHelperClient
-from perflens.trace_helper.policy import TracePolicy
+from perflens.trace_helper.policy import TraceMode, TracePolicy
 from perflens.trace_helper.protocol import (
     TraceHelperCollectionResult,
     TraceHelperCollectPidRequest,
@@ -71,21 +73,24 @@ class _FakeTraceHelper:
             ready_callback()
         artifact_name = f"{request.plan_id}.trace.ndjson"
         raw_path = self._private_spool / artifact_name
-        payload = (
-            json.dumps(
+        event = {
+            "schema_version": "1.0",
+            "sequence": 0,
+            "timestamp_ns": 1_500,
+            "cpu": 0,
+            "target_tid": self._target_tid,
+        }
+        if request.mode == "lock":
+            event.update(
                 {
-                    "schema_version": "1.0",
-                    "sequence": 0,
-                    "timestamp_ns": 1_500,
-                    "cpu": 0,
-                    "kind": "sched_wakeup",
-                    "target_tid": self._target_tid,
-                    "target_cpu": 0,
-                },
-                separators=(",", ":"),
+                    "kind": "futex_wait",
+                    "lock_id": "lock-aaaaaaaaaaaaaaaaaaaa",
+                    "futex_operation": "wait",
+                }
             )
-            + "\n"
-        ).encode("ascii")
+        else:
+            event.update({"kind": "sched_wakeup", "target_cpu": 0})
+        payload = (json.dumps(event, separators=(",", ":")) + "\n").encode("ascii")
         raw_path.write_bytes(payload)
         raw_path.chmod(0o640)
         return TraceHelperCollectionResult(
@@ -118,12 +123,12 @@ def _immutable_code(path: Path) -> Path:
     return path
 
 
-def _trace_plan() -> CollectionPlanArtifact:
+def _trace_plan(mode: TraceMode = "sched") -> CollectionPlanArtifact:
     target_pid = os.getppid()
     target_uid, start_ticks = inspect_pid_identity(target_pid)
     return CollectionPlanArtifact(
         plan_id="plan-0123456789abcdefabcd",
-        mode="sched",
+        mode=mode,
         target_type="pid",
         target_pid=target_pid,
         target_uid=target_uid,
@@ -165,7 +170,36 @@ def test_trace_coordinator_preserves_complete_docker_target_binding() -> None:
     assert _trace_helper_target_from_plan(plan) == request.target
 
 
-def _coordinator(tmp_path: Path, plan: CollectionPlanArtifact) -> TraceCollectionCoordinator:
+def _docker_plan(mode: TraceMode, *, rootful: bool = False) -> CollectionPlanArtifact:
+    fixture_name = "docker-rootful-sched.jsonl" if rootful else "docker-sched.jsonl"
+    fixture = Path(__file__).parents[1] / "fixtures/trace_helper/valid" / fixture_name
+    request = parse_trace_helper_request_frame(
+        fixture.read_bytes(),
+        now_unix_milliseconds=4_102_444_700_000,
+    )
+    assert isinstance(request, TraceHelperCollectPidRequest)
+    assert isinstance(request.target, TraceHelperDockerTarget)
+    binding = ContainerCollectionTargetBinding.model_validate(
+        request.target.container.model_dump()
+    )
+    return _trace_plan(mode).model_copy(
+        update={
+            "target_pid": request.target.pid,
+            "target_uid": request.target.uid,
+            "target_start_time_ticks": request.target.start_time_ticks,
+            "target_runtime": "docker",
+            "container_target": binding,
+        }
+    )
+
+
+def _coordinator(
+    tmp_path: Path,
+    plan: CollectionPlanArtifact,
+    *,
+    allow_rootful_container_targets: bool = False,
+) -> TraceCollectionCoordinator:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     private_spool = tmp_path / "private"
     public_spool = tmp_path / "public"
     private_spool.mkdir(mode=0o750)
@@ -173,7 +207,7 @@ def _coordinator(tmp_path: Path, plan: CollectionPlanArtifact) -> TraceCollectio
     policy = TracePolicy(
         path=tmp_path / "trace.toml",
         policy_sha256="a" * 64,
-        allowed_uid=plan.target_uid,
+        allowed_uid=os.geteuid(),
         allowed_modes=("sched", "off_cpu", "lock"),
         max_duration_seconds=10,
         max_output_bytes=64 << 20,
@@ -187,6 +221,7 @@ def _coordinator(tmp_path: Path, plan: CollectionPlanArtifact) -> TraceCollectio
         public_spool=public_spool,
         public_artifact_mode=0o640,
         expected_helper_uid=os.geteuid(),
+        allow_rootful_container_targets=allow_rootful_container_targets,
         producer_path=_immutable_code(tmp_path / "producer"),
         converter_path=_immutable_code(tmp_path / "converter"),
     )
@@ -230,6 +265,72 @@ def test_trace_coordinator_publishes_only_verified_public_evidence(tmp_path: Pat
     assert evidence.limits.max_duration_seconds == 10
 
 
+@pytest.mark.parametrize("mode", ("sched", "off_cpu", "lock"))
+def test_trace_coordinator_binds_docker_identity_for_every_trace_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: TraceMode,
+) -> None:
+    plan = _docker_plan(mode)
+
+    def accept_current_plan(_plan: CollectionPlanArtifact) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "perflens.collector_broker.trace.assert_plan_current",
+        accept_current_plan,
+    )
+    receipt = _coordinator(tmp_path, plan).collect(os.geteuid(), plan)
+    evidence = _verify_trace_evidence_receipt(
+        receipt,
+        plan,
+        _socket_identity(Path(receipt.evidence_path).parent),
+        os.geteuid(),
+    )
+
+    assert evidence.mode == mode
+    assert evidence.target.target_runtime == "docker"
+    assert evidence.target.container_target == plan.container_target
+    analysis = build_trace_analysis(evidence)
+    verification = verify_trace_analysis_artifact(analysis, evidence)
+    assert analysis.target.container_target == plan.container_target
+    assert verification.target.container_target == plan.container_target
+    assert verification.verification_status in {"partial", "verified"}
+
+
+@pytest.mark.parametrize("mode", ("sched", "off_cpu", "lock"))
+def test_trace_coordinator_requires_dedicated_rootful_grant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: TraceMode,
+) -> None:
+    plan = _docker_plan(mode, rootful=True)
+
+    def accept_current_plan(_plan: CollectionPlanArtifact) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "perflens.collector_broker.trace.assert_plan_current",
+        accept_current_plan,
+    )
+    with pytest.raises(PerfLensError, match="fixed policy"):
+        _coordinator(tmp_path / "denied", plan).collect(os.geteuid(), plan)
+
+    receipt = _coordinator(
+        tmp_path / "allowed",
+        plan,
+        allow_rootful_container_targets=True,
+    ).collect(os.geteuid(), plan)
+    evidence = _verify_trace_evidence_receipt(
+        receipt,
+        plan,
+        _socket_identity(Path(receipt.evidence_path).parent),
+        os.geteuid(),
+    )
+    assert evidence.target.target_uid == 0
+    assert evidence.target.container_target == plan.container_target
+
+
 def test_trace_client_rejects_public_evidence_digest_tampering(tmp_path: Path) -> None:
     plan = _trace_plan()
     receipt = _coordinator(tmp_path, plan).collect(os.geteuid(), plan)
@@ -244,6 +345,35 @@ def test_trace_client_rejects_public_evidence_digest_tampering(tmp_path: Path) -
         _verify_trace_evidence_receipt(
             tampered,
             plan,
+            _socket_identity(Path(receipt.evidence_path).parent),
+            os.geteuid(),
+        )
+
+
+def test_trace_client_rejects_different_container_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = _docker_plan("sched")
+
+    def accept_current_plan(_plan: CollectionPlanArtifact) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "perflens.collector_broker.trace.assert_plan_current",
+        accept_current_plan,
+    )
+    receipt = _coordinator(tmp_path, plan).collect(os.geteuid(), plan)
+    assert plan.container_target is not None
+    different_target = plan.container_target.model_copy(
+        update={"identity_fingerprint": "9" * 64}
+    )
+    different_plan = plan.model_copy(update={"container_target": different_target})
+
+    with pytest.raises(PerfLensError, match="identity, permissions, or digest"):
+        _verify_trace_evidence_receipt(
+            receipt,
+            different_plan,
             _socket_identity(Path(receipt.evidence_path).parent),
             os.geteuid(),
         )

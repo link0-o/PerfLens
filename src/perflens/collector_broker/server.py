@@ -147,6 +147,9 @@ class CollectorBrokerServer:
                     public_spool=self._policy.spool_root,
                     public_artifact_mode=self._policy.artifact_mode,
                     expected_helper_uid=expected_helper_uid,
+                    allow_rootful_container_targets=(
+                        self._policy.allow_rootful_container_targets
+                    ),
                 )
         elif trace_helper_client is not None or trace_coordinator is not None:
             raise ValueError("Trace clients require an explicit immutable Trace policy")

@@ -19,6 +19,7 @@ import pytest
 from mcp.client import Client
 from typer.testing import CliRunner
 
+import perflens.collector_broker.server as broker_server
 from perflens.cli.app import app
 from perflens.collection.collector import (
     ACTIVE_COLLECTION_AUTHORIZATION,
@@ -29,6 +30,7 @@ from perflens.collection.planning import (
     AutomaticCollectionPolicy,
     CollectionPlanRequest,
     create_collection_plan,
+    inspect_pid_identity,
 )
 from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.collector_broker.policy import CollectorBrokerPolicy
@@ -38,6 +40,9 @@ from perflens.contracts.artifacts import (
     CollectionCapabilityArtifact,
     CollectionModeCapability,
     CollectionPlanArtifact,
+    ContainerCollectionCgroupBinding,
+    ContainerCollectionNamespaceBinding,
+    ContainerCollectionTargetBinding,
 )
 from perflens.distribution.onboarding import run_project_setup
 from perflens.distribution.status import inspect_runtime_status
@@ -1337,6 +1342,145 @@ def test_broker_delegates_paranoid3_collection_to_typed_helper(tmp_path: Path) -
     finally:
         target.terminate()
         target.wait(timeout=5)
+
+
+@pytest.mark.parametrize("mode", ("stat", "record"))
+@pytest.mark.parametrize("rootful", (False, True))
+def test_paranoid3_broker_preserves_docker_identity_for_cpu_modes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: Literal["stat", "record"],
+    rootful: bool,
+) -> None:
+    spool = tmp_path / "spool"
+    helper_spool = tmp_path / "helper-spool"
+    runtime = tmp_path / "run"
+    for directory in (spool, helper_spool, runtime):
+        directory.mkdir()
+        directory.chmod(0o750)
+    target_pid = os.getppid()
+    inspected_uid, start_ticks = inspect_pid_identity(target_pid)
+    target_uid = 0 if rootful else inspected_uid
+    container = ContainerCollectionTargetBinding(
+        target_id="container-target-0123456789abcdefabcd",
+        target_kind="existing_container",
+        target_content_sha256="1" * 64,
+        container_identity_sha256="2" * 64,
+        image_identity_sha256="3" * 64,
+        identity_fingerprint="4" * 64,
+        container_pid=12,
+        host_pid=target_pid,
+        host_uid=target_uid,
+        host_start_time_ticks=start_ticks,
+        executable_name="python",
+        namespace=ContainerCollectionNamespaceBinding(
+            pid_namespace_inode=101,
+            user_namespace_inode=102,
+            mount_namespace_inode=103,
+            cgroup_namespace_inode=104,
+        ),
+        cgroup=ContainerCollectionCgroupBinding(
+            inode=105,
+            identity_sha256="5" * 64,
+        ),
+        uid_mapping="rootful_cross_uid" if rootful else "rootless_same_uid",
+        rootful_risk_authorized=rootful,
+        adapter_recipe_id="local-docker-read-v1",
+        adapter_sha256="6" * 64,
+    )
+    plan = CollectionPlanArtifact(
+        plan_id="plan-0123456789abcdefabcd",
+        mode=mode,
+        target_type="pid",
+        target_pid=target_pid,
+        target_uid=target_uid,
+        target_start_time_ticks=start_ticks,
+        target_runtime="docker",
+        container_target=container,
+        backend="privileged_broker",
+        duration_seconds=0.1,
+        frequency_hz=99 if mode == "record" else None,
+        call_graph="dwarf" if mode == "record" else None,
+        events=("cycles", "instructions") if mode == "stat" else (),
+        requested_event_source="hardware_required",
+        record_event="cycles" if mode == "record" else None,
+        max_output_bytes=1024,
+        expires_at=(datetime.now(tz=UTC) + timedelta(seconds=30)).isoformat(),
+        policy_status="allowed",
+        required_privilege="cap_sys_admin_or_policy_change",
+    )
+
+    def accept_current_plan(_plan: CollectionPlanArtifact) -> None:
+        return None
+
+    monkeypatch.setattr(broker_server, "assert_plan_current", accept_current_plan)
+
+    class FakeDockerHelper:
+        def collect(
+            self,
+            submitted: CollectionPlanArtifact,
+            *,
+            caller_uid: int,
+            ready_callback: Callable[[], None] | None = None,
+        ) -> HelperCollectionResult:
+            assert caller_uid == os.geteuid()
+            assert submitted.target_runtime == "docker"
+            assert submitted.container_target == container
+            if ready_callback is not None:
+                ready_callback()
+            if mode == "stat":
+                payload = b"100;;cycles;10;100.0\n200;;instructions;10;100.0\n"
+                suffix = ".stat.csv"
+                output_format = "perf_stat_delimited"
+            else:
+                payload = b"PERFILE2-docker-record"
+                suffix = ".perf.data"
+                output_format = "perf_data"
+            output = helper_spool / f"{submitted.plan_id}{suffix}"
+            output.write_bytes(payload)
+            output.chmod(0o640)
+            return HelperCollectionResult(
+                kind="collection",
+                plan_id=submitted.plan_id,
+                mode=mode,
+                target_pid=submitted.target_pid,
+                artifact_name=output.name,
+                output_bytes=len(payload),
+                output_sha256=hashlib.sha256(payload).hexdigest(),
+                output_format=output_format,
+                actual_event_source="hardware",
+                fallback_used=False,
+                events=submitted.events if mode == "stat" else (),
+                record_event="cycles" if mode == "record" else None,
+                started_at_unix_milliseconds=1_000,
+                finished_at_unix_milliseconds=1_100,
+            )
+
+    policy = CollectorBrokerPolicy(
+        spool_root=spool,
+        perf_path=_fake_perf(tmp_path),
+        allowed_uids=(os.geteuid(),),
+        privilege_mode="paranoid3_helper",
+        allow_rootful_container_targets=rootful,
+        max_duration_seconds=1,
+        max_output_bytes=1024,
+    )
+    with CollectorBrokerServer(
+        runtime / "collector.sock",
+        policy,
+        helper_client=cast(HelperClient, FakeDockerHelper()),
+        helper_spool_root=helper_spool,
+        expected_helper_uid=os.geteuid(),
+    ) as server:
+        worker = threading.Thread(target=server.serve_once, daemon=True)
+        worker.start()
+        artifact = CollectorBrokerClient(server.socket_path, timeout_seconds=5).collect(plan)
+        worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert artifact.mode == mode
+    assert artifact.target_runtime == "docker"
+    assert artifact.container_target == container
 
 
 def test_failed_plan_cannot_be_replayed_after_broker_restart(tmp_path: Path) -> None:

@@ -24,6 +24,7 @@ from perflens.application.trace_evidence import (
     validate_trace_evidence_invariants,
 )
 from perflens.contracts import trace as public
+from perflens.contracts.artifacts import ContainerCollectionTargetBinding
 from perflens.domain import trace as domain
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.profiles.trace_stream import TraceParseStatistics, TraceStreamParseResult
@@ -74,6 +75,7 @@ def build_trace_evidence(
     observation_window: public.TraceObservationWindow,
     limits: public.TraceResourceLimits,
     perflens_version: str,
+    container_target: ContainerCollectionTargetBinding | None = None,
 ) -> public.TraceEvidenceArtifact:
     """Project one fixed-parser result into a content-addressed public artifact.
 
@@ -146,6 +148,8 @@ def build_trace_evidence(
                 target_pid=target.pid,
                 target_uid=target.uid,
                 target_start_time_ticks=target.start_time_ticks,
+                target_runtime="docker" if container_target is not None else "host",
+                container_target=container_target,
                 observed_target_tids=observed_tids,
             ),
             "conversion": conversion,

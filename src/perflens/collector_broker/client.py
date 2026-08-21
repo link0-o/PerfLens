@@ -71,6 +71,8 @@ class CollectorBrokerClient:
             artifact.target_type != "pid"
             or artifact.target_pid != plan.target_pid
             or artifact.mode != plan.mode
+            or artifact.target_runtime != plan.target_runtime
+            or artifact.container_target != plan.container_target
         ):
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,
@@ -440,6 +442,8 @@ def _verify_trace_evidence_receipt(
         or evidence.target.target_pid != plan.target_pid
         or evidence.target.target_uid != plan.target_uid
         or evidence.target.target_start_time_ticks != plan.target_start_time_ticks
+        or evidence.target.target_runtime != plan.target_runtime
+        or evidence.target.container_target != plan.container_target
     ):
         raise _unsafe_trace_evidence()
     validate_trace_evidence_invariants(evidence)

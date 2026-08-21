@@ -667,6 +667,64 @@ def test_client_rejects_collection_result_that_does_not_match_plan(
     assert mismatch.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 
+def test_client_rejects_collection_result_with_different_container_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    listener, socket_path = _listening_socket(tmp_path, "docker-result-mismatch")
+    listener.close()
+    plan = _docker_plan(
+        target_uid=os.geteuid(),
+        uid_mapping="rootless_same_uid",
+        rootful_risk_authorized=False,
+    )
+    artifact = CollectionArtifact(
+        collection_id="collection-missing-docker-binding",
+        mode=plan.mode,
+        target_type="pid",
+        target_argument_count=0,
+        target_pid=plan.target_pid,
+        target_runtime="host",
+        output_path="/var/lib/perflens/wrong.perf.data",
+        output_sha256="a" * 64,
+        output_bytes=1,
+        output_format="perf_data",
+        perf_executable="/usr/bin/perf",
+        started_at="2026-08-04T00:00:00+00:00",
+        finished_at="2026-08-04T00:00:01+00:00",
+        duration_seconds=1,
+        frequency_hz=plan.frequency_hz,
+        call_graph=plan.call_graph,
+        record_event=plan.record_event,
+        requested_event_source="hardware_required",
+        actual_event_source="hardware",
+    )
+
+    def wrong_exchange(
+        _self: CollectorBrokerClient,
+        _payload: bytes,
+        *,
+        expected_request_id: str,
+        expected_ready: tuple[str, int] | None = None,
+        ready_callback: Callable[[], None] | None = None,
+    ) -> tuple[BrokerResponse, int, int]:
+        assert expected_ready is None
+        assert ready_callback is None
+        return (
+            BrokerResponse(
+                request_id=expected_request_id,
+                ok=True,
+                result=artifact.model_dump(mode="json"),
+            ),
+            os.getpid(),
+            os.geteuid(),
+        )
+
+    monkeypatch.setattr(CollectorBrokerClient, "_exchange", wrong_exchange)
+    with pytest.raises(PerfLensError, match="does not match"):
+        CollectorBrokerClient(socket_path).collect(plan)
+
+
 def test_client_verifies_collection_file_identity_permissions_and_digest(tmp_path: Path) -> None:
     listener, socket_path = _listening_socket(tmp_path, "v")
     socket_identity = _socket_identity(socket_path)
