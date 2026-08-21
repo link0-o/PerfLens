@@ -9,6 +9,7 @@ import os
 import re
 import stat
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -19,6 +20,15 @@ _CONTAINER_REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _MAX_DOCKER_BINARY_BYTES = 128 << 20
 _MAX_JSON_BYTES = 1 << 20
 _MAX_TOP_BYTES = 1 << 20
+_MANAGED_CONTAINER_ID = re.compile(r"^[a-f0-9]{64}$")
+_MANAGED_CONTAINER_NAME = re.compile(r"^perflens-[a-f0-9]{20}$")
+_IMAGE_DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
+_SHA256 = re.compile(r"^[a-f0-9]{64}$")
+_CONTAINER_USER = re.compile(r"^[0-9]{1,10}(?::[0-9]{1,10})?$")
+_CANONICAL_CPUS = re.compile(r"^(?:0\.[0-9]{1,6}|[1-9][0-9]{0,3}(?:\.[0-9]{1,6})?)$")
+_GATE_CONTAINER_PATH = "/usr/lib/perflens/perflens-container-gate"
+_CONTROL_CONTAINER_PATH = "/run/perflens-gate"
+_CONTROL_SOCKET_PATH = f"{_CONTROL_CONTAINER_PATH}/control.sock"
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,8 +52,31 @@ class DockerCliIdentity:
     trusted_owner_uids: tuple[int, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ManagedDockerCreateRequest:
+    """Strongly typed inputs for the one fixed managed-container recipe."""
+
+    container_name: str
+    image_digest: str
+    project_root: Path
+    scratch_root: Path
+    control_root: Path
+    gate_path: Path
+    gate_sha256: str
+    workload_entrypoint: str
+    workload_arguments: tuple[str, ...]
+    working_directory: str
+    container_user: str
+    cpus: str
+    memory_bytes: int
+    pids: int
+    session_identity_sha256: str
+    workload_spec_sha256: str
+    creation_receipt_sha256: str
+
+
 class DockerCommandAdapter:
-    """Execute only reviewed, read-only Docker commands with fixed arguments."""
+    """Execute only reviewed local-Docker recipes with fixed argument layouts."""
 
     def __init__(
         self,
@@ -53,6 +86,7 @@ class DockerCommandAdapter:
         endpoint_kind: Literal["local_rootful", "local_rootless"],
         config_directory: Path,
         trusted_cli_owner_uids: tuple[int, ...] = (0,),
+        trusted_gate_owner_uids: tuple[int, ...] = (0,),
         invoking_uid: int | None = None,
     ) -> None:
         self._invoking_uid = os.geteuid() if invoking_uid is None else invoking_uid
@@ -60,6 +94,9 @@ class DockerCommandAdapter:
             docker_path,
             trusted_owner_uids=trusted_cli_owner_uids,
         )
+        if not trusted_gate_owner_uids:
+            raise _managed_error("Managed Container Gate requires trusted owner UIDs")
+        self._trusted_gate_owner_uids = trusted_gate_owner_uids
         self._config_directory = _validate_empty_config_directory(
             config_directory,
             trusted_owner_uids=trusted_cli_owner_uids,
@@ -107,6 +144,65 @@ class DockerCommandAdapter:
                 recoverable=True,
             ) from exc
 
+    def create_managed_container(self, request: ManagedDockerCreateRequest) -> str:
+        payload = self._run_bytes(
+            _managed_create_arguments(
+                request,
+                invoking_uid=self._invoking_uid,
+                trusted_gate_owner_uids=self._trusted_gate_owner_uids,
+            ),
+            max_stdout_bytes=128,
+            timeout_seconds=15,
+        )
+        return _parse_managed_container_id(payload, "create")
+
+    def start_managed_container(self, container_id: str) -> None:
+        reference = _validate_full_container_id(container_id)
+        payload = self._run_bytes(
+            ("container", "start", reference),
+            max_stdout_bytes=128,
+            timeout_seconds=15,
+        )
+        if _parse_managed_container_id(payload, "start") != reference:
+            raise _managed_error("Docker start returned a different container identity")
+
+    def wait_managed_container(self, container_id: str, *, timeout_seconds: int) -> int:
+        reference = _validate_full_container_id(container_id)
+        if not 1 <= timeout_seconds <= 1_260:
+            raise _managed_error("Managed Docker wait timeout is outside its fixed bound")
+        payload = self._run_bytes(
+            ("container", "wait", reference),
+            max_stdout_bytes=32,
+            timeout_seconds=timeout_seconds,
+        )
+        try:
+            value = int(payload.decode("ascii", errors="strict").strip())
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise _managed_error("Docker wait returned an invalid exit status") from exc
+        if not 0 <= value <= 255:
+            raise _managed_error("Docker wait exit status is outside the process range")
+        return value
+
+    def stop_managed_container(self, container_id: str) -> None:
+        reference = _validate_full_container_id(container_id)
+        payload = self._run_bytes(
+            ("container", "stop", "--time", "2", reference),
+            max_stdout_bytes=128,
+            timeout_seconds=10,
+        )
+        if _parse_managed_container_id(payload, "stop") != reference:
+            raise _managed_error("Docker stop returned a different container identity")
+
+    def remove_managed_container(self, container_id: str) -> None:
+        reference = _validate_full_container_id(container_id)
+        payload = self._run_bytes(
+            ("container", "rm", reference),
+            max_stdout_bytes=128,
+            timeout_seconds=10,
+        )
+        if _parse_managed_container_id(payload, "remove") != reference:
+            raise _managed_error("Docker remove returned a different container identity")
+
     def _run_json(self, args: tuple[str, ...]) -> dict[str, Any]:
         payload = self._run_bytes(args, max_stdout_bytes=_MAX_JSON_BYTES)
         try:
@@ -127,7 +223,15 @@ class DockerCommandAdapter:
             )
         return cast(dict[str, Any], decoded)
 
-    def _run_bytes(self, args: tuple[str, ...], *, max_stdout_bytes: int) -> bytes:
+    def _run_bytes(
+        self,
+        args: tuple[str, ...],
+        *,
+        max_stdout_bytes: int,
+        timeout_seconds: int = 5,
+    ) -> bytes:
+        if not 1 <= timeout_seconds <= 1_260:
+            raise _managed_error("Docker command timeout is outside its fixed bound")
         assert_docker_cli_current(self._cli)
         assert_docker_endpoint_current(self._endpoint, invoking_uid=self._invoking_uid)
         output = io.BytesIO()
@@ -142,7 +246,7 @@ class DockerCommandAdapter:
             ),
             output,
             limits=CommandLimits(
-                timeout_seconds=5,
+                timeout_seconds=timeout_seconds,
                 terminate_grace_seconds=0.5,
                 max_stdout_bytes=max_stdout_bytes,
                 max_stderr_bytes=64 << 10,
@@ -151,6 +255,230 @@ class DockerCommandAdapter:
         assert_docker_cli_current(self._cli)
         assert_docker_endpoint_current(self._endpoint, invoking_uid=self._invoking_uid)
         return output.getvalue()
+
+
+def _managed_create_arguments(
+    request: ManagedDockerCreateRequest,
+    *,
+    invoking_uid: int,
+    trusted_gate_owner_uids: tuple[int, ...],
+) -> tuple[str, ...]:
+    if not _MANAGED_CONTAINER_NAME.fullmatch(request.container_name):
+        raise _managed_error("Managed Docker container name is invalid")
+    if not _IMAGE_DIGEST.fullmatch(request.image_digest):
+        raise _managed_error("Managed Docker image must use one immutable digest")
+    if any(
+        not _SHA256.fullmatch(value)
+        for value in (
+            request.session_identity_sha256,
+            request.workload_spec_sha256,
+            request.creation_receipt_sha256,
+        )
+    ):
+        raise _managed_error("Managed Docker labels require bounded SHA-256 identities")
+    project = _validate_mount_source(
+        request.project_root,
+        kind="directory",
+        expected_uid=invoking_uid,
+        require_private=False,
+    )
+    scratch = _validate_mount_source(
+        request.scratch_root,
+        kind="directory",
+        expected_uid=invoking_uid,
+        require_private=True,
+    )
+    control = _validate_mount_source(
+        request.control_root,
+        kind="directory",
+        expected_uid=invoking_uid,
+        require_private=True,
+    )
+    gate = _validate_mount_source(
+        request.gate_path,
+        kind="executable",
+        expected_uid=None,
+        require_private=False,
+        trusted_owner_uids=trusted_gate_owner_uids,
+        expected_sha256=request.gate_sha256,
+    )
+    if len({project, scratch, control, gate}) != 4:
+        raise _managed_error("Managed Docker mount sources must be distinct")
+    if any(
+        _paths_overlap(left, right)
+        for left, right in ((project, scratch), (project, control), (scratch, control))
+    ):
+        raise _managed_error("Managed Docker project, scratch, and control roots must be disjoint")
+    _validate_container_path(request.workload_entrypoint, "workload entrypoint")
+    _validate_container_path(request.working_directory, "working directory")
+    if (
+        len(request.workload_arguments) > 256
+        or sum(len(value.encode("utf-8")) for value in request.workload_arguments) > 65_536
+        or any(
+            "\x00" in value or len(value.encode("utf-8")) > 4096
+            for value in request.workload_arguments
+        )
+    ):
+        raise _managed_error("Managed Docker workload arguments exceed their fixed bound")
+    if not _CONTAINER_USER.fullmatch(request.container_user):
+        raise _managed_error("Managed Docker user must be a numeric UID or UID:GID")
+    user_ids = tuple(int(value) for value in request.container_user.split(":"))
+    if any(value > 4_294_967_295 for value in user_ids):
+        raise _managed_error("Managed Docker UID/GID exceeds the Linux range")
+    try:
+        cpus = Decimal(request.cpus)
+    except InvalidOperation as exc:
+        raise _managed_error("Managed Docker CPU limit is invalid") from exc
+    if (
+        not _CANONICAL_CPUS.fullmatch(request.cpus)
+        or not cpus.is_finite()
+        or cpus <= 0
+        or cpus > 1024
+    ):
+        raise _managed_error("Managed Docker CPU limit is outside its fixed bound")
+    if not 6 << 20 <= request.memory_bytes <= 1 << 50 or not 1 <= request.pids <= 1_000_000:
+        raise _managed_error("Managed Docker memory or PID limit is outside its fixed bound")
+    labels = (
+        "io.perflens.managed=true",
+        f"io.perflens.session-sha256={request.session_identity_sha256}",
+        f"io.perflens.workload-sha256={request.workload_spec_sha256}",
+        f"io.perflens.receipt-sha256={request.creation_receipt_sha256}",
+    )
+    arguments: list[str] = [
+        "container",
+        "create",
+        "--name",
+        request.container_name,
+        "--pull",
+        "never",
+        "--network",
+        "none",
+        "--restart",
+        "no",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges=true",
+        "--user",
+        request.container_user,
+        "--workdir",
+        request.working_directory,
+        "--cpus",
+        request.cpus,
+        "--memory",
+        str(request.memory_bytes),
+        "--pids-limit",
+        str(request.pids),
+    ]
+    for label in labels:
+        arguments.extend(("--label", label))
+    arguments.extend(
+        (
+            "--mount",
+            f"type=bind,src={project},dst=/workspace,readonly",
+            "--mount",
+            f"type=bind,src={scratch},dst=/perflens-scratch",
+            "--mount",
+            f"type=bind,src={control},dst={_CONTROL_CONTAINER_PATH},readonly",
+            "--mount",
+            f"type=bind,src={gate},dst={_GATE_CONTAINER_PATH},readonly",
+            "--entrypoint",
+            _GATE_CONTAINER_PATH,
+            request.image_digest,
+            "--control",
+            _CONTROL_SOCKET_PATH,
+            "--",
+            request.workload_entrypoint,
+            *request.workload_arguments,
+        )
+    )
+    return tuple(arguments)
+
+
+def _validate_mount_source(
+    path: Path,
+    *,
+    kind: Literal["directory", "executable"],
+    expected_uid: int | None,
+    require_private: bool,
+    trusted_owner_uids: tuple[int, ...] = (),
+    expected_sha256: str | None = None,
+) -> Path:
+    if not path.is_absolute() or path.is_symlink() or any(
+        value in str(path) for value in (",", "\x00", "\n", "\r")
+    ):
+        raise _managed_error("Managed Docker mount source path is unsafe")
+    try:
+        resolved = path.resolve(strict=True)
+        metadata = path.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise _managed_error("Managed Docker mount source is unavailable") from exc
+    if resolved != path or metadata.st_nlink < 1:
+        raise _managed_error("Managed Docker mount source identity is unsafe")
+    if kind == "directory":
+        valid_type = stat.S_ISDIR(metadata.st_mode)
+    else:
+        valid_type = stat.S_ISREG(metadata.st_mode) and bool(metadata.st_mode & 0o111)
+    if not valid_type or (expected_uid is not None and metadata.st_uid != expected_uid):
+        raise _managed_error("Managed Docker mount source type or owner is unsafe")
+    if trusted_owner_uids and metadata.st_uid not in trusted_owner_uids:
+        raise _managed_error("Managed Docker Gate owner is outside the trusted policy")
+    if require_private and stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise _managed_error("Managed Docker private mount source must use mode 0700")
+    if kind == "executable" and (metadata.st_nlink != 1 or metadata.st_mode & 0o022):
+        raise _managed_error("Managed Docker Gate mount is writable or multiply linked")
+    if expected_sha256 is not None:
+        if not _SHA256.fullmatch(expected_sha256):
+            raise _managed_error("Managed Docker Gate SHA-256 is invalid")
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise _managed_error("Managed Docker Gate cannot be hashed") from exc
+        if digest != expected_sha256:
+            raise _managed_error("Managed Docker Gate content differs from the authorized binary")
+    return resolved
+
+
+def _paths_overlap(left: Path, right: Path) -> bool:
+    return left == right or left in right.parents or right in left.parents
+
+
+def _validate_container_path(value: str, label: str) -> None:
+    if (
+        not value.startswith("/")
+        or value == "/"
+        or "\x00" in value
+        or len(value.encode("utf-8")) > 4096
+        or "//" in value
+        or "/../" in f"{value}/"
+        or "/./" in f"{value}/"
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+    ):
+        raise _managed_error(f"Managed Docker {label} is not absolute and normalized")
+
+
+def _validate_full_container_id(value: str) -> str:
+    if not _MANAGED_CONTAINER_ID.fullmatch(value):
+        raise _managed_error("Managed Docker lifecycle requires one full container ID")
+    return value
+
+
+def _parse_managed_container_id(payload: bytes, operation: str) -> str:
+    try:
+        value = payload.decode("ascii", errors="strict").strip()
+    except UnicodeDecodeError as exc:
+        raise _managed_error(f"Docker {operation} returned a non-ASCII identity") from exc
+    return _validate_full_container_id(value)
+
+
+def _managed_error(message: str) -> PerfLensError:
+    return PerfLensError(
+        ErrorCode.PATH_SAFETY_VIOLATION,
+        "docker_managed_adapter",
+        message,
+        recoverable=True,
+    )
 
 
 def inspect_docker_cli(

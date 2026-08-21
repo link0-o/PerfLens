@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import socket
 import tempfile
 from collections.abc import Generator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from perflens.application.evidence import contract_content_sha256
-from perflens.docker.adapter import DockerCommandAdapter, inspect_docker_cli
+from perflens.docker.adapter import (
+    DockerCommandAdapter,
+    ManagedDockerCreateRequest,
+    inspect_docker_cli,
+)
 from perflens.docker.capability import discover_docker_capability
 from perflens.domain.errors import ErrorCode, PerfLensError
 
@@ -35,6 +41,8 @@ common = {
     },
 }
 variant = {variant!r}
+with open({log_path!r}, "a", encoding="utf-8") as log:
+    log.write(json.dumps(args) + "\\n")
 if command[:1] == ["version"]:
     if variant == "malformed-version":
         sys.stdout.write("not-json")
@@ -71,6 +79,12 @@ elif command[:2] == ["container", "top"]:
         os.write(1, b"PID PPID COMMAND\\n1 0 \\xff\\n")
     else:
         sys.stdout.write("PID PPID COMMAND\\n1 0 workload\\n")
+elif command[:2] == ["container", "create"]:
+    sys.stdout.write("a" * 64 + "\\n")
+elif command[:2] in (["container", "start"], ["container", "stop"], ["container", "rm"]):
+    sys.stdout.write("a" * 64 + "\\n")
+elif command[:2] == ["container", "wait"]:
+    sys.stdout.write("7\\n")
 else:
     raise SystemExit(64)
 """
@@ -83,6 +97,7 @@ class _DockerSandbox:
     config: Path
     endpoint: Path
     listener: socket.socket
+    log: Path
 
 
 @contextmanager
@@ -90,7 +105,13 @@ def _docker_sandbox(*, variant: str = "normal") -> Generator[_DockerSandbox]:
     root = Path(tempfile.mkdtemp(prefix="perflens-docker-adapter-test-"))
     os.chmod(root, 0o700)
     cli = root / "docker"
-    cli.write_text(_FAKE_DOCKER.replace("{variant!r}", repr(variant)), encoding="utf-8")
+    log = root / "commands.ndjson"
+    cli.write_text(
+        _FAKE_DOCKER.replace("{variant!r}", repr(variant)).replace(
+            "{log_path!r}", repr(str(log))
+        ),
+        encoding="utf-8",
+    )
     os.chmod(cli, 0o500)
     config = root / "empty-config"
     config.mkdir(mode=0o500)
@@ -99,7 +120,7 @@ def _docker_sandbox(*, variant: str = "normal") -> Generator[_DockerSandbox]:
     listener.bind(str(endpoint))
     os.chmod(endpoint, 0o600)
     try:
-        yield _DockerSandbox(root, cli, config, endpoint, listener)
+        yield _DockerSandbox(root, cli, config, endpoint, listener, log)
     finally:
         listener.close()
         if config.exists():
@@ -115,12 +136,55 @@ def _adapter(sandbox: _DockerSandbox) -> DockerCommandAdapter:
         endpoint_kind="local_rootless",
         config_directory=sandbox.config,
         trusted_cli_owner_uids=_trusted_owner_uids(),
+        trusted_gate_owner_uids=_trusted_owner_uids(),
         invoking_uid=uid,
     )
 
 
 def _trusted_owner_uids() -> tuple[int, ...]:
     return tuple(dict.fromkeys((0, os.geteuid(), Path("/").stat().st_uid)))
+
+
+def _observed_commands(sandbox: _DockerSandbox) -> list[list[str]]:
+    if not sandbox.log.exists():
+        return []
+    return [
+        list(value)
+        for value in (
+            json.loads(line)
+            for line in sandbox.log.read_text(encoding="utf-8").splitlines()
+        )
+    ]
+
+
+def _managed_request(sandbox: _DockerSandbox) -> ManagedDockerCreateRequest:
+    project = sandbox.root / "project"
+    scratch = sandbox.root / "scratch"
+    control = sandbox.root / "control"
+    for directory in (project, scratch, control):
+        directory.mkdir(mode=0o700)
+    gate = sandbox.root / "perflens-container-gate"
+    gate.write_bytes(b"fixed-gate")
+    gate.chmod(0o500)
+    return ManagedDockerCreateRequest(
+        container_name="perflens-" + "1" * 20,
+        image_digest="sha256:" + "2" * 64,
+        project_root=project,
+        scratch_root=scratch,
+        control_root=control,
+        gate_path=gate,
+        gate_sha256=hashlib.sha256(gate.read_bytes()).hexdigest(),
+        workload_entrypoint="/usr/bin/python3",
+        workload_arguments=("/workspace/bench.py", "--rounds", "3"),
+        working_directory="/workspace",
+        container_user=f"{os.geteuid()}:{os.getegid()}",
+        cpus="2",
+        memory_bytes=536_870_912,
+        pids=64,
+        session_identity_sha256="3" * 64,
+        workload_spec_sha256="4" * 64,
+        creation_receipt_sha256="5" * 64,
+    )
 
 
 def test_adapter_uses_only_fixed_local_arguments_and_clean_environment() -> None:
@@ -152,6 +216,134 @@ def test_adapter_uses_only_fixed_local_arguments_and_clean_environment() -> None
             "service-1",
         ]
         assert adapter.top_container("service-1").endswith("1 0 workload\n")
+
+
+def test_managed_adapter_derives_one_fixed_sandbox_and_lifecycle() -> None:
+    with _docker_sandbox() as sandbox:
+        adapter = _adapter(sandbox)
+        request = _managed_request(sandbox)
+        container_id = adapter.create_managed_container(request)
+        assert container_id == "a" * 64
+        create = _observed_commands(sandbox)[-1][4:]
+        assert create[:2] == ["container", "create"]
+        assert "--privileged" not in create
+        assert "--pid" not in create
+        assert "--device" not in create
+        assert "--env" not in create
+        assert create[create.index("--pull") + 1] == "never"
+        assert "--network" in create
+        assert create[create.index("--network") + 1] == "none"
+        assert create[create.index("--restart") + 1] == "no"
+        assert "--read-only" in create
+        assert create[create.index("--cap-drop") + 1] == "ALL"
+        assert create[create.index("--security-opt") + 1] == "no-new-privileges=true"
+        assert create[-7:] == [
+            "--control",
+            "/run/perflens-gate/control.sock",
+            "--",
+            "/usr/bin/python3",
+            "/workspace/bench.py",
+            "--rounds",
+            "3",
+        ]
+        mounts = tuple(
+            create[index + 1]
+            for index, value in enumerate(create)
+            if value == "--mount"
+        )
+        assert mounts == (
+            f"type=bind,src={request.project_root},dst=/workspace,readonly",
+            f"type=bind,src={request.scratch_root},dst=/perflens-scratch",
+            f"type=bind,src={request.control_root},dst=/run/perflens-gate,readonly",
+            "type=bind,src="
+            f"{request.gate_path},dst=/usr/lib/perflens/perflens-container-gate,readonly",
+        )
+
+        adapter.start_managed_container(container_id)
+        assert adapter.wait_managed_container(container_id, timeout_seconds=10) == 7
+        adapter.stop_managed_container(container_id)
+        adapter.remove_managed_container(container_id)
+        commands = tuple(tuple(command[4:7]) for command in _observed_commands(sandbox)[-4:])
+        assert commands == (
+            ("container", "start", container_id),
+            ("container", "wait", container_id),
+            ("container", "stop", "--time"),
+            ("container", "rm", container_id),
+        )
+
+
+def test_managed_adapter_rejects_unsafe_recipe_before_docker_exec() -> None:
+    with _docker_sandbox() as sandbox:
+        adapter = _adapter(sandbox)
+        request = _managed_request(sandbox)
+        before = len(_observed_commands(sandbox))
+        unsafe = replace(
+            request,
+            workload_entrypoint="python3",
+        )
+        with pytest.raises(PerfLensError):
+            adapter.create_managed_container(unsafe)
+        assert len(_observed_commands(sandbox)) == before
+
+        request.gate_path.chmod(0o522)
+        with pytest.raises(PerfLensError):
+            adapter.create_managed_container(request)
+        assert len(_observed_commands(sandbox)) == before
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("gate_sha256", "0" * 64),
+        ("scratch_root", None),
+        ("cpus", "02"),
+        ("cpus", "1.0000000"),
+        ("memory_bytes", (6 << 20) - 1),
+        ("pids", 0),
+    ),
+)
+def test_managed_adapter_rejects_tampered_gate_overlaps_and_limits(
+    field: str,
+    value: object,
+) -> None:
+    with _docker_sandbox() as sandbox:
+        adapter = _adapter(sandbox)
+        request = _managed_request(sandbox)
+        replacement = request.project_root if field == "scratch_root" else value
+        before = len(_observed_commands(sandbox))
+        with pytest.raises(PerfLensError) as captured:
+            adapter.create_managed_container(replace(request, **{field: replacement}))
+        assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+        assert len(_observed_commands(sandbox)) == before
+
+
+def test_managed_adapter_rejects_gate_owner_outside_policy() -> None:
+    with _docker_sandbox() as sandbox:
+        request = _managed_request(sandbox)
+        adapter = DockerCommandAdapter(
+            docker_path=sandbox.cli,
+            endpoint_path=sandbox.endpoint,
+            endpoint_kind="local_rootless",
+            config_directory=sandbox.config,
+            trusted_cli_owner_uids=_trusted_owner_uids(),
+            trusted_gate_owner_uids=(os.geteuid() + 1,),
+            invoking_uid=os.geteuid(),
+        )
+        before = len(_observed_commands(sandbox))
+        with pytest.raises(PerfLensError) as captured:
+            adapter.create_managed_container(request)
+        assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+        assert len(_observed_commands(sandbox)) == before
+
+
+@pytest.mark.parametrize("container_id", ["short", "g" * 64, "a" * 63])
+def test_managed_lifecycle_requires_full_container_id(container_id: str) -> None:
+    with _docker_sandbox() as sandbox:
+        adapter = _adapter(sandbox)
+        before = len(_observed_commands(sandbox))
+        with pytest.raises(PerfLensError):
+            adapter.remove_managed_container(container_id)
+        assert len(_observed_commands(sandbox)) == before
 
 
 @pytest.mark.parametrize("reference", ("../escape", "--privileged", "name/id", "", "x" * 129))

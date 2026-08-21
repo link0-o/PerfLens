@@ -331,7 +331,7 @@ class ContainerResourceContextArtifact(ContractModel):
 
 class ContainerResourceLimits(ContractModel):
     cpus: float = Field(gt=0, le=1024)
-    memory_bytes: int = Field(gt=0, le=1 << 50)
+    memory_bytes: int = Field(ge=6 << 20, le=1 << 50)
     pids: int = Field(gt=0, le=1_000_000)
 
 

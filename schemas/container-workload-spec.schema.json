@@ -10,8 +10,8 @@
           "type": "number"
         },
         "memory_bytes": {
-          "exclusiveMinimum": 0,
           "maximum": 1125899906842624,
+          "minimum": 6291456,
           "title": "Memory Bytes",
           "type": "integer"
         },

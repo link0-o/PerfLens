@@ -106,7 +106,7 @@ def test_workload_contract_requires_numeric_linux_uid_gid(container_user: str) -
                 "entrypoint": "/bin/true",
                 "working_directory": "/workspace",
                 "container_user": container_user,
-                "resources": {"cpus": 1, "memory_bytes": 1024, "pids": 2},
+                "resources": {"cpus": 1, "memory_bytes": 6 << 20, "pids": 2},
                 "allowed_modes": ["stat"],
                 "authorization_mode": "per_run",
                 "max_workload_runs": 1,
