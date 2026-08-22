@@ -170,11 +170,12 @@ The default sandbox is:
 - a foreground workload that does not daemonize away from the bound PID.
 
 To capture startup, PerfLens mounts a packaged, static Container Gate read-only as the temporary
-container entry point. The Gate waits on a private control socket. After Docker creates the
-container, PerfLens resolves and revalidates the Gate's host PID, the Collector completes its
-disabled-event attachment, and the ordinary-user coordinator permits the Gate to `execve` the
-exact workload. The Collector and Helpers receive only a PID plan, never a Docker command, image,
-entry point, or environment.
+container entry point. The Gate uses a bounded retry for the fixed private control socket, then
+waits. After Docker creates the container, PerfLens first authenticates the live Gate with
+`SO_PEERCRED` and its exact READY frame, then resolves and twice revalidates that pinned process's
+Linux identity. The Collector completes its disabled-event attachment before the ordinary-user
+coordinator permits the Gate to `execve` the exact workload. The Collector and Helpers receive
+only a PID plan, never a Docker command, image, entry point, or environment.
 
 At completion, PerfLens may stop and remove only a container whose full ID, session nonce, creation
 receipt, and managed labels all match. Any uncertainty preserves the container and reports a manual

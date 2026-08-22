@@ -48,7 +48,7 @@ from perflens.domain.errors import ErrorCode, PerfLensError
 
 _READY_FRAME = b"PERFLENS_GATE_V1 READY\n"
 _EXEC_FRAME = b"PERFLENS_GATE_V1 EXEC\n"
-_PEER_CREDENTIALS = struct.Struct("3i")
+_PEER_CREDENTIALS = struct.Struct("=iII")
 _SESSION_LABEL = "io.perflens.session-sha256"
 _WORKLOAD_LABEL = "io.perflens.workload-sha256"
 _RECEIPT_LABEL = "io.perflens.receipt-sha256"
@@ -270,7 +270,16 @@ class ManagedDockerCoordinator:
                 expected_running=True,
             )
             instance = parse_container_instance(running_data)
+            connection, gate_peer_uid = _accept_gate(
+                listener.socket,
+                expected_pid=instance.init_host_pid,
+                timeout_seconds=self._gate_wait_seconds,
+            )
             kernel = self._reader.inspect_process(instance.init_host_pid)
+            if gate_peer_uid != kernel.host_uid:
+                raise _managed_error(
+                    "Container Gate peer UID differs from the verified target"
+                )
             target_artifact = build_managed_container_target_artifact(
                 adapter=self._adapter,
                 instance=instance,
@@ -278,12 +287,6 @@ class ManagedDockerCoordinator:
                 invoking_uid=self._invoking_uid,
                 allow_rootful_cross_uid=self._allow_rootful_cross_uid,
                 created_at=now,
-            )
-            connection = _accept_gate(
-                listener.socket,
-                expected_pid=kernel.host_pid,
-                expected_uid=kernel.host_uid,
-                timeout_seconds=self._gate_wait_seconds,
             )
             _retire_gate_listener(listener)
             listener = None
@@ -729,9 +732,8 @@ def _accept_gate(
     listener: socket.socket,
     *,
     expected_pid: int,
-    expected_uid: int,
     timeout_seconds: int,
-) -> socket.socket:
+) -> tuple[socket.socket, int]:
     try:
         connection, _ = listener.accept()
     except OSError as exc:
@@ -746,7 +748,7 @@ def _accept_gate(
             )
         )
         peer_pid, peer_uid, _peer_gid = credentials
-        if peer_pid != expected_pid or peer_uid != expected_uid:
+        if peer_pid != expected_pid:
             raise _managed_error("Container Gate peer identity differs from the verified target")
         if _receive_exact(connection, len(_READY_FRAME)) != _READY_FRAME:
             raise _managed_error("Container Gate readiness frame is invalid")
@@ -759,7 +761,7 @@ def _accept_gate(
             connection.settimeout(timeout_seconds)
         if trailing is not None:
             raise _managed_error("Container Gate readiness contains an extra frame")
-        return connection
+        return connection, peer_uid
     except BaseException as exc:
         connection.close()
         if isinstance(exc, PerfLensError):

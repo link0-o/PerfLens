@@ -5,7 +5,8 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 const CONTROL_PATH: &str = "/run/perflens-gate/control.sock";
 const READY_FRAME: &[u8] = b"PERFLENS_GATE_V1 READY\n";
@@ -13,6 +14,8 @@ const EXEC_FRAME: &[u8] = b"PERFLENS_GATE_V1 EXEC\n";
 const MAX_ARGUMENTS: usize = 256;
 const MAX_ARGUMENT_BYTES: usize = 65_536;
 const CONTROL_TIMEOUT: Duration = Duration::from_mins(1);
+const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+const CONTROL_CONNECT_RETRY: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Eq, PartialEq)]
 struct GateCommand {
@@ -93,9 +96,7 @@ fn run(command: &GateCommand) -> ExitCode {
 }
 
 fn await_execution_release(control_path: &Path) -> Result<(), &'static str> {
-    let Ok(mut control) = UnixStream::connect(control_path) else {
-        return Err("control endpoint unavailable");
-    };
+    let mut control = connect_control(control_path)?;
     if control.set_read_timeout(Some(CONTROL_TIMEOUT)).is_err()
         || control.set_write_timeout(Some(CONTROL_TIMEOUT)).is_err()
         || control.write_all(READY_FRAME).is_err()
@@ -113,6 +114,27 @@ fn await_execution_release(control_path: &Path) -> Result<(), &'static str> {
     Ok(())
 }
 
+fn connect_control(control_path: &Path) -> Result<UnixStream, &'static str> {
+    let deadline = Instant::now() + CONTROL_CONNECT_TIMEOUT;
+    loop {
+        match UnixStream::connect(control_path) {
+            Ok(control) => return Ok(control),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) && Instant::now() < deadline =>
+            {
+                thread::sleep(CONTROL_CONNECT_RETRY);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err("control endpoint permission denied");
+            }
+            Err(_) => return Err("control endpoint unavailable"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -127,7 +149,7 @@ mod tests {
     use std::process;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::thread;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -246,5 +268,29 @@ mod tests {
         server.join().expect("join extra-frame server");
         fs::remove_file(&socket).expect("remove extra-frame socket");
         fs::remove_dir(&directory).expect("remove gate test directory");
+    }
+
+    #[test]
+    fn retries_a_fixed_control_socket_until_it_appears() {
+        let directory = private_test_directory();
+        let socket = directory.join("control.sock");
+        let delayed_socket = socket.clone();
+        let server = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(30));
+            let listener = UnixListener::bind(&delayed_socket).expect("bind delayed socket");
+            let (mut stream, _) = listener.accept().expect("accept delayed gate peer");
+            let mut ready = [0_u8; READY_FRAME.len()];
+            stream
+                .read_exact(&mut ready)
+                .expect("read delayed ready frame");
+            assert_eq!(ready, READY_FRAME);
+            stream
+                .write_all(EXEC_FRAME)
+                .expect("write delayed execution release");
+        });
+        assert_eq!(await_execution_release(&socket), Ok(()));
+        server.join().expect("join delayed socket server");
+        fs::remove_file(&socket).expect("remove delayed socket");
+        fs::remove_dir(&directory).expect("remove delayed socket directory");
     }
 }

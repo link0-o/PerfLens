@@ -11,6 +11,7 @@ from typing import Any, cast
 import pytest
 from tests.support.docker import write_self_contained_test_elf
 
+import perflens.docker.managed as managed_module
 from perflens.application.evidence import contract_content_sha256
 from perflens.contracts.docker import ContainerWorkloadSpecArtifact
 from perflens.docker.adapter import (
@@ -48,13 +49,17 @@ EXEC = b"PERFLENS_GATE_V1 EXEC\n"
 @dataclass(slots=True)
 class _FakeReader:
     host_pid: int
+    identity_allowed: threading.Event | None = None
+    host_uid: int = os.geteuid()
 
     def inspect_process(self, host_pid: int) -> KernelProcessIdentity:
         if host_pid != self.host_pid:
             raise AssertionError("unexpected managed host PID")
+        if self.identity_allowed is not None and not self.identity_allowed.is_set():
+            raise AssertionError("managed identity was read before Gate readiness")
         return KernelProcessIdentity(
             host_pid=host_pid,
-            host_uid=os.geteuid(),
+            host_uid=self.host_uid,
             host_start_time_ticks=987_654,
             container_pid=1,
             nspid=(host_pid, 1),
@@ -275,6 +280,8 @@ def _setup(
     tmp_path: Path,
     *,
     adapter: _FakeManagedAdapter | None = None,
+    reader_host_uid: int | None = None,
+    identity_allowed: threading.Event | None = None,
 ) -> tuple[
     ManagedDockerCoordinator,
     _FakeManagedAdapter,
@@ -331,7 +338,14 @@ def _setup(
         runtime_root=runtime_root,
         project=project,
         gate=gate,
-        reader=cast(Any, _FakeReader(selected.gate_pid)),
+        reader=cast(
+            Any,
+            _FakeReader(
+                selected.gate_pid,
+                identity_allowed,
+                os.geteuid() if reader_host_uid is None else reader_host_uid,
+            ),
+        ),
         token_hex=lambda _bytes: "1" * 20,
         wall_clock=lambda: NOW,
         gate_wait_seconds=1,
@@ -392,6 +406,29 @@ def test_managed_coordinator_binds_gate_runs_and_cleans_exact_container(
     serialized = run.model_dump_json()
     assert CONTAINER_ID not in serialized
     assert str(runtime_root) not in serialized
+
+
+def test_managed_coordinator_authenticates_gate_before_kernel_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity_allowed = threading.Event()
+    original_accept_gate = managed_module._accept_gate  # pyright: ignore[reportPrivateUsage]
+
+    def tracked_accept_gate(*args: Any, **kwargs: Any) -> tuple[socket.socket, int]:
+        accepted = original_accept_gate(*args, **kwargs)
+        identity_allowed.set()
+        return accepted
+
+    monkeypatch.setattr(managed_module, "_accept_gate", tracked_accept_gate)
+    coordinator, _adapter, workload, authority, authorized, lease, _runtime_root = _setup(
+        tmp_path,
+        identity_allowed=identity_allowed,
+    )
+    prepared = _prepare(coordinator, workload, authority, authorized, lease)
+    coordinator.release(prepared)
+    coordinator.wait(prepared, timeout_seconds=30)
+    assert coordinator.cleanup(prepared) == "removed"
 
 
 @pytest.mark.parametrize(
@@ -458,6 +495,21 @@ def test_managed_coordinator_rejects_gate_peer_pid_then_cleans_verified_instance
     with pytest.raises(PerfLensError) as captured:
         _prepare(coordinator, workload, authority, authorized, lease)
     assert "peer identity" in captured.value.message
+    assert adapter.operations == ["create", "start", "stop", "remove"]
+    assert adapter.state == "removed"
+    assert not (runtime_root / ("run-" + "1" * 20)).exists()
+
+
+def test_managed_coordinator_rejects_gate_peer_uid_after_kernel_identity(
+    tmp_path: Path,
+) -> None:
+    coordinator, adapter, workload, authority, authorized, lease, runtime_root = _setup(
+        tmp_path,
+        reader_host_uid=os.geteuid() + 1,
+    )
+    with pytest.raises(PerfLensError) as captured:
+        _prepare(coordinator, workload, authority, authorized, lease)
+    assert "peer UID" in captured.value.message
     assert adapter.operations == ["create", "start", "stop", "remove"]
     assert adapter.state == "removed"
     assert not (runtime_root / ("run-" + "1" * 20)).exists()

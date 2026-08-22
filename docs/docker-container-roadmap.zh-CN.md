@@ -156,8 +156,9 @@ namespace inode 和 cgroup inode。这些变化是托管工作流的正常生命
 - workload 必须以前台模式运行，不能 daemonize 后丢失目标 PID。
 
 为了采集启动阶段，PerfLens 将包内固定、静态的 Container Gate 只读挂载为临时容器
-entrypoint。Gate 先通过私有控制 Socket 等待；Docker 创建容器后，PerfLens 解析并复核
-Gate 的宿主 PID，Collector 以禁用事件状态完成绑定，普通用户协调器再允许 Gate 对精确
+entrypoint。Gate 对固定私有控制 Socket 进行有界重试后等待；Docker 创建容器后，PerfLens
+先用 `SO_PEERCRED` 和精确 READY 帧认证仍存活的 Gate，再解析并两次复核这个固定进程的
+Linux 身份。Collector 以禁用事件状态完成绑定后，普通用户协调器才允许 Gate 对精确
 workload 执行 `execve`。Collector 和 Helper始终只收到 PID 计划，不收到 Docker 命令、
 镜像、entrypoint 或环境变量。
 
