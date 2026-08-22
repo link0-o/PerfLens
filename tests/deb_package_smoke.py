@@ -32,9 +32,7 @@ def main() -> None:
     else:
         main_package = arguments.main.resolve(strict=True)
     if arguments.collector is None:
-        collector_candidates = tuple(
-            directory.glob(f"perflens-collector_{package_version}_*.deb")
-        )
+        collector_candidates = tuple(directory.glob(f"perflens-collector_{package_version}_*.deb"))
         if len(collector_candidates) != 1:
             parser.error("expected exactly one architecture-specific Collector DEB")
         collector_package = collector_candidates[0]
@@ -51,29 +49,42 @@ def main() -> None:
     assert _field(dpkg_deb, main_package, "Version") == package_version
     assert _field(dpkg_deb, collector_package, "Version") == package_version
     main_dependencies = _field(dpkg_deb, main_package, "Depends")
+    assert "docker" not in main_dependencies.lower()
     assert any(
         f"python3 (>= {abi})" in main_dependencies
         and f"python3 (<< 3.{int(abi.removeprefix('3.')) + 1})" in main_dependencies
         for abi in ("3.12", "3.13")
     )
-    assert f"perflens (= {package_version})" in _field(
-        dpkg_deb, collector_package, "Depends"
-    )
+    assert f"perflens (= {package_version})" in _field(dpkg_deb, collector_package, "Depends")
     collector_dependencies = _field(dpkg_deb, collector_package, "Depends")
+    assert "docker" not in collector_dependencies.lower()
     for dependency in ("libbpf1", "libelf1", "zlib1g", "libzstd1"):
         assert dependency in collector_dependencies
 
     with tempfile.TemporaryDirectory(prefix="perflens-deb-smoke-") as directory:
         root = Path(directory) / "root"
+        main_root = Path(directory) / "main-root"
+        collector_root = Path(directory) / "collector-root"
         main_control = Path(directory) / "main-control"
         collector_control = Path(directory) / "collector-control"
-        for package, control, expected_control_files in (
-            (main_package, main_control, {"control", "md5sums", "postinst"}),
-            (collector_package, collector_control, {"control", "md5sums"}),
+        for package, package_root, control, expected_control_files in (
+            (main_package, main_root, main_control, {"control", "md5sums", "postinst"}),
+            (collector_package, collector_root, collector_control, {"control", "md5sums"}),
         ):
+            _run(dpkg_deb, "--extract", str(package), str(package_root))
             _run(dpkg_deb, "--extract", str(package), str(root))
             _run(dpkg_deb, "--control", str(package), str(control))
             assert {path.name for path in control.iterdir()} == expected_control_files
+            assert not (package_root / "etc").exists()
+            assert not (package_root / "run").exists()
+            assert not (package_root / "var").exists()
+
+        packaged_gate = Path("usr/lib/perflens/perflens-container-gate")
+        assert (main_root / packaged_gate).is_file()
+        assert not (collector_root / packaged_gate).exists()
+        postinst_text = (main_control / "postinst").read_text(encoding="utf-8")
+        for forbidden in ("docker", "systemctl", "usermod", "groupadd", "/etc/perflens"):
+            assert forbidden not in postinst_text
 
         binary_directory = root / "usr/bin"
         expected_commands = {
@@ -115,9 +126,9 @@ def main() -> None:
         helper_service = (
             root / "usr/share/perflens/collector/perflens-privileged-helper.service"
         ).read_text(encoding="utf-8")
-        trace_policy = (
-            root / "usr/share/perflens/collector/trace.example.toml"
-        ).read_text(encoding="utf-8")
+        trace_policy = (root / "usr/share/perflens/collector/trace.example.toml").read_text(
+            encoding="utf-8"
+        )
         trace_service = (
             root / "usr/share/perflens/collector/perflens-trace-helper.service"
         ).read_text(encoding="utf-8")
