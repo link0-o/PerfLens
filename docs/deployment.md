@@ -78,15 +78,15 @@ users still run plain `perflens init`; it discovers the deployed privilege mode 
 profile. See the [Collector and user-space-lock roadmap](collector-capability-roadmap.md) for the implementation
 and acceptance contract.
 
-## Planned `v0.3.1` Docker deployment boundary
+## `v0.3.1` Docker deployment boundary
 
-`v0.3.1` plans collection from one explicit process in a local Linux Docker Engine using cgroup
-v2. These interfaces are not implemented yet. Release v0.3.0 must not advertise active Docker
-collection as available. See the
-[v0.3.1 Docker process roadmap](docker-container-roadmap.md).
+Release v0.3.1 supports collection from one explicit process in a local Linux Docker Engine using
+cgroup v2. Project users opt in with `perflens init --docker`; the generated project policy remains
+inactive until the user authorizes one run or one bounded in-memory Agent session. See the
+[v0.3.1 Docker process guide](docker-container-roadmap.md).
 
 Docker is the `host/docker` target-runtime axis, not a third Collector privilege mode. It remains
-orthogonal to `cpu_only/full_diagnostics` and `cap_perfmon/paranoid3_helper`. Future DEBs:
+orthogonal to `cpu_only/full_diagnostics` and `cap_perfmon/paranoid3_helper`. The v0.3.1 DEBs:
 
 - do not install or start Docker and do not edit the `docker` group, daemon configuration, or
   Docker-socket permissions;
@@ -96,7 +96,7 @@ orthogonal to `cpu_only/full_diagnostics` and `cap_perfmon/paranoid3_helper`. Fu
   Broker/Helper independently revalidates `/proc`, PID namespace, start time, and cgroup identity;
 - deny rootful UID-0 targets until an administrator explicitly enables the dedicated
   `allow_rootful_container_targets` risk boundary; daily collection still uses no sudo;
-- require planned `perflens init --docker`, followed by per-run confirmation or a
+- require `perflens init --docker`, followed by per-run confirmation or a
   `bounded_session` confirmed once at the start of the current Agent conversation. That grant is
   memory-only and bound to the exact image, command, mounts, resources, and target. Conversation
   end, MCP restart, identity/configuration change, or the default two-hour hard backstop revokes it.

@@ -35,6 +35,19 @@ before updating with a narrower client selection. The managed setup directory
 refuses unexpected user files and preserves staged Collector assets unless
 regeneration is explicitly requested.
 
+For a project that intentionally targets a local Docker workload, initialize with:
+
+```bash
+perflens init --docker
+```
+
+This adds the fixed project Docker policy and bounded MCP gates; it does not start Docker or grant
+execution. Review `perflens-setup/container-workload.toml` before use. The Skill then uses
+`inspect_docker_capability` and `discover_docker_processes`, resolves one exact target, requests
+either `per_run` or `bounded_session` authorization, and calls only the corresponding existing- or
+managed-container collection tool. The session token lives only in that MCP connection and is
+revoked with `revoke_docker_session` or by connection exit.
+
 The default project policy allows `stat` and `record`, with MCP ceilings of 30
 seconds, 99 Hz, 256 MiB per collection, and a 120-second plan lifetime. The
 Skill normally starts near 10 seconds and adapts to the workload. Existing-PID
@@ -170,9 +183,10 @@ their own explicit authorization.
 | `READ_ONLY` | hotspot/path lookup, classification pages, artifact pages, source context | Only configured artifact IDs and allowed-root paths are accepted. |
 | `WRITES_ARTIFACTS` | profile analysis, diagnosis bundle | Disabled unless `--allow-writes`; writes only beneath the artifact root. |
 | `PROCESS_EXECUTION` | perf.data conversion and source symbolization | Disabled unless `--allow-process-execution`; executable selection remains allowlisted and bounded. |
-| `ACTIVE_COLLECTION` | Supported `record`/`stat`; disabled raw `sched`/`lock`/`off_cpu` experiments in `cap_perfmon` | Requires writes, process execution, active-collection startup gate, exact per-call authorization, bounded output, and a new output path. PID attachment has two additional gates. Raw trace experiments are not selected automatically and the `paranoid3_helper` rejects them. |
+| `ACTIVE_COLLECTION` | Supported `record`/`stat`; `sched`/`lock`/`off_cpu` when the deployed Collector is `full_diagnostics` | Requires writes, process execution, active-collection startup gate, exact authorization, bounded output, and a new output path. PID attachment has two additional gates; trace also requires Collector policy and the independent Trace Helper. |
 | `AUTOMATIC_COLLECTION` | Execute a short-lived PID-bound plan through the Collector | Requires explicit MCP startup gates and an independent Collector policy. |
 | `PROJECT_EXECUTION` | Launch one confirmed project executable and collect its new PID | Also requires automatic collection, `--allow-project-execution`, exact per-call authorization, and project path checks. |
+| `DOCKER_COLLECTION` | Discover, authorize, and collect one local-container process or one fixed managed workload | Requires `perflens init --docker`, project Docker policy, automatic collection, a matching in-memory session, independently verified Linux identity, and Docker/Collector policy intersection. |
 
 Tool annotations are client hints. The authorization checks above are independent server-side controls.
 

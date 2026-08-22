@@ -27,9 +27,10 @@ MCP 分析产物并生成报告
   自动取得 PID；Collector 不负责启动程序；
 - 计划绑定 PID 所有者和 `/proc/<pid>/stat` 启动时间，防止 PID 复用；
 - 计划默认 120 秒过期；MCP 和运行中的 Broker 都拒绝同一计划再次执行，固定产物路径还会阻止服务重启后的成功产物被覆盖；
-- 当前正式、默认启用的自动采集模式是 `record` 和 `stat`；公共类型与
-  `cap_perfmon` Broker 已有 `sched`、`lock`、`off_cpu` 原始证据入口，但它们仍是默认
-  关闭的实验能力，尚无专用确定性分析器；`paranoid3_helper` 会明确拒绝这三种模式；
+- `cpu_only` 功能配置正式开放 `record` 和 `stat`；`full_diagnostics` 还开放
+  `sched`、`off_cpu`、`lock` 的短时目标内采集、确定性分析与一致性校验；
+- `paranoid3_helper` 的现有 Rust Perf Helper 仍只执行 `record/stat`；高级模式通过独立
+  Trace Helper、独立 Socket、策略和 spool 执行，不扩大 Perf Helper 协议；
 - Collector 通过 Unix Socket 的 `SO_PEERCRED` 验证调用 UID；
 - 客户端也会固定安全的 Socket 身份、核对对端 UID 与 Socket 属主，并要求响应
   `request_id`、采集 PID 和模式与授权请求一致；畸形、超限、超时或错配响应会安全失败；
@@ -43,6 +44,26 @@ MCP 分析产物并生成报告
 - 管理员需要释放空间时使用独立的“归档 → 只读验证 → 显式授权清理”流程；MCP、
   Skill 和 Collector 协议都没有自动删除接口；
 - Broker 模式暂不启动用户提供的命令，也不支持全系统采样。
+
+### 本地 Docker 单进程目标
+
+v0.3.1 把本地 Linux Docker Engine、cgroup v2 下的单个容器进程作为另一种目标运行时，
+而不是第三种 Collector 权限模式。项目先运行 `perflens init --docker`；之后 Agent 通过
+同一 MCP 连接发现和解析容器目标，并在 `per_run` 或有界对话会话内取得用户授权。
+
+Docker Adapter 只用于发现和提示。每次采集前，Broker 及相应 Rust Helper 都会独立复核
+容器完整 ID、宿主 PID/UID/启动时间、PID namespace 与 cgroup 身份；单次计划仍然短期、
+单一 PID、单次使用。Docker Socket 不会交给 Collector、Helper、Skill，也不会记录到
+公开 Artifact。
+
+已有容器绑定具体实例；容器重启、替换或身份异常变化会使授权失效。临时测试容器绑定
+已授权的 `ContainerWorkloadSpec`，每轮容器 ID/PID 正常变化，但必须由固定 Gate 启动并
+重新通过身份复核。PerfLens 不 build/pull 镜像、不安装或启动 Docker、不修改 Docker 组，
+也不支持任意 Docker 参数、宿主 PID namespace、特权容器、任意宿主挂载或远程 endpoint。
+
+采集同时保存有界的 cgroup v2 前后快照与差值。CPU、内存、I/O、PIDs 和 pressure 是整个
+容器的资源上下文，不得伪装成目标进程的独占指标。匹配 A/B 还要求相同工作负载合同、
+镜像、命令、挂载、资源边界、采集模式和实际事件来源。
 
 ### 硬件 PMU 自动降级
 

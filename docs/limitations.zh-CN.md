@@ -43,9 +43,10 @@ Profile 比较描述所选事件的相对分布，不能证明绝对耗时发生
 猜测 owner 或持锁时间。详见
 [Collector 与用户态锁能力路线图](collector-capability-roadmap.zh-CN.md)。
 
-当前版本不支持主动 Docker 采集。已有的容器/build 路径映射只能帮助解释用户已经提供的
-Profile；PerfLens 尚不能发现容器进程、启动托管容器、绑定容器身份或读取 cgroup 上下文。
-这些能力计划进入 `v0.3.1`，并且只覆盖本地 Linux Docker Engine、cgroup v2 和单个明确
-进程。它不会自动扩大成整容器、多容器、远程 Engine、Compose 或 Kubernetes 采集，详见
-[v0.3.1 Docker 路线图](docker-container-roadmap.zh-CN.md)。C/C++、Java、Python 和 Go
-用户态锁 Adapter 已移到 `v0.4.0`；公共合同骨架存在不代表 Adapter 当前可用。
+发布版 v0.3.1 的 Docker 主动采集只覆盖本地 Linux Docker Engine、cgroup v2 和一个明确
+进程。它不会自动扩大成整容器或多进程聚合、远程 Engine、Docker Desktop VM、Compose、
+Kubernetes、自动 build/pull 镜像或任意 Docker 参数。已有容器会话绑定一个具体进程实例；
+托管临时容器只使用本地不可变镜像和固定项目配方。cgroup 差值属于整个容器，不能写成
+目标进程独占指标；无法保留已验证的容器 root/module 快照时，符号和源码证据必须标记为
+`partial`。详见 [v0.3.1 Docker 指南](docker-container-roadmap.zh-CN.md)。C/C++、Java、
+Python 和 Go 用户态锁 Adapter 仍计划进入 v0.4.0；公共合同骨架不代表 Adapter 当前可用。

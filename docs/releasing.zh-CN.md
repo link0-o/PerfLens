@@ -25,12 +25,21 @@ PerfLens 的正式发布版由不可变的 Python 安装包和独立 Skill 压�
 源码版本文件的准确版本号。
 
 ```bash
-perflens_release_version=0.3.0
+perflens_release_version=0.3.1
 perflens_release_tag="v${perflens_release_version}"
 uv sync --all-groups --frozen
 uv run ruff check .
 uv run pyright
 uv run pytest --cov=perflens --cov-fail-under=85
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --locked
+cargo audit --deny warnings
+cargo deny check
+cargo build --release --locked \
+  --package perflens-container-gate \
+  --package perflens-privileged-helper \
+  --package perflens-trace-helper
 perflens_source_epoch="$(git log -1 --format=%ct)"
 perflens_repro_dir="$(mktemp -d)"
 SOURCE_DATE_EPOCH="$perflens_source_epoch" uv build --no-sources --out-dir dist
@@ -75,7 +84,7 @@ Python 3.13；构建器会固定权限和时间戳，CI 会提取包并执行命
 只有发布提交已经进入 `main` 后，才创建并推送带注释的版本标签：
 
 ```bash
-perflens_release_tag=v0.3.0
+perflens_release_tag=v0.3.1
 git tag -a "$perflens_release_tag" -m "PerfLens ${perflens_release_tag}"
 git push origin "$perflens_release_tag"
 ```
@@ -103,7 +112,7 @@ git push origin "$perflens_release_tag"
 GitHub Release。发布完成后至少抽查一个资产：
 
 ```bash
-perflens_release_version=0.3.0
+perflens_release_version=0.3.1
 gh attestation verify "./dist/perflens-${perflens_release_version}-py3-none-any.whl" \
   --repo link0-o/PerfLens \
   --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
@@ -117,7 +126,7 @@ gh attestation verify "./dist/perflens-${perflens_release_version}-py3-none-any.
 自动发布前，需要在 GitHub 配置受保护的 `pypi` Environment，并在 PyPI 配置 Trusted Publisher。只发布 Python wheel 和源码包，不要把 Skill 压缩包或 SBOM 上传到 PyPI：
 
 ```bash
-perflens_release_version=0.3.0
+perflens_release_version=0.3.1
 uv publish \
   "dist/perflens-${perflens_release_version}-py3-none-any.whl" \
   "dist/perflens-${perflens_release_version}.tar.gz"

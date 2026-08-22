@@ -4,6 +4,55 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-22
+
+### Added
+
+- Project-scoped local-Docker targeting through `perflens init --docker`, with typed public
+  capability, process-inventory, target, resource-context, workload, session, run, module,
+  symbol-context, measurement, and matched-comparison artifacts and generated JSON Schemas.
+- Explicit `per_run` and connection-scoped `bounded_session` authorization. Existing-container
+  sessions bind one concrete container/process incarnation; managed sessions bind a fixed image,
+  command, read-only workspace, no-network policy, resource budget, treatment set, and packaged
+  Container Gate while deriving a fresh single-use PID plan for every run.
+- Authorized `stat/record/sched/off_cpu/lock` collection for one container process through the
+  existing Broker and independently validating Rust Helpers, including rootless/same-UID handling
+  and a separately acknowledged rootful-container policy boundary.
+- Bounded cgroup v2 CPU, cpuset, memory, I/O, PID, and pressure context; verified container module
+  Build IDs and privacy-preserving workspace source mapping; hardware-PMU fallback provenance; and
+  evidence-bound managed Benchmark plus matched A/B verification.
+
+### Changed
+
+- The main Debian package now includes the fixed unprivileged `perflens-container-gate`; the
+  Collector package retains the privileged Helpers. Both packages remain non-interactive and do
+  not depend on, install, start, or configure Docker.
+- The bundled Codex/Claude Skill routes explicit container-performance requests through the typed
+  Docker MCP tools and preserves the distinction between container-wide cgroup context and the
+  selected process's perf evidence.
+- The planned C/C++, Java, Python, and Go runtime-lock adapters remain deferred to v0.4.0; their
+  checked-in public contracts are groundwork only.
+
+### Security
+
+- Docker access is restricted to a fixed local CLI/socket adapter with endpoint and tool identity
+  pinning, bounded parsing, no arbitrary Docker arguments, no build/pull, no remote context, no
+  privileged/host-PID/socket/device/capability mount surface, and conservative identity-bound
+  cleanup. Broker and both Helpers independently revalidate UID, process start time, namespaces,
+  cgroup identity, target fields, limits, and protocol content before accepting container plans.
+- Public artifacts, MCP pages, errors, and diagnostics omit full inspect responses, environment
+  variables, labels, socket and mount-source paths, raw cgroup paths, and out-of-target argv.
+
+### Fixed
+
+- Managed A/B evidence now binds the exact treatment files, workload command, Gate, container run,
+  Collection, cgroup snapshot, private Benchmark bytes, correctness result, environment fingerprint,
+  and deterministic replay. Incomplete or mismatched evidence remains partial/non-comparable and
+  cannot be promoted to `Verified Improvement`.
+- Container symbol projection rejects cross-Collection contexts, replacement or escaping module
+  paths, conflicting Build IDs, unsafe workspace mappings, and unsupported Python/JIT source
+  annotations without leaking container absolute paths.
+
 ## [0.3.0] - 2026-08-21
 
 ### Added
@@ -492,7 +541,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - Tag-driven GitHub Release automation with wheel/sdist smoke tests, a
   standalone Skill archive, CycloneDX SBOM, and SHA-256 checksums.
 
-[Unreleased]: https://github.com/link0-o/PerfLens/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/link0-o/PerfLens/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/link0-o/PerfLens/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/link0-o/PerfLens/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/link0-o/PerfLens/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/link0-o/PerfLens/compare/v0.1.2...v0.1.3

@@ -14,6 +14,7 @@ Manual collection service      ─→ bounded command runner ─→ system perf
 Ordinary-user project launcher ─→ new PID ─┐
 Automatic PID plan ─→ Unix socket ─→ restricted Collector ─→ fixed spool
 Full-diagnostics plan ─→ public Broker ─→ separate Trace Helper ─→ target-filtered evidence
+Docker project policy ─→ fixed ordinary-user adapter ─→ verified host PID/cgroup identity
 Explicit admin deploy ─→ versioned TOML ─→ perflens-admin ─→ systemd
 ```
 
@@ -155,10 +156,10 @@ dispatch retains the requested identity. A symlink pathname is preserved only
 when its direct parent and resolved target satisfy the corresponding ownership
 and non-writable checks.
 
-## Planned Docker target runtime
+## Docker target runtime
 
-`v0.3.1` plans a fixed local-Docker adapter in front of the existing host-PID plan. Docker remains
-a target runtime rather than a privilege mode:
+Release v0.3.1 places a fixed local-Docker adapter in front of the existing host-PID plan. Docker
+remains a target runtime rather than a privilege mode:
 
 ```text
 Explicit authorization in one Agent conversation
@@ -173,10 +174,12 @@ perf process evidence + before/after cgroup v2 snapshots
 ```
 
 The adapter only supplies and binds local Docker identity; the Linux Broker and Helpers still
-verify the real process independently. The Docker socket never enters the Collector, Helpers,
-Agent, MCP, or Skill. DEBs do not install/start Docker, edit the `docker` group, or build/pull
-images. Public artifacts omit full inspect responses, environment variables, labels, host mount
-sources, and foreign processes. The current implementation has only container path mapping for
-existing evidence, not active Docker discovery, launch, or attachment. Planned artifacts, rootful
-boundaries, conversation authorization, and release gates are specified in the
-[v0.3.1 Docker process roadmap](docker-container-roadmap.md).
+verify the real process independently before and after collection. The Docker socket never enters
+the Collector, Helpers, Agent, or Skill; the MCP process can invoke only the fixed, project-policy
+adapter surface. DEBs do not install/start Docker, edit the `docker` group, or build/pull images.
+Public artifacts omit full inspect responses, environment variables, labels, host mount sources,
+and foreign processes. Existing-container sessions bind one exact instance. Managed sessions bind
+a fixed workload recipe and derive a fresh single-use PID plan for every temporary-container run.
+The public artifacts, rootful boundary, in-memory authorization, cgroup evidence, symbol mapping,
+and matched A/B gates are specified in the
+[v0.3.1 Docker process guide](docker-container-roadmap.md).

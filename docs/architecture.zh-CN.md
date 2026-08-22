@@ -14,6 +14,7 @@ Symbol Provider                ─→ 已验证的源码定位
 普通用户项目启动器 ─→ 新 PID ─┐
 自动 PID 计划 ─→ Unix Socket ─→ 受限 Collector ─→ 固定 spool
 完整诊断计划 ─→ 公共 Broker ─→ 独立 Trace Helper ─→ 目标过滤证据
+Docker 项目策略 ─→ 固定普通用户 Adapter ─→ 已验证宿主 PID/cgroup 身份
 管理员显式部署 ─→ 版本化 TOML ─→ perflens-admin ─→ systemd
 ```
 
@@ -139,9 +140,9 @@ Debian 的多个命令入口可以共享私有运行时启动器，但 Codex 配
 确定要进入 MCP 或 Collector。只有父目录与解析目标满足相应所有者和不可写检查时，
 引导与部署器才会保留符号链接路径。
 
-## 计划中的 Docker 目标运行时
+## Docker 目标运行时
 
-`v0.3.1` 计划在现有 Host PID 计划之前增加固定的本地 Docker Adapter，但不把 Docker
+发布版 `v0.3.1` 在现有 Host PID 计划之前增加固定的本地 Docker Adapter，但不把 Docker
 变成新的权限模式：
 
 ```text
@@ -156,12 +157,13 @@ Agent 对话内显式授权
 perf 进程证据 + cgroup v2 前后快照
 ```
 
-Adapter 只负责提示和绑定本地 Docker 身份；Linux Broker 与 Helper 仍独立验证真实进程。
-Docker Socket 不进入 Collector、Helper、Agent、MCP 或 Skill，DEB 也不安装/启动 Docker、
-修改 `docker` 用户组或自动 build/pull 镜像。公开产物不保存完整 inspect、环境变量、标签、
-宿主挂载源路径或目标外进程。当前版本只有已有证据的容器路径映射，没有主动 Docker
-发现、启动或附加能力。计划中的产物、rootful 边界、会话授权和测试门见
-[《v0.3.1 Docker 进程采集与分析路线图》](docker-container-roadmap.zh-CN.md)。
+Adapter 只负责提示和绑定本地 Docker 身份；Linux Broker 与 Helper 在采集前后仍独立验证
+真实进程。Docker Socket 不进入 Collector、Helper、Agent 或 Skill；MCP 进程只能调用固定、
+受项目策略限制的 Adapter。DEB 不安装/启动 Docker、修改 `docker` 用户组或自动 build/pull
+镜像。公开产物不保存完整 inspect、环境变量、标签、宿主挂载源路径或目标外进程。已有
+容器会话绑定一个精确实例；托管会话绑定固定 workload 配方，并为每轮临时容器派生新的
+短期单次 PID 计划。公共产物、rootful 边界、内存会话、cgroup 证据、符号映射和匹配 A/B
+门禁见[《v0.3.1 Docker 进程采集与分析指南》](docker-container-roadmap.zh-CN.md)。
 
 ## 依赖方向
 

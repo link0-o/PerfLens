@@ -2,90 +2,65 @@
 
 简体中文 | [English](release-readiness.md)
 
-本文是 2026-08-15 对 0.2.0 修复线的验证快照，不是永久不变的宣传页。下一次正式发布
-必须重新执行[《发布流程》](releasing.zh-CN.md)中的全部门禁；工作流存在不等于对应远程
-GitHub Actions 已经成功。
+本文是 2026-08-22 对 v0.3.1 发布候选的本地验证记录，不代替 Tag 工作流，也不代替每台
+部署主机的真实验收。每次发布都必须重新执行[《发布流程》](releasing.zh-CN.md)；远程工作流
+已经配置不等于对应运行已经通过。
 
-## 当前可发布范围
+## 候选范围
 
-当前稳定闭环包括：
+v0.3.0 的 Linux 宿主机 `stat/record/sched/off_cpu/lock` 路径继续受支持。v0.3.1 新增本地
+Linux Docker Engine、cgroup v2 下的一个明确进程：
 
-- folded、`perf script` 和经系统 perf 转换的 `perf.data` 分析；
-- 带守恒与来源绑定的热点、调用路径、源码归因和 JSON/Markdown 证据；
-- Profile/Benchmark 比较，以及同工作负载、同事件来源、保持正确性的 A/B 验证；
-- 带类型、分页、权限开关和证据完整性校验的 MCP Server；
-- Codex/Claude Code 项目 Skill；
-- 默认关闭、明确授权、只接受 PID 的 Collector 自动采集；
-- `cap_perfmon` 与可选 `paranoid3_helper` 两种部署模式；
-- 正式支持的 `stat`、`record`，以及硬件 PMU 不可用时可审计的软件事件降级；
-- Collector 部署、升级、策略更新、撤销、spool 检查、归档和显式清理。
+- 已有容器的有界发现与身份绑定；
+- 使用包内 Container Gate 的固定策略托管临时容器；
+- `per_run` 与连接级、仅内存保存的 `bounded_session` 授权；
+- 与容器身份绑定的 `stat/record` 和 `full_diagnostics` trace 计划；
+- cgroup v2 资源上下文、模块/Build ID/源码映射和 PMU 降级来源；
+- 与证据绑定的 Benchmark、处理变量、正确性和匹配 A/B 验证；
+- 通过 `perflens init --docker` 提供项目级 Codex/Claude Code Skill 与 MCP 集成。
 
-`sched`、`lock`、`off_cpu` **不在当前稳定发布声明中**。它们只在 `cap_perfmon`
-Broker 中保留默认关闭的原始实验入口，没有专用确定性分析器；`paranoid3_helper` 明确
-拒绝它们。下一功能版本候选为 `v0.3.0`，范围与门禁见
-[采集能力扩展路线图](collector-capability-roadmap.zh-CN.md)。
+本版本不包含远程 Docker、Docker Desktop VM、Compose/Kubernetes、镜像 build/pull、任意
+Docker 参数、整容器 perf 聚合，也不包含计划进入 v0.4.0 的 C/C++、Java、Python、Go
+运行时锁 Adapter。
 
-项目仍然不包含：LLM API、自研 Agent 循环、Web UI、任意源码自动修改、通用 Benchmark
-执行平台、生产 APM、直接解析 `perf.data` 二进制、内存泄漏分析、GPU 分析、分布式链路
-追踪以及面向某个应用的专用规则。
+## 自动化本地门禁
 
-## 最近一次本地门禁快照
+| 门禁 | 2026-08-22 候选结果 |
+|---|---|
+| Ruff | 通过 |
+| Pyright 严格模式 | 0 错误、0 警告 |
+| Python 3.12 | 1022 通过；覆盖率 85.03% |
+| Python 3.13 | 1022 通过；覆盖率 85.03% |
+| Rust 格式/Clippy/测试 | 通过；54 个测试 |
+| Rust 依赖 | 使用官方本地 advisory DB 干净克隆运行 `cargo audit` 无发现；`cargo deny check` 通过 |
+| 协议/Schema | 生成文件无差异；Python/Rust 有效与无效 golden 通过 |
+| Python 包 | wheel 与 sdist 可复现构建，并通过隔离安装冒烟 |
+| Debian 包 | 两个可复现 `0.3.1-1` amd64 DEB 通过提取/包冒烟；不激活服务或 Docker |
 
-| 检查项 | 命令或证据 | 2026-08-15 快照 |
-|---|---|---|
-| 代码规范 | `ruff check .` | 通过 |
-| 严格类型 | `pyright` | 0 错误、0 警告 |
-| Python 完整测试 | `pytest -q`（当前开发环境） | 554 通过 |
-| 覆盖率 | `pytest --cov=perflens --cov-fail-under=85` | 85.48%，通过 |
-| Python CI 矩阵 | `.github/workflows/ci.yml` | 配置 Python 3.12、3.13；发布时以对应远程运行结果为准 |
-| Rust 格式/静态检查 | 固定工具链 `cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings` | 通过 |
-| Rust 测试 | `cargo test --locked` | 25 个库测试和 2 个二进制测试通过 |
-| Schema/协议 | 已提交 Schema、跨语言有效/无效 golden、未知字段拒绝 | 通过 |
-| Skill | 结构、打包和工作流安全测试 | 通过 |
-| wheel/sdist | 重复构建、逐字节比较、隔离安装 | 通过 |
-| 原生 DEB | Debian 13 主包/Collector 拆包、重复构建、提取/安装冒烟 | 通过 |
-| 依赖与供应链 | 锁文件、许可证/漏洞检查、SBOM、Action 固定、发布来源证明配置 | 通过本地门禁；远程证明需由标签工作流产生 |
-
-这些数字属于一次快照。测试增加后，文档不应继续复制旧数量；发布记录应保存实际命令、
-提交 SHA、Python/Rust 版本和完整日志。覆盖率门槛仍是 85%，不得为了新增功能而降低。
-
-## Collector 与真实主机证据
-
-自动化测试覆盖真实 Unix Socket、对等身份、PID 复用/跨 UID/重放/过期拒绝、固定 spool、
-容量配额、产物哈希与权限、部署/升级/回滚/撤销，以及 Python/Rust 私有协议的拒绝路径。
-成功和失败的 perf 路径使用受控可执行 Test Double，避免把 CI 主机权限误当成产品能力。
-
-此外，Debian 13 人工验收已经证明：
-
-- `paranoid3_helper` 与非特权 Broker 可以完成认证握手；
-- 在 VMware 硬件 PMU 没有产生可用计数时，可以完成软件 `stat`；
-- `cpu-clock record` 和调用栈采样可以完成；
-- Collection 会报告 `actual_event_source=software`、降级原因与 IPC/cache/branch 限制；
-- 原始证据哈希、Collection、分析输入、转换清单、热点/调用路径权重守恒可以验证。
-
-这只证明该主机和该短时工作负载。它不证明硬件 PMU、其他内核/虚拟机/LSM、其他 PID
-或实验 trace 模式一定可用。每台主机仍要由普通授权用户运行：
-
-```bash
-perflens accept-collector --authorize-host-acceptance
-```
+具体数量只描述本次候选检出，测试增加后会变化。覆盖率门槛保持 85%，不得为了发布降低。
 
 ## 安全与解释门禁
 
-- 不经过 shell；用户路径必须规范化并拒绝符号链接逃逸；源 Profile 永不覆盖；
-- MCP、Skill、Agent 和 Python Broker 不运行 sudo，也不持有 Helper 权限；
-- 用户工作负载始终由普通用户启动，Collector/Helper 只接收短期、单次、同 UID 的 PID 计划；
-- `paranoid3_helper` 只执行固定 root 所有 perf 路径，只允许 `stat`、`record`；
-- 原始输入、转换结果、最终分析和 Agent 可见分页必须保持来源绑定与哈希一致；
-- 解析警告、未知帧、丢失事件、截断和未解析权重必须保留，不能伪装成零；
-- 规则匹配不是根因，Profile 百分比不是绝对耗时，软件事件不能支持 IPC/cache/branch 结论；
-- 只有匹配工作负载、相同事件来源、正确性通过并重复测量的 A/B，才能称为已验证改进。
+- Docker、Agent、Skill、MCP、Broker 和 Helper 边界保持分离；任何组件都不调用 sudo，也不
+  修改 sysctl、Docker 用户组、daemon 配置或 Socket 权限。
+- Docker 命令及挂载/网络/资源策略从类型化项目合同派生；远程 endpoint、任意参数、
+  build/pull、privileged、host PID、设备、额外 capability、Docker Socket 挂载和宿主路径
+  逃逸都会被拒绝。
+- Broker、stat/record Helper 与 Trace Helper 独立验证容器目标 UID、PID 启动时间、
+  namespace、cgroup、计划期限、单次身份和资源上限。
+- 公开输出不保存完整 inspect、环境变量、标签、Socket/挂载源/cgroup 路径和目标外 argv；
+  缺失的符号/源码证据保持 `partial`。
+- cgroup 差值属于整容器上下文，不是目标进程独占证据；软件 PMU 降级不能支持 IPC、
+  cache-miss、branch-miss 或微架构结论。
+- `Verified Improvement` 要求处理变量确实变化、环境指纹相同、容器绑定的正确性与
+  Benchmark 成功、绝对指标改善、确定性重放通过且未观察到资源转移。
 
-## 标签与下一版本
+## 剩余真实主机发布门
 
-本历史快照生成时源码版本仍为 `0.2.0`。当前发布元数据已更新为 `0.3.0`；每次尝试创建
-`v0.3.0` 标签都必须重新运行发布工作流中的完整门禁，不能把这份旧快照当成通过证据。
+自动化测试使用真实 Unix Socket 和有界 Docker/perf Test Double。候选仍需在本机执行一次
+显式安装验收，覆盖实际可用的 rootless/rootful Docker、已有容器、托管临时容器、软件
+PMU 降级和宿主 Collector 回归。rootful UID 0 还要求专用管理员风险确认。结果只证明该
+主机和对应 workload。
 
-已经对外发布的标签应保持不可变。即使确认旧标签/Release 从未提供给用户，删除并重建也
-只能作为单独审查的仓库恢复操作；[发布流程](releasing.zh-CN.md)不把覆盖标签作为正常
-步骤，默认做法仍是修复后发布新版本。
+在真实验收、最终安装包重建、干净工作区检查和远程 CI 全部通过前，不要创建或推送
+`v0.3.1`。已有 `v0.3.0` Tag 保持不可变。

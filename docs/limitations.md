@@ -57,11 +57,13 @@ verification, lost, truncated, boundary-censored, or unpaired evidence remains `
 is only a user-space-lock candidate, and owner or hold time is unavailable without genuine source
 evidence. See the [Collector and user-space-lock roadmap](collector-capability-roadmap.md).
 
-Active Docker collection is not currently supported. Existing container/build path mapping only
-helps interpret profiles supplied by the user; PerfLens cannot yet discover container processes,
-start a managed container, bind container identity, or collect cgroup context. These capabilities
-are planned for v0.3.1 and are limited to a local Linux Docker Engine, cgroup v2, and one explicit
-process. They do not silently expand into whole-container, multi-container, remote-Engine,
-Compose, or Kubernetes collection; see the [v0.3.1 Docker roadmap](docker-container-roadmap.md).
-The C/C++, Java, Python, and Go user-space-lock adapters move to v0.4.0. A checked-in public
-contract skeleton does not mean that those adapters are available.
+Release v0.3.1 Docker collection is limited to one explicit process in a local Linux Docker Engine
+with cgroup v2. It does not silently expand into whole-container or multi-process aggregation,
+remote Engines, Docker Desktop VMs, Compose, Kubernetes, automatic image build/pull, or arbitrary
+Docker arguments. Existing-container sessions bind one concrete process incarnation; managed
+temporary containers use only a local immutable image and a fixed project recipe. cgroup deltas
+describe the whole container and must not be reported as target-process-exclusive values. Symbol
+or source evidence becomes `partial` when the verified container root/module snapshot cannot be
+preserved. See the [v0.3.1 Docker guide](docker-container-roadmap.md). The C/C++, Java, Python, and
+Go user-space-lock adapters remain planned for v0.4.0; their public contract groundwork does not
+make those adapters available.

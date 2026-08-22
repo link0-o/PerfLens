@@ -4,7 +4,8 @@
 
 PerfLens 为 Debian 13 `amd64` 提供两个职责分离的原生安装包：
 
-- `perflens_<版本>-<Debian修订号>_amd64.deb`：普通用户 CLI、MCP Server、Skill 和锁定运行依赖；
+- `perflens_<版本>-<Debian修订号>_amd64.deb`：普通用户 CLI、MCP Server、Skill、锁定运行依赖
+  和固定的非特权 Container Gate；
 - `perflens-collector_<版本>-<Debian修订号>_amd64.deb`：可选的 `perflens-admin`、
   `perflens-collector`、同架构 Rust Helper 和部署示例，依赖同版本主包。
 
@@ -16,7 +17,7 @@ PerfLens 为 Debian 13 `amd64` 提供两个职责分离的原生安装包：
 只分析已有 Profile、不需要自动采集时，只安装主包：
 
 ```bash
-sudo apt install ./perflens_0.3.0-1_amd64.deb
+sudo apt install ./perflens_0.3.1-1_amd64.deb
 cd /绝对路径/你的项目
 perflens init
 ```
@@ -25,8 +26,8 @@ perflens init
 
 ```bash
 sudo apt install \
-  ./perflens_0.3.0-1_amd64.deb \
-  ./perflens-collector_0.3.0-1_amd64.deb
+  ./perflens_0.3.1-1_amd64.deb \
+  ./perflens-collector_0.3.1-1_amd64.deb
 
 perflens setup \
   --project /绝对路径/你的项目 \
@@ -64,11 +65,15 @@ perflens init --prepare-collector \
 固定 Rust Helper unit 获得收窄后的 capability bounding set。
 
 上一条 `0.2.0` 修复线保持上游版本不变，仅把 Debian 修订号从 `1` 增加到 `2`，因此已经安装
-`0.2.0-1` 的主机可以用 APT 升级到 `0.2.0-2`，CLI 仍显示 `0.2.0`。新的 `0.3.0`
-上游版本从 Debian 修订号 `1` 重新开始。文件名只是示例，
+`0.2.0-1` 的主机可以用 APT 升级到 `0.2.0-2`，CLI 仍显示 `0.2.0`。`0.3.1`
+上游版本使用 Debian 修订号 `1`。文件名只是示例，
 应以实际下载文件为准。安装包不会自动启动服务、写入
 `/etc/perflens`、修改 sysctl/capability 或授予用户权限。检查引导生成的双语
 `collector.toml` 后，由管理员明确执行：
+
+Docker 始终是可选外部运行时。两个包都不依赖或启动 Docker，不加入 Docker 用户组，
+不写 daemon 配置，也不启用项目 Docker 策略。主包中的 Container Gate 默认不执行；只有
+普通用户明确授权托管工作流时才使用。需要 Docker 的项目单独运行 `perflens init --docker`。
 
 ```bash
 sudo perflens-admin deploy \

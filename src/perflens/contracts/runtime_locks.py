@@ -1,4 +1,4 @@
-"""Public contracts for v0.3.1 runtime-lock adapters.
+"""Public contract groundwork for the planned v0.4.0 runtime-lock adapters.
 
 The runtime adapters intentionally share one evidence model even though their
 source semantics differ.  Exact event streams, thresholded events, sampled

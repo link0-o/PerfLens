@@ -7,17 +7,17 @@
 普通 Linux 用户应下载：
 
 ```text
-perflens-0.3.0-py3-none-any.whl
+perflens-0.3.1-py3-none-any.whl
 ```
 
-`.whl` 是 Python 安装包，不是需要解压后点击运行的 ZIP。不要提取它。解压后看到的 `perflens/` 和 `perflens-0.3.0.dist-info/` 只是程序模块与安装元数据。
+`.whl` 是 Python 安装包，不是需要解压后点击运行的 ZIP。不要提取它。解压后看到的 `perflens/` 和 `perflens-0.3.1.dist-info/` 只是程序模块与安装元数据。
 
 其他 Release 文件的用途：
 
-- `perflens_0.3.0-1_amd64.deb`：Debian 13 普通用户主安装包；
-- `perflens-collector_0.3.0-1_amd64.deb`：可选 Collector 与 Rust Helper，需配合同版本主包；
-- `perflens-0.3.0.tar.gz`：源码发行包；
-- `perflens-skill-0.3.0.zip`：只包含 Agent Skill；
+- `perflens_0.3.1-1_amd64.deb`：Debian 13 普通用户主安装包；
+- `perflens-collector_0.3.1-1_amd64.deb`：可选 Collector 与 Rust Helper，需配合同版本主包；
+- `perflens-0.3.1.tar.gz`：源码发行包；
+- `perflens-skill-0.3.1.zip`：只包含 Agent Skill；
 - `sbom.cdx.json`：依赖安全清单；
 - `SHA256SUMS`：下载校验和；
 - `Source code`：GitHub 自动生成的源码快照。
@@ -33,7 +33,7 @@ sha256sum --ignore-missing --check SHA256SUMS
 DEB、源码包、Skill、SBOM 和 `SHA256SUMS` 也可以用相同命令验证：
 
 ```bash
-gh attestation verify ./perflens-0.3.0-py3-none-any.whl \
+gh attestation verify ./perflens-0.3.1-py3-none-any.whl \
   --repo link0-o/PerfLens \
   --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -45,7 +45,7 @@ gh attestation verify ./perflens-0.3.0-py3-none-any.whl \
 Debian 13 `amd64` 用户推荐直接安装主 DEB，不需要 pipx：
 
 ```bash
-sudo apt install ./perflens_0.3.0-1_amd64.deb
+sudo apt install ./perflens_0.3.1-1_amd64.deb
 ```
 
 需要自动采集时再安装完全相同版本的 Collector DEB。安装软件包不会自动启动
@@ -82,7 +82,7 @@ root。只分析已有 Profile 时不需要选择或部署任何 Collector。
 
 ```bash
 cd ~/Downloads
-pipx install ./perflens-0.3.0-py3-none-any.whl
+pipx install ./perflens-0.3.1-py3-none-any.whl
 ```
 
 如果浏览器下载到了其他目录，请先在文件管理器中进入该目录，右键空白处选择
@@ -99,7 +99,7 @@ pipx ensurepath
 然后重新打开终端，再执行 wheel 安装命令。也可以使用：
 
 ```bash
-uv tool install ./perflens-0.3.0-py3-none-any.whl
+uv tool install ./perflens-0.3.1-py3-none-any.whl
 ```
 
 验证安装：
@@ -117,6 +117,16 @@ perflens --help
 cd /绝对路径/你的项目
 perflens init
 ```
+
+当前项目明确要采集本地 Linux Docker Engine 中的一个进程时，改用：
+
+```bash
+perflens init --docker
+```
+
+先审查生成的 `perflens-setup/container-workload.toml`。Docker 执行仍要求通过项目 MCP
+明确确认 `per_run` 或 `bounded_session`；PerfLens 不安装/启动 Docker、不加入 Docker 组、
+不 build/pull 镜像，也不接受任意 Docker 参数。
 
 默认同时激活 Codex 和 Claude Code，并启用有界项目运行与自动采集。也可以明确选择：
 

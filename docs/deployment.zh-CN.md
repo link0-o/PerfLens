@@ -90,15 +90,15 @@ sudo perflens-admin switch-profile cpu_only
 管理员参数。完整设计和验收门见
 [《Collector 与用户态锁能力路线图（v0.3.0 / v0.4.0）》](collector-capability-roadmap.zh-CN.md)。
 
-## `v0.3.1` 计划中的 Docker 部署边界
+## `v0.3.1` Docker 部署边界
 
-`v0.3.1` 计划增加本地 Linux Docker Engine、cgroup v2 下单个明确容器进程的采集。
-这些接口当前尚未实现，v0.3.0 不能把 Docker 主动采集写成
-正式能力。完整合同见
-[《v0.3.1 Docker 进程采集与分析路线图》](docker-container-roadmap.zh-CN.md)。
+发布版 `v0.3.1` 支持采集本地 Linux Docker Engine、cgroup v2 下的一个明确容器进程。
+项目用户使用 `perflens init --docker` 显式启用项目配置；用户确认单次执行或当前 Agent
+连接内的有界会话之前，该配置不会授权执行。完整合同见
+[《v0.3.1 Docker 进程采集与分析指南》](docker-container-roadmap.zh-CN.md)。
 
 Docker 是 `host/docker` 目标运行时选择，不是第三种 Collector 权限模式，也不改变
-`cpu_only/full_diagnostics` 与 `cap_perfmon/paranoid3_helper` 两组现有选择。未来 DEB：
+`cpu_only/full_diagnostics` 与 `cap_perfmon/paranoid3_helper` 两组现有选择。v0.3.1 DEB：
 
 - 不安装或启动 Docker，不修改 `docker` 用户组、daemon 配置或 Docker Socket 权限；
 - 不自动 build/pull 镜像，不启用容器支持，也不把 Docker Socket 交给 Collector、Helper、
@@ -127,7 +127,7 @@ Docker 是 `host/docker` 目标运行时选择，不是第三种 Collector 权�
 ```bash
 sudo python3 -m venv /opt/perflens
 sudo /opt/perflens/bin/python -m pip install \
-  ./dist/perflens-0.3.0-py3-none-any.whl
+  ./dist/perflens-0.3.1-py3-none-any.whl
 ```
 
 这里的版本号只是示例，应替换为实际构建版本。正式离线部署应同时提供 wheelhouse 或完整系统包，不应在安装脚本中隐式访问网络。

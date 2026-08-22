@@ -29,12 +29,21 @@ The commands below use the planned next version as an example. Set
 files before running them.
 
 ```bash
-perflens_release_version=0.3.0
+perflens_release_version=0.3.1
 perflens_release_tag="v${perflens_release_version}"
 uv sync --all-groups --frozen
 uv run ruff check .
 uv run pyright
 uv run pytest --cov=perflens --cov-fail-under=85
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --locked
+cargo audit --deny warnings
+cargo deny check
+cargo build --release --locked \
+  --package perflens-container-gate \
+  --package perflens-privileged-helper \
+  --package perflens-trace-helper
 perflens_source_epoch="$(git log -1 --format=%ct)"
 perflens_repro_dir="$(mktemp -d)"
 SOURCE_DATE_EPOCH="$perflens_source_epoch" uv build --no-sources --out-dir dist
@@ -82,7 +91,7 @@ Create and push an annotated version tag only after the release commit is on
 `main`:
 
 ```bash
-perflens_release_tag=v0.3.0
+perflens_release_tag=v0.3.1
 git tag -a "$perflens_release_tag" -m "PerfLens ${perflens_release_tag}"
 git push origin "$perflens_release_tag"
 ```
@@ -117,7 +126,7 @@ publisher runs only after attestation succeeds. After publication, spot-check
 at least one asset:
 
 ```bash
-perflens_release_version=0.3.0
+perflens_release_version=0.3.1
 gh attestation verify "./dist/perflens-${perflens_release_version}-py3-none-any.whl" \
   --repo link0-o/PerfLens \
   --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
@@ -131,7 +140,7 @@ before enabling automated publication. Publish only the Python distributions,
 not the Skill archive or SBOM:
 
 ```bash
-perflens_release_version=0.3.0
+perflens_release_version=0.3.1
 uv publish \
   "dist/perflens-${perflens_release_version}-py3-none-any.whl" \
   "dist/perflens-${perflens_release_version}.tar.gz"

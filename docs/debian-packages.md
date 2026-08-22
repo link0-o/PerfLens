@@ -5,7 +5,7 @@
 PerfLens publishes two role-separated native packages for Debian 13 `amd64`:
 
 - `perflens_<version>-<Debian-revision>_amd64.deb` contains the unprivileged CLI, MCP server,
-  Skill, and hash-locked runtime dependencies;
+  Skill, hash-locked runtime dependencies, and the fixed unprivileged Container Gate;
 - `perflens-collector_<version>-<Debian-revision>_amd64.deb` adds the optional administrator,
   Collector, target-native Rust Helper, and depends on the exact same main-package version.
 
@@ -18,7 +18,7 @@ MCP or Collector identity. Links in writable directories are rejected.
 For offline profile analysis, install only the main package:
 
 ```bash
-sudo apt install ./perflens_0.3.0-1_amd64.deb
+sudo apt install ./perflens_0.3.1-1_amd64.deb
 cd /absolute/path/to/project
 perflens init
 ```
@@ -27,8 +27,8 @@ For automatic collection, install both packages and generate a reviewed policy:
 
 ```bash
 sudo apt install \
-  ./perflens_0.3.0-1_amd64.deb \
-  ./perflens-collector_0.3.0-1_amd64.deb
+  ./perflens_0.3.1-1_amd64.deb \
+  ./perflens-collector_0.3.1-1_amd64.deb
 
 perflens setup \
   --project /absolute/path/to/project \
@@ -66,7 +66,12 @@ the complete versioned artifact.
 The previous repaired `0.2.0` line kept its upstream version and incremented only the
 Debian revision from `1` to `2`. APT could therefore upgrade an installed
 `0.2.0-1` package to `0.2.0-2`, while the PerfLens CLI still reported `0.2.0`.
-The new `0.3.0` upstream release starts again at Debian revision `1`.
+The `0.3.1` upstream release uses Debian revision `1`.
+
+Docker remains an optional external runtime. Neither package depends on or activates Docker, joins
+a Docker group, writes daemon configuration, or enables project Docker policy. The Container Gate
+in the main package is inert until an ordinary-user managed workflow has explicit authorization.
+Use `perflens init --docker` only in projects that intentionally opt in.
 After the user's new login session, `perflens status --project <project>` checks
 runtime readiness and `perflens-admin spool-status` reports Collector storage
 headroom. Both are read-only; add `--json` to the latter for a versioned artifact.

@@ -1,18 +1,18 @@
-# PerfLens v0.3.1 Docker 进程采集与分析路线图
+# PerfLens v0.3.1 Docker 进程采集与分析指南
 
-[一次性 Goal 执行合同](v0.3.1-execution-contract.zh-CN.md)
+[实施审计合同](v0.3.1-execution-contract.zh-CN.md)
 
 简体中文 | [English](docker-container-roadmap.md)
 
-状态：**计划实现；当前尚不可用**
+状态：**发布候选已实现；自动门禁通过，等待真实主机 Docker 验收**
 
-最后审计：2026-08-21，基于 v0.3.0 宿主机实现
+最后审计：2026-08-22，基于 v0.3.1 源码和本地安装包候选
 
 目标版本：`v0.3.1`
 
-本文是 v0.3.1 的设计、实现和发布合同。它不表示当前安装包已经能够主动发现、启动或
-采集 Docker 容器。当前 PerfLens 只能稳定处理宿主机 PID，并能对用户已经导出的
-`perf.data`、`perf script` 或 folded Profile 做离线分析和源码路径映射。
+本文是 v0.3.1 的设计、实现、使用和发布合同。当前源码与本地安装包候选已经实现下述
+有界 Docker 范围内的主动发现、授权、托管启动、采集、分析和匹配比较。每台主机仍须
+完成显式本地 Docker 验收，才能宣称该安装环境实际可用。
 
 版本路线固定为：
 
@@ -86,7 +86,7 @@ v0.3.1 不支持：
 
 ### 3.1 项目初始化
 
-计划接口为：
+项目初始化接口为：
 
 ```bash
 cd /绝对路径/项目
@@ -222,7 +222,7 @@ MCP 和不同 Agent 客户端不一定提供可信、统一的对话 ID或“对
 
 - Agent 对话或客户端连接明确结束；
 - MCP 进程退出、重启或连接身份改变；
-- 用户执行计划中的 `perflens revoke-session`；
+- 同一客户端连接调用类型化 MCP 工具 `revoke_docker_session`；
 - 项目根身份或只读挂载范围、镜像摘要、命令、网络、资源限制或授权范围改变；
 - Collector 管理员策略、功能配置或权限模式改变；
 - 对现有容器：完整容器 ID、容器启动身份、目标进程启动身份、namespace 或 cgroup 改变；
@@ -280,7 +280,7 @@ Rootless Docker 中容器 root 会映射到运行 daemon 的宿主用户；usern
 - Rootless Docker 中宿主 UID等于调用用户的目标；
 - rootful Docker 中显式以调用用户宿主 UID运行的目标。
 
-默认拒绝 rootful UID 0。管理员可以一次性在 Collector策略中启用计划字段
+默认拒绝 rootful UID 0。管理员可以一次性在 Collector策略中启用已实现字段
 `allow_rootful_container_targets = true`，并使用独立风险确认。该设置只开放经过完整 Docker
 身份验证的容器目标，不会打开通用 `allow_other_target_uids`，也不会使后续采集需要重复
 输入 sudo。
@@ -292,7 +292,7 @@ rootful `stat/record` 由受限 Rust Helper 执行，并独立验证请求 peer�
 
 ## 6. 目标身份与协议
 
-计划新增以下版本化公共产物：
+v0.3.1 新增以下版本化公共产物：
 
 - `DockerRuntimeCapabilityArtifact`：Docker CLI、endpoint类别、daemon模式、cgroup版本、
   Rootless/rootful和功能可用性；
@@ -302,7 +302,11 @@ rootful `stat/record` 由受限 Rust Helper 执行，并独立验证请求 peer�
 - `ContainerResourceContextArtifact`：采集前后 cgroup资源快照、差值、范围和限制；
 - `ContainerWorkloadSpecArtifact`：固定镜像、workload、挂载、网络、用户和资源策略；
 - `ContainerOptimizationSessionArtifact`：授权模式、绑定摘要、累计预算和失效状态；
-- `ContainerRunArtifact`：托管容器生命周期、目标 PID、退出状态和对应 Collection ID。
+- `ContainerRunArtifact`：托管容器生命周期、目标 PID、退出状态和对应 Collection ID；
+- `ContainerModuleSnapshotArtifact` 与 `ContainerSymbolContextArtifact`：有界模块身份、
+  Build ID、映射质量和隐私安全的源码上下文；
+- `ContainerMeasurementArtifact` 与 `ContainerMatchedComparisonArtifact`：Collection、
+  cgroup、run、Benchmark 绑定和保守的匹配 A/B 结论。
 
 现有 Collection Plan/Artifact 使用向后兼容的新版本增加可选容器目标摘要；旧 Host PID
 产物继续按 Host目标读取。Broker、stat/record Helper和Trace Helper协议分别增加严格的
@@ -390,19 +394,26 @@ namespace及cgroup inode共同验证。
 可以作为被比较的处理变量。只有正确性通过、环境匹配且有绝对指标的前后测量才能写成
 `Verified Improvement`。
 
-## 9. CLI、MCP 与 Skill 计划
+## 9. CLI、MCP 与 Skill
 
-计划中的用户入口：
+稳定 CLI 入口负责项目初始化：
 
 ```bash
 perflens init --docker
-perflens container status --project /绝对路径/项目
-perflens accept-container --container <名称或ID>
-perflens revoke-session
 ```
 
-`perflens init`可以只读检测Dockerfile或容器配置并提示`--docker`，但不能静默启用Docker
-执行权限。MCP新增的容器工具必须使用类型化Schema，并分别控制：
+它生成 `perflens-setup/container-workload.toml`，项目用户审查并修改固定策略后，再让 Agent
+采集。会话状态有意归属于长生命周期 MCP 连接，因此授权和撤销使用 MCP 工具；不提供
+无法触达另一个进程内存令牌的一次性 CLI 假接口。已经实现的类型化工具为：
+
+- `inspect_docker_capability`、`discover_docker_processes`、`resolve_docker_target`：有界只读发现；
+- `authorize_docker_session`、`authorize_managed_docker_session`：显式创建 `per_run` 或
+  `bounded_session` 授权；
+- `collect_docker_target`、`collect_managed_docker_workload`：执行已授权工作流；
+- `revoke_docker_session`：在同一连接撤销会话；
+- 现有分析工具和 `compare_container_measurements`：完成已验证投影和 A/B。
+
+`perflens init` 不会静默启用 Docker 执行权限。MCP 容器工具使用类型化 Schema，分别控制：
 
 - 容器能力/进程发现；
 - 附加现有容器；
@@ -432,9 +443,9 @@ stat
 Agent只能在本次授权会话和管理员策略交集内选择最小必要证据，不能因为“深度优化”四个
 字自动扩大镜像、命令、挂载、网络、目标、时长或权限。
 
-## 10. 实施顺序
+## 10. 已完成实施里程碑
 
-后续代码按独立、可回滚提交完成：
+代码按以下顺序以独立、可回滚提交完成：
 
 1. Docker能力、目标、资源、workload、会话和run公共合同及Schema；
 2. 固定Docker inspect/top Adapter、Socket身份固定和有界脱敏解析；
@@ -448,8 +459,8 @@ Agent只能在本次授权会话和管理员策略交集内选择最小必要证
 10. CLI、MCP、Skill自动路由和匹配A/B；
 11. DEB、升级/卸载、真实Docker矩阵和中英文发布文档。
 
-每一步必须先通过拒绝路径和当前里程碑测试，不能在身份与Artifact合同之前先给MCP开放
-Docker执行。
+每一步均先通过正常路径、拒绝路径、静态检查和协议测试，再进入下一里程碑；身份与
+Artifact 合同稳定之前没有向 MCP 开放 Docker 执行。
 
 ## 11. 测试与发布门槛
 

@@ -1,19 +1,19 @@
-# PerfLens v0.3.1 Docker process collection and analysis roadmap
+# PerfLens v0.3.1 Docker process collection and analysis guide
 
-[One-run Goal execution contract](v0.3.1-execution-contract.md)
+[Implementation audit contract](v0.3.1-execution-contract.md)
 
 [简体中文](docker-container-roadmap.zh-CN.md) | English
 
-Status: **planned; not currently available**
+Status: **implemented release candidate; automated gates passed, real-host Docker acceptance pending**
 
-Last audited: 2026-08-21 against the v0.3.0 host implementation
+Last audited: 2026-08-22 against the v0.3.1 source and package candidate
 
 Target release: `v0.3.1`
 
-This document is the v0.3.1 design, implementation, and release contract. It does not claim that
-the current package can actively discover, start, or collect from Docker containers. PerfLens
-currently has a stable host-PID path and can analyze user-exported `perf.data`, `perf script`, and
-folded profiles offline, including source-path mapping.
+This document is the v0.3.1 design, implementation, use, and release contract. The current source
+and local package candidate implement active discovery, authorization, managed launch, collection,
+analysis, and matched comparison for the bounded Docker scope below. A host still must pass the
+explicit local-Docker acceptance before its installation can claim that the runtime is usable.
 
 The release sequence is fixed as follows:
 
@@ -94,7 +94,7 @@ in the container.
 
 ### 3.1 Project initialization
 
-The planned interface is:
+The project initialization interface is:
 
 ```bash
 cd /absolute/project/path
@@ -242,7 +242,7 @@ The session expires on the first of:
 
 - an explicit Agent conversation or client-connection end;
 - MCP exit, restart, or connection-identity change;
-- the planned `perflens revoke-session` command;
+- the typed `revoke_docker_session` MCP call on the same client connection;
 - a project-root identity or read-only mount-scope, image-digest, command, network, resource, or
   authorization-scope change;
 - an administrator policy, feature-profile, or privilege-mode change;
@@ -309,7 +309,7 @@ The default allows:
 - Rootless Docker targets whose host UID equals the invoking UID;
 - rootful Docker targets explicitly running as the invoking host UID.
 
-Rootful UID 0 is denied by default. An administrator may enable the planned
+Rootful UID 0 is denied by default. An administrator may enable the implemented
 `allow_rootful_container_targets = true` policy with a separate risk acknowledgement. It applies
 only to fully verified Docker targets, does not enable generic `allow_other_target_uids`, and does
 not require sudo for every later collection.
@@ -322,7 +322,7 @@ commands or a Docker socket.
 
 ## 6. Target identity and protocol
 
-The plan adds these versioned public artifacts:
+v0.3.1 adds these versioned public artifacts:
 
 - `DockerRuntimeCapabilityArtifact`: Docker CLI, endpoint class, daemon mode, cgroup version,
   Rootless/rootful state, and capability;
@@ -332,7 +332,11 @@ The plan adds these versioned public artifacts:
 - `ContainerResourceContextArtifact`: before/after cgroup snapshots, deltas, scope, and limits;
 - `ContainerWorkloadSpecArtifact`: fixed image, workload, mounts, network, user, and resources;
 - `ContainerOptimizationSessionArtifact`: authorization mode, bound digest, budgets, and expiry;
-- `ContainerRunArtifact`: managed-container lifecycle, target PID, exit status, and Collection ID.
+- `ContainerRunArtifact`: managed-container lifecycle, target PID, exit status, and Collection ID;
+- `ContainerModuleSnapshotArtifact` and `ContainerSymbolContextArtifact`: bounded module identity,
+  Build ID, mapping quality, and privacy-preserving source context;
+- `ContainerMeasurementArtifact` and `ContainerMatchedComparisonArtifact`: Collection/cgroup/run/
+  benchmark bindings and a conservative matched A/B conclusion.
 
 Collection Plan/Artifact gains a backward-compatible version with an optional container-target
 digest; old Host-PID artifacts remain readable as Host targets. Broker, stat/record Helper, and
@@ -428,19 +432,28 @@ fingerprint matches. Source or build-artifact digest can be the treatment under 
 correctness-preserving, environment-matched before/after measurement with an absolute metric may
 be called a `Verified Improvement`.
 
-## 9. Planned CLI, MCP, and Skill experience
+## 9. CLI, MCP, and Skill experience
 
-Planned user entry points are:
+The stable CLI entry point is project initialization:
 
 ```bash
 perflens init --docker
-perflens container status --project /absolute/project/path
-perflens accept-container --container <name-or-ID>
-perflens revoke-session
 ```
 
-`perflens init` may detect a Dockerfile or container configuration read-only and suggest
-`--docker`, but it never enables Docker execution silently. Typed MCP tools separately gate:
+It writes `perflens-setup/container-workload.toml`; project users review and edit that fixed policy
+before asking an Agent to collect. Session state is deliberately owned by the long-lived MCP
+connection, so authorization and revocation are MCP tools rather than misleading one-shot CLI
+commands that could not reach another process's in-memory token. The implemented typed tools are:
+
+- `inspect_docker_capability`, `discover_docker_processes`, and `resolve_docker_target` for bounded
+  read-only discovery;
+- `authorize_docker_session` or `authorize_managed_docker_session` for explicit `per_run` or
+  `bounded_session` authorization;
+- `collect_docker_target` or `collect_managed_docker_workload` for the authorized workflow;
+- `revoke_docker_session` for same-connection revocation;
+- existing analysis tools plus `compare_container_measurements` for verified projection and A/B.
+
+`perflens init` never enables Docker execution silently. Typed MCP tools separately gate:
 
 - container capability/process discovery;
 - existing-container attachment;
@@ -471,9 +484,9 @@ Even the words “deeply optimize” cannot let the Agent expand image, command,
 target, duration, or privilege beyond the intersection of the conversation authorization and
 administrator policy.
 
-## 10. Implementation order
+## 10. Implemented milestones
 
-Future code lands as independent, reversible commits:
+The implementation landed as independent, reversible commits in this order:
 
 1. public contracts and schemas for Docker capability, target, resource, workload, session, and run;
 2. fixed inspect/top adapter, socket identity pinning, and bounded sanitized parsing;
@@ -487,8 +500,8 @@ Future code lands as independent, reversible commits:
 10. CLI, MCP, Skill routing, and matched A/B;
 11. DEB, upgrade/removal, real-Docker matrix, and bilingual release documentation.
 
-Every milestone must pass its denial paths before the next begins. Docker execution is never
-exposed to MCP before identity and artifact contracts are stable.
+Each milestone passed focused normal, denial, lint, type, and protocol checks before the next one.
+Docker execution was exposed to MCP only after identity and artifact contracts were stable.
 
 ## 11. Tests and release gates
 

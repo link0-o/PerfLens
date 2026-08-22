@@ -12,17 +12,49 @@ The optional `perflens-collector` is a Unix-socket broker. It authenticates peer
 
 ## Current mode maturity
 
-The supported, default automatic workflow is `stat` followed by `record` when
-sampling is justified. Plans expire after 120 seconds by default. Public types
-and the `cap_perfmon` Broker also contain raw `sched`, `lock`, and `off_cpu`
-entry points, but those modes are experimental, disabled by the generated
-policy, and do not yet have mode-specific deterministic analyzers. The
-`paranoid3_helper` protocol and Rust Helper intentionally reject them.
+The `cpu_only` feature profile supports `stat` followed by `record` when
+sampling is justified. The `full_diagnostics` profile also supports bounded,
+target-filtered `sched`, `off_cpu`, and `lock` collection with deterministic
+analysis and consistency verification. Plans expire after 120 seconds by
+default. The existing `paranoid3_helper` Rust Perf Helper remains limited to
+`stat` and `record`; advanced modes use the independent Trace Helper, socket,
+policy, and spool instead of widening that protocol.
 
-The Skill therefore does not select those raw trace modes merely because a
-request says “deep analysis” or “deep optimization.” See the
+The Skill selects the smallest evidence mode justified by observed symptoms;
+the words “deep analysis” or “deep optimization” do not expand an already
+authorized target, duration, profile, or workload. See the
 [collector capability roadmap](collector-capability-roadmap.md) for the
-planned analysis artifacts, privacy checks, and release gates.
+analysis artifacts, privacy checks, and release boundaries.
+
+### Local-Docker single-process targets
+
+v0.3.1 adds one process in a local Linux Docker Engine container under cgroup
+v2 as another target runtime, not as a third Collector privilege mode. Run
+`perflens init --docker` once for the project. The Agent then discovers and
+resolves the target through the same MCP connection and obtains either a
+`per_run` or bounded conversation-session authorization.
+
+The Docker adapter supplies discovery hints only. Before each collection, the
+Broker and relevant Rust Helper independently revalidate the full container
+ID, host PID/UID/start time, PID namespace, and cgroup identity. Each
+collection plan remains short-lived, single-PID, and single-use. The Docker
+socket is never passed to a Collector, Helper, or Skill and is not retained in
+public artifacts.
+
+Existing-container authorization binds one concrete instance, so restart,
+replacement, or abnormal identity changes invalidate it. Temporary test
+containers bind an authorized `ContainerWorkloadSpec`; new container IDs and
+PIDs are expected per run, but the fixed Gate must create them and every
+instance is revalidated. PerfLens does not build or pull images, install or
+start Docker, modify Docker groups, or accept arbitrary Docker arguments,
+host PID namespaces, privileged containers, arbitrary host mounts, or remote
+endpoints.
+
+Collection also preserves bounded cgroup-v2 before/after snapshots and
+deltas. CPU, memory, I/O, PIDs, and pressure are whole-container context, not
+target-process-exclusive metrics. Matched A/B additionally requires the same
+workload contract, image, command, mounts, resource bounds, collection mode,
+and actual event source.
 
 Authentication is bidirectional for health and collection requests. The client
 pins safe socket metadata, matches the kernel peer UID to the socket owner,
@@ -102,10 +134,11 @@ server, Agent, or Python Broker as root.
 
 For automatic MCP collection, enable all explicit server gates, configure `--collector-socket`, include the collector spool as an `--allowed-root`, and bound modes/duration/frequency. See the [Chinese guide](automatic-collection.zh-CN.md) for the complete configuration and safety model.
 
-The generic `perf.data` path is an on-CPU analyzer. It must not be presented as
-a scheduler-delay, lock-wait, or paired off-CPU interval analyzer. Until those
-dedicated analyzers land, raw advanced-mode evidence cannot support precise
-runnable-wait, lock hold/wait, owner/waiter, or blocking-duration claims.
+The generic `perf.data` path remains an on-CPU analyzer and must not be
+presented as scheduler-delay, lock-wait, or paired off-CPU evidence. Those
+claims come only from the dedicated v0.3.0 trace artifacts and verifiers, and
+must retain `partial` status when intervals are truncated, events are lost, or
+owner/waiter evidence is unavailable.
 
 The automatic workflow is:
 

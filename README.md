@@ -16,9 +16,8 @@ After DEB installation, `sudo perflens-admin setup` selects the host Collector m
 [Collector privilege-mode lifecycle](docs/collector-mode-lifecycle.md) for dry-runs,
 switching, rollback, and project resynchronization.
 See the [Collector and user-space-lock roadmap](docs/collector-capability-roadmap.md) for the
-current maturity boundary and phased extension plan. Planned v0.3.1 local-Docker single-process
-support is specified separately in the [Docker process roadmap](docs/docker-container-roadmap.md);
-active Docker discovery, launch, and collection are not current capabilities.
+current maturity boundary and phased extension plan. Release v0.3.1 local-Docker single-process
+support is specified separately in the [Docker process guide](docs/docker-container-roadmap.md).
 See the [trustworthy perf evidence pipeline](docs/evidence-pipeline.md) for raw-input binding,
 conversion provenance, quality gates, and Agent-facing verification.
 
@@ -47,6 +46,9 @@ The current release formally supports Milestones 0 through 9:
 - default-off, explicitly authorized `stat`/`record` collection. Release v0.3.0 also provides a
   separate target-filtered Trace Helper and verified `sched`/`off_cpu`/`lock` pipeline through
   the opt-in `full_diagnostics` feature profile.
+- v0.3.1 project-scoped discovery and authorized collection for one process in a local Linux
+  Docker Engine, including cgroup v2 context, bounded container symbol mapping, managed temporary
+  test containers, and evidence-matched A/B comparison.
 
 It does **not** include an AI/LLM API, Web UI, source-code patch tool, benchmark
 runner, or custom agent framework.
@@ -58,9 +60,9 @@ PerfLens requires Python 3.12 or newer.
 For a GitHub release, download the wheel and install it as an isolated tool:
 
 ```bash
-pipx install ./perflens-0.3.0-py3-none-any.whl
+pipx install ./perflens-0.3.1-py3-none-any.whl
 # or
-uv tool install ./perflens-0.3.0-py3-none-any.whl
+uv tool install ./perflens-0.3.1-py3-none-any.whl
 ```
 
 Then opt one project in. Other projects do not see the Skill or MCP server:
@@ -69,6 +71,17 @@ Then opt one project in. Other projects do not see the Skill or MCP server:
 cd /absolute/path/to/project
 perflens init
 ```
+
+For a project that intentionally profiles a local Docker workload, initialize the project with:
+
+```bash
+perflens init --docker
+```
+
+This writes a project-owned `perflens-setup/container-workload.toml` policy. It does not install
+or start Docker, join the Docker group, build/pull an image, deploy a Collector, or grant execution.
+The Skill uses typed MCP discovery, authorization, collection, and comparison tools only after the
+user confirms either one run or a bounded in-memory session.
 
 This activates Codex and Claude Code by default. Select only one with
 `--client codex` or `--client claude-code`, or use `--read-only` when the
@@ -105,10 +118,13 @@ enabled automatically and requires administrator acknowledgement of the bounded 
 Release v0.3.0 adds a separate Trace Helper, in-kernel target filtering, deterministic
 sched/off-CPU/lock analysis, and the `full_diagnostics` lifecycle. The existing privileged
 stat/record Helper remains limited to stat/record. See the
-[Collector and user-space-lock roadmap](docs/collector-capability-roadmap.md). `v0.3.1` is now the
-local-Docker single-process release, while the four runtime-lock adapters move to `v0.4.0`.
-Checked-in Runtime Lock public contracts are groundwork, not available adapters. See the
-[v0.3.1 Docker process roadmap](docs/docker-container-roadmap.md).
+[Collector and user-space-lock roadmap](docs/collector-capability-roadmap.md). Release v0.3.1
+adds the local-Docker single-process target runtime while the four runtime-lock adapters remain
+planned for v0.4.0. Docker support is limited to a local Linux Engine, cgroup v2, an explicit
+process, and fixed project policy; it excludes arbitrary Docker arguments, remote engines,
+Compose/Kubernetes, image build/pull, and whole-container perf aggregation. Checked-in Runtime
+Lock public contracts are groundwork, not available adapters. See the
+[v0.3.1 Docker process guide](docs/docker-container-roadmap.md).
 
 Run a read-only readiness summary at any time:
 
@@ -497,6 +513,7 @@ Chinese version.
   lock/futex-candidate artifacts through the opt-in `full_diagnostics` profile.
   It cannot promote a futex candidate to a language lock, invent owner/hold time without pairs, or
   cover every user-space fast path.
-- Active Docker discovery, launch, and collection are not currently supported. Existing container
-  path mapping applies only to already captured evidence; active local-Docker support is planned
-  for v0.3.1.
+- Release v0.3.1 Docker collection is limited to one explicit process in a local Linux Engine with
+  cgroup v2 and explicit project/session authorization. It excludes remote Engines, Docker Desktop
+  VMs, Compose/Kubernetes, image build/pull, arbitrary Docker arguments, and whole-container perf
+  aggregation; container-wide cgroup deltas are context rather than process-exclusive evidence.

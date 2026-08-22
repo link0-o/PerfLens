@@ -1924,8 +1924,8 @@ def _container_measurement_summary(
         "container_environment_fingerprint_sha256": (
             measurement.environment.environment_fingerprint_sha256
         ),
-            "container_treatment_count": len(measurement.treatment_sha256),
-            "container_benchmark_id": measurement.source_benchmark_id,
+        "container_treatment_count": len(measurement.treatment_sha256),
+        "container_benchmark_id": measurement.source_benchmark_id,
         "container_measurement_limitations": "; ".join(measurement.limitations),
     }
 

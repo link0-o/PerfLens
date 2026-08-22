@@ -16,10 +16,10 @@
 | Skill | Project Skill for Codex `.agents/skills` and Claude Code `.claude/skills`, validated by `skill-creator` |
 | AI client config | Codex project `.codex/config.toml`; Claude Code project `.mcp.json` |
 | Active collection | Release `0.3.0` supports `record/stat` and adds opt-in `sched/off_cpu/lock` through a separate Trace Helper |
-| Automatic collection | Host-only today: ordinary-user launcher plus a host-PID-only Linux Collector Broker using `SO_PEERCRED`; systemd template provided |
+| Automatic collection | Host PID plus one explicitly authorized process in a local Docker Engine; ordinary-user orchestration and a `SO_PEERCRED`-authenticated Collector remain separate |
 | Collector policy | Current version 1; `cpu_only` permits `record/stat`, while `full_diagnostics` additionally permits `sched/off_cpu/lock`; missing version is accepted as legacy version 1 and unsupported versions are rejected |
 | paranoid=3 Helper | The existing Rust Helper remains permanently limited to `record/stat`; v0.3.0 uses another service/protocol/socket/spool for its Trace Helper |
-| Target runtime | Current formal scope is a Linux host PID; one process in a local Docker Engine with cgroup v2 is planned for v0.3.1, not available today |
+| Target runtime | Linux host PID, or one explicit process in a local Linux Docker Engine with cgroup v2; no remote Engine, Docker Desktop VM, Compose, or whole-container aggregation |
 | Native DEB | Debian 13 `amd64`, system Python 3.13; split exact-version Collector package |
 | Artifact schema | 1.0 |
 
@@ -36,13 +36,13 @@ short software `stat` and `cpu-clock record` collection through the
 a compatibility claim for every kernel, VM, PMU, LSM, or advanced trace mode;
 each `full_diagnostics` deployment requires its own short real-host acceptance.
 
-Current container compatibility means only container/build path mapping while analyzing an
-existing profile. PerfLens does not yet discover Docker processes, launch containers, connect to a
-remote Engine, or collect container cgroup context. v0.3.1 plans only a local Linux Docker Engine,
-cgroup v2, and one explicit process, covering an existing container or a PerfLens-managed
-temporary test container. See the [Docker process roadmap](docker-container-roadmap.md) for the
-compatibility and denial matrix. C/C++, Java, Python, and Go user-space-lock adapters are planned
-for v0.4.0.
+Release v0.3.1 discovers processes in an existing local container or creates a fixed-policy managed
+temporary test container, binds the container identity to the host PID, captures cgroup v2 context,
+and maps bounded module/source evidence. Docker remains optional and external: PerfLens neither
+installs Docker nor builds/pulls images. Rootful UID-0 targets stay disabled until an administrator
+explicitly enables the dedicated policy boundary. See the [Docker process guide](docker-container-roadmap.md)
+for the complete compatibility and denial matrix. C/C++, Java, Python, and Go user-space-lock
+adapters remain planned for v0.4.0.
 
 Run `perflens status --project /absolute/path/to/project` for a read-only summary
 of onboarding files, Skill, generated MCP configuration, Collector assets,

@@ -35,6 +35,18 @@ perflens init
 存在时会拒绝覆盖。
 完整的下载、安装和接入步骤见[《中文安装指南》](../INSTALL.zh-CN.md)。
 
+明确需要采集本地 Docker 工作负载的项目使用：
+
+```bash
+perflens init --docker
+```
+
+该命令增加固定项目 Docker 策略和有界 MCP 门禁，不启动 Docker，也不授予执行权限。使用前
+先审查 `perflens-setup/container-workload.toml`。Skill 随后调用
+`inspect_docker_capability`、`discover_docker_processes`，解析一个精确目标，请求
+`per_run` 或 `bounded_session` 授权，再调用对应的已有容器或托管容器采集工具。会话令牌
+只存在于当前 MCP 连接；`revoke_docker_session` 或连接退出会撤销它。
+
 `perflens init` 默认开启项目工作负载自动采集，允许 `stat` 和 `record`，MCP 单次最长
 30 秒、`record` 最大 99 Hz、单次输出最大 256 MiB、一次性计划 120 秒失效；Skill
 通常先请求约 10 秒，并按程序长短调整，不会固定强制采集 10 秒。已有 PID 附加默认关闭。
@@ -253,14 +265,16 @@ on-CPU 热点，但不得用软件结果推断 IPC、硬件缓存或分支未命
 | `READ_ONLY` | 热点、路径、分类结果、产物分页和源码上下文 | 只接受已配置的 artifact ID 和 allowed-root 内路径 |
 | `WRITES_ARTIFACTS` | 分析 Profile、生成诊断包 | 需要 `--allow-writes`，只能写 artifact root |
 | `PROCESS_EXECUTION` | 转换 perf.data、执行源码符号化程序 | 需要 `--allow-process-execution`，命令、输出和时长有边界 |
-| `ACTIVE_COLLECTION` | 正式 `record`/`stat`；`cap_perfmon` 中默认关闭的原始 `sched`/`lock`/`off_cpu` 实验 | 需要多个启动开关、逐次精确授权和全新输出路径；已有 PID 另需附加开关；Skill 不自动选择原始实验模式，`paranoid3_helper` 会拒绝它们 |
+| `ACTIVE_COLLECTION` | 正式 `record`/`stat`；已部署 `full_diagnostics` 时的 `sched`/`lock`/`off_cpu` | 需要写入、进程执行、主动采集启动门、精确授权、有界输出和全新路径；已有 PID 另需附加门；trace 还要求 Collector 策略与独立 Trace Helper |
 | `AUTOMATIC_COLLECTION` | 执行短期、单次、PID 绑定计划 | MCP 分类授权与 Collector 独立策略必须同时允许 |
 | `PROJECT_EXECUTION` | 启动一个已确认的项目可执行文件并采集其新 PID | 还需要自动采集、`--allow-project-execution`、逐次执行授权和项目路径边界 |
+| `DOCKER_COLLECTION` | 发现、授权并采集一个本地容器进程或一个固定托管 workload | 需要 `perflens init --docker`、项目 Docker 策略、自动采集、匹配的内存会话、独立 Linux 身份复核，以及 Docker/Collector 策略交集 |
 
 客户端显示的工具注解只是提示；真正的权限检查始终在 PerfLens MCP Server 内执行。
 
-当前稳定自动顺序是 `stat → record`。“深度分析”或“深度优化”只会让 Skill 在已授权、
-已稳定的能力中逐步取证，不会自动扩大到实验性 trace 模式或新的权限边界。
+当前稳定自动顺序从 `stat` 开始，再按证据选择 `record` 或已部署 `full_diagnostics` 的
+trace 模式。“深度分析”或“深度优化”只会让 Skill 在已授权、已稳定的能力中逐步取证，
+不会自动扩大到新的目标、Docker 配方或权限边界。
 
 ## 主动采样的额外授权
 

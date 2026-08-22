@@ -15,10 +15,9 @@
 `perflens-admin switch-mode <模式> --dry-run`。项目内只需运行 `perflens init`，它会自动
 识别安全的已部署模式。详见[《Collector 权限模式选择与切换》](docs/collector-mode-lifecycle.zh-CN.md)。
 现有能力的成熟度、待修复项和后续扩展顺序见
-[《Collector 与用户态锁能力路线图》](docs/collector-capability-roadmap.zh-CN.md)。计划中的
-`v0.3.1` 本地 Docker 单进程采集见
-[《Docker 进程采集与分析路线图》](docs/docker-container-roadmap.zh-CN.md)；当前版本尚未提供
-Docker 主动发现、启动或采集能力。
+[《Collector 与用户态锁能力路线图》](docs/collector-capability-roadmap.zh-CN.md)。发布版
+`v0.3.1` 的本地 Docker 单进程能力见
+[《Docker 进程采集与分析指南》](docs/docker-container-roadmap.zh-CN.md)。
 perf 原始证据如何转换、校验并带着质量边界交给 Agent，见
 [《Perf 原始证据到 Agent 数据的可信链路》](docs/evidence-pipeline.zh-CN.md)。
 
@@ -53,9 +52,9 @@ PerfLens 不包含 LLM API、Web UI、自动修改源码功能、Benchmark 执�
 从 GitHub Releases 下载 wheel 后，推荐作为独立工具安装：
 
 ```bash
-pipx install ./perflens-0.3.0-py3-none-any.whl
+pipx install ./perflens-0.3.1-py3-none-any.whl
 # 或者
-uv tool install ./perflens-0.3.0-py3-none-any.whl
+uv tool install ./perflens-0.3.1-py3-none-any.whl
 ```
 
 不要手工提取 wheel。安装成功后进入要分析的项目，首次运行：
@@ -64,6 +63,16 @@ uv tool install ./perflens-0.3.0-py3-none-any.whl
 cd /绝对路径/你的项目
 perflens init
 ```
+
+如果当前项目明确需要采集本地 Docker 工作负载，改用：
+
+```bash
+perflens init --docker
+```
+
+该命令只生成项目级 `perflens-setup/container-workload.toml` 策略，不安装或启动 Docker、
+不加入 Docker 用户组、不 build/pull 镜像、不部署 Collector，也不授予执行权限。之后 Skill
+只会在用户确认单次授权或内存中的有界会话后，调用类型化 MCP 工具完成发现、采集和比较。
 
 `init` 默认只在当前项目激活 Codex 和 Claude Code 集成，并开启受策略约束的自动采集。
 只使用一个客户端时传 `--client codex` 或 `--client claude-code`；只分析已有证据时传
@@ -93,9 +102,11 @@ root Rust Helper；该模式不会自动启用，必须由管理员确认受限 
 确定性分析和 `full_diagnostics` 生命周期；原有特权 stat/record Helper 仍严格限制为
 `stat/record`。详细边界见
 [《Collector 与用户态锁能力路线图（v0.3.0 / v0.4.0）》](docs/collector-capability-roadmap.zh-CN.md)。
-`v0.3.1` 改为本地 Docker 单进程能力，四类用户态锁 Adapter 的目标版本为 `v0.4.0`；
-已经提交的 Runtime Lock 公共合同只是前置骨架，不代表 Adapter 已可用。Docker 计划见
-[《v0.3.1 Docker 进程采集与分析路线图》](docs/docker-container-roadmap.zh-CN.md)。
+发布版 `v0.3.1` 增加本地 Docker 单进程目标运行时，四类用户态锁 Adapter 仍计划进入
+`v0.4.0`。Docker 能力只覆盖本地 Linux Engine、cgroup v2、明确进程和固定项目策略；
+不支持任意 Docker 参数、远程 Engine、Compose/Kubernetes、自动 build/pull 或整容器 perf
+聚合。已经提交的 Runtime Lock 公共合同只是前置骨架，不代表 Adapter 已可用。详见
+[《v0.3.1 Docker 进程采集与分析指南》](docs/docker-container-roadmap.zh-CN.md)。
 
 随时可以运行只读状态检查，不需要记住多条排错命令：
 
@@ -451,8 +462,10 @@ uv run pip-audit
 - 发布版 v0.3.0 通过可选的 `full_diagnostics` 配置生成调度延迟、off-CPU 区间和底层
   锁/futex 候选 Artifact；它仍不能把 futex
   候选升级成特定语言锁、在缺少配对时猜 owner/持锁时长，或覆盖所有用户态快路径。
-- 当前没有正式的 Docker 主动采集：已有容器路径映射只用于分析已有证据，不会发现容器、
-  启动容器或把 Collector 附加到容器内进程。该能力是 `v0.3.1` 计划。
+- 发布版 v0.3.1 的 Docker 主动采集只覆盖本地 Linux Engine、cgroup v2 下的一个明确进程，
+  并要求项目与会话显式授权；不支持远程 Engine、Docker Desktop VM、Compose/Kubernetes、
+  自动 build/pull、任意 Docker 参数或整容器 perf 聚合。容器级 cgroup 差值只是上下文，
+  不能写成目标进程独占证据。
 
 更多中文资料：
 
