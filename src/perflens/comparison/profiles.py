@@ -158,6 +158,7 @@ def compare_profiles(
         comparison_id=comparison_id,
         baseline_analysis_id=baseline.analysis_id,
         candidate_analysis_id=candidate.analysis_id,
+        minimum_delta_percent=minimum_delta_percent,
         comparable=comparable,
         metadata_differences=metadata_differences,
         hotspot_deltas=tuple(hotspot_deltas),
@@ -278,5 +279,25 @@ def _collection_setting_fields(
         "collection_evidence_limitations": (
             before.evidence_limitations,
             after.evidence_limitations,
+        ),
+        "collection_collector_config_sha256": (
+            before.collector_config_sha256,
+            after.collector_config_sha256,
+        ),
+        "collection_collector_privilege_mode": (
+            before.collector_privilege_mode,
+            after.collector_privilege_mode,
+        ),
+        "collection_collector_feature_profile": (
+            before.collector_feature_profile,
+            after.collector_feature_profile,
+        ),
+        "collection_host_kernel_release": (
+            before.host_kernel_release,
+            after.host_kernel_release,
+        ),
+        "collection_perf_executable_sha256": (
+            before.perf_executable_sha256,
+            after.perf_executable_sha256,
         ),
     }

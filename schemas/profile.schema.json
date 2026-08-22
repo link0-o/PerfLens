@@ -38,6 +38,51 @@
           "title": "Collection Id",
           "type": "string"
         },
+        "collector_config_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Collector Config Sha256"
+        },
+        "collector_feature_profile": {
+          "anyOf": [
+            {
+              "enum": [
+                "cpu_only",
+                "full_diagnostics"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Collector Feature Profile"
+        },
+        "collector_privilege_mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "cap_perfmon",
+                "paranoid3_helper"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Collector Privilege Mode"
+        },
         "container_target_content_sha256": {
           "anyOf": [
             {
@@ -106,6 +151,20 @@
           "default": null,
           "title": "Frequency Hz"
         },
+        "host_kernel_release": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Host Kernel Release"
+        },
         "mode": {
           "enum": [
             "record",
@@ -125,6 +184,19 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Output Sha256",
           "type": "string"
+        },
+        "perf_executable_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Perf Executable Sha256"
         },
         "record_event": {
           "anyOf": [

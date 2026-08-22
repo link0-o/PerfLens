@@ -272,6 +272,12 @@
       "title": "Metadata Differences",
       "type": "object"
     },
+    "minimum_delta_percent": {
+      "default": 1.0,
+      "minimum": 0,
+      "title": "Minimum Delta Percent",
+      "type": "number"
+    },
     "schema_version": {
       "const": "1.0",
       "default": "1.0",

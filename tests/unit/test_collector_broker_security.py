@@ -27,7 +27,11 @@ from perflens.collector_broker.client import (
     _validate_connected_peer,
     _verify_collection_artifact,
 )
-from perflens.collector_broker.policy import CollectorBrokerPolicy, validate_broker_policy
+from perflens.collector_broker.policy import (
+    CollectorBrokerPolicy,
+    broker_policy_sha256,
+    validate_broker_policy,
+)
 from perflens.collector_broker.protocol import (
     BROKER_SCHEMA_VERSION,
     MAX_BROKER_MESSAGE_BYTES,
@@ -96,6 +100,18 @@ def _plan() -> CollectionPlanArtifact:
         expires_at=(datetime.now(tz=UTC) + timedelta(minutes=1)).isoformat(),
         policy_status="allowed",
         required_privilege="cap_perfmon",
+    )
+
+
+def test_collector_policy_fingerprint_covers_every_effective_limit(tmp_path: Path) -> None:
+    policy = _policy(tmp_path)
+    fingerprint = broker_policy_sha256(policy)
+    assert fingerprint == broker_policy_sha256(policy)
+    assert fingerprint != broker_policy_sha256(
+        replace(policy, max_duration_seconds=policy.max_duration_seconds - 1)
+    )
+    assert fingerprint != broker_policy_sha256(
+        replace(policy, allow_software_fallback=True)
     )
 
 

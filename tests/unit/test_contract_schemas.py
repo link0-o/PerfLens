@@ -59,6 +59,8 @@ from perflens.contracts.artifacts import (
     VerificationCheck,
 )
 from perflens.contracts.docker import (
+    ContainerMatchedComparisonArtifact,
+    ContainerMeasurementArtifact,
     ContainerModuleSnapshotArtifact,
     ContainerOptimizationSessionArtifact,
     ContainerProcessInventoryArtifact,
@@ -163,6 +165,8 @@ def test_checked_in_json_schemas_match_contract_models() -> None:
         "container-workload-spec.schema.json": ContainerWorkloadSpecArtifact,
         "container-optimization-session.schema.json": ContainerOptimizationSessionArtifact,
         "container-run.schema.json": ContainerRunArtifact,
+        "container-measurement.schema.json": ContainerMeasurementArtifact,
+        "container-matched-comparison.schema.json": ContainerMatchedComparisonArtifact,
     }
 
     for filename, model in models.items():

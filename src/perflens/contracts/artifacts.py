@@ -75,6 +75,17 @@ class CollectionEvidenceProvenance(ContractModel):
     fallback_used: bool
     fallback_reason: str | None = None
     evidence_limitations: tuple[str, ...] = ()
+    collector_config_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] | None = None
+    collector_feature_profile: Literal["cpu_only", "full_diagnostics"] | None = None
+    host_kernel_release: str | None = Field(default=None, min_length=1, max_length=256)
+    perf_executable_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
 
     @model_validator(mode="after")
     def validate_target_runtime(self) -> CollectionEvidenceProvenance:
@@ -86,6 +97,17 @@ class CollectionEvidenceProvenance(ContractModel):
             raise ValueError("host Collection provenance cannot bind a Docker target")
         if self.target_runtime == "docker" and any(item is None for item in bindings):
             raise ValueError("Docker Collection provenance requires its target identity")
+        collector_bindings = (
+            self.collector_config_sha256,
+            self.collector_privilege_mode,
+            self.collector_feature_profile,
+            self.host_kernel_release,
+            self.perf_executable_sha256,
+        )
+        if any(item is None for item in collector_bindings) and any(
+            item is not None for item in collector_bindings
+        ):
+            raise ValueError("Collector configuration provenance must be all present or absent")
         return self
 
 
@@ -531,6 +553,7 @@ class ProfileComparison(ContractModel):
     comparison_id: str
     baseline_analysis_id: str
     candidate_analysis_id: str
+    minimum_delta_percent: float = Field(default=1.0, ge=0)
     comparable: bool
     metadata_differences: dict[str, tuple[str, str]]
     hotspot_deltas: tuple[ProfileHotspotDelta, ...]
@@ -785,6 +808,17 @@ class CollectionArtifact(ContractModel):
     fallback_used: bool = False
     fallback_reason: str | None = None
     evidence_limitations: tuple[str, ...] = ()
+    collector_config_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] | None = None
+    collector_feature_profile: Literal["cpu_only", "full_diagnostics"] | None = None
+    host_kernel_release: str | None = Field(default=None, min_length=1, max_length=256)
+    perf_executable_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
     metrics: tuple[PerfStatMetric, ...] = ()
     authorization: Literal["explicit"] = "explicit"
     diagnostics: tuple[str, ...] = ()
@@ -803,6 +837,17 @@ class CollectionArtifact(ContractModel):
                 raise ValueError("Docker Collection requires a complete target binding")
             if self.target_pid != self.container_target.host_pid:
                 raise ValueError("Docker Collection host PID differs from its target binding")
+        collector_bindings = (
+            self.collector_config_sha256,
+            self.collector_privilege_mode,
+            self.collector_feature_profile,
+            self.host_kernel_release,
+            self.perf_executable_sha256,
+        )
+        if any(item is None for item in collector_bindings) and any(
+            item is not None for item in collector_bindings
+        ):
+            raise ValueError("Collector configuration provenance must be all present or absent")
         return self
 
 

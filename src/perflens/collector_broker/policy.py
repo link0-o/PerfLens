@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import os
 import tomllib
@@ -50,6 +52,33 @@ class CollectorBrokerPolicy:
     allow_software_fallback: bool = False
     socket_mode: int = 0o660
     artifact_mode: int = 0o640
+
+
+def broker_policy_sha256(policy: CollectorBrokerPolicy) -> str:
+    """Hash the complete validated policy without exposing its paths or UID list."""
+    payload = {
+        "spool_root": str(policy.spool_root),
+        "perf_path": str(policy.perf_path),
+        "allowed_uids": policy.allowed_uids,
+        "privilege_mode": policy.privilege_mode,
+        "policy_version": policy.policy_version,
+        "allowed_modes": policy.allowed_modes,
+        "allow_other_target_uids": policy.allow_other_target_uids,
+        "allow_rootful_container_targets": policy.allow_rootful_container_targets,
+        "max_duration_seconds": policy.max_duration_seconds,
+        "max_frequency_hz": policy.max_frequency_hz,
+        "max_output_bytes": policy.max_output_bytes,
+        "max_spool_bytes": policy.max_spool_bytes,
+        "max_spool_artifacts": policy.max_spool_artifacts,
+        "min_free_bytes": policy.min_free_bytes,
+        "max_plan_ttl_seconds": policy.max_plan_ttl_seconds,
+        "allowed_stat_events": policy.allowed_stat_events,
+        "allow_software_fallback": policy.allow_software_fallback,
+        "socket_mode": policy.socket_mode,
+        "artifact_mode": policy.artifact_mode,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def load_broker_policy(path: Path) -> CollectorBrokerPolicy:

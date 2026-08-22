@@ -9,6 +9,7 @@ import json
 import logging
 import math
 import os
+import platform
 import shutil
 import signal
 import socket
@@ -41,6 +42,7 @@ from perflens.collection.collector import (
 from perflens.collection.planning import assert_plan_current
 from perflens.collector_broker.policy import (
     CollectorBrokerPolicy,
+    broker_policy_sha256,
     load_broker_policy,
     validate_broker_policy,
 )
@@ -91,6 +93,7 @@ _HARDWARE_PROBE_MINIMUM_PLAN_SECONDS = 0.3
 _HARDWARE_PROBE_MAX_SECONDS = 0.25
 _HARDWARE_PROBE_EVENTS = HARDWARE_STAT_EVENTS[:2]
 _POST_PROBE_FALLBACK_MINIMUM_SECONDS = 0.05
+_MAX_PERF_EXECUTABLE_BYTES = 512 << 20
 
 
 class CollectorBrokerServer:
@@ -120,6 +123,8 @@ class CollectorBrokerServer:
                 f"{_MAX_REQUEST_FRAME_TIMEOUT_SECONDS:g} seconds"
             )
         self._policy = validate_broker_policy(policy)
+        self._host_kernel_release = platform.release()
+        self._perf_executable_sha256 = _trusted_executable_sha256(self._policy.perf_path)
         self._helper_client = helper_client
         self._helper_spool_root = helper_spool_root
         self._expected_helper_uid = expected_helper_uid
@@ -153,6 +158,15 @@ class CollectorBrokerServer:
                 )
         elif trace_helper_client is not None or trace_coordinator is not None:
             raise ValueError("Trace clients require an explicit immutable Trace policy")
+        trace_policy_sha256 = trace_policy.policy_sha256 if trace_policy is not None else "none"
+        self._collector_config_sha256 = hashlib.sha256(
+            (
+                "perflens-collector-config-v1\0"
+                + broker_policy_sha256(self._policy)
+                + "\0"
+                + trace_policy_sha256
+            ).encode("utf-8")
+        ).hexdigest()
         self._socket_path = _new_socket_path(socket_path)
         self._request_timeout_seconds = float(request_timeout_seconds)
         self._stop = threading.Event()
@@ -330,7 +344,7 @@ class CollectorBrokerServer:
                 ready_callback=ready_callback,
             )
         if plan.fallback_allowed and not effective_plan.fallback_allowed:
-            return artifact.model_copy(
+            artifact = artifact.model_copy(
                 update={
                     "warnings": (
                         *artifact.warnings,
@@ -339,7 +353,17 @@ class CollectorBrokerServer:
                     )
                 }
             )
-        return artifact
+        return artifact.model_copy(
+            update={
+                "collector_config_sha256": self._collector_config_sha256,
+                "collector_privilege_mode": self._policy.privilege_mode,
+                "collector_feature_profile": (
+                    "full_diagnostics" if self._trace_policy is not None else "cpu_only"
+                ),
+                "host_kernel_release": self._host_kernel_release,
+                "perf_executable_sha256": self._perf_executable_sha256,
+            }
+        )
 
     def _narrow_fallback_to_collector_policy(
         self,
@@ -1143,6 +1167,59 @@ def _new_socket_path(path: Path) -> Path:
     if candidate.exists() or candidate.is_symlink():
         raise ValueError("Collector socket path already exists")
     return candidate
+
+
+def _trusted_executable_sha256(path: Path) -> str:
+    """Hash the already-policy-validated perf binary without executing it."""
+    descriptor = -1
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_size <= 0
+            or before.st_size > _MAX_PERF_EXECUTABLE_BYTES
+            or before.st_mode & 0o022
+        ):
+            raise OSError("unsafe perf executable identity")
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 1 << 20):
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        current = path.stat(follow_symlinks=False)
+        before_identity = (
+            before.st_dev,
+            before.st_ino,
+            before.st_uid,
+            stat.S_IMODE(before.st_mode),
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        if before_identity != (
+            after.st_dev,
+            after.st_ino,
+            after.st_uid,
+            stat.S_IMODE(after.st_mode),
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ) or before_identity != (
+            current.st_dev,
+            current.st_ino,
+            current.st_uid,
+            stat.S_IMODE(current.st_mode),
+            current.st_size,
+            current.st_mtime_ns,
+            current.st_ctime_ns,
+        ):
+            raise OSError("perf executable identity changed")
+        return digest.hexdigest()
+    except OSError as exc:
+        raise ValueError("Collector perf executable identity cannot be frozen") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _peer_uid(connection: socket.socket) -> int:

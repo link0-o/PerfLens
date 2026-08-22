@@ -1,0 +1,730 @@
+{
+  "$defs": {
+    "CgroupIoDeviceLimit": {
+      "additionalProperties": false,
+      "description": "One normalized cgroup-v2 ``io.max`` device limit.\n\nA missing value means that dimension is unlimited. Entries where every\ndimension is unlimited are omitted by the parser, so exported entries\nalways carry at least one effective limit.",
+      "properties": {
+        "major": {
+          "minimum": 0,
+          "title": "Major",
+          "type": "integer"
+        },
+        "minor": {
+          "minimum": 0,
+          "title": "Minor",
+          "type": "integer"
+        },
+        "read_bps": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Read Bps"
+        },
+        "read_iops": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Read Iops"
+        },
+        "write_bps": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Write Bps"
+        },
+        "write_iops": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Write Iops"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "title": "CgroupIoDeviceLimit",
+      "type": "object"
+    },
+    "ContainerEnvironmentFingerprint": {
+      "additionalProperties": false,
+      "description": "Stable A/B invariants; ephemeral container and PID identities are excluded.",
+      "properties": {
+        "actual_event_source": {
+          "enum": [
+            "hardware",
+            "software"
+          ],
+          "title": "Actual Event Source",
+          "type": "string"
+        },
+        "adapter_recipe_id": {
+          "enum": [
+            "local-docker-read-v1",
+            "local-docker-managed-v1"
+          ],
+          "title": "Adapter Recipe Id",
+          "type": "string"
+        },
+        "adapter_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Adapter Sha256",
+          "type": "string"
+        },
+        "collection_call_graph": {
+          "anyOf": [
+            {
+              "enum": [
+                "fp",
+                "dwarf",
+                "lbr"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Collection Call Graph"
+        },
+        "collection_events": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Collection Events",
+          "type": "array"
+        },
+        "collection_frequency_hz": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 10000,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Collection Frequency Hz"
+        },
+        "collection_mode": {
+          "enum": [
+            "stat",
+            "record",
+            "sched",
+            "off_cpu",
+            "lock"
+          ],
+          "title": "Collection Mode",
+          "type": "string"
+        },
+        "collection_record_event": {
+          "anyOf": [
+            {
+              "enum": [
+                "cycles",
+                "cpu-clock"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Collection Record Event"
+        },
+        "collector_config_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Collector Config Sha256",
+          "type": "string"
+        },
+        "collector_feature_profile": {
+          "enum": [
+            "cpu_only",
+            "full_diagnostics"
+          ],
+          "title": "Collector Feature Profile",
+          "type": "string"
+        },
+        "collector_privilege_mode": {
+          "enum": [
+            "cap_perfmon",
+            "paranoid3_helper"
+          ],
+          "title": "Collector Privilege Mode",
+          "type": "string"
+        },
+        "container_gate_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Container Gate Sha256"
+        },
+        "cpu_period_usec": {
+          "exclusiveMinimum": 0,
+          "title": "Cpu Period Usec",
+          "type": "integer"
+        },
+        "cpu_quota_usec": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Quota Usec"
+        },
+        "cpuset_cpus_effective": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Cpuset Cpus Effective",
+          "type": "string"
+        },
+        "environment_fingerprint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Environment Fingerprint Sha256",
+          "type": "string"
+        },
+        "evidence_limitations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Limitations",
+          "type": "array"
+        },
+        "fallback_reason": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Reason"
+        },
+        "fallback_used": {
+          "title": "Fallback Used",
+          "type": "boolean"
+        },
+        "host_kernel_release": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Host Kernel Release",
+          "type": "string"
+        },
+        "image_identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Image Identity Sha256",
+          "type": "string"
+        },
+        "io_limits": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CgroupIoDeviceLimit"
+          },
+          "title": "Io Limits",
+          "type": "array"
+        },
+        "memory_max_bytes": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Memory Max Bytes"
+        },
+        "mount_layout_recipe": {
+          "enum": [
+            "existing-container-unverified-v1",
+            "managed-workspace-readonly-v1"
+          ],
+          "title": "Mount Layout Recipe",
+          "type": "string"
+        },
+        "network_mode": {
+          "enum": [
+            "unknown",
+            "none"
+          ],
+          "title": "Network Mode",
+          "type": "string"
+        },
+        "perf_executable_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Perf Executable Sha256",
+          "type": "string"
+        },
+        "pids_max": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pids Max"
+        },
+        "requested_event_source": {
+          "enum": [
+            "auto",
+            "hardware_required",
+            "software_only"
+          ],
+          "title": "Requested Event Source",
+          "type": "string"
+        },
+        "target_kind": {
+          "enum": [
+            "existing_container",
+            "managed_temporary_container"
+          ],
+          "title": "Target Kind",
+          "type": "string"
+        },
+        "uid_mapping": {
+          "enum": [
+            "rootless_same_uid",
+            "rootful_same_uid",
+            "rootful_cross_uid"
+          ],
+          "title": "Uid Mapping",
+          "type": "string"
+        },
+        "workload_fingerprint": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workload Fingerprint"
+        }
+      },
+      "required": [
+        "target_kind",
+        "image_identity_sha256",
+        "uid_mapping",
+        "adapter_recipe_id",
+        "adapter_sha256",
+        "mount_layout_recipe",
+        "network_mode",
+        "host_kernel_release",
+        "perf_executable_sha256",
+        "collector_config_sha256",
+        "collector_privilege_mode",
+        "collector_feature_profile",
+        "collection_mode",
+        "requested_event_source",
+        "actual_event_source",
+        "fallback_used",
+        "cpu_period_usec",
+        "cpuset_cpus_effective",
+        "environment_fingerprint_sha256"
+      ],
+      "title": "ContainerEnvironmentFingerprint",
+      "type": "object"
+    },
+    "ContainerResourceDelta": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu_nr_periods": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Nr Periods"
+        },
+        "cpu_nr_throttled": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Nr Throttled"
+        },
+        "cpu_system_usec": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu System Usec"
+        },
+        "cpu_throttled_usec": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Throttled Usec"
+        },
+        "cpu_usage_usec": {
+          "minimum": 0,
+          "title": "Cpu Usage Usec",
+          "type": "integer"
+        },
+        "cpu_user_usec": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu User Usec"
+        },
+        "io_pressure_full_usec": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Io Pressure Full Usec"
+        },
+        "io_pressure_some_usec": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Io Pressure Some Usec"
+        },
+        "io_read_bytes": {
+          "minimum": 0,
+          "title": "Io Read Bytes",
+          "type": "integer"
+        },
+        "io_read_ios": {
+          "minimum": 0,
+          "title": "Io Read Ios",
+          "type": "integer"
+        },
+        "io_write_bytes": {
+          "minimum": 0,
+          "title": "Io Write Bytes",
+          "type": "integer"
+        },
+        "io_write_ios": {
+          "minimum": 0,
+          "title": "Io Write Ios",
+          "type": "integer"
+        },
+        "memory_event_deltas": {
+          "default": [],
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Memory Event Deltas",
+          "type": "array"
+        },
+        "memory_pressure_full_usec": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Memory Pressure Full Usec"
+        },
+        "memory_pressure_some_usec": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Memory Pressure Some Usec"
+        }
+      },
+      "required": [
+        "cpu_usage_usec",
+        "io_read_bytes",
+        "io_write_bytes",
+        "io_read_ios",
+        "io_write_ios"
+      ],
+      "title": "ContainerResourceDelta",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One container Collection plus its whole-cgroup and stable-environment evidence.",
+  "properties": {
+    "allowed_conclusions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Conclusions",
+      "type": "array"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "environment": {
+      "$ref": "#/$defs/ContainerEnvironmentFingerprint"
+    },
+    "forbidden_conclusions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Forbidden Conclusions",
+      "type": "array"
+    },
+    "limitations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "measurement_id": {
+      "pattern": "^container-measurement-[a-f0-9]{20}$",
+      "title": "Measurement Id",
+      "type": "string"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "quality_status": {
+      "enum": [
+        "verified",
+        "partial"
+      ],
+      "title": "Quality Status",
+      "type": "string"
+    },
+    "resource_context_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Resource Context Content Sha256",
+      "type": "string"
+    },
+    "resource_context_id": {
+      "pattern": "^container-resource-[a-f0-9]{20}$",
+      "title": "Resource Context Id",
+      "type": "string"
+    },
+    "resource_observation": {
+      "$ref": "#/$defs/ContainerResourceDelta"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_collection_artifact_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Source Collection Artifact Sha256",
+      "type": "string"
+    },
+    "source_collection_id": {
+      "pattern": "^collection-[a-f0-9]{16}$",
+      "title": "Source Collection Id",
+      "type": "string"
+    },
+    "source_output_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Source Output Sha256",
+      "type": "string"
+    },
+    "source_run_content_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Run Content Sha256"
+    },
+    "source_run_id": {
+      "anyOf": [
+        {
+          "pattern": "^container-run-[a-f0-9]{20}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Run Id"
+    },
+    "treatment_sha256": {
+      "default": [],
+      "items": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "title": "Treatment Sha256",
+      "type": "array"
+    },
+    "workload_spec_id": {
+      "anyOf": [
+        {
+          "pattern": "^container-workload-[a-f0-9]{20}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workload Spec Id"
+    },
+    "workload_spec_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workload Spec Sha256"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "measurement_id",
+    "created_at",
+    "source_collection_id",
+    "source_collection_artifact_sha256",
+    "source_output_sha256",
+    "resource_context_id",
+    "resource_context_content_sha256",
+    "environment",
+    "resource_observation",
+    "quality_status",
+    "content_sha256"
+  ],
+  "title": "ContainerMeasurementArtifact",
+  "type": "object"
+}

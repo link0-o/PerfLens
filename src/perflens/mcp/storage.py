@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import stat
+from datetime import datetime
 from pathlib import Path
 from typing import TypeVar
 
@@ -22,6 +23,8 @@ from perflens.application.verify_trace import (
     verify_trace_analysis_artifact,
 )
 from perflens.artifacts.filesystem import serialize_json, write_json_new_atomic
+from perflens.comparison.benchmarks import compare_benchmarks
+from perflens.comparison.profiles import compare_profiles
 from perflens.contracts.artifacts import (
     AnalysisArtifact,
     BenchmarkArtifact,
@@ -32,10 +35,13 @@ from perflens.contracts.artifacts import (
     ProjectRunArtifact,
 )
 from perflens.contracts.docker import (
+    ContainerMatchedComparisonArtifact,
+    ContainerMeasurementArtifact,
     ContainerModuleSnapshotArtifact,
     ContainerResourceContextArtifact,
     ContainerRunArtifact,
     ContainerSymbolContextArtifact,
+    ContainerWorkloadSpecArtifact,
     derive_container_module_snapshot_id,
     derive_container_symbol_context_id,
 )
@@ -45,6 +51,10 @@ from perflens.contracts.trace import (
     SchedulerAnalysisArtifact,
     TraceAnalysisVerificationArtifact,
     TraceEvidenceArtifact,
+)
+from perflens.docker.comparison import (
+    build_container_measurement,
+    compare_container_measurements,
 )
 from perflens.docker.symbols import assert_public_container_analysis
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -205,6 +215,40 @@ class ArtifactStore:
         self._require_embedded_id(benchmark.benchmark_id, benchmark_id, "benchmark")
         return benchmark
 
+    def load_profile_comparison(self, comparison_id: str) -> ProfileComparison:
+        comparison = self._load(comparison_id, "profile-comparison", ProfileComparison)
+        self._require_embedded_id(comparison.comparison_id, comparison_id, "profile-comparison")
+        replayed = compare_profiles(
+            self.load_analysis(comparison.baseline_analysis_id),
+            self.load_analysis(comparison.candidate_analysis_id),
+            minimum_delta_percent=comparison.minimum_delta_percent,
+        )
+        if replayed != comparison:
+            raise self._identity_error(comparison_id, "profile-comparison")
+        return comparison
+
+    def load_benchmark_comparison(self, comparison_id: str) -> BenchmarkComparison:
+        comparison = self._load(
+            comparison_id,
+            "benchmark-comparison",
+            BenchmarkComparison,
+        )
+        self._require_embedded_id(
+            comparison.comparison_id,
+            comparison_id,
+            "benchmark-comparison",
+        )
+        replayed = compare_benchmarks(
+            self.load_benchmark(comparison.baseline_benchmark_id),
+            self.load_benchmark(comparison.candidate_benchmark_id),
+            minimum_practical_impact_percent=(
+                comparison.minimum_practical_impact_percent
+            ),
+        )
+        if replayed != comparison:
+            raise self._identity_error(comparison_id, "benchmark-comparison")
+        return comparison
+
     def load_collection(self, collection_id: str) -> CollectionArtifact:
         collection = self._load(collection_id, "collection", CollectionArtifact)
         self._require_embedded_id(collection.collection_id, collection_id, "collection")
@@ -353,6 +397,52 @@ class ArtifactStore:
                 raise self._identity_error(run_id, "container-run")
         return run
 
+    def load_container_workload_spec(
+        self,
+        workload_spec_id: str,
+    ) -> ContainerWorkloadSpecArtifact:
+        workload = self._load(
+            workload_spec_id,
+            "container-workload-spec",
+            ContainerWorkloadSpecArtifact,
+        )
+        self._require_embedded_id(
+            workload.workload_spec_id,
+            workload_spec_id,
+            "container-workload-spec",
+        )
+        self._verify_docker_content(
+            workload,
+            workload.content_sha256,
+            workload_spec_id,
+            "container-workload-spec",
+        )
+        return workload
+
+    def load_container_measurement(
+        self,
+        measurement_id: str,
+    ) -> ContainerMeasurementArtifact:
+        measurement = self._load(
+            measurement_id,
+            "container-measurement",
+            ContainerMeasurementArtifact,
+        )
+        self._verify_container_measurement(measurement, measurement_id)
+        return measurement
+
+    def load_container_matched_comparison(
+        self,
+        comparison_id: str,
+    ) -> ContainerMatchedComparisonArtifact:
+        comparison = self._load(
+            comparison_id,
+            "container-matched-comparison",
+            ContainerMatchedComparisonArtifact,
+        )
+        self._verify_container_matched_comparison(comparison, comparison_id)
+        return comparison
+
     def load_trace_analysis(
         self,
         analysis_id: str,
@@ -403,6 +493,9 @@ class ArtifactStore:
             "lock-analysis",
             "container-resource-context",
             "container-run",
+            "container-workload-spec",
+            "container-measurement",
+            "container-matched-comparison",
             "container-module-snapshot",
             "container-symbol-context",
         }:
@@ -559,6 +652,24 @@ class ArtifactStore:
                 ):
                     raise self._identity_error(artifact_id, artifact_type)
             return
+        if artifact_type == "container-workload-spec":
+            workload = ContainerWorkloadSpecArtifact.model_validate_json(payload)
+            self._require_embedded_id(workload.workload_spec_id, artifact_id, artifact_type)
+            self._verify_docker_content(
+                workload,
+                workload.content_sha256,
+                artifact_id,
+                artifact_type,
+            )
+            return
+        if artifact_type == "container-measurement":
+            measurement = ContainerMeasurementArtifact.model_validate_json(payload)
+            self._verify_container_measurement(measurement, artifact_id)
+            return
+        if artifact_type == "container-matched-comparison":
+            comparison = ContainerMatchedComparisonArtifact.model_validate_json(payload)
+            self._verify_container_matched_comparison(comparison, artifact_id)
+            return
         if artifact_type == "diagnosis":
             diagnosis = DiagnosisBundle.model_validate_json(payload)
             expected_analysis_id = artifact_id.removeprefix("diagnosis-")
@@ -580,9 +691,25 @@ class ArtifactStore:
         elif artifact_type == "profile-comparison":
             model = ProfileComparison.model_validate_json(payload)
             embedded_id = model.comparison_id
+            replayed = compare_profiles(
+                self.load_analysis(model.baseline_analysis_id),
+                self.load_analysis(model.candidate_analysis_id),
+                minimum_delta_percent=model.minimum_delta_percent,
+            )
+            if replayed != model:
+                raise self._identity_error(artifact_id, artifact_type)
         elif artifact_type == "benchmark-comparison":
             model = BenchmarkComparison.model_validate_json(payload)
             embedded_id = model.comparison_id
+            replayed = compare_benchmarks(
+                self.load_benchmark(model.baseline_benchmark_id),
+                self.load_benchmark(model.candidate_benchmark_id),
+                minimum_practical_impact_percent=(
+                    model.minimum_practical_impact_percent
+                ),
+            )
+            if replayed != model:
+                raise self._identity_error(artifact_id, artifact_type)
         else:
             raise self._identity_error(artifact_id, artifact_type)
         self._require_embedded_id(embedded_id, artifact_id, artifact_type)
@@ -599,6 +726,101 @@ class ArtifactStore:
             exclude={"content_sha256"},
         ):
             raise self._identity_error(artifact_id, artifact_type)
+
+    def _verify_container_measurement(
+        self,
+        measurement: ContainerMeasurementArtifact,
+        measurement_id: str,
+    ) -> None:
+        self._require_embedded_id(
+            measurement.measurement_id,
+            measurement_id,
+            "container-measurement",
+        )
+        self._verify_docker_content(
+            measurement,
+            measurement.content_sha256,
+            measurement_id,
+            "container-measurement",
+        )
+        collection = self.load_collection(measurement.source_collection_id)
+        context = self.load_container_resource_context(measurement.resource_context_id)
+        run = (
+            self.load_container_run(measurement.source_run_id)
+            if measurement.source_run_id is not None
+            else None
+        )
+        workload = (
+            self.load_container_workload_spec(measurement.workload_spec_id)
+            if measurement.workload_spec_id is not None
+            else None
+        )
+        replayed = build_container_measurement(
+            collection,
+            context,
+            run=run,
+            workload=workload,
+            created_at=datetime.fromisoformat(measurement.created_at),
+        )
+        if replayed != measurement:
+            raise self._identity_error(measurement_id, "container-measurement")
+
+    def _verify_container_matched_comparison(
+        self,
+        comparison: ContainerMatchedComparisonArtifact,
+        comparison_id: str,
+    ) -> None:
+        self._require_embedded_id(
+            comparison.comparison_id,
+            comparison_id,
+            "container-matched-comparison",
+        )
+        self._verify_docker_content(
+            comparison,
+            comparison.content_sha256,
+            comparison_id,
+            "container-matched-comparison",
+        )
+        baseline_measurement = self.load_container_measurement(
+            comparison.baseline_measurement_id
+        )
+        candidate_measurement = self.load_container_measurement(
+            comparison.candidate_measurement_id
+        )
+        baseline_analysis = self.load_analysis(comparison.baseline_analysis_id)
+        candidate_analysis = self.load_analysis(comparison.candidate_analysis_id)
+        profile_comparison = self.load_profile_comparison(comparison.profile_comparison_id)
+        baseline_benchmark = self.load_benchmark(comparison.baseline_benchmark_id)
+        candidate_benchmark = self.load_benchmark(comparison.candidate_benchmark_id)
+        benchmark_comparison = self.load_benchmark_comparison(
+            comparison.benchmark_comparison_id
+        )
+        if (
+            comparison.baseline_measurement_content_sha256
+            != baseline_measurement.content_sha256
+            or comparison.candidate_measurement_content_sha256
+            != candidate_measurement.content_sha256
+            or comparison.baseline_analysis_content_sha256 != baseline_analysis.content_sha256
+            or comparison.candidate_analysis_content_sha256 != candidate_analysis.content_sha256
+            or comparison.baseline_benchmark_content_sha256
+            != contract_content_sha256(baseline_benchmark)
+            or comparison.candidate_benchmark_content_sha256
+            != contract_content_sha256(candidate_benchmark)
+        ):
+            raise self._identity_error(comparison_id, "container-matched-comparison")
+        replayed = compare_container_measurements(
+            baseline_measurement,
+            candidate_measurement,
+            baseline_analysis=baseline_analysis,
+            candidate_analysis=candidate_analysis,
+            profile_comparison=profile_comparison,
+            baseline_benchmark=baseline_benchmark,
+            candidate_benchmark=candidate_benchmark,
+            benchmark_comparison=benchmark_comparison,
+            created_at=datetime.fromisoformat(comparison.created_at),
+        )
+        if replayed != comparison:
+            raise self._identity_error(comparison_id, "container-matched-comparison")
 
     @staticmethod
     def _trace_analysis_type(

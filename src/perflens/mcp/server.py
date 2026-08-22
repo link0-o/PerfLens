@@ -66,6 +66,8 @@ from perflens.contracts.artifacts import (
 )
 from perflens.contracts.docker import (
     CollectionMode,
+    ContainerMatchedComparisonArtifact,
+    ContainerMeasurementArtifact,
     ContainerModuleSnapshotArtifact,
     ContainerOptimizationSessionArtifact,
     ContainerProcessInventoryArtifact,
@@ -88,6 +90,10 @@ from perflens.docker.cgroup import (
     CgroupV2ResourceReader,
     build_container_resource_context,
 )
+from perflens.docker.comparison import (
+    build_container_measurement,
+    compare_container_measurements,
+)
 from perflens.docker.managed import build_container_run_artifact
 from perflens.docker.project_config import (
     assert_docker_project_policy_current,
@@ -98,6 +104,10 @@ from perflens.docker.symbols import (
     build_container_symbol_context,
     capture_container_module_snapshot,
     project_container_analysis,
+)
+from perflens.docker.treatment import (
+    assert_treatment_snapshot_current,
+    capture_treatment_snapshot,
 )
 from perflens.docker.workload import inspect_managed_project_root
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -600,6 +610,17 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 resource_context.resource_context_id,
                 "container-resource-context",
             )
+            measurement = (
+                build_container_measurement(executed.collection, resource_context)
+                if executed.collection is not None
+                else None
+            )
+            if measurement is not None:
+                store.save(
+                    measurement,
+                    measurement.measurement_id,
+                    "container-measurement",
+                )
         except BaseException:
             with suppress(PerfLensError):
                 docker_runtime.finish_existing_run(
@@ -651,6 +672,17 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                             else None
                         ),
                     ),
+                    **_container_measurement_summary(
+                        measurement,
+                        uri=(
+                            store.uri(
+                                measurement.measurement_id,
+                                "container-measurement",
+                            )
+                            if measurement is not None
+                            else None
+                        ),
+                    ),
                 },
             }
         )
@@ -676,6 +708,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         events: tuple[str, ...] = HARDWARE_STAT_EVENTS,
         event_source: Literal["auto", "hardware_required", "software_only"] = "auto",
         max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
+        treatment_paths: tuple[str, ...] = (),
     ) -> ArtifactReference:
         _require_automatic_collection(config, require_existing_pid_attach=True)
         _require_docker_targets(config)
@@ -692,6 +725,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         )
         started = time.monotonic()
         executed: _ExecutedBrokerPlan | None = None
+        treatment_snapshot = capture_treatment_snapshot(
+            policy.workspace_root(docker_policy.path.parent.parent),
+            tuple(policy.input_file(path) for path in treatment_paths),
+        )
         run = docker_runtime.prepare_managed_run(
             session_id,
             requested_modes=(mode,),
@@ -771,6 +808,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     recoverable=True,
                 )
             run.coordinator.wait(run.prepared, timeout_seconds=remaining)
+            assert_treatment_snapshot_current(treatment_snapshot)
             cleanup_status = run.coordinator.cleanup(run.prepared)
             finished_at = datetime.now(tz=UTC)
             container_run = build_container_run_artifact(
@@ -780,6 +818,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 status="exited",
                 cleanup_status=cleanup_status,
                 collection_ids=(executed.collection_id,),
+                build_artifact_sha256=treatment_snapshot.treatment_sha256,
                 resource_context_id=resource_context.resource_context_id,
                 warnings=(
                     (
@@ -795,13 +834,35 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 actual_active_seconds=max(1, math.ceil(time.monotonic() - started)),
                 actual_evidence_bytes=executed.evidence_bytes,
             )
+            store.save(
+                run.authorization.workload,
+                run.authorization.workload.workload_spec_id,
+                "container-workload-spec",
+            )
             store.save(container_run, container_run.run_id, "container-run")
+            measurement = (
+                build_container_measurement(
+                    executed.collection,
+                    resource_context,
+                    run=container_run,
+                    workload=run.authorization.workload,
+                )
+                if executed.collection is not None
+                else None
+            )
+            if measurement is not None:
+                store.save(
+                    measurement,
+                    measurement.measurement_id,
+                    "container-measurement",
+                )
             return _managed_run_reference(
                 container_run,
                 executed.reference,
                 session,
                 resource_context,
                 module_snapshot,
+                measurement,
                 uri=store.uri(container_run.run_id, "container-run"),
                 resource_uri=store.uri(
                     resource_context.resource_context_id,
@@ -813,6 +874,14 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                         "container-module-snapshot",
                     )
                     if module_snapshot is not None
+                    else None
+                ),
+                measurement_uri=(
+                    store.uri(
+                        measurement.measurement_id,
+                        "container-measurement",
+                    )
+                    if measurement is not None
                     else None
                 ),
             )
@@ -1403,6 +1472,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "lock-analysis",
             "container-resource-context",
             "container-run",
+            "container-workload-spec",
+            "container-measurement",
+            "container-matched-comparison",
             "container-module-snapshot",
             "container-symbol-context",
         ],
@@ -1560,6 +1632,91 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         )
 
     @server.tool(
+        name="compare_container_measurements",
+        description=(
+            "Compare two Docker measurements using bound profile, absolute benchmark, "
+            "correctness, treatment, and whole-container resource evidence."
+        ),
+        annotations=WRITES_ARTIFACTS,
+        meta={"perflens/permission": "WRITES_ARTIFACTS"},
+        structured_output=True,
+    )
+    async def compare_container_measurement_artifacts(
+        baseline_measurement_id: str,
+        candidate_measurement_id: str,
+        baseline_analysis_id: str,
+        candidate_analysis_id: str,
+        baseline_benchmark_id: str,
+        candidate_benchmark_id: str,
+        minimum_delta_percent: float = 1.0,
+        minimum_practical_impact_percent: float = 1.0,
+    ) -> ArtifactReference:
+        baseline_measurement = store.load_container_measurement(
+            baseline_measurement_id
+        )
+        candidate_measurement = store.load_container_measurement(
+            candidate_measurement_id
+        )
+        baseline_analysis = store.load_analysis(baseline_analysis_id)
+        candidate_analysis = store.load_analysis(candidate_analysis_id)
+        baseline_benchmark = store.load_benchmark(baseline_benchmark_id)
+        candidate_benchmark = store.load_benchmark(candidate_benchmark_id)
+        profile_comparison = compare_profile_artifacts(
+            baseline_analysis,
+            candidate_analysis,
+            minimum_delta_percent=minimum_delta_percent,
+        )
+        benchmark_comparison = compare_benchmark_artifacts(
+            baseline_benchmark,
+            candidate_benchmark,
+            minimum_practical_impact_percent=minimum_practical_impact_percent,
+        )
+        comparison: ContainerMatchedComparisonArtifact = compare_container_measurements(
+            baseline_measurement,
+            candidate_measurement,
+            baseline_analysis=baseline_analysis,
+            candidate_analysis=candidate_analysis,
+            profile_comparison=profile_comparison,
+            baseline_benchmark=baseline_benchmark,
+            candidate_benchmark=candidate_benchmark,
+            benchmark_comparison=benchmark_comparison,
+        )
+        store.save(
+            profile_comparison,
+            profile_comparison.comparison_id,
+            "profile-comparison",
+        )
+        store.save(
+            benchmark_comparison,
+            benchmark_comparison.comparison_id,
+            "benchmark-comparison",
+        )
+        store.save(
+            comparison,
+            comparison.comparison_id,
+            "container-matched-comparison",
+        )
+        return ArtifactReference(
+            artifact_id=comparison.comparison_id,
+            artifact_type="container-matched-comparison",
+            uri=store.uri(
+                comparison.comparison_id,
+                "container-matched-comparison",
+            ),
+            summary={
+                "comparable": comparison.comparable,
+                "environment_match": comparison.environment_match,
+                "treatment_changed": comparison.treatment_changed,
+                "correctness_status": comparison.correctness_status,
+                "resource_transfer_status": comparison.resource_transfer_status,
+                "conclusion": comparison.conclusion,
+                "improved_metrics": "; ".join(comparison.improved_metrics),
+                "regressed_metrics": "; ".join(comparison.regressed_metrics),
+                "warnings": "; ".join(comparison.warnings),
+            },
+        )
+
+    @server.tool(
         name="collect_profile",
         description=(
             "Run bounded perf record/stat/sched/lock/off-CPU collection only after explicit "
@@ -1676,10 +1833,12 @@ def _managed_run_reference(
     session: ContainerOptimizationSessionArtifact,
     resource_context: ContainerResourceContextArtifact,
     module_snapshot: ContainerModuleSnapshotArtifact | None,
+    measurement: ContainerMeasurementArtifact | None,
     *,
     uri: str,
     resource_uri: str,
     module_uri: str | None,
+    measurement_uri: str | None,
 ) -> ArtifactReference:
     return ArtifactReference(
         artifact_id=run.run_id,
@@ -1698,6 +1857,7 @@ def _managed_run_reference(
             "collection_artifact_type": collection.artifact_type,
             **_container_resource_summary(resource_context, uri=resource_uri),
             **_container_module_summary(module_snapshot, uri=module_uri),
+            **_container_measurement_summary(measurement, uri=measurement_uri),
         },
     )
 
@@ -1741,6 +1901,25 @@ def _container_module_summary(
             1 for item in snapshot.modules if item.status == "verified"
         ),
         "container_module_limitations": "; ".join(snapshot.limitations),
+    }
+
+
+def _container_measurement_summary(
+    measurement: ContainerMeasurementArtifact | None,
+    *,
+    uri: str | None,
+) -> dict[str, str | int | float | bool | None]:
+    if measurement is None:
+        return {}
+    return {
+        "container_measurement_id": measurement.measurement_id,
+        "container_measurement_uri": uri,
+        "container_measurement_quality": measurement.quality_status,
+        "container_environment_fingerprint_sha256": (
+            measurement.environment.environment_fingerprint_sha256
+        ),
+        "container_treatment_count": len(measurement.treatment_sha256),
+        "container_measurement_limitations": "; ".join(measurement.limitations),
     }
 
 

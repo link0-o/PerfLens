@@ -9,6 +9,7 @@ an existing container are private adapter data and never belong here.
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
@@ -33,6 +34,14 @@ ContainerSymbolContextId = Annotated[
 ContainerWorkloadId = Annotated[str, Field(pattern=r"^container-workload-[a-f0-9]{20}$")]
 ContainerSessionId = Annotated[str, Field(pattern=r"^container-session-[a-f0-9]{20}$")]
 ContainerRunId = Annotated[str, Field(pattern=r"^container-run-[a-f0-9]{20}$")]
+ContainerMeasurementId = Annotated[
+    str,
+    Field(pattern=r"^container-measurement-[a-f0-9]{20}$"),
+]
+ContainerComparisonId = Annotated[
+    str,
+    Field(pattern=r"^container-comparison-[a-f0-9]{20}$"),
+]
 CollectionId = Annotated[str, Field(pattern=r"^collection-[a-f0-9]{16}$")]
 
 CollectionMode = Literal["stat", "record", "sched", "off_cpu", "lock"]
@@ -96,6 +105,20 @@ def derive_container_module_snapshot_id(source_collection_id: str) -> str:
 def derive_container_symbol_context_id(source_analysis_id: str) -> str:
     material = f"perflens-docker-symbol-context-v1\0{source_analysis_id}"
     return f"container-symbols-{hashlib.sha256(material.encode('utf-8')).hexdigest()[:20]}"
+
+
+def derive_container_measurement_id(source_collection_id: str) -> str:
+    material = f"perflens-docker-measurement-v1\0{source_collection_id}"
+    return f"container-measurement-{hashlib.sha256(material.encode('utf-8')).hexdigest()[:20]}"
+
+
+def container_environment_fingerprint(environment: ContainerEnvironmentFingerprint) -> str:
+    payload = environment.model_dump(
+        mode="json",
+        exclude={"environment_fingerprint_sha256"},
+    )
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 class DockerToolIdentity(ContractModel):
@@ -891,4 +914,203 @@ class ContainerRunArtifact(ContractModel):
             raise ValueError("pre-exec Docker failure cannot claim a workload exit code")
         if self.status != "failed_before_exec" and self.exit_code is None:
             raise ValueError("completed Docker workload must report its exit code")
+        return self
+
+
+class ContainerEnvironmentFingerprint(ContractModel):
+    """Stable A/B invariants; ephemeral container and PID identities are excluded."""
+
+    target_kind: DockerTargetKind
+    image_identity_sha256: Sha256
+    uid_mapping: Literal[
+        "rootless_same_uid",
+        "rootful_same_uid",
+        "rootful_cross_uid",
+    ]
+    adapter_recipe_id: Literal["local-docker-read-v1", "local-docker-managed-v1"]
+    adapter_sha256: Sha256
+    workload_fingerprint: Sha256 | None = None
+    container_gate_sha256: Sha256 | None = None
+    mount_layout_recipe: Literal[
+        "existing-container-unverified-v1",
+        "managed-workspace-readonly-v1",
+    ]
+    network_mode: Literal["unknown", "none"]
+    host_kernel_release: str = Field(min_length=1, max_length=256)
+    perf_executable_sha256: Sha256
+    collector_config_sha256: Sha256
+    collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"]
+    collector_feature_profile: Literal["cpu_only", "full_diagnostics"]
+    collection_mode: CollectionMode
+    collection_frequency_hz: int | None = Field(default=None, gt=0, le=10_000)
+    collection_call_graph: Literal["fp", "dwarf", "lbr"] | None = None
+    collection_record_event: Literal["cycles", "cpu-clock"] | None = None
+    collection_events: tuple[str, ...] = ()
+    requested_event_source: Literal["auto", "hardware_required", "software_only"]
+    actual_event_source: Literal["hardware", "software"]
+    fallback_used: bool
+    fallback_reason: str | None = Field(default=None, min_length=1, max_length=256)
+    evidence_limitations: tuple[str, ...] = ()
+    cpu_quota_usec: int | None = Field(default=None, gt=0)
+    cpu_period_usec: int = Field(gt=0)
+    cpuset_cpus_effective: str = Field(min_length=1, max_length=4096)
+    memory_max_bytes: int | None = Field(default=None, gt=0)
+    io_limits: tuple[CgroupIoDeviceLimit, ...] = ()
+    pids_max: int | None = Field(default=None, gt=0)
+    environment_fingerprint_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_fingerprint(self) -> ContainerEnvironmentFingerprint:
+        managed = self.target_kind == "managed_temporary_container"
+        if managed != (self.workload_fingerprint is not None):
+            raise ValueError("managed environment must bind one workload fingerprint")
+        if managed != (self.container_gate_sha256 is not None):
+            raise ValueError("managed environment must bind one Container Gate")
+        if managed != (self.mount_layout_recipe == "managed-workspace-readonly-v1"):
+            raise ValueError("Docker target kind and mount-layout recipe differ")
+        if managed != (self.network_mode == "none"):
+            raise ValueError("managed Docker A/B requires the fixed no-network recipe")
+        if self.collection_mode == "record":
+            if (
+                self.collection_frequency_hz is None
+                or self.collection_call_graph is None
+                or self.collection_record_event is None
+                or self.collection_events
+            ):
+                raise ValueError("record environment has inconsistent sampling settings")
+        elif self.collection_mode == "stat" and (
+            self.collection_frequency_hz is not None
+            or self.collection_call_graph is not None
+            or self.collection_record_event is not None
+            or not self.collection_events
+        ):
+            raise ValueError("stat environment has inconsistent counting settings")
+        if self.fallback_used != (self.fallback_reason is not None):
+            raise ValueError("Docker environment fallback reason is inconsistent")
+        if self.environment_fingerprint_sha256 != container_environment_fingerprint(self):
+            raise ValueError("Docker environment fingerprint does not match its invariants")
+        return self
+
+
+class ContainerMeasurementArtifact(ContractModel):
+    """One container Collection plus its whole-cgroup and stable-environment evidence."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    measurement_id: ContainerMeasurementId
+    created_at: str
+    source_collection_id: CollectionId
+    source_collection_artifact_sha256: Sha256
+    source_output_sha256: Sha256
+    resource_context_id: ContainerResourceId
+    resource_context_content_sha256: Sha256
+    source_run_id: ContainerRunId | None = None
+    source_run_content_sha256: Sha256 | None = None
+    workload_spec_id: ContainerWorkloadId | None = None
+    workload_spec_sha256: Sha256 | None = None
+    environment: ContainerEnvironmentFingerprint
+    treatment_sha256: tuple[Sha256, ...] = ()
+    resource_observation: ContainerResourceDelta
+    quality_status: Literal["verified", "partial"]
+    limitations: tuple[str, ...] = ()
+    allowed_conclusions: tuple[str, ...] = ()
+    forbidden_conclusions: tuple[str, ...] = ()
+    content_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_measurement(self) -> ContainerMeasurementArtifact:
+        if self.measurement_id != derive_container_measurement_id(self.source_collection_id):
+            raise ValueError("container measurement ID does not match its Collection")
+        run_bindings = (
+            self.source_run_id,
+            self.source_run_content_sha256,
+            self.workload_spec_id,
+            self.workload_spec_sha256,
+        )
+        managed = self.environment.target_kind == "managed_temporary_container"
+        if managed and any(value is None for value in run_bindings):
+            raise ValueError("managed container measurement requires run and workload bindings")
+        if not managed and any(value is not None for value in run_bindings):
+            raise ValueError("existing container measurement cannot claim a managed run")
+        _validate_unique_sorted(self.treatment_sha256, "container treatment hashes")
+        if self.quality_status == "partial" and not self.limitations:
+            raise ValueError("partial container measurement requires a limitation")
+        if not self.allowed_conclusions or not self.forbidden_conclusions:
+            raise ValueError("container measurement must preserve conclusion boundaries")
+        return self
+
+
+class ContainerMatchedComparisonArtifact(ContractModel):
+    """Evidence-constrained matched A/B decision for two container measurements."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    comparison_id: ContainerComparisonId
+    created_at: str
+    baseline_measurement_id: ContainerMeasurementId
+    baseline_measurement_content_sha256: Sha256
+    candidate_measurement_id: ContainerMeasurementId
+    candidate_measurement_content_sha256: Sha256
+    baseline_analysis_id: str
+    baseline_analysis_content_sha256: Sha256
+    candidate_analysis_id: str
+    candidate_analysis_content_sha256: Sha256
+    profile_comparison_id: str = Field(pattern=r"^profile-comparison-[a-f0-9]{16}$")
+    profile_comparison_content_sha256: Sha256
+    baseline_benchmark_id: str
+    baseline_benchmark_content_sha256: Sha256
+    candidate_benchmark_id: str
+    candidate_benchmark_content_sha256: Sha256
+    benchmark_comparison_id: str = Field(pattern=r"^benchmark-comparison-[a-f0-9]{16}$")
+    benchmark_comparison_content_sha256: Sha256
+    environment_match: bool
+    environment_differences: dict[str, tuple[str, str]] = Field(default_factory=dict)
+    treatment_changed: bool
+    baseline_treatment_sha256: tuple[Sha256, ...] = ()
+    candidate_treatment_sha256: tuple[Sha256, ...] = ()
+    correctness_status: Literal["passed", "failed", "unavailable"]
+    resource_transfer_status: Literal["no_observed_regression", "regression", "incomplete"]
+    comparable: bool
+    conclusion: Literal[
+        "verified_improvement",
+        "candidate_improvement",
+        "candidate_regression",
+        "no_material_change",
+        "not_comparable",
+    ]
+    improved_metrics: tuple[str, ...] = ()
+    regressed_metrics: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    allowed_conclusions: tuple[str, ...] = ()
+    forbidden_conclusions: tuple[str, ...] = ()
+    content_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_comparison(self) -> ContainerMatchedComparisonArtifact:
+        _validate_unique_sorted(self.baseline_treatment_sha256, "baseline treatment hashes")
+        _validate_unique_sorted(self.candidate_treatment_sha256, "candidate treatment hashes")
+        _validate_unique_sorted(self.improved_metrics, "improved metric names")
+        _validate_unique_sorted(self.regressed_metrics, "regressed metric names")
+        if self.environment_match == bool(self.environment_differences):
+            raise ValueError("environment match status and differences disagree")
+        if self.treatment_changed != (
+            self.baseline_treatment_sha256 != self.candidate_treatment_sha256
+        ):
+            raise ValueError("container treatment-change status is inconsistent")
+        if self.conclusion == "verified_improvement" and (
+            not self.comparable
+            or not self.environment_match
+            or not self.treatment_changed
+            or self.correctness_status != "passed"
+            or self.resource_transfer_status != "no_observed_regression"
+            or not self.improved_metrics
+            or self.regressed_metrics
+        ):
+            raise ValueError("verified container improvement lacks required matched evidence")
+        if self.conclusion == "not_comparable" and self.comparable:
+            raise ValueError("comparable container evidence cannot claim not_comparable")
+        if self.conclusion != "not_comparable" and not self.comparable:
+            raise ValueError("non-comparable container evidence cannot claim a performance result")
+        if not self.allowed_conclusions or not self.forbidden_conclusions:
+            raise ValueError("container comparison must preserve conclusion boundaries")
         return self

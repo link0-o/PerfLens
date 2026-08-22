@@ -21,13 +21,25 @@ from perflens.collection.planning import (
     AutomaticCollectionPolicy,
     CollectionPlanRequest,
 )
-from perflens.contracts.artifacts import CollectionArtifact, CollectionPlanArtifact
+from perflens.contracts.artifacts import (
+    BenchmarkComparison,
+    CollectionArtifact,
+    CollectionPlanArtifact,
+    ContainerCollectionCgroupBinding,
+    ContainerCollectionNamespaceBinding,
+    ContainerCollectionTargetBinding,
+    PerfStatMetric,
+    ProfileComparison,
+)
 from perflens.contracts.docker import (
     ContainerCgroupIdentity,
+    ContainerMatchedComparisonArtifact,
     ContainerNamespaceIdentity,
     ContainerOptimizationSessionArtifact,
+    ContainerResourceLimits,
     ContainerRunArtifact,
     ContainerTargetArtifact,
+    ContainerWorkloadSpecArtifact,
 )
 from perflens.docker.capability import discover_docker_capability
 from perflens.docker.project_config import render_default_docker_project_policy
@@ -94,7 +106,37 @@ def _fake_docker_plan() -> CollectionPlanArtifact:
     )
 
 
-def _fake_docker_collection(tmp_path: Path) -> CollectionArtifact:
+def _fake_docker_collection(
+    tmp_path: Path,
+    target: ContainerTargetArtifact,
+) -> CollectionArtifact:
+    binding = ContainerCollectionTargetBinding(
+        target_id=target.target_id,
+        target_kind=target.target_kind,
+        target_content_sha256=target.content_sha256,
+        container_identity_sha256=target.container_identity_sha256,
+        image_identity_sha256=target.image_identity_sha256,
+        identity_fingerprint=target.identity_fingerprint,
+        container_pid=target.container_pid,
+        host_pid=target.host_pid,
+        host_uid=target.host_uid,
+        host_start_time_ticks=target.host_start_time_ticks,
+        executable_name=target.executable_name,
+        namespace=ContainerCollectionNamespaceBinding(
+            pid_namespace_inode=target.namespace.pid_namespace_inode,
+            user_namespace_inode=target.namespace.user_namespace_inode,
+            mount_namespace_inode=target.namespace.mount_namespace_inode,
+            cgroup_namespace_inode=target.namespace.cgroup_namespace_inode,
+        ),
+        cgroup=ContainerCollectionCgroupBinding(
+            inode=target.cgroup.inode,
+            identity_sha256=target.cgroup.identity_sha256,
+        ),
+        uid_mapping=target.uid_mapping,
+        rootful_risk_authorized=target.rootful_risk_authorized,
+        adapter_recipe_id=target.adapter_recipe_id,
+        adapter_sha256=target.adapter_sha256,
+    )
     return CollectionArtifact(
         schema_version="1.0",
         collection_id="collection-" + "b" * 16,
@@ -102,6 +144,8 @@ def _fake_docker_collection(tmp_path: Path) -> CollectionArtifact:
         target_type="pid",
         target_argument_count=0,
         target_pid=1234,
+        target_runtime="docker",
+        container_target=binding,
         output_path=str(tmp_path / "fake.stat.csv"),
         output_sha256="c" * 64,
         output_bytes=120,
@@ -113,6 +157,53 @@ def _fake_docker_collection(tmp_path: Path) -> CollectionArtifact:
         events=("task-clock",),
         requested_event_source="software_only",
         actual_event_source="software",
+        evidence_limitations=(
+            "instructions-per-cycle unavailable",
+            "hardware cache-miss evidence unavailable",
+            "hardware branch-miss evidence unavailable",
+        ),
+        collector_config_sha256="a" * 64,
+        collector_privilege_mode="paranoid3_helper",
+        collector_feature_profile="full_diagnostics",
+        host_kernel_release="6.12-test",
+        perf_executable_sha256="b" * 64,
+        metrics=(
+            PerfStatMetric(
+                event="task-clock",
+                value=1000,
+                unit="msec",
+                status="measured",
+            ),
+        ),
+    )
+
+
+def _managed_workload() -> ContainerWorkloadSpecArtifact:
+    provisional = ContainerWorkloadSpecArtifact(
+        schema_version="1.0",
+        perflens_version="0.3.1",
+        workload_spec_id="container-workload-" + "f" * 20,
+        created_at="2026-08-21T00:00:00+00:00",
+        project_identity_sha256="1" * 64,
+        image_digest="sha256:" + "6" * 64,
+        container_gate_sha256="2" * 64,
+        entrypoint="/usr/bin/python3",
+        working_directory="/workspace",
+        container_user=f"{os.geteuid()}:{os.getegid()}",
+        resources=ContainerResourceLimits(cpus=1, memory_bytes=64 << 20, pids=32),
+        allowed_modes=("stat",),
+        authorization_mode="per_run",
+        max_workload_runs=1,
+        workload_fingerprint="3" * 64,
+        content_sha256="0" * 64,
+    )
+    return provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            )
+        }
     )
 
 
@@ -138,7 +229,11 @@ def _managed_docker_target() -> ContainerTargetArtifact:
     )
 
 
-def _managed_session(*, state: str = "active") -> ContainerOptimizationSessionArtifact:
+def _managed_session(
+    workload_spec_sha256: str,
+    *,
+    state: str = "active",
+) -> ContainerOptimizationSessionArtifact:
     inactive = None if state == "active" else "Docker authorization budget was exhausted."
     provisional = ContainerOptimizationSessionArtifact(
         schema_version="1.0",
@@ -151,7 +246,7 @@ def _managed_session(*, state: str = "active") -> ContainerOptimizationSessionAr
         project_identity_sha256="1" * 64,
         client_connection_identity_sha256="2" * 64,
         authorization_receipt_sha256="3" * 64,
-        workload_spec_sha256="4" * 64,
+        workload_spec_sha256=workload_spec_sha256,
         allowed_modes=("stat",),
         state=cast(Any, state),
         max_workload_runs=1,
@@ -175,14 +270,17 @@ def _managed_session(*, state: str = "active") -> ContainerOptimizationSessionAr
     )
 
 
-def _managed_run_artifact(resource_context_id: str) -> ContainerRunArtifact:
+def _managed_run_artifact(
+    resource_context_id: str,
+    workload_spec_sha256: str,
+) -> ContainerRunArtifact:
     provisional = ContainerRunArtifact(
         schema_version="1.0",
         perflens_version="0.3.1",
         run_id="container-run-" + "5" * 20,
         created_at="2026-08-21T00:01:01+00:00",
         session_id="container-session-" + "e" * 20,
-        workload_spec_sha256="4" * 64,
+        workload_spec_sha256=workload_spec_sha256,
         container_identity_sha256="5" * 64,
         image_identity_sha256="6" * 64,
         target_identity_sha256="d" * 64,
@@ -237,6 +335,7 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "analyze_benchmark",
                 "compare_profiles",
                 "compare_benchmarks",
+                "compare_container_measurements",
                 "collect_profile",
                 "inspect_collection_capabilities",
                 "inspect_docker_capability",
@@ -298,6 +397,9 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["collect_managed_docker_workload"].meta == {
                 "perflens/permission": "DOCKER_COLLECTION"
             }
+            assert tools["compare_container_measurements"].meta == {
+                "perflens/permission": "WRITES_ARTIFACTS"
+            }
             docker_authorization = tools["authorize_docker_session"].input_schema[
                 "properties"
             ]["authorization"]
@@ -338,6 +440,172 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             }
 
     asyncio.run(exercise())
+
+
+def test_compare_container_measurements_tool_stores_only_verified_comparison_chain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    requested: list[tuple[str, str]] = []
+    baseline_measurement = SimpleNamespace(measurement_id="container-measurement-" + "1" * 20)
+    candidate_measurement = SimpleNamespace(measurement_id="container-measurement-" + "2" * 20)
+    baseline_analysis = SimpleNamespace(analysis_id="analysis-before")
+    candidate_analysis = SimpleNamespace(analysis_id="analysis-after")
+    baseline_benchmark = SimpleNamespace(benchmark_id="benchmark-before")
+    candidate_benchmark = SimpleNamespace(benchmark_id="benchmark-after")
+    profile_comparison = ProfileComparison(
+        comparison_id="profile-comparison-" + "3" * 16,
+        baseline_analysis_id="analysis-before",
+        candidate_analysis_id="analysis-after",
+        comparable=True,
+        metadata_differences={},
+        hotspot_deltas=(),
+        call_path_deltas=(),
+        dso_changes={},
+        baseline_unresolved_percent=0,
+        candidate_unresolved_percent=0,
+        unresolved_delta_percent=0,
+        warnings=(),
+    )
+    benchmark_comparison = BenchmarkComparison(
+        comparison_id="benchmark-comparison-" + "4" * 16,
+        baseline_benchmark_id="benchmark-before",
+        candidate_benchmark_id="benchmark-after",
+        comparable=True,
+        condition_differences={},
+        expected_variables={"commit": ("before", "after")},
+        minimum_practical_impact_percent=1,
+        metrics=(),
+        warnings=(),
+    )
+    provisional = ContainerMatchedComparisonArtifact(
+        schema_version="1.0",
+        perflens_version="0.3.1",
+        comparison_id="container-comparison-" + "5" * 20,
+        created_at="2026-08-22T00:00:00+00:00",
+        baseline_measurement_id=baseline_measurement.measurement_id,
+        baseline_measurement_content_sha256="1" * 64,
+        candidate_measurement_id=candidate_measurement.measurement_id,
+        candidate_measurement_content_sha256="2" * 64,
+        baseline_analysis_id="analysis-before",
+        baseline_analysis_content_sha256="3" * 64,
+        candidate_analysis_id="analysis-after",
+        candidate_analysis_content_sha256="4" * 64,
+        profile_comparison_id=profile_comparison.comparison_id,
+        profile_comparison_content_sha256="5" * 64,
+        baseline_benchmark_id="benchmark-before",
+        baseline_benchmark_content_sha256="6" * 64,
+        candidate_benchmark_id="benchmark-after",
+        candidate_benchmark_content_sha256="7" * 64,
+        benchmark_comparison_id=benchmark_comparison.comparison_id,
+        benchmark_comparison_content_sha256="8" * 64,
+        environment_match=True,
+        treatment_changed=True,
+        baseline_treatment_sha256=("9" * 64,),
+        candidate_treatment_sha256=("a" * 64,),
+        correctness_status="passed",
+        resource_transfer_status="no_observed_regression",
+        comparable=True,
+        conclusion="verified_improvement",
+        improved_metrics=("throughput",),
+        allowed_conclusions=("Verified Improvement is evidence-bound.",),
+        forbidden_conclusions=("No microarchitectural mechanism is proven.",),
+        content_sha256="0" * 64,
+    )
+    comparison = provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+
+    def load_measurement(_store: ArtifactStore, artifact_id: str):
+        requested.append(("measurement", artifact_id))
+        return (
+            baseline_measurement
+            if artifact_id == baseline_measurement.measurement_id
+            else candidate_measurement
+        )
+
+    def load_analysis(_store: ArtifactStore, artifact_id: str):
+        requested.append(("analysis", artifact_id))
+        return baseline_analysis if artifact_id == "analysis-before" else candidate_analysis
+
+    def load_benchmark(_store: ArtifactStore, artifact_id: str):
+        requested.append(("benchmark", artifact_id))
+        return baseline_benchmark if artifact_id == "benchmark-before" else candidate_benchmark
+
+    def fake_compare_profiles(*_args: Any, **_kwargs: Any) -> ProfileComparison:
+        return profile_comparison
+
+    def fake_compare_benchmarks(*_args: Any, **_kwargs: Any) -> BenchmarkComparison:
+        return benchmark_comparison
+
+    def fake_compare_containers(
+        *_args: Any,
+        **_kwargs: Any,
+    ) -> ContainerMatchedComparisonArtifact:
+        return comparison
+
+    monkeypatch.setattr(ArtifactStore, "load_container_measurement", load_measurement)
+    monkeypatch.setattr(ArtifactStore, "load_analysis", load_analysis)
+    monkeypatch.setattr(ArtifactStore, "load_benchmark", load_benchmark)
+    monkeypatch.setattr(
+        "perflens.mcp.server.compare_profile_artifacts",
+        fake_compare_profiles,
+    )
+    monkeypatch.setattr(
+        "perflens.mcp.server.compare_benchmark_artifacts",
+        fake_compare_benchmarks,
+    )
+    monkeypatch.setattr(
+        "perflens.mcp.server.compare_container_measurements",
+        fake_compare_containers,
+    )
+    server = create_server(
+        ServerConfig(
+            (tmp_path,),
+            artifact_root,
+            allow_writes=True,
+        )
+    )
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "compare_container_measurements",
+                {
+                    "baseline_measurement_id": baseline_measurement.measurement_id,
+                    "candidate_measurement_id": candidate_measurement.measurement_id,
+                    "baseline_analysis_id": "analysis-before",
+                    "candidate_analysis_id": "analysis-after",
+                    "baseline_benchmark_id": "benchmark-before",
+                    "candidate_benchmark_id": "benchmark-after",
+                },
+            )
+            assert not result.is_error
+            reference = _structured(result)
+            assert reference["artifact_id"] == comparison.comparison_id
+            assert reference["summary"]["conclusion"] == "verified_improvement"
+            assert reference["summary"]["correctness_status"] == "passed"
+
+    asyncio.run(exercise())
+    assert requested == [
+        ("measurement", baseline_measurement.measurement_id),
+        ("measurement", candidate_measurement.measurement_id),
+        ("analysis", "analysis-before"),
+        ("analysis", "analysis-after"),
+        ("benchmark", "benchmark-before"),
+        ("benchmark", "benchmark-after"),
+    ]
+    assert (
+        artifact_root
+        / f"{comparison.comparison_id}.container-matched-comparison.json"
+    ).is_file()
 
 
 def test_docker_capability_requires_project_opt_in(
@@ -409,7 +677,7 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
     policy.write_text(render_default_docker_project_policy(), encoding="utf-8")
     policy.chmod(0o600)
     target = _docker_target()
-    collection = _fake_docker_collection(tmp_path)
+    collection = _fake_docker_collection(tmp_path, target)
     planned_requests: list[CollectionPlanRequest] = []
     plan_denied = {"value": False}
 
@@ -591,6 +859,9 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
             assert reference["summary"]["container_resource_output_sha256"] == (
                 collection.output_sha256
             )
+            assert reference["summary"]["container_measurement_quality"] == "partial"
+            measurement_id = reference["summary"]["container_measurement_id"]
+            assert isinstance(measurement_id, str)
             assert planned_requests[0].container_target == target
             assert (artifact_root / f"{collection.collection_id}.collection.json").is_file()
             assert (
@@ -599,6 +870,9 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
                     f"{resource_context.resource_context_id}."
                     "container-resource-context.json"
                 )
+            ).is_file()
+            assert (
+                artifact_root / f"{measurement_id}.container-measurement.json"
             ).is_file()
             assert len(resource_captures) == 2
 
@@ -777,14 +1051,20 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
     )
     policy.chmod(0o600)
     target = _managed_docker_target()
-    collection = _fake_docker_collection(tmp_path)
-    active_session = _managed_session()
-    exhausted_session = _managed_session(state="exhausted")
+    workload = _managed_workload()
+    collection = _fake_docker_collection(tmp_path, target)
+    active_session = _managed_session(workload.content_sha256)
+    exhausted_session = _managed_session(workload.content_sha256, state="exhausted")
     resource_context = make_container_resource_context(
         source_collection_id=collection.collection_id,
         source_output_sha256=collection.output_sha256,
     )
-    container_run = _managed_run_artifact(resource_context.resource_context_id)
+    container_run = _managed_run_artifact(
+        resource_context.resource_context_id,
+        workload.content_sha256,
+    )
+    treatment_file = tmp_path / "workload.py"
+    treatment_file.write_text("print('workload')\n", encoding="utf-8")
     operations: list[str] = []
     requests: list[CollectionPlanRequest] = []
     plan_denied = {"value": False}
@@ -813,7 +1093,7 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
     coordinated = SimpleNamespace(
         prepared=prepared,
         coordinator=FakeCoordinator(),
-        authorization=SimpleNamespace(workload=object()),
+        authorization=SimpleNamespace(workload=workload),
     )
 
     class FakeCgroupReader:
@@ -883,7 +1163,19 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
 
     def fake_build_run(**kwargs: object) -> ContainerRunArtifact:
         assert kwargs["resource_context_id"] == resource_context.resource_context_id
-        return container_run
+        build_artifacts = cast(tuple[str, ...], kwargs["build_artifact_sha256"])
+        assert len(build_artifacts) == 1
+        provisional = container_run.model_copy(
+            update={"build_artifact_sha256": build_artifacts}
+        )
+        return provisional.model_copy(
+            update={
+                "content_sha256": contract_content_sha256(
+                    provisional,
+                    exclude={"content_sha256"},
+                )
+            }
+        )
 
     class FakeBrokerClient:
         fail = False
@@ -983,6 +1275,7 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
                     "events": ["task-clock"],
                     "event_source": "software_only",
                     "max_output_bytes": 1000,
+                    "treatment_paths": [str(treatment_file)],
                 },
             )
             assert not result.is_error
@@ -995,6 +1288,9 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             assert reference["summary"]["container_resource_collection_id"] == (
                 collection.collection_id
             )
+            assert reference["summary"]["container_measurement_quality"] == "verified"
+            measurement_id = reference["summary"]["container_measurement_id"]
+            assert isinstance(measurement_id, str)
             assert operations == [
                 "prepare",
                 "broker",
@@ -1014,6 +1310,12 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
                     f"{resource_context.resource_context_id}."
                     "container-resource-context.json"
                 )
+            ).is_file()
+            assert (
+                artifact_root / f"{workload.workload_spec_id}.container-workload-spec.json"
+            ).is_file()
+            assert (
+                artifact_root / f"{measurement_id}.container-measurement.json"
             ).is_file()
 
             operations.clear()

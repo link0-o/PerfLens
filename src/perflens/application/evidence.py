@@ -136,6 +136,11 @@ def build_collection_evidence_provenance(
         fallback_used=collection.fallback_used,
         fallback_reason=collection.fallback_reason,
         evidence_limitations=collection.evidence_limitations,
+        collector_config_sha256=collection.collector_config_sha256,
+        collector_privilege_mode=collection.collector_privilege_mode,
+        collector_feature_profile=collection.collector_feature_profile,
+        host_kernel_release=collection.host_kernel_release,
+        perf_executable_sha256=collection.perf_executable_sha256,
     )
 
 

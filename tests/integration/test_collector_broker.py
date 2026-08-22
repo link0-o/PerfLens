@@ -690,6 +690,13 @@ def test_broker_collects_verified_pid_to_fixed_spool(tmp_path: Path) -> None:
         assert artifact.target_pid == target.pid
         assert artifact.actual_event_source == "hardware"
         assert artifact.fallback_used is False
+        assert artifact.collector_config_sha256 is not None
+        assert artifact.collector_privilege_mode == "cap_perfmon"
+        assert artifact.collector_feature_profile == "cpu_only"
+        assert artifact.host_kernel_release
+        assert artifact.perf_executable_sha256 == hashlib.sha256(
+            policy.perf_path.read_bytes()
+        ).hexdigest()
         assert any("disabled by Collector policy" in warning for warning in artifact.warnings)
         assert artifact.output_path.startswith(str(spool))
         assert Path(artifact.output_path).read_bytes() == b"PERFILE2-broker"
@@ -1800,7 +1807,6 @@ def test_mcp_plans_and_executes_single_use_automatic_collection(tmp_path: Path) 
     try:
         with CollectorBrokerServer(runtime / "collector.sock", broker_policy) as broker:
             worker = threading.Thread(target=broker.serve_once, daemon=True)
-            worker.start()
             mcp_server = create_server(
                 ServerConfig(
                     allowed_roots=(tmp_path,),
@@ -1834,6 +1840,7 @@ def test_mcp_plans_and_executes_single_use_automatic_collection(tmp_path: Path) 
                     plan = planned.structured_content
                     assert isinstance(plan, dict)
                     assert plan["policy_status"] == "allowed"
+                    worker.start()
                     executed = await client.call_tool(
                         "execute_collection_plan",
                         {"plan_id": plan["plan_id"]},
@@ -1891,7 +1898,6 @@ def test_mcp_launches_exact_project_workload_then_collects_bound_pid(tmp_path: P
     )
     with CollectorBrokerServer(runtime / "collector.sock", broker_policy) as broker:
         worker = threading.Thread(target=broker.serve_once, daemon=True)
-        worker.start()
         mcp_server = create_server(
             ServerConfig(
                 allowed_roots=(project, spool),
@@ -1931,6 +1937,7 @@ def test_mcp_launches_exact_project_workload_then_collects_bound_pid(tmp_path: P
                 assert isinstance(payload, dict)
                 return cast(dict[str, Any], payload)
 
+        worker.start()
         payload = asyncio.run(exercise())
         worker.join(timeout=5)
 

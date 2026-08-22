@@ -8,6 +8,8 @@ from tests.support.docker import make_container_resource_context
 
 from perflens.contracts.artifacts import CollectionArtifact, CollectionPlanArtifact
 from perflens.contracts.docker import (
+    ContainerMatchedComparisonArtifact,
+    ContainerMeasurementArtifact,
     ContainerOptimizationSessionArtifact,
     ContainerProcessInventoryArtifact,
     ContainerResourceContextArtifact,
@@ -531,6 +533,8 @@ def test_public_docker_schemas_exclude_private_docker_data() -> None:
         ContainerWorkloadSpecArtifact,
         ContainerOptimizationSessionArtifact,
         ContainerRunArtifact,
+        ContainerMeasurementArtifact,
+        ContainerMatchedComparisonArtifact,
     )
     text = "\n".join(str(model.model_json_schema()) for model in schemas)
     for forbidden in (
