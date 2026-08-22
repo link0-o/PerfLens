@@ -48,6 +48,7 @@ def _write_cgroup(
     pressure_total: int,
     cpu_max: str = "200000 100000",
     cpuset: str = "0-3",
+    io_max: str = "8:0 rbps=1048576 wbps=max riops=1000 wiops=max",
 ) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "cpu.stat").write_text(
@@ -76,6 +77,7 @@ def _write_cgroup(
         f"8:0 rbytes={read_bytes} wbytes={write_bytes} rios=2 wios=3 dbytes=0 dios=0\n",
         encoding="ascii",
     )
+    (directory / "io.max").write_text(f"{io_max}\n", encoding="ascii")
     (directory / "io.pressure").write_text(
         f"some avg10=0.00 avg60=0.00 avg300=0.00 total={pressure_total * 2}\n"
         f"full avg10=0.00 avg60=0.00 avg300=0.00 total={pressure_total}\n",
@@ -216,6 +218,9 @@ def test_cgroup_reader_and_delta_cover_bounded_container_resources(tmp_path: Pat
     )
     assert context.delta.io_read_bytes == 60
     assert context.delta.io_write_bytes == 80
+    assert context.before.io_limits[0].read_bps == 1_048_576
+    assert context.before.io_limits[0].read_iops == 1_000
+    assert context.before.io_limits[0].write_bps is None
     assert context.delta.memory_pressure_some_usec == 10
     assert context.delta.io_pressure_some_usec == 20
     assert context.source_collection_id == _SOURCE_COLLECTION_ID
@@ -243,13 +248,13 @@ def test_missing_optional_pressure_and_io_are_explicitly_partial(tmp_path: Path)
     cgroup_root = tmp_path / "cgroup"
     target, directory = _resolved_target(cgroup_root)
     _initial_files(directory)
-    for name in ("memory.pressure", "io.pressure", "io.stat"):
+    for name in ("memory.pressure", "io.pressure", "io.stat", "io.max"):
         (directory / name).unlink()
     reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
     started = datetime(2026, 8, 21, tzinfo=UTC)
     before = reader.capture(observed_at=started)
     _later_files(directory)
-    for name in ("memory.pressure", "io.pressure", "io.stat"):
+    for name in ("memory.pressure", "io.pressure", "io.stat", "io.max"):
         (directory / name).unlink()
     after = reader.capture(observed_at=started + timedelta(seconds=1))
     context = build_container_resource_context(
@@ -263,7 +268,28 @@ def test_missing_optional_pressure_and_io_are_explicitly_partial(tmp_path: Path)
     assert context.delta.memory_pressure_some_usec is None
     assert context.delta.io_pressure_some_usec is None
     assert context.delta.io_read_bytes == 0
-    assert len(context.limitations) == 3
+    assert len(context.limitations) == 4
+
+
+def test_io_limit_change_is_reported_as_partial_environment_drift(tmp_path: Path) -> None:
+    cgroup_root = tmp_path / "cgroup"
+    target, directory = _resolved_target(cgroup_root)
+    _initial_files(directory)
+    reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
+    started = datetime(2026, 8, 21, tzinfo=UTC)
+    before = reader.capture(observed_at=started)
+    _later_files(directory)
+    (directory / "io.max").write_text("8:0 rbps=524288\n", encoding="ascii")
+    after = reader.capture(observed_at=started + timedelta(seconds=1))
+    context = build_container_resource_context(
+        reader,
+        before,
+        after,
+        source_collection_id=_SOURCE_COLLECTION_ID,
+        source_output_sha256=_SOURCE_OUTPUT_SHA256,
+    )
+    assert context.quality_status == "partial"
+    assert any("I/O limits changed" in value for value in context.limitations)
 
 
 def test_resource_limit_change_is_reported_as_partial_environment_drift(
@@ -416,6 +442,8 @@ def test_resource_context_rejects_naive_or_pre_observation_creation_time(
         ("memory.events", "oom nope\n"),
         ("memory.pressure", "some total=nope\n"),
         ("io.stat", "8:0 rbytes=1\n8:0 rbytes=2\n"),
+        ("io.max", "8:0 rbps=0\n"),
+        ("io.max", "8:0 rbps=max\n8:0 wbps=1\n"),
         ("pids.max", "0\n"),
     ),
 )
@@ -465,11 +493,7 @@ def test_reader_rejects_public_private_cgroup_digest_mismatch(tmp_path: Path) ->
     target, directory = _resolved_target(cgroup_root)
     _initial_files(directory)
     tampered = target.artifact.model_copy(
-        update={
-            "cgroup": target.artifact.cgroup.model_copy(
-                update={"identity_sha256": "0" * 64}
-            )
-        }
+        update={"cgroup": target.artifact.cgroup.model_copy(update={"identity_sha256": "0" * 64})}
     )
     with pytest.raises(PerfLensError) as captured:
         CgroupV2ResourceReader(

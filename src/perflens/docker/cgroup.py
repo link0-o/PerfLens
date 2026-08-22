@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from perflens import __version__
 from perflens.application.evidence import contract_content_sha256
 from perflens.contracts.docker import (
+    CgroupIoDeviceLimit,
     CgroupIoDeviceSnapshot,
     ContainerResourceContextArtifact,
     ContainerResourceDelta,
@@ -129,12 +130,8 @@ class CgroupV2ResourceReader:
             ):
                 if field not in cpu:
                     limitations.append(f"cpu.stat omits optional {field}.")
-            cpu_quota, cpu_period = _parse_cpu_max(
-                _read_text(descriptor, "cpu.max", budget=budget)
-            )
-            cpuset = _parse_cpuset(
-                _read_text(descriptor, "cpuset.cpus.effective", budget=budget)
-            )
+            cpu_quota, cpu_period = _parse_cpu_max(_read_text(descriptor, "cpu.max", budget=budget))
+            cpuset = _parse_cpuset(_read_text(descriptor, "cpuset.cpus.effective", budget=budget))
             memory_current = _parse_unsigned_scalar(
                 _read_text(descriptor, "memory.current", budget=budget),
                 "memory.current",
@@ -164,10 +161,7 @@ class CgroupV2ResourceReader:
                 limitations.append("memory.pressure is unavailable for this cgroup.")
             else:
                 memory_pressure = _parse_pressure(memory_pressure_text, "memory.pressure")
-                if (
-                    memory_pressure.some_total_us is None
-                    or memory_pressure.full_total_us is None
-                ):
+                if memory_pressure.some_total_us is None or memory_pressure.full_total_us is None:
                     limitations.append("memory.pressure omits a pressure class.")
             io_text = _read_optional_text(descriptor, "io.stat", budget=budget)
             if io_text is None:
@@ -175,6 +169,12 @@ class CgroupV2ResourceReader:
                 limitations.append("io.stat is unavailable for this cgroup.")
             else:
                 io_devices = _parse_io_stat(io_text)
+            io_max_text = _read_optional_text(descriptor, "io.max", budget=budget)
+            if io_max_text is None:
+                io_limits: tuple[CgroupIoDeviceLimit, ...] = ()
+                limitations.append("io.max is unavailable for this cgroup.")
+            else:
+                io_limits = _parse_io_max(io_max_text)
             io_pressure_text = _read_optional_text(
                 descriptor,
                 "io.pressure",
@@ -209,6 +209,7 @@ class CgroupV2ResourceReader:
                 memory_events=memory_events,
                 memory_pressure=memory_pressure,
                 io_devices=io_devices,
+                io_limits=io_limits,
                 io_pressure=io_pressure,
                 pids_current=pids_current,
                 pids_max=pids_max,
@@ -259,6 +260,8 @@ def build_container_resource_context(
         limitations.add("Effective cpuset changed during the resource observation window.")
     if first.memory_max_bytes != second.memory_max_bytes:
         limitations.add("Memory limit changed during the resource observation window.")
+    if first.io_limits != second.io_limits:
+        limitations.add("I/O limits changed during the resource observation window.")
     if first.pids_max != second.pids_max:
         limitations.add("PIDs limit changed during the resource observation window.")
     delta = ContainerResourceDelta(
@@ -507,6 +510,46 @@ def _parse_io_stat(text: str) -> tuple[CgroupIoDeviceSnapshot, ...]:
     return result
 
 
+def _parse_io_max(text: str) -> tuple[CgroupIoDeviceLimit, ...]:
+    limits: list[CgroupIoDeviceLimit] = []
+    seen_devices: set[tuple[int, int]] = set()
+    lines = text.splitlines()
+    if len(lines) > 256:
+        raise _resource_error("io.max exceeds the fixed device limit")
+    field_names = {
+        "rbps": "read_bps",
+        "wbps": "write_bps",
+        "riops": "read_iops",
+        "wiops": "write_iops",
+    }
+    for line in lines:
+        fields = line.split()
+        if not fields:
+            continue
+        device = fields[0].split(":")
+        if len(device) != 2 or len(fields) < 2:
+            raise _resource_error("io.max contains an invalid device limit")
+        major = _parse_unsigned(device[0], "io.max major")
+        minor = _parse_unsigned(device[1], "io.max minor")
+        device_identity = (major, minor)
+        if device_identity in seen_devices:
+            raise _resource_error("io.max contains duplicate device identities")
+        seen_devices.add(device_identity)
+        parsed: dict[str, int | None] = {}
+        for field in fields[1:]:
+            key, separator, raw_value = field.partition("=")
+            if not separator or key not in field_names or key in parsed:
+                raise _resource_error("io.max contains an unknown or duplicate limit")
+            parsed[key] = None if raw_value == "max" else _parse_positive(raw_value, "io.max limit")
+        values = {
+            public_name: parsed.get(cgroup_name) for cgroup_name, public_name in field_names.items()
+        }
+        if any(value is not None for value in values.values()):
+            limits.append(CgroupIoDeviceLimit(major=major, minor=minor, **values))
+    result = tuple(sorted(limits, key=lambda item: (item.major, item.minor)))
+    return result
+
+
 def _parse_counter_lines(text: str, *, label: str, max_fields: int) -> dict[str, int]:
     lines = text.splitlines()
     if not lines or len(lines) > min(max_fields, _MAX_LINES):
@@ -545,6 +588,13 @@ def _parse_unsigned(value: str, label: str) -> int:
     parsed = int(value)
     if parsed > 18_446_744_073_709_551_615:
         raise _resource_error(f"{label} exceeds the unsigned 64-bit limit")
+    return parsed
+
+
+def _parse_positive(value: str, label: str) -> int:
+    parsed = _parse_unsigned(value, label)
+    if parsed == 0:
+        raise _resource_error(f"{label} must be positive or max")
     return parsed
 
 

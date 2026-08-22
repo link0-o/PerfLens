@@ -3,6 +3,7 @@ from __future__ import annotations
 from perflens import __version__
 from perflens.application.evidence import contract_content_sha256
 from perflens.contracts.docker import (
+    CgroupIoDeviceLimit,
     ContainerResourceContextArtifact,
     ContainerResourceDelta,
     ContainerResourceSnapshot,
@@ -31,6 +32,7 @@ def make_container_resource_context(
         memory_events=(("oom", 0),),
         memory_pressure=PressureSnapshot(some_total_us=10, full_total_us=0),
         io_pressure=PressureSnapshot(some_total_us=20, full_total_us=0),
+        io_limits=(CgroupIoDeviceLimit(major=8, minor=0, read_bps=1 << 20),),
         pids_current=2,
     )
     after = before.model_copy(
@@ -85,9 +87,7 @@ def make_container_resource_context(
             io_pressure_full_usec=0,
         ),
         quality_status="verified",
-        allowed_conclusions=(
-            "Container-wide cgroup resource observations may be reported.",
-        ),
+        allowed_conclusions=("Container-wide cgroup resource observations may be reported.",),
         forbidden_conclusions=(
             "Container counters are not exclusive measurements of the selected process.",
         ),

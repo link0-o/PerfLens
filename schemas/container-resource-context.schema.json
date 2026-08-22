@@ -1,5 +1,79 @@
 {
   "$defs": {
+    "CgroupIoDeviceLimit": {
+      "additionalProperties": false,
+      "description": "One normalized cgroup-v2 ``io.max`` device limit.\n\nA missing value means that dimension is unlimited. Entries where every\ndimension is unlimited are omitted by the parser, so exported entries\nalways carry at least one effective limit.",
+      "properties": {
+        "major": {
+          "minimum": 0,
+          "title": "Major",
+          "type": "integer"
+        },
+        "minor": {
+          "minimum": 0,
+          "title": "Minor",
+          "type": "integer"
+        },
+        "read_bps": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Read Bps"
+        },
+        "read_iops": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Read Iops"
+        },
+        "write_bps": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Write Bps"
+        },
+        "write_iops": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Write Iops"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "title": "CgroupIoDeviceLimit",
+      "type": "object"
+    },
     "CgroupIoDeviceSnapshot": {
       "additionalProperties": false,
       "properties": {
@@ -322,6 +396,14 @@
             "$ref": "#/$defs/CgroupIoDeviceSnapshot"
           },
           "title": "Io Devices",
+          "type": "array"
+        },
+        "io_limits": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CgroupIoDeviceLimit"
+          },
+          "title": "Io Limits",
           "type": "array"
         },
         "io_pressure": {

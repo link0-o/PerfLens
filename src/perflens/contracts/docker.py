@@ -279,6 +279,31 @@ class CgroupIoDeviceSnapshot(ContractModel):
     write_ios: int = Field(ge=0)
 
 
+class CgroupIoDeviceLimit(ContractModel):
+    """One normalized cgroup-v2 ``io.max`` device limit.
+
+    A missing value means that dimension is unlimited. Entries where every
+    dimension is unlimited are omitted by the parser, so exported entries
+    always carry at least one effective limit.
+    """
+
+    major: int = Field(ge=0)
+    minor: int = Field(ge=0)
+    read_bps: int | None = Field(default=None, gt=0)
+    write_bps: int | None = Field(default=None, gt=0)
+    read_iops: int | None = Field(default=None, gt=0)
+    write_iops: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_effective_limit(self) -> CgroupIoDeviceLimit:
+        if all(
+            value is None
+            for value in (self.read_bps, self.write_bps, self.read_iops, self.write_iops)
+        ):
+            raise ValueError("I/O limit entry must contain at least one effective limit")
+        return self
+
+
 class ContainerResourceSnapshot(ContractModel):
     observed_at: str
     cpu_usage_usec: int = Field(ge=0)
@@ -295,13 +320,14 @@ class ContainerResourceSnapshot(ContractModel):
     memory_events: tuple[tuple[str, int], ...] = ()
     memory_pressure: PressureSnapshot | None = None
     io_devices: tuple[CgroupIoDeviceSnapshot, ...] = ()
+    io_limits: tuple[CgroupIoDeviceLimit, ...] = ()
     io_pressure: PressureSnapshot | None = None
     pids_current: int = Field(ge=0)
     pids_max: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def validate_snapshot(self) -> ContainerResourceSnapshot:
-        if len(self.memory_events) > 64 or len(self.io_devices) > 256:
+        if len(self.memory_events) > 64 or len(self.io_devices) > 256 or len(self.io_limits) > 256:
             raise ValueError("cgroup snapshot exceeds public cardinality limits")
         keys = tuple(key for key, _ in self.memory_events)
         if any(not key or len(key) > 64 or not key.replace("_", "").isalnum() for key in keys):
@@ -311,6 +337,12 @@ class ContainerResourceSnapshot(ContractModel):
         devices = tuple((item.major, item.minor) for item in self.io_devices)
         if len(set(devices)) != len(devices) or tuple(sorted(devices)) != devices:
             raise ValueError("I/O devices must be unique and sorted")
+        limited_devices = tuple((item.major, item.minor) for item in self.io_limits)
+        if (
+            len(set(limited_devices)) != len(limited_devices)
+            or tuple(sorted(limited_devices)) != limited_devices
+        ):
+            raise ValueError("I/O limit devices must be unique and sorted")
         return self
 
 
@@ -372,8 +404,7 @@ def _resource_delta_from_snapshots(
         field: Literal["read_bytes", "write_bytes", "read_ios", "write_ios"],
     ) -> dict[tuple[int, int], int]:
         return {
-            (device.major, device.minor): getattr(device, field)
-            for device in snapshot.io_devices
+            (device.major, device.minor): getattr(device, field) for device in snapshot.io_devices
         }
 
     def io_delta(
@@ -525,6 +556,7 @@ class ContainerResourceContextArtifact(ContractModel):
             or self.before.cpu_period_usec != self.after.cpu_period_usec
             or self.before.cpuset_cpus_effective != self.after.cpuset_cpus_effective
             or self.before.memory_max_bytes != self.after.memory_max_bytes
+            or self.before.io_limits != self.after.io_limits
             or self.before.pids_max != self.after.pids_max
         )
         if environment_changed and self.quality_status != "partial":
@@ -678,20 +710,13 @@ class ContainerSymbolContextArtifact(ContractModel):
 
     @model_validator(mode="after")
     def validate_symbol_context(self) -> ContainerSymbolContextArtifact:
-        if self.symbol_context_id != derive_container_symbol_context_id(
-            self.source_analysis_id
-        ):
+        if self.symbol_context_id != derive_container_symbol_context_id(self.source_analysis_id):
             raise ValueError("container symbol context ID does not match its Analysis")
         mapping_keys = tuple(
             (item.container_source_path_sha256, item.line) for item in self.source_mappings
         )
-        ordered_mapping_keys = tuple(
-            sorted(mapping_keys, key=lambda item: (item[0], item[1] or 0))
-        )
-        if (
-            len(set(mapping_keys)) != len(mapping_keys)
-            or ordered_mapping_keys != mapping_keys
-        ):
+        ordered_mapping_keys = tuple(sorted(mapping_keys, key=lambda item: (item[0], item[1] or 0)))
+        if len(set(mapping_keys)) != len(mapping_keys) or ordered_mapping_keys != mapping_keys:
             raise ValueError("container source mappings must be unique and sorted")
         if self.source_location_count < len(self.source_mappings):
             raise ValueError("exported source mappings exceed observed source locations")
@@ -745,9 +770,7 @@ class ContainerWorkloadSpecArtifact(ContractModel):
     max_active_seconds: int = Field(default=1200, gt=0, le=1200)
     hard_expiry_seconds: int = Field(default=7200, gt=0, le=7200)
     trace_max_duration_seconds: int = Field(default=10, gt=0, le=10)
-    cleanup_policy: Literal["verified_session_containers_only"] = (
-        "verified_session_containers_only"
-    )
+    cleanup_policy: Literal["verified_session_containers_only"] = "verified_session_containers_only"
     correctness_command_sha256: Sha256 | None = None
     benchmark_output_contract_sha256: Sha256 | None = None
     workload_fingerprint: Sha256

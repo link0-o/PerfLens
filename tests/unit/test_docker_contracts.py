@@ -103,6 +103,16 @@ def _snapshot(observed_at: str, *, usage: int) -> dict[str, Any]:
                 "write_ios": 2,
             }
         ],
+        "io_limits": [
+            {
+                "major": 8,
+                "minor": 0,
+                "read_bps": 1048576,
+                "write_bps": None,
+                "read_iops": 1000,
+                "write_iops": None,
+            }
+        ],
         "io_pressure": {"some_total_us": 2, "full_total_us": 0},
         "pids_current": 2,
         "pids_max": 64,
@@ -274,6 +284,7 @@ def test_resource_context_is_container_scoped_and_time_ordered() -> None:
         "counter_decrease",
         "source_binding",
         "unreported_limit_drift",
+        "unreported_io_limit_drift",
         "partial_without_limitations",
         "missing_allowed_conclusions",
         "missing_forbidden_conclusions",
@@ -294,6 +305,8 @@ def test_resource_context_rejects_forged_or_unbounded_semantics(
         payload["source_output_sha256"] = "9" * 64
     elif case == "unreported_limit_drift":
         payload["after"]["cpu_quota_usec"] = 50_000
+    elif case == "unreported_io_limit_drift":
+        payload["after"]["io_limits"][0]["read_bps"] = 2_097_152
     elif case == "partial_without_limitations":
         payload["quality_status"] = "partial"
         payload["limitations"] = []
