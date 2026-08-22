@@ -36,7 +36,7 @@ C/C++/Java/Python/Go runtime-lock adapters.
 | Rust dependencies | `cargo audit` clean with the official local advisory DB clone; `cargo deny check` passed |
 | Protocol/Schema | generated files clean; Python/Rust valid and invalid goldens passed |
 | Python packages | wheel and sdist built reproducibly and passed isolated smoke tests |
-| Debian packages | two reproducible `0.3.1-1` amd64 DEBs passed extract/package smoke; no service or Docker activation |
+| Debian packages | two reproducible `0.3.1-2` amd64 DEBs passed extract/package smoke; no service or Docker activation |
 
 Exact counts describe this candidate checkout and will change as tests grow. The coverage gate
 remains 85% and must not be lowered for a release.

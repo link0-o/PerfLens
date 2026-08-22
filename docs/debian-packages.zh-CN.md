@@ -17,7 +17,7 @@ PerfLens 为 Debian 13 `amd64` 提供两个职责分离的原生安装包：
 只分析已有 Profile、不需要自动采集时，只安装主包：
 
 ```bash
-sudo apt install ./perflens_0.3.1-1_amd64.deb
+sudo apt install ./perflens_0.3.1-2_amd64.deb
 cd /绝对路径/你的项目
 perflens init
 ```
@@ -26,8 +26,8 @@ perflens init
 
 ```bash
 sudo apt install \
-  ./perflens_0.3.1-1_amd64.deb \
-  ./perflens-collector_0.3.1-1_amd64.deb
+  ./perflens_0.3.1-2_amd64.deb \
+  ./perflens-collector_0.3.1-2_amd64.deb
 
 perflens setup \
   --project /绝对路径/你的项目 \

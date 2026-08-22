@@ -35,7 +35,7 @@ Docker 参数、整容器 perf 聚合，也不包含计划进入 v0.4.0 的 C/C+
 | Rust 依赖 | 使用官方本地 advisory DB 干净克隆运行 `cargo audit` 无发现；`cargo deny check` 通过 |
 | 协议/Schema | 生成文件无差异；Python/Rust 有效与无效 golden 通过 |
 | Python 包 | wheel 与 sdist 可复现构建，并通过隔离安装冒烟 |
-| Debian 包 | 两个可复现 `0.3.1-1` amd64 DEB 通过提取/包冒烟；不激活服务或 Docker |
+| Debian 包 | 两个可复现 `0.3.1-2` amd64 DEB 通过提取/包冒烟；不激活服务或 Docker |
 
 具体数量只描述本次候选检出，测试增加后会变化。覆盖率门槛保持 85%，不得为了发布降低。
 
