@@ -1,5 +1,7 @@
 # PerfLens v0.3.1 Docker 进程采集与分析路线图
 
+[一次性 Goal 执行合同](v0.3.1-execution-contract.zh-CN.md)
+
 简体中文 | [English](docker-container-roadmap.md)
 
 状态：**计划实现；当前尚不可用**

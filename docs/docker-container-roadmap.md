@@ -1,5 +1,7 @@
 # PerfLens v0.3.1 Docker process collection and analysis roadmap
 
+[One-run Goal execution contract](v0.3.1-execution-contract.md)
+
 [简体中文](docker-container-roadmap.zh-CN.md) | English
 
 Status: **planned; not currently available**
