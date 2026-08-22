@@ -388,28 +388,18 @@ def _require_substantive_trace(
             and analysis.total_context_switch_count > 0
         )
     elif mode == "off_cpu":
-        substantive = (
-            isinstance(analysis, OffCpuAnalysisArtifact)
-            and (
-                analysis.total_complete_interval_count
-                + analysis.total_incomplete_interval_count
-                > 0
-            )
+        substantive = isinstance(analysis, OffCpuAnalysisArtifact) and (
+            analysis.total_complete_interval_count + analysis.total_incomplete_interval_count > 0
         )
     else:
-        substantive = (
-            isinstance(analysis, LockAnalysisArtifact)
-            and (
-                analysis.total_exact_wait_count
-                + analysis.total_candidate_wait_event_count
-                > 0
-            )
+        substantive = isinstance(analysis, LockAnalysisArtifact) and (
+            analysis.total_exact_wait_count + analysis.total_candidate_wait_event_count > 0
         )
     if evidence.quality.emitted_event_count <= 0 or not substantive:
         raise PerfLensError(
             ErrorCode.PROFILE_PARSE_FAILED,
             "collector_acceptance",
-            "Advanced Collector acceptance produced no substantive target evidence",
+            f"Advanced Collector {mode} acceptance produced no substantive target evidence",
             recoverable=True,
             details={
                 "mode": mode,

@@ -241,9 +241,7 @@ def test_accept_collector_passes_with_software_evidence_when_hardware_pmu_is_unu
                 events=(event,),
                 requested_event_source=("hardware_required" if hardware else "software_only"),
                 actual_event_source=("hardware" if hardware else "software"),
-                metrics=(
-                    PerfStatMetric(event=event, value=value, unit="", status="measured"),
-                ),
+                metrics=(PerfStatMetric(event=event, value=value, unit="", status="measured"),),
             )
 
     monkeypatch.setattr(acceptance, "CollectorBrokerClient", FallbackAcceptanceClient)
@@ -596,6 +594,7 @@ def test_advanced_acceptance_rejects_empty_or_non_substantive_evidence(
     with pytest.raises(PerfLensError) as captured:
         acceptance._require_substantive_trace(mode, evidence, analysis)
     assert captured.value.code is ErrorCode.PROFILE_PARSE_FAILED
+    assert mode in captured.value.message
     assert captured.value.details["mode"] == mode
 
 
@@ -608,16 +607,25 @@ def test_denied_acceptance_plan_and_analysis_id_dispatch_are_explicit() -> None:
         acceptance._require_allowed_plan(denied)
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
-    assert acceptance._trace_analysis_id(
-        SchedulerAnalysisArtifact.model_construct(
-            scheduler_analysis_id="scheduler-analysis-aaaaaaaaaaaaaaaa"
+    assert (
+        acceptance._trace_analysis_id(
+            SchedulerAnalysisArtifact.model_construct(
+                scheduler_analysis_id="scheduler-analysis-aaaaaaaaaaaaaaaa"
+            )
         )
-    ) == "scheduler-analysis-aaaaaaaaaaaaaaaa"
-    assert acceptance._trace_analysis_id(
-        OffCpuAnalysisArtifact.model_construct(
-            off_cpu_analysis_id="off-cpu-analysis-bbbbbbbbbbbbbbbb"
+        == "scheduler-analysis-aaaaaaaaaaaaaaaa"
+    )
+    assert (
+        acceptance._trace_analysis_id(
+            OffCpuAnalysisArtifact.model_construct(
+                off_cpu_analysis_id="off-cpu-analysis-bbbbbbbbbbbbbbbb"
+            )
         )
-    ) == "off-cpu-analysis-bbbbbbbbbbbbbbbb"
-    assert acceptance._trace_analysis_id(
-        LockAnalysisArtifact.model_construct(lock_analysis_id="lock-analysis-cccccccccccccccc")
-    ) == "lock-analysis-cccccccccccccccc"
+        == "off-cpu-analysis-bbbbbbbbbbbbbbbb"
+    )
+    assert (
+        acceptance._trace_analysis_id(
+            LockAnalysisArtifact.model_construct(lock_analysis_id="lock-analysis-cccccccccccccccc")
+        )
+        == "lock-analysis-cccccccccccccccc"
+    )

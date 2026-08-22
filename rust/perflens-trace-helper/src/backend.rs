@@ -222,10 +222,20 @@ fn normalize_event(
     if raw.reserved != 0 || raw.target_tid == 0 {
         return Err(invalid_data("kernel trace event violates its fixed layout"));
     }
-    let related_scope = if raw.related_target_tid != 0 {
-        Some("target")
-    } else if raw.flags & RELATED_EXTERNAL_REDACTED != 0 {
-        Some("external_redacted")
+    // `flags` is mode-specific: scheduler records use bit zero for a redacted external task,
+    // kernel-lock records carry lock flags, and futex records carry the allowlisted operation.
+    // Interpreting lock/futex bit zero as scheduler relationship metadata adds an illegal field to
+    // every odd-valued operation (for example FUTEX_WAIT_BITSET=9), which the independent Python
+    // parser must reject.  Relationship metadata therefore exists only in the scheduler kind
+    // namespace.
+    let related_scope = if (1..=7).contains(&raw.kind) {
+        if raw.related_target_tid != 0 {
+            Some("target")
+        } else if raw.flags & RELATED_EXTERNAL_REDACTED != 0 {
+            Some("external_redacted")
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -762,6 +772,35 @@ mod tests {
         assert_ne!(first, private_lock_id(&[2; 32], 0xdead_beef));
         assert!(first.starts_with("lock-"));
         assert!(!first.contains("deadbeef"));
+    }
+
+    #[test]
+    fn lock_and_futex_flags_never_become_scheduler_relationship_fields() {
+        let mut lock = raw(20);
+        lock.object_address = 0xfeed_face;
+        lock.flags = 1;
+        let lock_event = normalize_event(lock, 0, &[3; 32]).expect("normalized lock event");
+        assert_eq!(lock_event.kind, "lock_wait");
+        assert_eq!(lock_event.lock_flags, Some(1));
+        assert_eq!(lock_event.related_scope, None);
+        assert!(
+            !serde_json::to_string(&lock_event)
+                .expect("serialize lock event")
+                .contains("related_scope")
+        );
+
+        let mut futex = raw(22);
+        futex.object_address = 0xdead_beef;
+        futex.flags = 9;
+        let futex_event = normalize_event(futex, 1, &[4; 32]).expect("normalized futex event");
+        assert_eq!(futex_event.kind, "futex_wait");
+        assert_eq!(futex_event.futex_operation, Some("wait_bitset"));
+        assert_eq!(futex_event.related_scope, None);
+        assert!(
+            !serde_json::to_string(&futex_event)
+                .expect("serialize futex event")
+                .contains("related_scope")
+        );
     }
 
     #[test]

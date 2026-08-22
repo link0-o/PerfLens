@@ -9,6 +9,7 @@ import pytest
 
 from perflens.domain.errors import PerfLensError
 from perflens.domain.trace import (
+    FutexEvent,
     ResourceLimits,
     SchedSwitchEvent,
     SchedWakeupEvent,
@@ -113,6 +114,48 @@ def test_truncation_and_loss_are_explicitly_partial(tmp_path: Path) -> None:
     assert result.statistics.partial
     assert result.statistics.lost_event_count == 7
     assert result.statistics.diagnostic_count == 1
+
+
+def test_parses_fixed_futex_operation_without_scheduler_metadata(tmp_path: Path) -> None:
+    trace = tmp_path / "trace.ndjson"
+    _write(
+        trace,
+        [
+            _record(
+                0,
+                "futex_wait",
+                lock_id="lock-aaaaaaaaaaaaaaaaaaaa",
+                futex_operation="wait_bitset",
+            )
+        ],
+    )
+
+    result = _adapter(trace, mode="lock").parse(trace)
+
+    assert result.statistics.malformed_event_count == 0
+    assert len(result.events) == 1
+    assert isinstance(result.events[0], FutexEvent)
+
+
+def test_rejects_scheduler_relationship_metadata_on_futex_event(tmp_path: Path) -> None:
+    trace = tmp_path / "trace.ndjson"
+    _write(
+        trace,
+        [
+            _record(
+                0,
+                "futex_wait",
+                lock_id="lock-aaaaaaaaaaaaaaaaaaaa",
+                futex_operation="wait_bitset",
+                related_scope="external_redacted",
+            )
+        ],
+    )
+
+    result = _adapter(trace, mode="lock").parse(trace)
+
+    assert not result.events
+    assert result.statistics.malformed_event_count == 1
 
 
 @pytest.mark.parametrize(
