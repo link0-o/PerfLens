@@ -32,8 +32,12 @@ from perflens.contracts.artifacts import (
     ProjectRunArtifact,
 )
 from perflens.contracts.docker import (
+    ContainerModuleSnapshotArtifact,
     ContainerResourceContextArtifact,
     ContainerRunArtifact,
+    ContainerSymbolContextArtifact,
+    derive_container_module_snapshot_id,
+    derive_container_symbol_context_id,
 )
 from perflens.contracts.trace import (
     LockAnalysisArtifact,
@@ -42,6 +46,7 @@ from perflens.contracts.trace import (
     TraceAnalysisVerificationArtifact,
     TraceEvidenceArtifact,
 )
+from perflens.docker.symbols import assert_public_container_analysis
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.security.paths import validate_new_output_file
 
@@ -182,6 +187,7 @@ class ArtifactStore:
         analysis = self._load(analysis_id, "analysis", AnalysisArtifact)
         self._require_embedded_id(analysis.analysis_id, analysis_id, "analysis")
         verify_analysis_artifact(analysis, verify_source=False)
+        assert_public_container_analysis(analysis)
         return analysis
 
     def load_diagnosis(self, analysis_id: str) -> DiagnosisBundle | None:
@@ -237,6 +243,97 @@ class ArtifactStore:
             "container-resource-context",
         )
         return context
+
+    def load_container_module_snapshot(
+        self,
+        module_snapshot_id: str,
+    ) -> ContainerModuleSnapshotArtifact:
+        snapshot = self._load(
+            module_snapshot_id,
+            "container-module-snapshot",
+            ContainerModuleSnapshotArtifact,
+        )
+        self._require_embedded_id(
+            snapshot.module_snapshot_id,
+            module_snapshot_id,
+            "container-module-snapshot",
+        )
+        self._verify_docker_content(
+            snapshot,
+            snapshot.content_sha256,
+            module_snapshot_id,
+            "container-module-snapshot",
+        )
+        collection = self.load_collection(snapshot.source_collection_id)
+        target = collection.container_target
+        if (
+            collection.target_runtime != "docker"
+            or collection.mode != "record"
+            or collection.output_format != "perf_data"
+            or collection.output_sha256 != snapshot.source_output_sha256
+            or target is None
+            or target.target_id != snapshot.container_target_id
+            or target.target_content_sha256 != snapshot.container_target_content_sha256
+            or target.container_identity_sha256 != snapshot.container_identity_sha256
+            or target.namespace.mount_namespace_inode != snapshot.mount_namespace_inode
+        ):
+            raise self._identity_error(module_snapshot_id, "container-module-snapshot")
+        return snapshot
+
+    def load_container_module_snapshot_for_collection(
+        self,
+        collection_id: str,
+    ) -> ContainerModuleSnapshotArtifact | None:
+        snapshot_id = derive_container_module_snapshot_id(collection_id)
+        if not self._path(snapshot_id, "container-module-snapshot").exists():
+            return None
+        return self.load_container_module_snapshot(snapshot_id)
+
+    def load_container_symbol_context(
+        self,
+        symbol_context_id: str,
+    ) -> ContainerSymbolContextArtifact:
+        context = self._load(
+            symbol_context_id,
+            "container-symbol-context",
+            ContainerSymbolContextArtifact,
+        )
+        self._require_embedded_id(
+            context.symbol_context_id,
+            symbol_context_id,
+            "container-symbol-context",
+        )
+        self._verify_docker_content(
+            context,
+            context.content_sha256,
+            symbol_context_id,
+            "container-symbol-context",
+        )
+        analysis = self.load_analysis(context.source_analysis_id)
+        snapshot = self.load_container_module_snapshot(context.module_snapshot_id)
+        collection = analysis.metadata.collection
+        if (
+            analysis.content_sha256 != context.source_analysis_content_sha256
+            or collection is None
+            or collection.target_runtime != "docker"
+            or collection.collection_id != context.source_collection_id
+            or collection.container_target_id != context.container_target_id
+            or snapshot.source_collection_id != context.source_collection_id
+            or snapshot.content_sha256 != context.module_snapshot_content_sha256
+            or snapshot.container_target_id != context.container_target_id
+            or snapshot.container_identity_sha256 != context.container_identity_sha256
+        ):
+            raise self._identity_error(symbol_context_id, "container-symbol-context")
+        return context
+
+    def load_container_symbol_context_for_analysis(
+        self,
+        analysis_id: str,
+    ) -> ContainerSymbolContextArtifact | None:
+        context_id = derive_container_symbol_context_id(analysis_id)
+        if not self._path(context_id, "container-symbol-context").exists():
+            return None
+        return self.load_container_symbol_context(context_id)
 
     def load_container_run(self, run_id: str) -> ContainerRunArtifact:
         run = self._load(run_id, "container-run", ContainerRunArtifact)
@@ -306,6 +403,8 @@ class ArtifactStore:
             "lock-analysis",
             "container-resource-context",
             "container-run",
+            "container-module-snapshot",
+            "container-symbol-context",
         }:
             # Validate and page the exact same immutable byte snapshot. Performing
             # a typed load followed by a second open would leave a replacement
@@ -347,6 +446,7 @@ class ArtifactStore:
             analysis = AnalysisArtifact.model_validate_json(payload)
             self._require_embedded_id(analysis.analysis_id, artifact_id, artifact_type)
             verify_analysis_artifact(analysis, verify_source=False)
+            assert_public_container_analysis(analysis)
             return
         if artifact_type == "collection":
             collection = CollectionArtifact.model_validate_json(payload)
@@ -388,6 +488,59 @@ class ArtifactStore:
                 artifact_id,
                 artifact_type,
             )
+            return
+        if artifact_type == "container-module-snapshot":
+            snapshot = ContainerModuleSnapshotArtifact.model_validate_json(payload)
+            self._require_embedded_id(
+                snapshot.module_snapshot_id,
+                artifact_id,
+                artifact_type,
+            )
+            self._verify_docker_content(
+                snapshot,
+                snapshot.content_sha256,
+                artifact_id,
+                artifact_type,
+            )
+            collection = self.load_collection(snapshot.source_collection_id)
+            target = collection.container_target
+            if (
+                collection.target_runtime != "docker"
+                or collection.mode != "record"
+                or collection.output_format != "perf_data"
+                or collection.output_sha256 != snapshot.source_output_sha256
+                or target is None
+                or target.target_id != snapshot.container_target_id
+                or target.target_content_sha256 != snapshot.container_target_content_sha256
+                or target.container_identity_sha256 != snapshot.container_identity_sha256
+                or target.namespace.mount_namespace_inode != snapshot.mount_namespace_inode
+            ):
+                raise self._identity_error(artifact_id, artifact_type)
+            return
+        if artifact_type == "container-symbol-context":
+            context = ContainerSymbolContextArtifact.model_validate_json(payload)
+            self._require_embedded_id(context.symbol_context_id, artifact_id, artifact_type)
+            self._verify_docker_content(
+                context,
+                context.content_sha256,
+                artifact_id,
+                artifact_type,
+            )
+            analysis = self.load_analysis(context.source_analysis_id)
+            snapshot = self.load_container_module_snapshot(context.module_snapshot_id)
+            collection = analysis.metadata.collection
+            if (
+                analysis.content_sha256 != context.source_analysis_content_sha256
+                or collection is None
+                or collection.target_runtime != "docker"
+                or collection.collection_id != context.source_collection_id
+                or collection.container_target_id != context.container_target_id
+                or snapshot.source_collection_id != context.source_collection_id
+                or snapshot.content_sha256 != context.module_snapshot_content_sha256
+                or snapshot.container_target_id != context.container_target_id
+                or snapshot.container_identity_sha256 != context.container_identity_sha256
+            ):
+                raise self._identity_error(artifact_id, artifact_type)
             return
         if artifact_type == "container-run":
             run = ContainerRunArtifact.model_validate_json(payload)
@@ -461,8 +614,7 @@ class ArtifactStore:
             details={"analysis_id": analysis_id},
         )
 
-    @staticmethod
-    def _verify_diagnosis(diagnosis: DiagnosisBundle, analysis: AnalysisArtifact) -> None:
+    def _verify_diagnosis(self, diagnosis: DiagnosisBundle, analysis: AnalysisArtifact) -> None:
         if (
             diagnosis.analysis_content_sha256 != analysis.content_sha256
             or diagnosis.content_sha256 != compute_diagnosis_content_sha256(diagnosis)
@@ -473,6 +625,20 @@ class ArtifactStore:
                 "Diagnosis does not match its verified source Analysis",
                 details={"analysis_id": analysis.analysis_id},
             )
+        if diagnosis.container_symbol_context_id is not None:
+            context = self.load_container_symbol_context(
+                diagnosis.container_symbol_context_id
+            )
+            if (
+                context.source_analysis_id != analysis.analysis_id
+                or context.content_sha256
+                != diagnosis.container_symbol_context_content_sha256
+                or context.quality_status != diagnosis.container_symbol_quality_status
+            ):
+                raise self._identity_error(
+                    diagnosis.container_symbol_context_id,
+                    "diagnosis",
+                )
 
     @staticmethod
     def _require_embedded_id(embedded_id: str, requested_id: str, artifact_type: str) -> None:

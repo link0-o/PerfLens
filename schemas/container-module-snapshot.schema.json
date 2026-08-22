@@ -1,0 +1,266 @@
+{
+  "$defs": {
+    "ContainerModuleEvidence": {
+      "additionalProperties": false,
+      "description": "One perf-referenced module without exposing its container path.",
+      "properties": {
+        "container_path_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Container Path Sha256",
+          "type": "string"
+        },
+        "content_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Sha256"
+        },
+        "file_bytes": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File Bytes"
+        },
+        "observed_build_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{8,128}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed Build Id"
+        },
+        "recorded_build_id": {
+          "pattern": "^[a-f0-9]{8,128}$",
+          "title": "Recorded Build Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "verified",
+            "unavailable",
+            "identity_mismatch",
+            "limit_exceeded"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "container_path_sha256",
+        "recorded_build_id",
+        "status"
+      ],
+      "title": "ContainerModuleEvidence",
+      "type": "object"
+    },
+    "ContainerModuleSnapshotLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_build_id_output_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 16777216,
+          "title": "Max Build Id Output Bytes",
+          "type": "integer"
+        },
+        "max_module_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 1073741824,
+          "title": "Max Module Bytes",
+          "type": "integer"
+        },
+        "max_modules": {
+          "exclusiveMinimum": 0,
+          "maximum": 1024,
+          "title": "Max Modules",
+          "type": "integer"
+        },
+        "max_total_module_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 4294967296,
+          "title": "Max Total Module Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_modules",
+        "max_module_bytes",
+        "max_total_module_bytes",
+        "max_build_id_output_bytes"
+      ],
+      "title": "ContainerModuleSnapshotLimits",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Capture-time, target-bound module identities for one Docker record Collection.",
+  "properties": {
+    "adapter_recipe_id": {
+      "const": "perf-buildid-list-with-hits-v1",
+      "title": "Adapter Recipe Id",
+      "type": "string"
+    },
+    "adapter_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Adapter Sha256",
+      "type": "string"
+    },
+    "allowed_conclusions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Conclusions",
+      "type": "array"
+    },
+    "container_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Container Identity Sha256",
+      "type": "string"
+    },
+    "container_target_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Container Target Content Sha256",
+      "type": "string"
+    },
+    "container_target_id": {
+      "pattern": "^container-target-[a-f0-9]{20}$",
+      "title": "Container Target Id",
+      "type": "string"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "forbidden_conclusions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Forbidden Conclusions",
+      "type": "array"
+    },
+    "limitations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "limits": {
+      "$ref": "#/$defs/ContainerModuleSnapshotLimits"
+    },
+    "module_snapshot_id": {
+      "pattern": "^container-modules-[a-f0-9]{20}$",
+      "title": "Module Snapshot Id",
+      "type": "string"
+    },
+    "modules": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ContainerModuleEvidence"
+      },
+      "title": "Modules",
+      "type": "array"
+    },
+    "modules_truncated": {
+      "default": false,
+      "title": "Modules Truncated",
+      "type": "boolean"
+    },
+    "mount_namespace_inode": {
+      "exclusiveMinimum": 0,
+      "title": "Mount Namespace Inode",
+      "type": "integer"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "process_root_identity_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Process Root Identity Sha256"
+    },
+    "referenced_module_count": {
+      "minimum": 0,
+      "title": "Referenced Module Count",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_collection_id": {
+      "pattern": "^collection-[a-f0-9]{16}$",
+      "title": "Source Collection Id",
+      "type": "string"
+    },
+    "source_output_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Source Output Sha256",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "verified",
+        "partial"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "module_snapshot_id",
+    "created_at",
+    "source_collection_id",
+    "source_output_sha256",
+    "container_target_id",
+    "container_target_content_sha256",
+    "container_identity_sha256",
+    "mount_namespace_inode",
+    "adapter_recipe_id",
+    "adapter_sha256",
+    "status",
+    "referenced_module_count",
+    "limits",
+    "content_sha256"
+  ],
+  "title": "ContainerModuleSnapshotArtifact",
+  "type": "object"
+}

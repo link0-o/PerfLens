@@ -5,7 +5,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Literal
 
-from perflens.application.evidence import compute_diagnosis_content_sha256
+from perflens.application.evidence import (
+    compute_diagnosis_content_sha256,
+    contract_content_sha256,
+)
 from perflens.classification.rules import CompiledRule, load_builtin_rules
 from perflens.contracts.artifacts import (
     AnalysisArtifact,
@@ -13,13 +16,33 @@ from perflens.contracts.artifacts import (
     DiagnosisBundle,
     Evidence,
 )
+from perflens.contracts.docker import ContainerSymbolContextArtifact
+from perflens.docker.symbols import assert_public_container_analysis
 
 
 def build_diagnosis_bundle(
     analysis: AnalysisArtifact,
     *,
     rules: tuple[CompiledRule, ...] | None = None,
+    container_symbols: ContainerSymbolContextArtifact | None = None,
 ) -> DiagnosisBundle:
+    collection = analysis.metadata.collection
+    is_docker_analysis = collection is not None and collection.target_runtime == "docker"
+    if is_docker_analysis:
+        assert_public_container_analysis(analysis)
+    if container_symbols is not None and container_symbols.content_sha256 != (
+        contract_content_sha256(container_symbols, exclude={"content_sha256"})
+    ):
+        raise ValueError("container symbol context content digest does not match its evidence")
+    if container_symbols is not None and (
+        collection is None
+        or collection.target_runtime != "docker"
+        or container_symbols.source_analysis_id != analysis.analysis_id
+        or container_symbols.source_analysis_content_sha256 != analysis.content_sha256
+        or container_symbols.source_collection_id != collection.collection_id
+        or container_symbols.container_target_id != collection.container_target_id
+    ):
+        raise ValueError("container symbol context does not match the diagnosed Analysis")
     effective_rules = rules or load_builtin_rules()
     classifications: list[Classification] = []
     for hotspot in analysis.hotspots:
@@ -78,6 +101,12 @@ def build_diagnosis_bundle(
         for hotspot in analysis.hotspots[:10]
     )
     limitations = [*analysis.evidence_quality.limitations, *analysis.metadata.warnings]
+    if container_symbols is not None:
+        limitations.extend(container_symbols.limitations)
+    elif is_docker_analysis:
+        limitations.append(
+            "Container module and workspace source identities were not independently verified."
+        )
     if not analysis.metadata.has_call_graph:
         limitations.append("The profile has no call graph; evidence is limited to L1 hotspots.")
     if not analysis.metadata.has_source_lines:
@@ -93,6 +122,10 @@ def build_diagnosis_bundle(
         f"Forbidden by evidence quality: {item}"
         for item in analysis.evidence_quality.forbidden_conclusions
     )
+    if is_docker_analysis and container_symbols is None:
+        missing.add("A verified container symbol context is required for module attribution.")
+    elif container_symbols is not None and container_symbols.quality_status == "partial":
+        missing.add("Container module or workspace source evidence is partial.")
     if not classifications:
         missing.add("No generic classification rule matched; inspect top call paths manually.")
     diagnosis = DiagnosisBundle(
@@ -105,6 +138,15 @@ def build_diagnosis_bundle(
             else "complete"
         ),
         generated_at=datetime.now(tz=UTC).isoformat(),
+        container_symbol_context_id=(
+            container_symbols.symbol_context_id if container_symbols is not None else None
+        ),
+        container_symbol_context_content_sha256=(
+            container_symbols.content_sha256 if container_symbols is not None else None
+        ),
+        container_symbol_quality_status=(
+            container_symbols.quality_status if container_symbols is not None else None
+        ),
         classifications=tuple(classifications),
         observations=observations,
         limitations=tuple(dict.fromkeys(limitations)),

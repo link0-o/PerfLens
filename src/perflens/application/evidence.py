@@ -120,6 +120,17 @@ def build_collection_evidence_provenance(
         record_event=collection.record_event,
         output_sha256=collection.output_sha256,
         output_bytes=collection.output_bytes,
+        target_runtime=collection.target_runtime,
+        container_target_id=(
+            collection.container_target.target_id
+            if collection.container_target is not None
+            else None
+        ),
+        container_target_content_sha256=(
+            collection.container_target.target_content_sha256
+            if collection.container_target is not None
+            else None
+        ),
         requested_event_source=collection.requested_event_source,
         actual_event_source=collection.actual_event_source,
         fallback_used=collection.fallback_used,

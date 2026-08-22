@@ -1,0 +1,192 @@
+{
+  "$defs": {
+    "ContainerSourceMappingEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "container_source_path_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Container Source Path Sha256",
+          "type": "string"
+        },
+        "line": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line"
+        },
+        "status": {
+          "enum": [
+            "mapped",
+            "unmapped",
+            "rejected",
+            "unavailable"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "workspace_relative_path": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workspace Relative Path"
+        }
+      },
+      "required": [
+        "container_source_path_sha256",
+        "status"
+      ],
+      "title": "ContainerSourceMappingEvidence",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Analysis-bound projection of verified modules and authorized source mappings.",
+  "properties": {
+    "allowed_conclusions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Conclusions",
+      "type": "array"
+    },
+    "container_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Container Identity Sha256",
+      "type": "string"
+    },
+    "container_target_id": {
+      "pattern": "^container-target-[a-f0-9]{20}$",
+      "title": "Container Target Id",
+      "type": "string"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "forbidden_conclusions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Forbidden Conclusions",
+      "type": "array"
+    },
+    "limitations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "module_count": {
+      "minimum": 0,
+      "title": "Module Count",
+      "type": "integer"
+    },
+    "module_snapshot_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Module Snapshot Content Sha256",
+      "type": "string"
+    },
+    "module_snapshot_id": {
+      "pattern": "^container-modules-[a-f0-9]{20}$",
+      "title": "Module Snapshot Id",
+      "type": "string"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "quality_status": {
+      "enum": [
+        "verified",
+        "partial"
+      ],
+      "title": "Quality Status",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_analysis_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Source Analysis Content Sha256",
+      "type": "string"
+    },
+    "source_analysis_id": {
+      "pattern": "^analysis-[a-f0-9]{16}$",
+      "title": "Source Analysis Id",
+      "type": "string"
+    },
+    "source_collection_id": {
+      "pattern": "^collection-[a-f0-9]{16}$",
+      "title": "Source Collection Id",
+      "type": "string"
+    },
+    "source_location_count": {
+      "minimum": 0,
+      "title": "Source Location Count",
+      "type": "integer"
+    },
+    "source_mappings": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ContainerSourceMappingEvidence"
+      },
+      "title": "Source Mappings",
+      "type": "array"
+    },
+    "source_mappings_truncated": {
+      "default": false,
+      "title": "Source Mappings Truncated",
+      "type": "boolean"
+    },
+    "symbol_context_id": {
+      "pattern": "^container-symbols-[a-f0-9]{20}$",
+      "title": "Symbol Context Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "symbol_context_id",
+    "created_at",
+    "source_analysis_id",
+    "source_analysis_content_sha256",
+    "source_collection_id",
+    "module_snapshot_id",
+    "module_snapshot_content_sha256",
+    "container_target_id",
+    "container_identity_sha256",
+    "quality_status",
+    "module_count",
+    "source_location_count",
+    "content_sha256"
+  ],
+  "title": "ContainerSymbolContextArtifact",
+  "type": "object"
+}

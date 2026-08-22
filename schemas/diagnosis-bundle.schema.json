@@ -206,6 +206,48 @@
       "title": "Classifications",
       "type": "array"
     },
+    "container_symbol_context_content_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Container Symbol Context Content Sha256"
+    },
+    "container_symbol_context_id": {
+      "anyOf": [
+        {
+          "pattern": "^container-symbols-[a-f0-9]{20}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Container Symbol Context Id"
+    },
+    "container_symbol_quality_status": {
+      "anyOf": [
+        {
+          "enum": [
+            "verified",
+            "partial"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Container Symbol Quality Status"
+    },
     "content_sha256": {
       "pattern": "^[a-f0-9]{64}$",
       "title": "Content Sha256",

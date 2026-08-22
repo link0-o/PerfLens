@@ -22,6 +22,14 @@ DockerCapabilityId = Annotated[str, Field(pattern=r"^docker-capability-[a-f0-9]{
 ContainerTargetId = Annotated[str, Field(pattern=r"^container-target-[a-f0-9]{20}$")]
 ContainerInventoryId = Annotated[str, Field(pattern=r"^container-inventory-[a-f0-9]{20}$")]
 ContainerResourceId = Annotated[str, Field(pattern=r"^container-resource-[a-f0-9]{20}$")]
+ContainerModuleSnapshotId = Annotated[
+    str,
+    Field(pattern=r"^container-modules-[a-f0-9]{20}$"),
+]
+ContainerSymbolContextId = Annotated[
+    str,
+    Field(pattern=r"^container-symbols-[a-f0-9]{20}$"),
+]
 ContainerWorkloadId = Annotated[str, Field(pattern=r"^container-workload-[a-f0-9]{20}$")]
 ContainerSessionId = Annotated[str, Field(pattern=r"^container-session-[a-f0-9]{20}$")]
 ContainerRunId = Annotated[str, Field(pattern=r"^container-run-[a-f0-9]{20}$")]
@@ -78,6 +86,16 @@ def derive_container_resource_context_id(
         )
     )
     return f"container-resource-{hashlib.sha256(material.encode('utf-8')).hexdigest()[:20]}"
+
+
+def derive_container_module_snapshot_id(source_collection_id: str) -> str:
+    material = f"perflens-docker-module-snapshot-v1\0{source_collection_id}"
+    return f"container-modules-{hashlib.sha256(material.encode('utf-8')).hexdigest()[:20]}"
+
+
+def derive_container_symbol_context_id(source_analysis_id: str) -> str:
+    material = f"perflens-docker-symbol-context-v1\0{source_analysis_id}"
+    return f"container-symbols-{hashlib.sha256(material.encode('utf-8')).hexdigest()[:20]}"
 
 
 class DockerToolIdentity(ContractModel):
@@ -515,6 +533,184 @@ class ContainerResourceContextArtifact(ContractModel):
             raise ValueError("partial container resource context must explain its limitations")
         if not self.allowed_conclusions or not self.forbidden_conclusions:
             raise ValueError("container resource context must preserve its conclusion boundary")
+        return self
+
+
+class ContainerModuleEvidence(ContractModel):
+    """One perf-referenced module without exposing its container path."""
+
+    container_path_sha256: Sha256
+    recorded_build_id: str = Field(pattern=r"^[a-f0-9]{8,128}$")
+    observed_build_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{8,128}$")
+    content_sha256: Sha256 | None = None
+    file_bytes: int | None = Field(default=None, gt=0)
+    status: Literal["verified", "unavailable", "identity_mismatch", "limit_exceeded"]
+
+    @model_validator(mode="after")
+    def validate_module(self) -> ContainerModuleEvidence:
+        has_file_evidence = any(
+            item is not None
+            for item in (self.observed_build_id, self.content_sha256, self.file_bytes)
+        )
+        complete = (
+            self.observed_build_id is not None
+            and self.content_sha256 is not None
+            and self.file_bytes is not None
+        )
+        if self.status == "verified":
+            if not complete or self.observed_build_id != self.recorded_build_id:
+                raise ValueError("verified container module must match its recorded Build ID")
+        elif self.status == "identity_mismatch":
+            if not complete or self.observed_build_id == self.recorded_build_id:
+                raise ValueError("module identity mismatch must preserve both differing identities")
+        elif has_file_evidence:
+            raise ValueError("unavailable container modules cannot claim file evidence")
+        return self
+
+
+class ContainerModuleSnapshotLimits(ContractModel):
+    max_modules: int = Field(gt=0, le=1024)
+    max_module_bytes: int = Field(gt=0, le=1 << 30)
+    max_total_module_bytes: int = Field(gt=0, le=4 << 30)
+    max_build_id_output_bytes: int = Field(gt=0, le=16 << 20)
+
+
+class ContainerModuleSnapshotArtifact(ContractModel):
+    """Capture-time, target-bound module identities for one Docker record Collection."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    module_snapshot_id: ContainerModuleSnapshotId
+    created_at: str
+    source_collection_id: CollectionId
+    source_output_sha256: Sha256
+    container_target_id: ContainerTargetId
+    container_target_content_sha256: Sha256
+    container_identity_sha256: Sha256
+    mount_namespace_inode: int = Field(gt=0)
+    process_root_identity_sha256: Sha256 | None = None
+    adapter_recipe_id: Literal["perf-buildid-list-with-hits-v1"]
+    adapter_sha256: Sha256
+    status: Literal["verified", "partial"]
+    referenced_module_count: int = Field(ge=0)
+    modules: tuple[ContainerModuleEvidence, ...] = ()
+    modules_truncated: bool = False
+    limits: ContainerModuleSnapshotLimits
+    limitations: tuple[str, ...] = ()
+    allowed_conclusions: tuple[str, ...] = ()
+    forbidden_conclusions: tuple[str, ...] = ()
+    content_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_snapshot(self) -> ContainerModuleSnapshotArtifact:
+        if self.module_snapshot_id != derive_container_module_snapshot_id(
+            self.source_collection_id
+        ):
+            raise ValueError("container module snapshot ID does not match its Collection")
+        module_keys = tuple(item.container_path_sha256 for item in self.modules)
+        _validate_unique_sorted(module_keys, "container module path digests")
+        if self.referenced_module_count < len(self.modules):
+            raise ValueError("exported container modules exceed the observed module count")
+        if self.referenced_module_count > len(self.modules) and not self.modules_truncated:
+            raise ValueError("omitted container modules must be reported as truncated")
+        degraded = (
+            self.modules_truncated
+            or not self.modules
+            or any(item.status != "verified" for item in self.modules)
+            or bool(self.limitations)
+            or self.process_root_identity_sha256 is None
+        )
+        if (self.status == "partial") != degraded:
+            raise ValueError("container module quality does not match its evidence")
+        if self.status == "partial" and not self.limitations:
+            raise ValueError("partial container module evidence requires a limitation")
+        if not self.allowed_conclusions or not self.forbidden_conclusions:
+            raise ValueError("container module snapshot must preserve conclusion boundaries")
+        return self
+
+
+class ContainerSourceMappingEvidence(ContractModel):
+    container_source_path_sha256: Sha256
+    line: int | None = Field(default=None, gt=0)
+    workspace_relative_path: str | None = Field(default=None, max_length=4096)
+    status: Literal["mapped", "unmapped", "rejected", "unavailable"]
+
+    @model_validator(mode="after")
+    def validate_mapping(self) -> ContainerSourceMappingEvidence:
+        if self.status == "mapped":
+            if self.workspace_relative_path is None:
+                raise ValueError("mapped container source requires a workspace-relative path")
+            relative = PurePosixPath(self.workspace_relative_path)
+            if (
+                relative.is_absolute()
+                or ".." in relative.parts
+                or str(relative) != self.workspace_relative_path
+            ):
+                raise ValueError("workspace source mapping must be normalized and relative")
+        elif self.workspace_relative_path is not None:
+            raise ValueError("unmapped container source cannot expose a workspace path")
+        return self
+
+
+class ContainerSymbolContextArtifact(ContractModel):
+    """Analysis-bound projection of verified modules and authorized source mappings."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    symbol_context_id: ContainerSymbolContextId
+    created_at: str
+    source_analysis_id: str = Field(pattern=r"^analysis-[a-f0-9]{16}$")
+    source_analysis_content_sha256: Sha256
+    source_collection_id: CollectionId
+    module_snapshot_id: ContainerModuleSnapshotId
+    module_snapshot_content_sha256: Sha256
+    container_target_id: ContainerTargetId
+    container_identity_sha256: Sha256
+    quality_status: Literal["verified", "partial"]
+    module_count: int = Field(ge=0)
+    source_location_count: int = Field(ge=0)
+    source_mappings: tuple[ContainerSourceMappingEvidence, ...] = ()
+    source_mappings_truncated: bool = False
+    limitations: tuple[str, ...] = ()
+    allowed_conclusions: tuple[str, ...] = ()
+    forbidden_conclusions: tuple[str, ...] = ()
+    content_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_symbol_context(self) -> ContainerSymbolContextArtifact:
+        if self.symbol_context_id != derive_container_symbol_context_id(
+            self.source_analysis_id
+        ):
+            raise ValueError("container symbol context ID does not match its Analysis")
+        mapping_keys = tuple(
+            (item.container_source_path_sha256, item.line) for item in self.source_mappings
+        )
+        ordered_mapping_keys = tuple(
+            sorted(mapping_keys, key=lambda item: (item[0], item[1] or 0))
+        )
+        if (
+            len(set(mapping_keys)) != len(mapping_keys)
+            or ordered_mapping_keys != mapping_keys
+        ):
+            raise ValueError("container source mappings must be unique and sorted")
+        if self.source_location_count < len(self.source_mappings):
+            raise ValueError("exported source mappings exceed observed source locations")
+        if self.source_location_count > len(self.source_mappings) and not (
+            self.source_mappings_truncated
+        ):
+            raise ValueError("omitted container source mappings must be reported as truncated")
+        degraded = (
+            bool(self.limitations)
+            or self.module_count == 0
+            or self.source_mappings_truncated
+            or any(item.status != "mapped" for item in self.source_mappings)
+        )
+        if (self.quality_status == "partial") != degraded:
+            raise ValueError("container symbol quality does not match its evidence")
+        if self.quality_status == "partial" and not self.limitations:
+            raise ValueError("partial container symbol evidence requires a limitation")
+        if not self.allowed_conclusions or not self.forbidden_conclusions:
+            raise ValueError("container symbol context must preserve conclusion boundaries")
         return self
 
 

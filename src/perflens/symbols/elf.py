@@ -175,6 +175,17 @@ def _build_id_from_elf(elf: ELFFile) -> str | None:
     return None
 
 
+def read_elf_build_id(handle: BinaryIO) -> str | None:
+    """Read a Build ID from an already identity-pinned file descriptor.
+
+    Container callers use this entry point so resolving a path cannot introduce a
+    second file-open race after the module has been confined beneath the target
+    process root.
+    """
+    handle.seek(0)
+    return _build_id_from_elf(ELFFile(handle))
+
+
 def _file_crc32(path: Path) -> int | None:
     checksum = 0
     try:

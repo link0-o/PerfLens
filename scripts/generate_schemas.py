@@ -63,10 +63,12 @@ from perflens.contracts.artifacts import (
     VerificationCheck,
 )
 from perflens.contracts.docker import (
+    ContainerModuleSnapshotArtifact,
     ContainerOptimizationSessionArtifact,
     ContainerProcessInventoryArtifact,
     ContainerResourceContextArtifact,
     ContainerRunArtifact,
+    ContainerSymbolContextArtifact,
     ContainerTargetArtifact,
     ContainerWorkloadSpecArtifact,
     DockerRuntimeCapabilityArtifact,
@@ -163,6 +165,8 @@ MODELS = {
     "container-target.schema.json": ContainerTargetArtifact,
     "container-process-inventory.schema.json": ContainerProcessInventoryArtifact,
     "container-resource-context.schema.json": ContainerResourceContextArtifact,
+    "container-module-snapshot.schema.json": ContainerModuleSnapshotArtifact,
+    "container-symbol-context.schema.json": ContainerSymbolContextArtifact,
     "container-workload-spec.schema.json": ContainerWorkloadSpecArtifact,
     "container-optimization-session.schema.json": ContainerOptimizationSessionArtifact,
     "container-run.schema.json": ContainerRunArtifact,

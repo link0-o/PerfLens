@@ -115,6 +115,32 @@
           "title": "Collection Id",
           "type": "string"
         },
+        "container_target_content_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Container Target Content Sha256"
+        },
+        "container_target_id": {
+          "anyOf": [
+            {
+              "pattern": "^container-target-[a-f0-9]{20}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Container Target Id"
+        },
         "duration_seconds": {
           "minimum": 0,
           "title": "Duration Seconds",
@@ -206,6 +232,15 @@
           "const": "1.0",
           "default": "1.0",
           "title": "Schema Version",
+          "type": "string"
+        },
+        "target_runtime": {
+          "default": "host",
+          "enum": [
+            "host",
+            "docker"
+          ],
+          "title": "Target Runtime",
           "type": "string"
         }
       },

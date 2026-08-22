@@ -61,11 +61,32 @@ class CollectionEvidenceProvenance(ContractModel):
     record_event: Literal["cycles", "cpu-clock"] | None = None
     output_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     output_bytes: int = Field(gt=0)
+    target_runtime: Literal["host", "docker"] = "host"
+    container_target_id: str | None = Field(
+        default=None,
+        pattern=r"^container-target-[a-f0-9]{20}$",
+    )
+    container_target_content_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
     requested_event_source: Literal["auto", "hardware_required", "software_only"]
     actual_event_source: Literal["hardware", "software", "unknown"]
     fallback_used: bool
     fallback_reason: str | None = None
     evidence_limitations: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_target_runtime(self) -> CollectionEvidenceProvenance:
+        bindings = (
+            self.container_target_id,
+            self.container_target_content_sha256,
+        )
+        if self.target_runtime == "host" and any(item is not None for item in bindings):
+            raise ValueError("host Collection provenance cannot bind a Docker target")
+        if self.target_runtime == "docker" and any(item is None for item in bindings):
+            raise ValueError("Docker Collection provenance requires its target identity")
+        return self
 
 
 class EvidenceQuality(ContractModel):
@@ -343,10 +364,30 @@ class DiagnosisBundle(ContractModel):
     content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     status: Literal["complete", "partial"]
     generated_at: str
+    container_symbol_context_id: str | None = Field(
+        default=None,
+        pattern=r"^container-symbols-[a-f0-9]{20}$",
+    )
+    container_symbol_context_content_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    container_symbol_quality_status: Literal["verified", "partial"] | None = None
     classifications: tuple[Classification, ...]
     observations: tuple[str, ...]
     limitations: tuple[str, ...]
     missing_evidence: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def validate_container_symbols(self) -> DiagnosisBundle:
+        bindings = (
+            self.container_symbol_context_id,
+            self.container_symbol_context_content_sha256,
+            self.container_symbol_quality_status,
+        )
+        if any(item is None for item in bindings) and any(item is not None for item in bindings):
+            raise ValueError("diagnosis container symbol bindings must be all present or absent")
+        return self
 
 
 class ArtifactReference(ContractModel):

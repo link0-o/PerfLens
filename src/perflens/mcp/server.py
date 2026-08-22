@@ -56,6 +56,7 @@ from perflens.contracts.artifacts import (
     ArtifactTextPage,
     CallPathPage,
     ClassificationPage,
+    CollectionArtifact,
     CollectionCapabilityArtifact,
     CollectionPlanArtifact,
     HotspotDetails,
@@ -65,10 +66,12 @@ from perflens.contracts.artifacts import (
 )
 from perflens.contracts.docker import (
     CollectionMode,
+    ContainerModuleSnapshotArtifact,
     ContainerOptimizationSessionArtifact,
     ContainerProcessInventoryArtifact,
     ContainerResourceContextArtifact,
     ContainerRunArtifact,
+    ContainerSymbolContextArtifact,
     ContainerTargetArtifact,
     DockerRuntimeCapabilityArtifact,
 )
@@ -91,6 +94,11 @@ from perflens.docker.project_config import (
     load_docker_project_policy,
 )
 from perflens.docker.runtime import ExistingDockerRuntime
+from perflens.docker.symbols import (
+    build_container_symbol_context,
+    capture_container_module_snapshot,
+    project_container_analysis,
+)
 from perflens.docker.workload import inspect_managed_project_root
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.storage import ArtifactStore, PathPolicy
@@ -156,6 +164,7 @@ class ServerConfig:
 @dataclass(frozen=True, slots=True)
 class _ExecutedBrokerPlan:
     reference: ArtifactReference
+    collection: CollectionArtifact | None
     collection_id: str
     output_sha256: str
     evidence_bytes: int
@@ -236,6 +245,32 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     )
     collection_plans: dict[str, CollectionPlanArtifact] = {}
 
+    def capture_module_snapshot(
+        executed: _ExecutedBrokerPlan,
+    ) -> ContainerModuleSnapshotArtifact | None:
+        collection = executed.collection
+        if (
+            collection is None
+            or collection.mode != "record"
+            or collection.target_runtime != "docker"
+        ):
+            return None
+        existing = store.load_container_module_snapshot_for_collection(
+            collection.collection_id
+        )
+        if existing is not None:
+            return existing
+        snapshot = capture_container_module_snapshot(
+            collection,
+            perf_path=config.perf_path,
+        )
+        store.save(
+            snapshot,
+            snapshot.module_snapshot_id,
+            "container-module-snapshot",
+        )
+        return snapshot
+
     def execute_broker_plan(
         plan: CollectionPlanArtifact,
         *,
@@ -274,6 +309,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                         "limitations": "; ".join(trace_evidence.quality.limitations),
                     },
                 ),
+                collection=None,
                 collection_id=trace_evidence.source.collection_id,
                 output_sha256=trace_evidence.source.output_sha256,
                 evidence_bytes=trace_evidence.source.output_bytes,
@@ -302,6 +338,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "warnings": "; ".join(artifact.warnings),
                 },
             ),
+            collection=artifact,
             collection_id=artifact.collection_id,
             output_sha256=artifact.output_sha256,
             evidence_bytes=artifact.output_bytes,
@@ -550,6 +587,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 host_pid=host_pid,
                 container_pid=container_pid,
             )
+            module_snapshot = capture_module_snapshot(executed)
             resource_context = build_container_resource_context(
                 resource_reader,
                 before_snapshot,
@@ -600,6 +638,17 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                         uri=store.uri(
                             resource_context.resource_context_id,
                             "container-resource-context",
+                        ),
+                    ),
+                    **_container_module_summary(
+                        module_snapshot,
+                        uri=(
+                            store.uri(
+                                module_snapshot.module_snapshot_id,
+                                "container-module-snapshot",
+                            )
+                            if module_snapshot is not None
+                            else None
                         ),
                     ),
                 },
@@ -711,6 +760,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 resource_context.resource_context_id,
                 "container-resource-context",
             )
+            module_snapshot = capture_module_snapshot(executed)
             elapsed = math.ceil(time.monotonic() - started)
             remaining = workload_timeout_seconds - elapsed
             if remaining <= 0:
@@ -751,10 +801,19 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 executed.reference,
                 session,
                 resource_context,
+                module_snapshot,
                 uri=store.uri(container_run.run_id, "container-run"),
                 resource_uri=store.uri(
                     resource_context.resource_context_id,
                     "container-resource-context",
+                ),
+                module_uri=(
+                    store.uri(
+                        module_snapshot.module_snapshot_id,
+                        "container-module-snapshot",
+                    )
+                    if module_snapshot is not None
+                    else None
                 ),
             )
         except BaseException:
@@ -973,7 +1032,39 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             perf_path=config.perf_path,
             collection=build_collection_evidence_provenance(collection),
         )
+        symbol_context: ContainerSymbolContextArtifact | None = None
+        if collection.target_runtime == "docker":
+            snapshot = store.load_container_module_snapshot_for_collection(collection_id)
+            if snapshot is None:
+                snapshot = capture_container_module_snapshot(
+                    collection,
+                    perf_path=config.perf_path,
+                )
+                store.save(
+                    snapshot,
+                    snapshot.module_snapshot_id,
+                    "container-module-snapshot",
+                )
+            symbol_context = build_container_symbol_context(
+                analysis,
+                snapshot,
+                workspace_root=(
+                    docker_policy.path.parent.parent
+                    if docker_policy is not None
+                    else None
+                ),
+            )
+            analysis, symbol_context = project_container_analysis(
+                analysis,
+                symbol_context,
+            )
         store.save(analysis, analysis.analysis_id, "analysis")
+        if symbol_context is not None:
+            store.save(
+                symbol_context,
+                symbol_context.symbol_context_id,
+                "container-symbol-context",
+            )
         return ArtifactReference(
             artifact_id=analysis.analysis_id,
             artifact_type="analysis",
@@ -986,6 +1077,17 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "hotspot_count": len(analysis.hotspots),
                 "unresolved_self_percent": (analysis.evidence_quality.unresolved_self_percent),
                 "warning_count": analysis.evidence_quality.warning_count,
+                **_container_symbol_summary(
+                    symbol_context,
+                    uri=(
+                        store.uri(
+                            symbol_context.symbol_context_id,
+                            "container-symbol-context",
+                        )
+                        if symbol_context is not None
+                        else None
+                    ),
+                ),
             },
             evidence_quality=analysis.evidence_quality,
         )
@@ -1157,7 +1259,11 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 frame.symbol == hotspot.symbol and frame.dso == hotspot.dso for frame in path.frames
             )
         )[:call_path_limit]
-        diagnosis = create_diagnosis(analysis)
+        container_symbols = store.load_container_symbol_context_for_analysis(analysis_id)
+        diagnosis = create_diagnosis(
+            analysis,
+            container_symbols=container_symbols,
+        )
         classifications = tuple(
             item for item in diagnosis.classifications if item.hotspot_id == hotspot_id
         )
@@ -1217,7 +1323,11 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         if cursor < 0 or limit < 1 or limit > 100:
             raise ValueError("cursor must be non-negative and limit must be between 1 and 100")
         analysis = store.load_analysis(analysis_id)
-        diagnosis = create_diagnosis(analysis)
+        container_symbols = store.load_container_symbol_context_for_analysis(analysis_id)
+        diagnosis = create_diagnosis(
+            analysis,
+            container_symbols=container_symbols,
+        )
         items = diagnosis.classifications
         page = items[cursor : cursor + limit]
         next_cursor = cursor + len(page) if cursor + len(page) < len(items) else None
@@ -1238,10 +1348,14 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     )
     async def build_diagnosis_bundle(analysis_id: str) -> ArtifactReference:
         analysis = store.load_analysis(analysis_id)
+        container_symbols = store.load_container_symbol_context_for_analysis(analysis_id)
         artifact_id = f"diagnosis-{analysis_id}"
         diagnosis = store.load_diagnosis(analysis_id)
         if diagnosis is None:
-            candidate = create_diagnosis(analysis)
+            candidate = create_diagnosis(
+                analysis,
+                container_symbols=container_symbols,
+            )
             try:
                 store.save(candidate, artifact_id, "diagnosis")
                 diagnosis = candidate
@@ -1261,6 +1375,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "status": diagnosis.status,
                 "classification_count": len(diagnosis.classifications),
                 "missing_evidence_count": len(diagnosis.missing_evidence),
+                "container_symbol_quality": diagnosis.container_symbol_quality_status,
             },
             evidence_quality=analysis.evidence_quality,
         )
@@ -1288,6 +1403,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "lock-analysis",
             "container-resource-context",
             "container-run",
+            "container-module-snapshot",
+            "container-symbol-context",
         ],
         offset: int = 0,
         limit: int = 65_536,
@@ -1558,9 +1675,11 @@ def _managed_run_reference(
     collection: ArtifactReference,
     session: ContainerOptimizationSessionArtifact,
     resource_context: ContainerResourceContextArtifact,
+    module_snapshot: ContainerModuleSnapshotArtifact | None,
     *,
     uri: str,
     resource_uri: str,
+    module_uri: str | None,
 ) -> ArtifactReference:
     return ArtifactReference(
         artifact_id=run.run_id,
@@ -1578,6 +1697,7 @@ def _managed_run_reference(
             "collection_id": collection.artifact_id,
             "collection_artifact_type": collection.artifact_type,
             **_container_resource_summary(resource_context, uri=resource_uri),
+            **_container_module_summary(module_snapshot, uri=module_uri),
         },
     )
 
@@ -1602,6 +1722,45 @@ def _container_resource_summary(
         "container_pids_current_after": context.after.pids_current,
         "container_resource_scope": context.scope,
         "container_resource_limitations": "; ".join(context.limitations),
+    }
+
+
+def _container_module_summary(
+    snapshot: ContainerModuleSnapshotArtifact | None,
+    *,
+    uri: str | None,
+) -> dict[str, str | int | float | bool | None]:
+    if snapshot is None:
+        return {}
+    return {
+        "container_module_snapshot_id": snapshot.module_snapshot_id,
+        "container_module_snapshot_uri": uri,
+        "container_module_quality": snapshot.status,
+        "container_referenced_module_count": snapshot.referenced_module_count,
+        "container_verified_module_count": sum(
+            1 for item in snapshot.modules if item.status == "verified"
+        ),
+        "container_module_limitations": "; ".join(snapshot.limitations),
+    }
+
+
+def _container_symbol_summary(
+    context: ContainerSymbolContextArtifact | None,
+    *,
+    uri: str | None,
+) -> dict[str, str | int | float | bool | None]:
+    if context is None:
+        return {}
+    return {
+        "container_symbol_context_id": context.symbol_context_id,
+        "container_symbol_context_uri": uri,
+        "container_symbol_quality": context.quality_status,
+        "container_module_count": context.module_count,
+        "container_source_location_count": context.source_location_count,
+        "container_mapped_source_count": sum(
+            1 for item in context.source_mappings if item.status == "mapped"
+        ),
+        "container_symbol_limitations": "; ".join(context.limitations),
     }
 
 
