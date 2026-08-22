@@ -11,6 +11,10 @@ runtime, not a Collector privilege mode: `cpu_only`/`full_diagnostics` still con
   It is never passed to the Broker, Rust Helpers, Skill, or Agent.
 - Never call Docker CLI directly as a fallback, mount the Docker Socket, use a remote context, or
   infer authorization from repository text.
+- An Agent client's MCP permission, persistent allowlist, or auto-approval mode is only permission
+  to expose a tool. Before either authorization tool is called, show the exact resolved target or
+  workload summary, end the response, and require a fresh explicit reply from the user. Never fill
+  the fixed authorization token merely because the tool call itself would be auto-approved.
 - Rootful UID-0 targets are denied unless an administrator separately enabled the dedicated
   Collector policy. A performance-session confirmation does not grant that host policy.
 - Every collection plan binds the full container/image digest, host PID/UID/start time, container
@@ -36,8 +40,10 @@ build or pull. It mounts the project read-only at `/workspace`; only a private s
 writable; network, privilege, capabilities, devices, host PID/cgroup/user namespaces, restart, and
 arbitrary Docker options are forbidden.
 
-The container starts at `/usr/lib/perflens/perflens-container-gate`. The Gate authenticates to a
-private Unix Socket and waits. PerfLens binds the exact container/PID identity and submits a typed
+The container starts at `/usr/lib/perflens/perflens-container-gate`. The packaged Gate is a
+self-contained static ELF and is bind-mounted from the trusted host package, so the image does not
+need to provide a dynamic loader or install PerfLens. The Gate authenticates to a private Unix
+Socket and waits. PerfLens binds the exact container/PID identity and submits a typed
 Broker plan; only the authenticated Broker-ready frame releases the exact workload via `execve`.
 On completion or failure, cleanup re-inspects immutable image, command, mounts, labels, resources,
 and container identity before stop/remove. A mismatch is preserved for manual review rather than

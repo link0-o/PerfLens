@@ -17,6 +17,7 @@ from perflens.contracts.docker import (
     ContainerResourceLimits,
     ContainerWorkloadSpecArtifact,
 )
+from perflens.docker.elf import validate_self_contained_elf
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _MAX_GATE_BYTES = 32 << 20
@@ -110,6 +111,10 @@ def inspect_container_gate(
             raise _workload_error(
                 "Container Gate owner, link count, mode, size, or executable bits are unsafe"
             )
+        try:
+            validate_self_contained_elf(descriptor, file_size=before.st_size)
+        except ValueError as exc:
+            raise _workload_error(str(exc)) from exc
         digest = hashlib.sha256()
         while chunk := os.read(descriptor, 1 << 20):
             digest.update(chunk)

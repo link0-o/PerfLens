@@ -41,9 +41,10 @@ cargo test --workspace --locked
 cargo audit --deny warnings
 cargo deny check
 cargo build --release --locked \
-  --package perflens-container-gate \
   --package perflens-privileged-helper \
   --package perflens-trace-helper
+RUSTFLAGS='-C target-feature=+crt-static' \
+  cargo build --release --locked --package perflens-container-gate
 perflens_source_epoch="$(git log -1 --format=%ct)"
 perflens_repro_dir="$(mktemp -d)"
 SOURCE_DATE_EPOCH="$perflens_source_epoch" uv build --no-sources --out-dir dist

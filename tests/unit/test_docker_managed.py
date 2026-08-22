@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from tests.support.docker import write_self_contained_test_elf
 
 from perflens.application.evidence import contract_content_sha256
 from perflens.contracts.docker import ContainerWorkloadSpecArtifact
@@ -288,8 +289,7 @@ def _setup(
     project_path.mkdir(mode=0o700)
     runtime_root.mkdir(mode=0o700)
     gate_path = tmp_path / "perflens-container-gate"
-    gate_path.write_bytes(b"static-gate")
-    gate_path.chmod(0o500)
+    write_self_contained_test_elf(gate_path)
     project = inspect_managed_project_root(project_path)
     gate = inspect_container_gate(gate_path, trusted_owner_uids=(os.geteuid(),))
     workload = build_container_workload_spec(
@@ -421,6 +421,10 @@ def test_managed_coordinator_preserves_container_when_inspect_policy_is_tampered
     assert adapter.operations == ["create"]
     assert adapter.state == "created"
     assert (runtime_root / ("run-" + "1" * 20)).is_dir()
+    assert captured.value.details["managed_container_cleanup_status"] == (
+        "preserved_for_manual_cleanup"
+    )
+    assert "manual review is required" in captured.value.message
     assert CONTAINER_ID not in str(captured.value)
     assert str(runtime_root) not in str(captured.value)
 
@@ -435,8 +439,10 @@ def test_managed_coordinator_rejects_invalid_or_extra_gate_frame_then_cleans(
         tmp_path,
         adapter=adapter,
     )
-    with pytest.raises(PerfLensError):
+    with pytest.raises(PerfLensError) as captured:
         _prepare(coordinator, workload, authority, authorized, lease)
+    assert captured.value.details["managed_container_cleanup_status"] == "removed"
+    assert "verified temporary container was removed" in captured.value.message
     assert adapter.operations == ["create", "start", "stop", "remove"]
     assert not (runtime_root / ("run-" + "1" * 20)).exists()
 

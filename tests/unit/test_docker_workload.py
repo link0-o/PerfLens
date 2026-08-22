@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from tests.support.docker import write_self_contained_test_elf
 
 from perflens.application.evidence import contract_content_sha256
 from perflens.contracts.docker import ContainerWorkloadSpecArtifact
@@ -20,9 +21,7 @@ from perflens.domain.errors import PerfLensError
 
 def _gate(tmp_path: Path) -> Path:
     path = tmp_path / "perflens-container-gate"
-    path.write_bytes(b"#!/bin/sh\nexit 0\n")
-    path.chmod(0o500)
-    return path
+    return write_self_contained_test_elf(path)
 
 
 def test_builder_binds_project_gate_and_fixed_sandbox(tmp_path: Path) -> None:
@@ -69,8 +68,7 @@ def test_builder_rejects_gate_replacement_after_authorization(tmp_path: Path) ->
         trusted_owner_uids=(os.geteuid(),),
     )
     gate_path.chmod(0o700)
-    gate_path.write_bytes(b"#!/bin/sh\nexit 1\n")
-    gate_path.chmod(0o500)
+    write_self_contained_test_elf(gate_path, suffix=b"replacement")
     with pytest.raises(PerfLensError):
         assert_container_gate_current(gate)
 
@@ -80,6 +78,14 @@ def test_gate_rejects_group_or_other_writable_binary(tmp_path: Path, mode: int) 
     gate = _gate(tmp_path)
     gate.chmod(mode)
     with pytest.raises(PerfLensError):
+        inspect_container_gate(gate, trusted_owner_uids=(os.geteuid(),))
+
+
+def test_gate_rejects_non_elf_executable(tmp_path: Path) -> None:
+    gate = tmp_path / "perflens-container-gate"
+    gate.write_bytes(b"#!/bin/sh\nexit 0\n")
+    gate.chmod(0o500)
+    with pytest.raises(PerfLensError, match="ELF"):
         inspect_container_gate(gate, trusted_owner_uids=(os.geteuid(),))
 
 

@@ -18,6 +18,7 @@ from typing import cast
 
 from perflens import __version__
 from perflens.distribution.debian import DEBIAN_PACKAGE_REVISION
+from perflens.docker.elf import validate_self_contained_elf
 
 _SOURCE_DATE_EPOCH = 1_577_836_800  # 2020-01-01 UTC
 _PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9+.-]+$")
@@ -80,6 +81,14 @@ def main() -> None:
         parser,
         "Rust container Gate binary",
     )
+    try:
+        with container_gate_binary.open("rb") as gate_stream:
+            validate_self_contained_elf(
+                gate_stream.fileno(),
+                file_size=container_gate_binary.stat().st_size,
+            )
+    except (OSError, ValueError) as exc:
+        parser.error(f"Rust container Gate binary is not self-contained: {exc}")
     python = _executable(arguments.python, parser, "Python interpreter")
     uv_candidate = arguments.uv or _which_path("uv", parser)
     uv = _executable(uv_candidate, parser, "uv executable")

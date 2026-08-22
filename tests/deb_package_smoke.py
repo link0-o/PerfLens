@@ -13,6 +13,7 @@ from pathlib import Path
 
 from perflens import __version__
 from perflens.distribution.debian import DEBIAN_PACKAGE_REVISION
+from perflens.docker.elf import validate_self_contained_elf
 
 
 def main() -> None:
@@ -195,8 +196,13 @@ def _assert_shared_libraries(root: Path) -> None:
             text=True,
         )
         assert "not found" not in completed.stdout, shared_object
+    gate = root / "usr/lib/perflens/perflens-container-gate"
+    with gate.open("rb") as gate_stream:
+        validate_self_contained_elf(
+            gate_stream.fileno(),
+            file_size=gate.stat().st_size,
+        )
     for helper in (
-        root / "usr/lib/perflens/perflens-container-gate",
         root / "usr/lib/perflens/perflens-privileged-helper",
         root / "usr/lib/perflens/perflens-trace-helper",
     ):

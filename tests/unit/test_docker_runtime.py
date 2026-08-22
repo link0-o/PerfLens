@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from tests.support.docker import write_self_contained_test_elf
 
 from perflens.application.evidence import contract_content_sha256
 from perflens.collection.planning import AutomaticCollectionPolicy
@@ -223,8 +224,7 @@ def test_managed_runtime_authorizes_only_the_fixed_project_recipe(
     )
     policy_path.chmod(0o600)
     gate = tmp_path / "perflens-container-gate"
-    gate.write_bytes(b"fixed-gate")
-    gate.chmod(0o500)
+    write_self_contained_test_elf(gate)
     runtime_root = tmp_path.parent / (tmp_path.name + "-runtime")
     runtime_root.mkdir(mode=0o700)
     policy = load_docker_project_policy(policy_path, allowed_roots=(tmp_path,))

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import struct
+from pathlib import Path
+
 from perflens import __version__
 from perflens.application.evidence import contract_content_sha256
 from perflens.contracts.docker import (
@@ -10,6 +13,32 @@ from perflens.contracts.docker import (
     PressureSnapshot,
     derive_container_resource_context_id,
 )
+
+
+def write_self_contained_test_elf(path: Path, *, suffix: bytes = b"") -> Path:
+    """Write the smallest ELF64 shape accepted by the Gate validator."""
+    ident = b"\x7fELF" + bytes((2, 1, 1, 0, 0)) + b"\x00" * 7
+    header = struct.pack(
+        "<16sHHIQQQIHHHHHH",
+        ident,
+        3,
+        62,
+        1,
+        0,
+        64,
+        0,
+        0,
+        64,
+        56,
+        1,
+        0,
+        0,
+        0,
+    )
+    load = struct.pack("<IIQQQQQQ", 1, 5, 0, 0, 0, 120, 120, 4096)
+    path.write_bytes(header + load + suffix)
+    path.chmod(0o500)
+    return path
 
 
 def make_container_resource_context(

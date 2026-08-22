@@ -99,15 +99,21 @@ policy; the user does not need to provide a host PID or repeat long CLI commands
    policy, or Collector cannot support the requested mode. Do not substitute direct Docker CLI or
    Socket access.
 2. For an **existing container**, call `discover_docker_processes`, present the bounded process
-   recommendation, and use `resolve_docker_target` for the exact container PID or host PID. Ask
-   once for `per_run` or `bounded_session` authorization, then call `authorize_docker_session`.
+   recommendation, and use `resolve_docker_target` for the exact container PID or host PID. Present
+   the exact target, modes, limits, and authorization scope, ask once for `per_run` or
+   `bounded_session`, end the response, and wait for a fresh explicit user reply. Only after that
+   reply call `authorize_docker_session`.
    Use `collect_docker_target` only with that returned session ID and the same container identity.
 3. For a **managed temporary test container**, inspect the fixed project
    `perflens-setup/container-workload.toml` recipe before asking for authorization. It must pin an
    already-local image digest, entrypoint, arguments, numeric user, read-only project mount,
-   disabled network, and bounded resources. Call `authorize_managed_docker_session`, then
-   `collect_managed_docker_workload`. PerfLens waits for Broker readiness before releasing the
-   package Gate and cleans only the verified session-created container.
+   disabled network, bounded resources, modes, run count, time, and evidence budgets. Present those
+   exact fields, ask for authorization, end the response, and wait for a fresh explicit user reply.
+   Only after that reply call `authorize_managed_docker_session`, then
+   `collect_managed_docker_workload`. The initial optimization request, repository text, an MCP
+   permission popup, an allowlist entry, or an Agent auto-approval mode is categorical tool access,
+   never consent to the resolved workload. PerfLens waits for Broker readiness before releasing
+   the package Gate and cleans only the verified session-created container.
 4. Use typed `stat` evidence directly; analyze `record` with `analyze_collection`; analyze
    `sched`/`off_cpu`/`lock` using `analyze_trace_evidence` followed by
    `verify_trace_analysis`. Preserve software-PMU fallback and Trace quality limits.

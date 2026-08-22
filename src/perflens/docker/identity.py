@@ -769,7 +769,10 @@ def _read_namespace_inode(descriptor: int, namespace: str) -> int:
     try:
         target = os.readlink(f"ns/{namespace}", dir_fd=descriptor)
     except OSError as exc:
-        raise _identity_error("Docker target namespace identity is unavailable") from exc
+        raise _identity_error(
+            f"Docker target {namespace} namespace identity is unavailable",
+            recoverable=True,
+        ) from exc
     matched = _NAMESPACE_LINK.fullmatch(target)
     if matched is None or matched.group("kind") != namespace:
         raise _identity_error("Docker target namespace identity is malformed")

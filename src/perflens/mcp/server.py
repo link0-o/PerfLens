@@ -138,7 +138,7 @@ EXECUTES_TARGET = ToolAnnotations(
 )
 AUTHORIZES_DOCKER = ToolAnnotations(
     read_only_hint=False,
-    destructive_hint=False,
+    destructive_hint=True,
     idempotent_hint=False,
     open_world_hint=False,
 )
@@ -432,7 +432,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         name="authorize_docker_session",
         description=(
             "Authorize one project-bound existing-container performance session. This stores "
-            "only process-local authorization and does not execute or profile the target."
+            "only process-local authorization and does not execute or profile the target. A "
+            "fresh user reply to the exact session summary is required; MCP tool permission is "
+            "not workload consent."
         ),
         annotations=AUTHORIZES_DOCKER,
         meta={"perflens/permission": "DOCKER_AUTHORIZATION"},
@@ -461,7 +463,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         name="authorize_managed_docker_session",
         description=(
             "Authorize the exact immutable image, command, mounts, resource limits, modes, and "
-            "budget pinned in this project's Docker policy. This never builds or pulls an image."
+            "budget pinned in this project's Docker policy. This never builds or pulls an image. "
+            "A fresh user reply to that exact summary is required; MCP tool permission is not "
+            "workload consent."
         ),
         annotations=AUTHORIZES_DOCKER,
         meta={"perflens/permission": "DOCKER_AUTHORIZATION"},

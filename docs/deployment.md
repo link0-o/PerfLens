@@ -105,6 +105,13 @@ Silence never means consent, and there is no permanent project grant. Each Colle
 remains short-lived and single-use even inside the session, and each trace remains at most ten
 seconds.
 
+An Agent client's MCP permission dialog, persistent tool allowlist, or auto-approval mode grants
+only categorical access to the authorization tool. It is not consent to any resolved image,
+command, target, or budget. The Skill must first show the complete authorization summary, stop and
+wait for a fresh user reply, and only then call the authorization tool. Do not permanently allowlist
+`authorize_docker_session` or `authorize_managed_docker_session` if the client permission dialog is
+the desired confirmation surface.
+
 Ordinary users should complete [Installation and first use](../INSTALL.md) and run `perflens init` in the selected project first. This page focuses on administrator-managed Collector deployment.
 
 Prefer `perflens setup --prepare-collector` to generate assets and exact commands

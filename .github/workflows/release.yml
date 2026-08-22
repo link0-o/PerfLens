@@ -87,9 +87,12 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - run: >-
           cargo build --release --locked
-          --package perflens-container-gate
           --package perflens-privileged-helper
           --package perflens-trace-helper
+      - name: Build the cross-image static Container Gate
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
+        run: cargo build --release --locked --package perflens-container-gate
       - run: uv sync --all-groups --frozen --python /usr/bin/python3
       - run: uv build --no-sources
       - run: >-

@@ -201,6 +201,21 @@ def test_reader_binds_pid_uid_start_time_namespace_and_cgroup(tmp_path: Path) ->
     assert identity.cgroup_relative_path == "/docker/test-container"
 
 
+def test_reader_identifies_the_unavailable_namespace(tmp_path: Path) -> None:
+    reader, proc_root, _ = _identity_filesystem(tmp_path)
+    _write_process(
+        proc_root,
+        host_pid=1002,
+        container_pid=12,
+        start_time=9876,
+        executable_name="worker",
+    )
+    (proc_root / "1002/ns/mnt").unlink()
+    with pytest.raises(PerfLensError, match="mnt namespace") as captured:
+        reader.inspect_process(1002)
+    assert captured.value.recoverable is True
+
+
 def test_resolver_emits_privacy_safe_content_bound_target(tmp_path: Path) -> None:
     reader, proc_root, _ = _identity_filesystem(tmp_path)
     _write_process(

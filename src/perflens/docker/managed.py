@@ -323,7 +323,7 @@ class ManagedDockerCoordinator:
                 control=connection,
                 started_at=now,
             )
-        except BaseException:
+        except BaseException as error:
             if connection is not None:
                 connection.close()
             if listener is not None:
@@ -337,6 +337,27 @@ class ManagedDockerCoordinator:
                 )
             if removable:
                 _cleanup_runtime_directory(runtime_directory, runtime_identity)
+            if isinstance(error, PerfLensError):
+                cleanup_status = (
+                    "not_created"
+                    if container_id is None
+                    else "removed"
+                    if removable
+                    else "preserved_for_manual_cleanup"
+                )
+                error.details = {
+                    **error.details,
+                    "managed_container_cleanup_status": cleanup_status,
+                }
+                if cleanup_status == "removed":
+                    error.message = (
+                        f"{error.message}; verified temporary container was removed"
+                    )
+                elif cleanup_status == "preserved_for_manual_cleanup":
+                    error.message = (
+                        f"{error.message}; container cleanup identity could not be verified and "
+                        "manual review is required"
+                    )
             raise
 
     def release(self, prepared: PreparedManagedContainer) -> None:

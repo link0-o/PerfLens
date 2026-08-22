@@ -400,6 +400,16 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["authorize_managed_docker_session"].meta == {
                 "perflens/permission": "DOCKER_AUTHORIZATION"
             }
+            existing_authorization_annotations = tools[
+                "authorize_docker_session"
+            ].annotations
+            managed_authorization_annotations = tools[
+                "authorize_managed_docker_session"
+            ].annotations
+            assert existing_authorization_annotations is not None
+            assert managed_authorization_annotations is not None
+            assert existing_authorization_annotations.destructive_hint is True
+            assert managed_authorization_annotations.destructive_hint is True
             assert tools["collect_docker_target"].meta == {
                 "perflens/permission": "DOCKER_COLLECTION"
             }

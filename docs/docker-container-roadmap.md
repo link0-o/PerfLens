@@ -203,6 +203,10 @@ The user-facing meaning of `bounded_session` is: **confirm once at the start of 
 conversation, then do not ask again during that conversation.** It is the default recommendation
 for deep optimization in managed temporary containers.
 
+The confirmation must be a fresh user reply after the exact resolved session summary is shown.
+An MCP permission prompt, persistent tool allowlist, Agent auto-approval mode, initial natural-
+language optimization request, or authorization literal supplied by the model is not this consent.
+
 ```text
 natural-language optimization request
       ↓
