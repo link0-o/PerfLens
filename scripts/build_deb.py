@@ -200,6 +200,10 @@ def _build_main_tree(
     container_gate = runtime / "perflens-container-gate"
     shutil.copyfile(container_gate_binary, container_gate)
     container_gate.chmod(0o755)
+    # Docker is always invoked with a fixed, root-owned empty configuration directory so user
+    # plugins, credentials, contexts, and environment configuration cannot influence the adapter.
+    # Empty directories are explicit DEB members even though they do not appear in md5sums.
+    (root / "usr/share/perflens/docker-empty-config").mkdir(parents=True)
     binary_directory = root / "usr/bin"
     binary_directory.mkdir(parents=True)
     for command in ("perflens", "perflens-mcp"):

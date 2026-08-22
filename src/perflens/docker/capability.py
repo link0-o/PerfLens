@@ -99,12 +99,17 @@ def discover_docker_capability(
         client_version, api_version = _parse_version(version)
         operating_system, cgroup_version = _parse_info(info)
     except (PerfLensError, ValueError) as exc:
-        limitation_code = exc.code.value if isinstance(exc, PerfLensError) else "INVALID_RESPONSE"
+        if isinstance(exc, PerfLensError):
+            limitation = (
+                f"Local Docker capability check failed: {exc.code.value}; {exc.message}."
+            )
+        else:
+            limitation = "Local Docker capability check failed: INVALID_RESPONSE."
         return _unavailable(
             checked_at=timestamp,
             endpoint_kind=endpoint_kind,
             daemon_mode=daemon_mode,
-            limitation=f"Local Docker capability check failed: {limitation_code}.",
+            limitation=limitation,
         )
 
     if operating_system != "linux" or cgroup_version != "v2":

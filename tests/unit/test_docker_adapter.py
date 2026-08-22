@@ -550,3 +550,22 @@ def test_capability_reports_missing_endpoint_without_running_docker() -> None:
     assert capability.status == "unavailable"
     assert capability.endpoint_kind == "missing"
     assert capability.docker_cli is None
+
+
+def test_capability_explains_missing_fixed_cli_config_directory() -> None:
+    with _docker_sandbox() as sandbox:
+        capability = discover_docker_capability(
+            docker_path=sandbox.cli,
+            config_directory=sandbox.root / "missing-config",
+            rootless_socket=sandbox.endpoint,
+            rootful_socket=sandbox.root / "missing.sock",
+            invoking_uid=os.geteuid(),
+            trusted_cli_owner_uids=_trusted_owner_uids(),
+        )
+
+    assert capability.status == "unavailable"
+    assert capability.docker_cli is None
+    assert capability.limitations == (
+        "Local Docker capability check failed: PATH_SAFETY_VIOLATION; "
+        "Docker CLI config directory cannot be inspected safely.",
+    )

@@ -116,6 +116,11 @@ def main() -> None:
         container_gate = root / "usr/lib/perflens/perflens-container-gate"
         assert container_gate.is_file()
         assert container_gate.stat().st_mode & 0o777 == 0o755
+        docker_config = main_root / "usr/share/perflens/docker-empty-config"
+        assert docker_config.is_dir()
+        assert not tuple(docker_config.iterdir())
+        assert docker_config.stat().st_mode & 0o777 == 0o755
+        assert not (collector_root / "usr/share/perflens/docker-empty-config").exists()
         _assert_safe_modes(root)
         policy = (root / "usr/share/perflens/collector/collector.example.toml").read_text(
             encoding="utf-8"
