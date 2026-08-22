@@ -198,9 +198,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     if config.allow_docker_targets and (
         not config.allow_automatic_collection or config.docker_project_config is None
     ):
-        raise ValueError(
-            "Docker targets require automatic collection and one project policy path"
-        )
+        raise ValueError("Docker targets require automatic collection and one project policy path")
     if not config.allow_docker_targets and config.docker_project_config is not None:
         raise ValueError("Docker project policy cannot be set while Docker targets are disabled")
     if not config.allow_docker_targets and config.docker_runtime_root is not None:
@@ -265,9 +263,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             or collection.target_runtime != "docker"
         ):
             return None
-        existing = store.load_container_module_snapshot_for_collection(
-            collection.collection_id
-        )
+        existing = store.load_container_module_snapshot_for_collection(collection.collection_id)
         if existing is not None:
             return existing
         snapshot = capture_container_module_snapshot(
@@ -443,9 +439,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     )
     async def authorize_docker_session(
         container_reference: str,
-        authorization: Literal[
-            "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
-        ],
+        authorization: Literal["I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"],
         host_pid: int | None = None,
         container_pid: int | None = None,
         authorization_mode: Literal["per_run", "bounded_session"] | None = None,
@@ -473,9 +467,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         structured_output=True,
     )
     async def authorize_managed_docker_session(
-        authorization: Literal[
-            "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
-        ],
+        authorization: Literal["I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"],
     ) -> ContainerOptimizationSessionArtifact:
         _require_docker_targets(config)
         assert docker_runtime is not None
@@ -524,7 +516,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         event_source: Literal["auto", "hardware_required", "software_only"] = "auto",
         max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
     ) -> ArtifactReference:
-        _require_automatic_collection(config, require_existing_pid_attach=True)
+        # Docker attachment has its own project opt-in, identity-bound session, and per-run
+        # authorization. Do not require or implicitly enable the broader Host-PID attach switch.
+        _require_automatic_collection(config, require_existing_pid_attach=False)
         _require_docker_targets(config)
         assert docker_runtime is not None
         resolved_target = docker_runtime.resolve_for_collection(
@@ -630,9 +624,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                         reserve_active_seconds,
                         max(0, math.ceil(time.monotonic() - started)),
                     ),
-                    actual_evidence_bytes=(
-                        executed.evidence_bytes if executed is not None else 0
-                    ),
+                    actual_evidence_bytes=(executed.evidence_bytes if executed is not None else 0),
                 )
             raise
         session = docker_runtime.finish_existing_run(
@@ -708,9 +700,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         events: tuple[str, ...] = HARDWARE_STAT_EVENTS,
         event_source: Literal["auto", "hardware_required", "software_only"] = "auto",
         max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
-        treatment_paths: tuple[str, ...] = (),
     ) -> ArtifactReference:
-        _require_automatic_collection(config, require_existing_pid_attach=True)
+        _require_automatic_collection(config, require_existing_pid_attach=False)
         _require_docker_targets(config)
         assert docker_runtime is not None
         assert docker_policy is not None
@@ -725,9 +716,13 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         )
         started = time.monotonic()
         executed: _ExecutedBrokerPlan | None = None
+        project_root = policy.workspace_root(docker_policy.path.parent.parent)
         treatment_snapshot = capture_treatment_snapshot(
-            policy.workspace_root(docker_policy.path.parent.parent),
-            tuple(policy.input_file(path) for path in treatment_paths),
+            project_root,
+            tuple(
+                policy.input_file(project_root / relative_path)
+                for relative_path in docker_policy.managed.treatment_paths
+            ),
         )
         run = docker_runtime.prepare_managed_run(
             session_id,
@@ -736,6 +731,15 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             reserve_evidence_bytes=max_output_bytes,
         )
         try:
+            captured_path_sha256 = tuple(
+                sorted(item.relative_path_sha256 for item in treatment_snapshot.files)
+            )
+            if captured_path_sha256 != run.authorization.workload.treatment_path_sha256:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "docker_comparison",
+                    "Managed Docker treatment files differ from the authorized workload",
+                )
             target = run.prepared.target.artifact
             resource_reader = CgroupV2ResourceReader(run.prepared.target)
             before_snapshot: CapturedCgroupSnapshot | None = None
@@ -892,9 +896,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 docker_runtime.finish_managed_run(
                     run,
                     actual_active_seconds=max(1, math.ceil(time.monotonic() - started)),
-                    actual_evidence_bytes=(
-                        executed.evidence_bytes if executed is not None else 0
-                    ),
+                    actual_evidence_bytes=(executed.evidence_bytes if executed is not None else 0),
                 )
             raise
 
@@ -1118,9 +1120,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 analysis,
                 snapshot,
                 workspace_root=(
-                    docker_policy.path.parent.parent
-                    if docker_policy is not None
-                    else None
+                    docker_policy.path.parent.parent if docker_policy is not None else None
                 ),
             )
             analysis, symbol_context = project_container_analysis(
@@ -1200,8 +1200,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     @server.tool(
         name="verify_trace_analysis",
         description=(
-            "Replay and verify a stored sched/off-CPU/lock analysis before Agent "
-            "interpretation."
+            "Replay and verify a stored sched/off-CPU/lock analysis before Agent interpretation."
         ),
         annotations=READ_ONLY,
         meta={"perflens/permission": "READ_ONLY"},
@@ -1651,12 +1650,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         minimum_delta_percent: float = 1.0,
         minimum_practical_impact_percent: float = 1.0,
     ) -> ArtifactReference:
-        baseline_measurement = store.load_container_measurement(
-            baseline_measurement_id
-        )
-        candidate_measurement = store.load_container_measurement(
-            candidate_measurement_id
-        )
+        baseline_measurement = store.load_container_measurement(baseline_measurement_id)
+        candidate_measurement = store.load_container_measurement(candidate_measurement_id)
         baseline_analysis = store.load_analysis(baseline_analysis_id)
         candidate_analysis = store.load_analysis(candidate_analysis_id)
         baseline_benchmark = store.load_benchmark(baseline_benchmark_id)
@@ -1813,10 +1808,7 @@ def _preflight_managed_collection(
         or frequency_hz > policy.max_frequency_hz
         or max_output_bytes < 1
         or max_output_bytes > policy.max_output_bytes
-        or (
-            mode in {"sched", "off_cpu", "lock"}
-            and duration_seconds > trace_max_duration_seconds
-        )
+        or (mode in {"sched", "off_cpu", "lock"} and duration_seconds > trace_max_duration_seconds)
     )
     if invalid:
         raise PerfLensError(

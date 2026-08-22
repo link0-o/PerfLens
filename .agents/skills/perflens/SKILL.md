@@ -113,8 +113,13 @@ policy; the user does not need to provide a host PID or repeat long CLI commands
    `verify_trace_analysis`. Preserve software-PMU fallback and Trace quality limits.
 5. For optimization, keep image digest, fixed recipe, resources, collection mode/event source,
    and benchmark parameters matched. New container IDs and PIDs are normal for managed A/B runs;
-   existing-container identity replacement invalidates its session. Only correctness-preserving,
-   matched before/after evidence is a verified improvement.
+   existing-container identity replacement invalidates its session. Analyze and verify both
+   `record` Collections, normalize an absolute containerized benchmark for each side, then call
+   `compare_container_measurements` with the returned measurement, analysis, and benchmark IDs.
+   Managed treatment files come only from the user-reviewed `container-workload.toml`; never pass
+   or invent a different path at collection time. Only a `verified_improvement` conclusion from
+   that replayed artifact may be reported as Verified Improvement. Existing-container measurements
+   retain an unbound command/input limitation and therefore cannot reach that conclusion in v0.3.1.
 
 The Skill never receives the Docker Socket and never accepts arbitrary Docker arguments. It must
 not build/pull images, enable networking, add mounts/devices/capabilities, use host namespaces,

@@ -124,6 +124,9 @@ def _collection(
 
 
 def _workload() -> ContainerWorkloadSpecArtifact:
+    treatment_path_sha256 = hashlib.sha256(
+        b"perflens-container-treatment-path-v1\0src/workload.py"
+    ).hexdigest()
     provisional = ContainerWorkloadSpecArtifact(
         schema_version="1.0",
         perflens_version=__version__,
@@ -139,6 +142,7 @@ def _workload() -> ContainerWorkloadSpecArtifact:
         resources=ContainerResourceLimits(cpus=1, memory_bytes=64 << 20, pids=32),
         allowed_modes=("stat", "record"),
         authorization_mode="bounded_session",
+        treatment_path_sha256=(treatment_path_sha256,),
         workload_fingerprint="4" * 64,
         content_sha256="0" * 64,
     )
@@ -180,6 +184,7 @@ def _run(
         status="exited",
         exit_code=0,
         collection_ids=(collection.collection_id,),
+        treatment_path_sha256=workload.treatment_path_sha256,
         build_artifact_sha256=(treatment,),
         resource_context_id=resource.resource_context_id,
         cleanup_status="removed",
@@ -202,9 +207,7 @@ def _analysis(profile: Path, collection: CollectionArtifact) -> AnalysisArtifact
         update={
             "source_type": "perf_data",
             "event": "cpu-clock",
-            "conversion": original.metadata.conversion.model_copy(
-                update={"adapter": "perf_data"}
-            ),
+            "conversion": original.metadata.conversion.model_copy(update={"adapter": "perf_data"}),
             "collection": provenance,
         }
     )
@@ -343,9 +346,7 @@ def test_measurement_rejects_cross_collection_and_tampered_evidence(tmp_path: Pa
             run=wrong_run,
             workload=workload,
         )
-    tampered = resources[0].model_copy(
-        update={"limitations": ("invented",)}
-    )
+    tampered = resources[0].model_copy(update={"limitations": ("invented",)})
     with pytest.raises(PerfLensError, match="content digest is invalid"):
         build_container_measurement(
             collections[0],
@@ -508,9 +509,7 @@ def test_environment_change_or_resource_transfer_blocks_verified_claim(tmp_path:
     invalid_environment = changed_environment.model_copy(
         update={"host_kernel_release": "6.14-unbound"}
     )
-    invalid_measurement = measurements[1].model_copy(
-        update={"environment": invalid_environment}
-    )
+    invalid_measurement = measurements[1].model_copy(update={"environment": invalid_environment})
     invalid_measurement = invalid_measurement.model_copy(
         update={
             "content_sha256": contract_content_sha256(
@@ -575,6 +574,7 @@ def test_store_replays_container_measurement_links_before_returning_it(
         measurement.measurement_id,
         "container-measurement",
     )
+
     def load_collection(_artifact_id: str) -> CollectionArtifact:
         return collections[0]
 
@@ -641,12 +641,9 @@ def test_store_replays_matched_comparison_and_rejects_qualified_claim_rewrite(
         comparison.comparison_id,
         "container-matched-comparison",
     )
+
     def load_measurement(artifact_id: str) -> ContainerMeasurementArtifact:
-        return (
-            measurements[0]
-            if artifact_id == measurements[0].measurement_id
-            else measurements[1]
-        )
+        return measurements[0] if artifact_id == measurements[0].measurement_id else measurements[1]
 
     def load_analysis(artifact_id: str) -> AnalysisArtifact:
         return analyses[0] if artifact_id == analyses[0].analysis_id else analyses[1]
@@ -655,11 +652,7 @@ def test_store_replays_matched_comparison_and_rejects_qualified_claim_rewrite(
         return profile_comparison
 
     def load_benchmark(artifact_id: str) -> BenchmarkArtifact:
-        return (
-            benchmarks[0]
-            if artifact_id == benchmarks[0].benchmark_id
-            else benchmarks[1]
-        )
+        return benchmarks[0] if artifact_id == benchmarks[0].benchmark_id else benchmarks[1]
 
     def load_benchmark_comparison(_artifact_id: str) -> BenchmarkComparison:
         return benchmark_comparison

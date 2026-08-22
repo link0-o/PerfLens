@@ -182,6 +182,15 @@
       "title": "Trace Max Duration Seconds",
       "type": "integer"
     },
+    "treatment_path_sha256": {
+      "default": [],
+      "items": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "title": "Treatment Path Sha256",
+      "type": "array"
+    },
     "working_directory": {
       "title": "Working Directory",
       "type": "string"

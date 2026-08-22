@@ -75,6 +75,7 @@ def build_container_measurement(
         _verify_content(workload, workload.content_sha256, "workload spec")
         if (
             run.workload_spec_sha256 != workload.content_sha256
+            or run.treatment_path_sha256 != workload.treatment_path_sha256
             or collection.collection_id not in run.collection_ids
             or run.resource_context_id != resource_context.resource_context_id
             or run.container_identity_sha256 != target.container_identity_sha256
@@ -120,9 +121,7 @@ def build_container_measurement(
         "workload_fingerprint": workload_fingerprint,
         "container_gate_sha256": gate_sha256,
         "mount_layout_recipe": (
-            "managed-workspace-readonly-v1"
-            if managed
-            else "existing-container-unverified-v1"
+            "managed-workspace-readonly-v1" if managed else "existing-container-unverified-v1"
         ),
         "network_mode": "none" if managed else "unknown",
         "host_kernel_release": collection.host_kernel_release,
@@ -149,8 +148,7 @@ def build_container_measurement(
         "environment_fingerprint_sha256": "0" * 64,
     }
     unchecked_environment = ContainerEnvironmentFingerprint.model_construct(
-        _fields_set=set(environment_values),
-        **environment_values
+        _fields_set=set(environment_values), **environment_values
     )
     environment = ContainerEnvironmentFingerprint.model_validate(
         {
@@ -423,8 +421,7 @@ def _analysis_matches_measurement(
         and analysis.metadata.conversion.adapter == "perf_data"
         and analysis.metadata.event == collection.record_event
         and collection.collection_id == measurement.source_collection_id
-        and collection.collection_artifact_sha256
-        == measurement.source_collection_artifact_sha256
+        and collection.collection_artifact_sha256 == measurement.source_collection_artifact_sha256
         and collection.output_sha256 == measurement.source_output_sha256
         and analysis.metadata.input_sha256 == measurement.source_output_sha256
         and analysis.metadata.input_bytes == collection.output_bytes

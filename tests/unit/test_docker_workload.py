@@ -44,12 +44,14 @@ def test_builder_binds_project_gate_and_fixed_sandbox(tmp_path: Path) -> None:
         memory_bytes=536_870_912,
         pids=64,
         allowed_modes=("stat", "record", "sched"),
+        treatment_paths=("src/workload.py",),
         created_at=datetime(2026, 8, 21, tzinfo=UTC),
     )
     assert artifact.project_identity_sha256 == project.identity_sha256
     assert artifact.container_gate_sha256 == gate.sha256
     assert artifact.network_mode == "none"
     assert artifact.workspace_read_only is True
+    assert len(artifact.treatment_path_sha256) == 1
     assert artifact.content_sha256 == contract_content_sha256(
         artifact,
         exclude={"content_sha256"},
@@ -57,6 +59,7 @@ def test_builder_binds_project_gate_and_fixed_sandbox(tmp_path: Path) -> None:
     serialized = artifact.model_dump_json()
     assert str(project_path) not in serialized
     assert str(gate.path) not in serialized
+    assert "src/workload.py" not in serialized
 
 
 def test_builder_rejects_gate_replacement_after_authorization(tmp_path: Path) -> None:
@@ -89,6 +92,29 @@ def test_project_root_must_be_canonical_owned_directory(tmp_path: Path) -> None:
         inspect_managed_project_root(alias)
     with pytest.raises(PerfLensError):
         inspect_managed_project_root(project / "missing")
+
+
+@pytest.mark.parametrize("path", ["/etc/passwd", "../outside", "."])
+def test_workload_rejects_non_project_treatment_path(
+    tmp_path: Path,
+    path: str,
+) -> None:
+    project_path = tmp_path / "project"
+    project_path.mkdir()
+    project = inspect_managed_project_root(project_path)
+    gate = inspect_container_gate(_gate(tmp_path), trusted_owner_uids=(os.geteuid(),))
+    with pytest.raises(PerfLensError):
+        build_container_workload_spec(
+            project=project,
+            gate=gate,
+            image_digest="sha256:" + "a" * 64,
+            entrypoint="/usr/bin/python3",
+            container_user=f"{os.geteuid()}:{os.getegid()}",
+            cpus=1,
+            memory_bytes=64 << 20,
+            pids=32,
+            treatment_paths=(path,),
+        )
 
 
 @pytest.mark.parametrize("container_user", ["root", "-1", "1:2:3", "4294967296"])

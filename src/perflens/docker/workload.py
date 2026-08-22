@@ -7,7 +7,7 @@ import os
 import stat
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from perflens import __version__
 from perflens.application.evidence import contract_content_sha256
@@ -176,11 +176,13 @@ def build_container_workload_spec(
     trace_max_duration_seconds: int = 10,
     correctness_command_sha256: str | None = None,
     benchmark_output_contract_sha256: str | None = None,
+    treatment_paths: tuple[str, ...] = (),
     created_at: datetime | None = None,
 ) -> ContainerWorkloadSpecArtifact:
     assert_managed_project_current(project)
     assert_container_gate_current(gate)
     modes = _canonical_modes(allowed_modes)
+    treatment_path_sha256 = _treatment_path_hashes(treatment_paths)
     timestamp = created_at or datetime.now(tz=UTC)
     if timestamp.tzinfo is None:
         raise _workload_error("Container workload timestamp must include a timezone")
@@ -204,6 +206,7 @@ def build_container_workload_spec(
         str(trace_max_duration_seconds),
         correctness_command_sha256 or "",
         benchmark_output_contract_sha256 or "",
+        *treatment_path_sha256,
     )
     provisional = ContainerWorkloadSpecArtifact(
         schema_version="1.0",
@@ -230,6 +233,7 @@ def build_container_workload_spec(
         trace_max_duration_seconds=trace_max_duration_seconds,
         correctness_command_sha256=correctness_command_sha256,
         benchmark_output_contract_sha256=benchmark_output_contract_sha256,
+        treatment_path_sha256=treatment_path_sha256,
         workload_fingerprint=fingerprint,
         content_sha256="0" * 64,
     )
@@ -250,6 +254,30 @@ def _canonical_modes(modes: tuple[CollectionMode, ...]) -> tuple[CollectionMode,
     return tuple(mode for mode in _CANONICAL_MODES if mode in modes)
 
 
+def _treatment_path_hashes(paths: tuple[str, ...]) -> tuple[str, ...]:
+    if len(paths) > 32 or len(set(paths)) != len(paths):
+        raise _workload_error("Container treatment paths must be unique and bounded")
+    hashes: list[str] = []
+    for value in paths:
+        path = PurePosixPath(value)
+        if (
+            not value
+            or value.startswith("/")
+            or "\x00" in value
+            or len(value.encode("utf-8")) > 4096
+            or str(path) != value
+            or value in {".", ".."}
+            or ".." in path.parts
+        ):
+            raise _workload_error(
+                "Container treatment path must be normalized and project-relative"
+            )
+        hashes.append(
+            hashlib.sha256(f"perflens-container-treatment-path-v1\0{value}".encode()).hexdigest()
+        )
+    return tuple(sorted(hashes))
+
+
 def _inspect_canonical_path(path: Path, *, require_directory: bool) -> tuple[Path, os.stat_result]:
     if not path.is_absolute() or path.is_symlink():
         raise _workload_error("Managed Docker host path must be absolute and non-symlinked")
@@ -258,8 +286,8 @@ def _inspect_canonical_path(path: Path, *, require_directory: bool) -> tuple[Pat
         metadata = path.stat(follow_symlinks=False)
     except OSError as exc:
         raise _workload_error("Managed Docker host path is unavailable") from exc
-    expected_type = stat.S_ISDIR(metadata.st_mode) if require_directory else stat.S_ISREG(
-        metadata.st_mode
+    expected_type = (
+        stat.S_ISDIR(metadata.st_mode) if require_directory else stat.S_ISREG(metadata.st_mode)
     )
     if canonical != path or not expected_type:
         raise _workload_error("Managed Docker host path type or canonical identity is invalid")

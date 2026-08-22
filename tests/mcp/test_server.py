@@ -179,6 +179,9 @@ def _fake_docker_collection(
 
 
 def _managed_workload() -> ContainerWorkloadSpecArtifact:
+    treatment_path_sha256 = hashlib.sha256(
+        b"perflens-container-treatment-path-v1\0workload.py"
+    ).hexdigest()
     provisional = ContainerWorkloadSpecArtifact(
         schema_version="1.0",
         perflens_version="0.3.1",
@@ -194,6 +197,7 @@ def _managed_workload() -> ContainerWorkloadSpecArtifact:
         allowed_modes=("stat",),
         authorization_mode="per_run",
         max_workload_runs=1,
+        treatment_path_sha256=(treatment_path_sha256,),
         workload_fingerprint="3" * 64,
         content_sha256="0" * 64,
     )
@@ -400,22 +404,20 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["compare_container_measurements"].meta == {
                 "perflens/permission": "WRITES_ARTIFACTS"
             }
-            docker_authorization = tools["authorize_docker_session"].input_schema[
-                "properties"
-            ]["authorization"]
+            docker_authorization = tools["authorize_docker_session"].input_schema["properties"][
+                "authorization"
+            ]
             assert docker_authorization["const"] == (
                 "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
             )
-            managed_authorization = tools[
-                "authorize_managed_docker_session"
-            ].input_schema["properties"]
+            managed_authorization = tools["authorize_managed_docker_session"].input_schema[
+                "properties"
+            ]
             assert set(managed_authorization) == {"authorization"}
             assert managed_authorization["authorization"]["const"] == (
                 "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
             )
-            managed_collection = tools[
-                "collect_managed_docker_workload"
-            ].input_schema["properties"]
+            managed_collection = tools["collect_managed_docker_workload"].input_schema["properties"]
             assert not {
                 "image",
                 "entrypoint",
@@ -423,6 +425,7 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "mounts",
                 "network",
                 "docker_options",
+                "treatment_paths",
             }.intersection(managed_collection)
             assert tools["collect_project_workload"].meta == {
                 "perflens/permission": "PROJECT_EXECUTION"
@@ -435,9 +438,7 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["analyze_trace_evidence"].meta == {
                 "perflens/permission": "WRITES_ARTIFACTS"
             }
-            assert tools["verify_trace_analysis"].meta == {
-                "perflens/permission": "READ_ONLY"
-            }
+            assert tools["verify_trace_analysis"].meta == {"perflens/permission": "READ_ONLY"}
 
     asyncio.run(exercise())
 
@@ -603,8 +604,7 @@ def test_compare_container_measurements_tool_stores_only_verified_comparison_cha
         ("benchmark", "benchmark-after"),
     ]
     assert (
-        artifact_root
-        / f"{comparison.comparison_id}.container-matched-comparison.json"
+        artifact_root / f"{comparison.comparison_id}.container-matched-comparison.json"
     ).is_file()
 
 
@@ -783,7 +783,7 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
             allow_writes=True,
             allow_process_execution=True,
             allow_active_collection=True,
-            allow_pid_attach=True,
+            allow_pid_attach=False,
             allow_automatic_collection=True,
             allow_docker_targets=True,
             docker_project_config=policy,
@@ -866,14 +866,9 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
             assert (artifact_root / f"{collection.collection_id}.collection.json").is_file()
             assert (
                 artifact_root
-                / (
-                    f"{resource_context.resource_context_id}."
-                    "container-resource-context.json"
-                )
+                / (f"{resource_context.resource_context_id}.container-resource-context.json")
             ).is_file()
-            assert (
-                artifact_root / f"{measurement_id}.container-measurement.json"
-            ).is_file()
+            assert (artifact_root / f"{measurement_id}.container-measurement.json").is_file()
             assert len(resource_captures) == 2
 
             denied_plan_session = _structured(
@@ -938,9 +933,7 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
                 },
             )
             assert duplicate_callback.is_error
-            assert "baseline callback was invoked more than once" in str(
-                duplicate_callback.content
-            )
+            assert "baseline callback was invoked more than once" in str(duplicate_callback.content)
 
             missing_callback_session = _structured(
                 await client.call_tool(
@@ -1046,7 +1039,8 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
         )
         .replace('image_digest = ""', 'image_digest = "sha256:' + "a" * 64 + '"')
         .replace('entrypoint = ""', 'entrypoint = "/usr/bin/python3"')
-        .replace('container_user = ""', f'container_user = "{os.geteuid()}:{os.getegid()}"'),
+        .replace('container_user = ""', f'container_user = "{os.geteuid()}:{os.getegid()}"')
+        .replace("treatment_paths = []", 'treatment_paths = ["workload.py"]'),
         encoding="utf-8",
     )
     policy.chmod(0o600)
@@ -1166,7 +1160,10 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
         build_artifacts = cast(tuple[str, ...], kwargs["build_artifact_sha256"])
         assert len(build_artifacts) == 1
         provisional = container_run.model_copy(
-            update={"build_artifact_sha256": build_artifacts}
+            update={
+                "treatment_path_sha256": workload.treatment_path_sha256,
+                "build_artifact_sha256": build_artifacts,
+            }
         )
         return provisional.model_copy(
             update={
@@ -1222,7 +1219,7 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             allow_writes=True,
             allow_process_execution=True,
             allow_active_collection=True,
-            allow_pid_attach=True,
+            allow_pid_attach=False,
             allow_automatic_collection=True,
             allow_docker_targets=True,
             docker_project_config=policy,
@@ -1275,7 +1272,6 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
                     "events": ["task-clock"],
                     "event_source": "software_only",
                     "max_output_bytes": 1000,
-                    "treatment_paths": [str(treatment_file)],
                 },
             )
             assert not result.is_error
@@ -1306,17 +1302,35 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             assert (artifact_root / f"{container_run.run_id}.container-run.json").is_file()
             assert (
                 artifact_root
-                / (
-                    f"{resource_context.resource_context_id}."
-                    "container-resource-context.json"
-                )
+                / (f"{resource_context.resource_context_id}.container-resource-context.json")
             ).is_file()
             assert (
                 artifact_root / f"{workload.workload_spec_id}.container-workload-spec.json"
             ).is_file()
-            assert (
-                artifact_root / f"{measurement_id}.container-measurement.json"
-            ).is_file()
+            assert (artifact_root / f"{measurement_id}.container-measurement.json").is_file()
+
+            operations.clear()
+            prepared.state = "prepared"
+            prepared.exit_code = None
+            coordinated.authorization.workload = workload.model_copy(
+                update={"treatment_path_sha256": ("f" * 64,)}
+            )
+            mismatched_treatment = await client.call_tool(
+                "collect_managed_docker_workload",
+                {
+                    "session_id": active_session.session_id,
+                    "mode": "stat",
+                    "duration_seconds": 1,
+                    "workload_timeout_seconds": 30,
+                    "events": ["task-clock"],
+                    "event_source": "software_only",
+                    "max_output_bytes": 1000,
+                },
+            )
+            assert mismatched_treatment.is_error
+            assert "differ from the authorized workload" in str(mismatched_treatment.content)
+            assert operations == ["prepare", "cleanup", "finish"]
+            coordinated.authorization.workload = workload
 
             operations.clear()
             prepared.state = "prepared"
@@ -1356,9 +1370,7 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
                 },
             )
             assert duplicate_callback.is_error
-            assert "baseline callback was invoked more than once" in str(
-                duplicate_callback.content
-            )
+            assert "baseline callback was invoked more than once" in str(duplicate_callback.content)
             assert operations == [
                 "prepare",
                 "broker",
@@ -1385,9 +1397,7 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
                 },
             )
             assert missing_callback.is_error
-            assert "without releasing the managed Docker workload" in str(
-                missing_callback.content
-            )
+            assert "without releasing the managed Docker workload" in str(missing_callback.content)
             assert operations == ["prepare", "broker", "cleanup", "finish"]
 
             operations.clear()
@@ -1431,9 +1441,7 @@ def test_trace_evidence_is_analyzed_verified_and_paged_without_a_raw_path(
     )
     evidence = make_scheduler_trace_evidence()
     store.save(evidence, evidence.trace_evidence_id, "trace-evidence")
-    server = create_server(
-        ServerConfig((tmp_path,), artifact_root, allow_writes=True)
-    )
+    server = create_server(ServerConfig((tmp_path,), artifact_root, allow_writes=True))
 
     async def exercise() -> None:
         async with Client(server, raise_exceptions=True) as client:

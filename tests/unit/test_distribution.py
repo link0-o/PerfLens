@@ -47,14 +47,14 @@ def test_project_skill_install_copies_the_complete_skill_and_refuses_overwrite(
     project_workload_text = (installed / "references/project-workload.md").read_text(
         encoding="utf-8"
     )
-    docker_text = (installed / "references/docker-analysis.md").read_text(
-        encoding="utf-8"
-    )
+    docker_text = (installed / "references/docker-analysis.md").read_text(encoding="utf-8")
     assert "I_EXPLICITLY_AUTHORIZE_PROJECT_EXECUTION" in skill_text
     assert "Do not substitute" in project_workload_text
     assert "parameter sweep" in project_workload_text
     assert "perflens-container-gate" in docker_text
     assert "Docker Socket" in docker_text
+    assert "[managed].treatment_paths" in docker_text
+    assert "compare_container_measurements" in docker_text
     with pytest.raises(PerfLensError) as captured:
         install_project_skill(project)
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
@@ -269,9 +269,7 @@ def test_collector_assets_have_fixed_safe_modes_independent_of_umask(
     assert (target / "perflens-collector-helper.service").stat().st_mode & 0o777 == 0o644
     assert (target / "perflens-privileged-helper.service").stat().st_mode & 0o777 == 0o644
     assert (target / "perflens-collector-trace.service").stat().st_mode & 0o777 == 0o644
-    assert (
-        target / "perflens-collector-helper-trace.service"
-    ).stat().st_mode & 0o777 == 0o644
+    assert (target / "perflens-collector-helper-trace.service").stat().st_mode & 0o777 == 0o644
     assert (target / "perflens-trace-helper.service").stat().st_mode & 0o777 == 0o644
     assert (target / "perflens.sysusers").stat().st_mode & 0o777 == 0o644
 

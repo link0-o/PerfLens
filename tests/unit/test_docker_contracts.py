@@ -429,11 +429,16 @@ def test_container_run_binds_one_session_and_sorted_evidence() -> None:
         "status": "exited",
         "exit_code": 0,
         "collection_ids": ["collection-aaaaaaaaaaaaaaaa", "collection-bbbbbbbbbbbbbbbb"],
+        "treatment_path_sha256": [SHA_A, SHA_B],
         "build_artifact_sha256": [SHA_A, SHA_B],
         "cleanup_status": "removed",
         "content_sha256": SHA_C,
     }
     assert len(ContainerRunArtifact.model_validate(run).collection_ids) == 2
+    run["build_artifact_sha256"] = [SHA_A]
+    with pytest.raises(ValidationError):
+        ContainerRunArtifact.model_validate(run)
+    run["build_artifact_sha256"] = [SHA_A, SHA_B]
     run["collection_ids"] = ["collection-bbbbbbbbbbbbbbbb", "collection-aaaaaaaaaaaaaaaa"]
     with pytest.raises(ValidationError):
         ContainerRunArtifact.model_validate(run)

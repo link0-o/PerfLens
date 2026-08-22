@@ -38,6 +38,7 @@ _MANAGED_KEYS = {
     "cpus",
     "memory_bytes",
     "pids",
+    "treatment_paths",
 }
 
 
@@ -51,6 +52,7 @@ class ManagedDockerProjectPolicy:
     cpus: float
     memory_bytes: int
     pids: int
+    treatment_paths: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +122,12 @@ container_user = ""
 cpus = 1.0
 memory_bytes = 536870912
 pids = 256
+# Relative, user-reviewed project files whose content identifies the A/B treatment. Paths are
+# never published; public artifacts retain only domain-separated contract hashes. Keep empty for
+# analysis without a Verified Improvement claim.
+# 用于标识 A/B 改动的项目内相对路径. 公开产物不保存路径, 仅保存合同哈希; 留空时仍可
+# 分析, 但不能声称 Verified Improvement.
+treatment_paths = []
 """
 
 
@@ -232,9 +240,7 @@ def _validate_policy_values(parsed: dict[str, object]) -> _ValidatedPolicy:
         "default_workflow": cast(
             Literal["existing_container", "managed_temporary_container"], workflow
         ),
-        "default_authorization_mode": cast(
-            Literal["per_run", "bounded_session"], authorization
-        ),
+        "default_authorization_mode": cast(Literal["per_run", "bounded_session"], authorization),
         "allow_managed_temporary_containers": allow_managed,
         "max_workload_runs": max_runs,
         "max_active_seconds": max_active,
@@ -282,6 +288,19 @@ def _validate_managed(
         raise _policy_error("Docker managed CPU limit is invalid")
     _integer(values["memory_bytes"], "managed memory", 6 << 20, 1 << 50)
     _integer(values["pids"], "managed PIDs", 1, 1_000_000)
+    treatment_paths_value = values["treatment_paths"]
+    if not isinstance(treatment_paths_value, list):
+        raise _policy_error("Docker managed treatment paths must be a list")
+    raw_treatment_paths = cast(list[object], treatment_paths_value)
+    if len(raw_treatment_paths) > 32 or any(
+        not isinstance(value, str) for value in raw_treatment_paths
+    ):
+        raise _policy_error("Docker managed treatment paths are invalid or unbounded")
+    treatment_paths = tuple(
+        _project_relative_path(cast(str, value), "treatment path") for value in raw_treatment_paths
+    )
+    if len(set(treatment_paths)) != len(treatment_paths):
+        raise _policy_error("Docker managed treatment paths must be unique")
     if enabled and (not image or not entrypoint or not user):
         raise _policy_error("Enabled managed Docker workflow requires image, entrypoint, and user")
     return ManagedDockerProjectPolicy(
@@ -293,6 +312,7 @@ def _validate_managed(
         cpus=float(cpus),
         memory_bytes=cast(int, values["memory_bytes"]),
         pids=cast(int, values["pids"]),
+        treatment_paths=tuple(sorted(treatment_paths)),
     )
 
 
@@ -300,6 +320,21 @@ def _container_path(value: str, label: str) -> None:
     path = PurePosixPath(value)
     if not value.startswith("/") or value == "/" or "\x00" in value or str(path) != value:
         raise _policy_error(f"Docker managed {label} must be a normalized absolute path")
+
+
+def _project_relative_path(value: str, label: str) -> str:
+    path = PurePosixPath(value)
+    if (
+        not value
+        or value.startswith("/")
+        or "\x00" in value
+        or len(value.encode("utf-8")) > 4096
+        or str(path) != value
+        or value in {".", ".."}
+        or ".." in path.parts
+    ):
+        raise _policy_error(f"Docker managed {label} must be a normalized project-relative path")
+    return value
 
 
 def _boolean(value: object, label: str) -> bool:

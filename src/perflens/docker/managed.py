@@ -482,6 +482,7 @@ def build_container_run_artifact(
         status=status,
         exit_code=prepared.exit_code,
         collection_ids=canonical_collections,
+        treatment_path_sha256=workload.treatment_path_sha256,
         build_artifact_sha256=canonical_builds,
         resource_context_id=resource_context_id,
         cleanup_status=cleanup_status,
@@ -590,12 +591,9 @@ def _validate_managed_inspect(
     host = _dict_field(data, "HostConfig")
     restart = _dict_field(host, "RestartPolicy")
     security_value = host.get("SecurityOpt")
-    security = (
-        cast(list[object], security_value) if isinstance(security_value, list) else []
-    )
+    security = cast(list[object], security_value) if isinstance(security_value, list) else []
     no_new_privileges = any(
-        isinstance(value, str)
-        and value in ("no-new-privileges", "no-new-privileges=true")
+        isinstance(value, str) and value in ("no-new-privileges", "no-new-privileges=true")
         for value in security
     )
     if (
@@ -866,11 +864,11 @@ def _retire_gate_listener(listener: _BoundGateListener) -> None:
     listener.close()
     try:
         metadata = listener.path.stat(follow_symlinks=False)
-        if (
-            not stat.S_ISSOCK(metadata.st_mode)
-            or (metadata.st_dev, metadata.st_ino, metadata.st_uid)
-            != (listener.device, listener.inode, listener.owner_uid)
-        ):
+        if not stat.S_ISSOCK(metadata.st_mode) or (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_uid,
+        ) != (listener.device, listener.inode, listener.owner_uid):
             raise _managed_error("Container Gate control path was replaced")
         listener.path.unlink()
     except OSError as exc:

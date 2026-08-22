@@ -48,6 +48,11 @@ session when the fixed workload specification is unchanged. Image digest, entryp
 mount policy, network/resources, project identity, Gate binary, allowed modes, or session budget
 changes do invalidate it.
 
+The user-reviewed `[managed].treatment_paths` list contains normalized project-relative files whose
+content identifies the A/B treatment. The list is part of the workload fingerprint and cannot be
+selected by the Agent at collection time. Public artifacts retain only domain-separated path and
+content hashes. An empty list permits diagnosis but prevents a Verified Improvement conclusion.
+
 ## Evidence and reporting
 
 For each result report target runtime, container and image identity digests, container PID, actual
@@ -60,3 +65,7 @@ For matched A/B, require the same image digest and workload spec in v0.3.1. Sour
 read-only under `/workspace` may change build artifacts, but record their digest; an image rebuild
 changes the authorized image digest and requires a new session. Compare only equal resource limits,
 workload parameters, collection mode, and actual event source, followed by correctness tests.
+Analyze and verify both `record` Collections, normalize one absolute containerized benchmark per
+side, and call `compare_container_measurements` with the two measurement, analysis, and benchmark
+IDs. Only its `verified_improvement` conclusion supports the corresponding claim. Existing-container
+measurements remain partial because their exact command/input/correctness contract is not bound.

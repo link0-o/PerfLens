@@ -129,6 +129,15 @@
       "title": "Target Identity Sha256",
       "type": "string"
     },
+    "treatment_path_sha256": {
+      "default": [],
+      "items": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "title": "Treatment Path Sha256",
+      "type": "array"
+    },
     "warnings": {
       "default": [],
       "items": {

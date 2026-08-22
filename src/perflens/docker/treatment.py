@@ -145,7 +145,9 @@ def _capture_file(
         if descriptor >= 0:
             os.close(descriptor)
     relative = path.relative_to(root).as_posix()
-    relative_sha256 = hashlib.sha256(relative.encode("utf-8")).hexdigest()
+    relative_sha256 = hashlib.sha256(
+        f"perflens-container-treatment-path-v1\0{relative}".encode()
+    ).hexdigest()
     content_sha256 = digest.hexdigest()
     treatment_sha256 = hashlib.sha256(
         f"perflens-container-treatment-file-v1\0{relative_sha256}\0{content_sha256}".encode()

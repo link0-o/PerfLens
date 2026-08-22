@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -23,6 +24,10 @@ def test_treatment_snapshot_binds_relative_path_and_content_without_exporting_pa
     snapshot = capture_treatment_snapshot(project, (source,))
 
     assert len(snapshot.treatment_sha256) == 1
+    assert (
+        snapshot.files[0].relative_path_sha256
+        == hashlib.sha256(b"perflens-container-treatment-path-v1\0workload.py").hexdigest()
+    )
     assert str(source) not in snapshot.treatment_sha256[0]
     assert_treatment_snapshot_current(snapshot)
 

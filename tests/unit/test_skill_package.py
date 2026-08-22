@@ -34,6 +34,7 @@ def test_performance_skill_has_valid_minimal_frontmatter_and_resources() -> None
     assert (skill_root / "assets" / "diagnosis-report-template.md").is_file()
     assert "collect_managed_docker_workload" in body
     assert "collect_docker_target" in body
+    assert "compare_container_measurements" in body
     assert "build/pull images" in body
 
 

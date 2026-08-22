@@ -100,12 +100,11 @@ class ExistingDockerRuntime:
         self._project_policy = project_policy
         self._allowed_roots = allowed_roots
         self._collection_policy = collection_policy
-        self._client_identity = client_connection_identity_sha256 or hashlib.sha256(
-            secrets.token_bytes(32)
-        ).hexdigest()
-        if (
-            len(self._client_identity) != 64
-            or any(character not in "0123456789abcdef" for character in self._client_identity)
+        self._client_identity = (
+            client_connection_identity_sha256 or hashlib.sha256(secrets.token_bytes(32)).hexdigest()
+        )
+        if len(self._client_identity) != 64 or any(
+            character not in "0123456789abcdef" for character in self._client_identity
         ):
             raise ValueError("Docker client connection identity must be a SHA-256 digest")
         self._adapter_factory = adapter_factory or open_local_docker_adapter
@@ -161,9 +160,7 @@ class ExistingDockerRuntime:
             host_pid=host_pid,
             container_pid=container_pid,
             reader=self._reader_factory(),
-            allow_rootful_cross_uid=(
-                self._collection_policy.allow_rootful_container_targets
-            ),
+            allow_rootful_cross_uid=(self._collection_policy.allow_rootful_container_targets),
         )
 
     def assert_collection_target_current(
@@ -183,8 +180,7 @@ class ExistingDockerRuntime:
         if (
             current.instance != expected.instance
             or current.kernel != expected.kernel
-            or current.artifact.identity_fingerprint
-            != expected.artifact.identity_fingerprint
+            or current.artifact.identity_fingerprint != expected.artifact.identity_fingerprint
         ):
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,
@@ -316,6 +312,7 @@ class ExistingDockerRuntime:
             max_active_seconds=self._project_policy.max_active_seconds,
             hard_expiry_seconds=self._project_policy.hard_expiry_seconds,
             trace_max_duration_seconds=self._project_policy.trace_max_duration_seconds,
+            treatment_paths=managed.treatment_paths,
         )
         with self._session_lock:
             self._prune_access_locked()
@@ -368,9 +365,7 @@ class ExistingDockerRuntime:
             project=self._project,
             gate=gate,
             reader=self._reader_factory(),
-            allow_rootful_cross_uid=(
-                self._collection_policy.allow_rootful_container_targets
-            ),
+            allow_rootful_cross_uid=(self._collection_policy.allow_rootful_container_targets),
         )
         with self._session_lock:
             current_access = self._require_access_locked(session_id)
@@ -471,9 +466,7 @@ class ExistingDockerRuntime:
     def _managed_root(self) -> Path:
         with self._session_lock:
             if self._managed_runtime_root is None:
-                self._managed_runtime_root = prepare_default_managed_runtime_root(
-                    self._project
-                )
+                self._managed_runtime_root = prepare_default_managed_runtime_root(self._project)
             return self._managed_runtime_root
 
     def _authorized_modes(

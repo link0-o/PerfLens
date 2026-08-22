@@ -32,6 +32,7 @@ def test_project_policy_is_strict_bounded_and_identity_pinned(tmp_path: Path) ->
     assert policy.trace_max_duration_seconds == 10
     assert policy.managed.working_directory == "/workspace"
     assert policy.managed.arguments == ()
+    assert policy.managed.treatment_paths == ()
     assert_docker_project_policy_current(policy, allowed_roots=(path.parent,))
 
     path.write_text(
@@ -94,3 +95,29 @@ def test_project_policy_rejects_symlink_writable_and_outside_paths(tmp_path: Pat
     outside.mkdir()
     with pytest.raises(PerfLensError):
         load_docker_project_policy(path, allowed_roots=(outside,))
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        '["/etc/passwd"]',
+        '["../outside"]',
+        '["src/workload.py", "src/workload.py"]',
+        '"src/workload.py"',
+    ),
+)
+def test_project_policy_rejects_unsafe_treatment_paths(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    path = _policy(tmp_path)
+    path.write_text(
+        render_default_docker_project_policy().replace(
+            "treatment_paths = []",
+            f"treatment_paths = {value}",
+        ),
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+    with pytest.raises(PerfLensError):
+        load_docker_project_policy(path, allowed_roots=(path.parent,))

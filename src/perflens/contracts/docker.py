@@ -796,6 +796,7 @@ class ContainerWorkloadSpecArtifact(ContractModel):
     cleanup_policy: Literal["verified_session_containers_only"] = "verified_session_containers_only"
     correctness_command_sha256: Sha256 | None = None
     benchmark_output_contract_sha256: Sha256 | None = None
+    treatment_path_sha256: tuple[Sha256, ...] = ()
     workload_fingerprint: Sha256
     content_sha256: Sha256
 
@@ -819,6 +820,9 @@ class ContainerWorkloadSpecArtifact(ContractModel):
             raise ValueError("container workload modes must use canonical order")
         if self.hard_expiry_seconds < self.max_active_seconds:
             raise ValueError("container workload hard expiry cannot be shorter than active budget")
+        _validate_unique_sorted(self.treatment_path_sha256, "container treatment path hashes")
+        if len(self.treatment_path_sha256) > 32:
+            raise ValueError("container workload treatment path count exceeds its fixed limit")
         return self
 
 
@@ -892,6 +896,7 @@ class ContainerRunArtifact(ContractModel):
     status: Literal["exited", "terminated_after_collection", "failed_before_exec"]
     exit_code: int | None = None
     collection_ids: tuple[CollectionId, ...] = ()
+    treatment_path_sha256: tuple[Sha256, ...] = ()
     build_artifact_sha256: tuple[Sha256, ...] = ()
     resource_context_id: str | None = Field(
         default=None,
@@ -909,7 +914,10 @@ class ContainerRunArtifact(ContractModel):
         ):
             raise ValueError("container run timestamps must be ordered")
         _validate_unique_sorted(self.collection_ids, "container collection IDs")
+        _validate_unique_sorted(self.treatment_path_sha256, "container treatment path hashes")
         _validate_unique_sorted(self.build_artifact_sha256, "container build artifact hashes")
+        if len(self.treatment_path_sha256) != len(self.build_artifact_sha256):
+            raise ValueError("container treatment paths and content hashes must have equal counts")
         if self.status == "failed_before_exec" and self.exit_code is not None:
             raise ValueError("pre-exec Docker failure cannot claim a workload exit code")
         if self.status != "failed_before_exec" and self.exit_code is None:
