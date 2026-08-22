@@ -33,6 +33,11 @@ def main() -> None:
     assert "--automatic-max-output-bytes" in init_help
     assert "--automatic-plan-ttl-seconds" in init_help
     assert "--allow-existing-pid-attach" in init_help
+    assert "--docker" in init_help
+    mcp_help = _run(perflens_mcp, "--help")
+    assert "--allow-docker-targets" in mcp_help
+    assert "--docker-project-config" in mcp_help
+    assert "--docker-gate-path" in mcp_help
     detach_help = _run(perflens, "detach", "--help")
     assert "--dry-run" in detach_help
     assert "--json" in detach_help

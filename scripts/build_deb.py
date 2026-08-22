@@ -41,6 +41,11 @@ def main() -> None:
         help="Prebuilt release perflens-trace-helper binary.",
     )
     parser.add_argument(
+        "--container-gate-binary",
+        type=Path,
+        help="Prebuilt release perflens-container-gate binary.",
+    )
+    parser.add_argument(
         "--offline",
         action="store_true",
         help="Require every locked dependency to already exist in the uv cache.",
@@ -68,6 +73,12 @@ def main() -> None:
         or project_root / "target/release/perflens-trace-helper",
         parser,
         "Rust Trace Helper binary",
+    )
+    container_gate_binary = _executable(
+        arguments.container_gate_binary
+        or project_root / "target/release/perflens-container-gate",
+        parser,
+        "Rust container Gate binary",
     )
     python = _executable(arguments.python, parser, "Python interpreter")
     uv_candidate = arguments.uv or _which_path("uv", parser)
@@ -112,6 +123,7 @@ def main() -> None:
             architecture=architecture,
             python_abi=python_abi,
             offline=arguments.offline,
+            container_gate_binary=container_gate_binary,
         )
         _build_collector_tree(
             collector_root,
@@ -140,6 +152,7 @@ def _build_main_tree(
     architecture: str,
     python_abi: str,
     offline: bool,
+    container_gate_binary: Path,
 ) -> None:
     runtime = root / "usr/lib/perflens"
     runtime.mkdir(parents=True)
@@ -184,6 +197,9 @@ def _build_main_tree(
     launcher = runtime / "perflens-launcher"
     shutil.copyfile(launcher_source, launcher)
     launcher.chmod(0o755)
+    container_gate = runtime / "perflens-container-gate"
+    shutil.copyfile(container_gate_binary, container_gate)
+    container_gate.chmod(0o755)
     binary_directory = root / "usr/bin"
     binary_directory.mkdir(parents=True)
     for command in ("perflens", "perflens-mcp"):
@@ -204,7 +220,8 @@ def _build_main_tree(
         description=(
             "Evidence-driven Linux performance analysis toolkit\n"
             " PerfLens provides an unprivileged CLI, MCP server, bundled Skill,\n"
-            " deterministic profile analysis, and guided project setup."
+            " deterministic profile analysis, a bounded Docker workload gate,\n"
+            " and guided project setup."
         ),
     )
     _install_control(root, control)
@@ -391,7 +408,11 @@ def _normalize_tree(root: Path) -> None:
     launcher = root / "usr/lib/perflens/perflens-launcher"
     if launcher.is_file():
         launcher.chmod(0o755)
-    for helper_name in ("perflens-privileged-helper", "perflens-trace-helper"):
+    for helper_name in (
+        "perflens-container-gate",
+        "perflens-privileged-helper",
+        "perflens-trace-helper",
+    ):
         helper = root / "usr/lib/perflens" / helper_name
         if helper.is_file():
             helper.chmod(0o755)

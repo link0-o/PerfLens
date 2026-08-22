@@ -102,6 +102,9 @@ def main() -> None:
         trace_helper = root / "usr/lib/perflens/perflens-trace-helper"
         assert trace_helper.is_file()
         assert trace_helper.stat().st_mode & 0o777 == 0o755
+        container_gate = root / "usr/lib/perflens/perflens-container-gate"
+        assert container_gate.is_file()
+        assert container_gate.stat().st_mode & 0o777 == 0o755
         _assert_safe_modes(root)
         policy = (root / "usr/share/perflens/collector/collector.example.toml").read_text(
             encoding="utf-8"
@@ -155,6 +158,7 @@ def _assert_safe_modes(root: Path) -> None:
         mode = stat.S_IMODE(path.stat().st_mode)
         if path.is_dir() or path.name in {
             "perflens-launcher",
+            "perflens-container-gate",
             "perflens-privileged-helper",
             "perflens-trace-helper",
         }:
@@ -176,6 +180,7 @@ def _assert_shared_libraries(root: Path) -> None:
         )
         assert "not found" not in completed.stdout, shared_object
     for helper in (
+        root / "usr/lib/perflens/perflens-container-gate",
         root / "usr/lib/perflens/perflens-privileged-helper",
         root / "usr/lib/perflens/perflens-trace-helper",
     ):
