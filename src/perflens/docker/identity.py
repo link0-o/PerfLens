@@ -30,6 +30,7 @@ from perflens.domain.errors import ErrorCode, PerfLensError
 _CONTAINER_ID = re.compile(r"^[a-f0-9]{64}$")
 _IMAGE_DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
 _NAMESPACE_LINK = re.compile(r"^(?P<kind>pid|user|mnt|cgroup):\[(?P<inode>[1-9][0-9]*)\]$")
+_NAMESPACE_NAMES = frozenset({"pid", "user", "mnt", "cgroup"})
 _MAX_PROC_FILE_BYTES = 64 << 10
 _MAX_TOP_ROWS = 256
 _READ_RECIPE_ID = "local-docker-read-v1"
@@ -766,13 +767,44 @@ def _parse_status(text: str, *, expected_host_pid: int) -> tuple[int, tuple[int,
 
 
 def _read_namespace_inode(descriptor: int, namespace: str) -> int:
+    if namespace not in _NAMESPACE_NAMES:
+        raise _identity_error("Docker target namespace kind is not allowed")
+
+    # Namespace entries are nsfs magic links.  Opening the entry relative to the
+    # already pinned /proc/<pid> descriptor and reading its inode avoids relying
+    # on textual magic-link rendering while keeping the identity bound to the
+    # exact PID incarnation under review.
+    namespace_flags = cast(int, getattr(os, "O_PATH", os.O_RDONLY)) | getattr(
+        os,
+        "O_CLOEXEC",
+        0,
+    )
     try:
-        target = os.readlink(f"ns/{namespace}", dir_fd=descriptor)
-    except OSError as exc:
-        raise _identity_error(
-            f"Docker target {namespace} namespace identity is unavailable",
-            recoverable=True,
-        ) from exc
+        namespace_descriptor = os.open(
+            f"ns/{namespace}",
+            namespace_flags,
+            dir_fd=descriptor,
+        )
+    except OSError:
+        # Procfs-compatible test/mount adapters may expose only the canonical
+        # magic-link text.  It remains acceptable only when the complete,
+        # bounded value matches the kernel namespace grammar below.
+        try:
+            target = os.readlink(f"ns/{namespace}", dir_fd=descriptor)
+        except OSError as exc:
+            raise _identity_error(
+                f"Docker target {namespace} namespace identity is unavailable",
+                recoverable=True,
+            ) from exc
+    else:
+        try:
+            inode = os.fstat(namespace_descriptor).st_ino
+        finally:
+            os.close(namespace_descriptor)
+        if inode <= 0:
+            raise _identity_error("Docker target namespace identity is malformed")
+        return inode
+
     matched = _NAMESPACE_LINK.fullmatch(target)
     if matched is None or matched.group("kind") != namespace:
         raise _identity_error("Docker target namespace identity is malformed")

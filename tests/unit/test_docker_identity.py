@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -201,6 +203,40 @@ def test_reader_binds_pid_uid_start_time_namespace_and_cgroup(tmp_path: Path) ->
     assert identity.cgroup_relative_path == "/docker/test-container"
 
 
+def test_reader_uses_real_nsfs_inodes_from_a_pinned_proc_descriptor() -> None:
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        identity = LinuxContainerIdentityReader().inspect_process(process.pid)
+        assert identity.namespace.pid == os.stat(
+            f"/proc/{process.pid}/ns/pid",
+            follow_symlinks=True,
+        ).st_ino
+        assert identity.namespace.user == os.stat(
+            f"/proc/{process.pid}/ns/user",
+            follow_symlinks=True,
+        ).st_ino
+        assert identity.namespace.mount == os.stat(
+            f"/proc/{process.pid}/ns/mnt",
+            follow_symlinks=True,
+        ).st_ino
+        assert identity.namespace.cgroup == os.stat(
+            f"/proc/{process.pid}/ns/cgroup",
+            follow_symlinks=True,
+        ).st_ino
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+
 def test_reader_identifies_the_unavailable_namespace(tmp_path: Path) -> None:
     reader, proc_root, _ = _identity_filesystem(tmp_path)
     _write_process(
@@ -214,6 +250,22 @@ def test_reader_identifies_the_unavailable_namespace(tmp_path: Path) -> None:
     with pytest.raises(PerfLensError, match="mnt namespace") as captured:
         reader.inspect_process(1002)
     assert captured.value.recoverable is True
+
+
+def test_reader_rejects_malformed_namespace_magic_link(tmp_path: Path) -> None:
+    reader, proc_root, _ = _identity_filesystem(tmp_path)
+    _write_process(
+        proc_root,
+        host_pid=1002,
+        container_pid=12,
+        start_time=9876,
+        executable_name="worker",
+    )
+    namespace = proc_root / "1002/ns/pid"
+    namespace.unlink()
+    namespace.symlink_to("pid:[0]")
+    with pytest.raises(PerfLensError, match="namespace identity is malformed"):
+        reader.inspect_process(1002)
 
 
 def test_resolver_emits_privacy_safe_content_bound_target(tmp_path: Path) -> None:
