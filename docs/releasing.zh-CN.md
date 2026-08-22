@@ -69,7 +69,10 @@ uv run python scripts/prepare_release.py --tag "$perflens_release_tag"
 uv run python scripts/render_release_notes.py \
   --tag "$perflens_release_tag" \
   --output /tmp/perflens-release-notes.md
-sha256sum --check dist/SHA256SUMS
+(
+  cd dist
+  sha256sum --check SHA256SUMS
+)
 ```
 
 执行前应确保 `dist/` 为空。发布准备脚本也会拒绝旧文件或非预期文件，

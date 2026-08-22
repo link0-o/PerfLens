@@ -20,3 +20,10 @@ def test_every_english_document_has_a_linked_simplified_chinese_counterpart() ->
         chinese_text = chinese.read_text(encoding="utf-8")
         assert f"]({chinese.name})" in english_text
         assert f"]({english.name})" in chinese_text
+
+
+def test_release_checksum_command_runs_from_the_manifest_directory() -> None:
+    for name in ("releasing.md", "releasing.zh-CN.md"):
+        text = (DOCS_ROOT / name).read_text(encoding="utf-8")
+        assert "cd dist\n  sha256sum --check SHA256SUMS" in text
+        assert "sha256sum --check dist/SHA256SUMS" not in text

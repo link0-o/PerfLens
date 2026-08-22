@@ -73,7 +73,10 @@ uv run python scripts/prepare_release.py --tag "$perflens_release_tag"
 uv run python scripts/render_release_notes.py \
   --tag "$perflens_release_tag" \
   --output /tmp/perflens-release-notes.md
-sha256sum --check dist/SHA256SUMS
+(
+  cd dist
+  sha256sum --check SHA256SUMS
+)
 ```
 
 Use an empty `dist/` directory. The release-preparation script also rejects
