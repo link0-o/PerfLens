@@ -22,7 +22,10 @@ from perflens.collection.planning import (
     CollectionPlanRequest,
 )
 from perflens.contracts.artifacts import (
+    BenchmarkArtifact,
     BenchmarkComparison,
+    BenchmarkEnvironment,
+    BenchmarkMetric,
     CollectionArtifact,
     CollectionPlanArtifact,
     ContainerCollectionCgroupBinding,
@@ -197,6 +200,8 @@ def _managed_workload() -> ContainerWorkloadSpecArtifact:
         allowed_modes=("stat",),
         authorization_mode="per_run",
         max_workload_runs=1,
+        correctness_command_sha256="4" * 64,
+        benchmark_output_contract_sha256="6" * 64,
         treatment_path_sha256=(treatment_path_sha256,),
         workload_fingerprint="3" * 64,
         content_sha256="0" * 64,
@@ -1040,7 +1045,8 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
         .replace('image_digest = ""', 'image_digest = "sha256:' + "a" * 64 + '"')
         .replace('entrypoint = ""', 'entrypoint = "/usr/bin/python3"')
         .replace('container_user = ""', f'container_user = "{os.geteuid()}:{os.getegid()}"')
-        .replace("treatment_paths = []", 'treatment_paths = ["workload.py"]'),
+        .replace("treatment_paths = []", 'treatment_paths = ["workload.py"]')
+        .replace('benchmark_output = ""', 'benchmark_output = "results.json"'),
         encoding="utf-8",
     )
     policy.chmod(0o600)
@@ -1059,6 +1065,24 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
     )
     treatment_file = tmp_path / "workload.py"
     treatment_file.write_text("print('workload')\n", encoding="utf-8")
+    benchmark = BenchmarkArtifact(
+        benchmark_id="benchmark-" + "7" * 16,
+        name="managed throughput",
+        repetitions=2,
+        metrics={
+            "throughput": BenchmarkMetric(
+                unit="operations/second",
+                higher_is_better=True,
+                values=(100.0, 101.0),
+                median=100.5,
+                mean=100.5,
+                standard_deviation=0.5,
+            )
+        },
+        environment=BenchmarkEnvironment(containerized=True),
+        error_count=0,
+        source_format="perflens",
+    )
     operations: list[str] = []
     requests: list[CollectionPlanRequest] = []
     plan_denied = {"value": False}
@@ -1081,6 +1105,7 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
 
     prepared = SimpleNamespace(
         target=SimpleNamespace(artifact=target),
+        receipt=SimpleNamespace(scratch_directory=tmp_path / "runtime" / "scratch"),
         state="prepared",
         exit_code=None,
     )
@@ -1157,12 +1182,15 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
 
     def fake_build_run(**kwargs: object) -> ContainerRunArtifact:
         assert kwargs["resource_context_id"] == resource_context.resource_context_id
+        assert kwargs["benchmark"] == benchmark
         build_artifacts = cast(tuple[str, ...], kwargs["build_artifact_sha256"])
         assert len(build_artifacts) == 1
         provisional = container_run.model_copy(
             update={
                 "treatment_path_sha256": workload.treatment_path_sha256,
                 "build_artifact_sha256": build_artifacts,
+                "benchmark_id": benchmark.benchmark_id,
+                "benchmark_content_sha256": contract_content_sha256(benchmark),
             }
         )
         return provisional.model_copy(
@@ -1211,6 +1239,22 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
     monkeypatch.setattr(
         "perflens.mcp.server.build_container_run_artifact",
         fake_build_run,
+    )
+
+    def fake_load_benchmark(
+        scratch_root: Path,
+        relative_path: str,
+        **kwargs: object,
+    ) -> BenchmarkArtifact:
+        assert scratch_root == prepared.receipt.scratch_directory
+        assert relative_path == "results.json"
+        assert kwargs == {"source_format": "auto", "benchmark_name": None}
+        operations.append("benchmark")
+        return benchmark
+
+    monkeypatch.setattr(
+        "perflens.mcp.server.load_managed_benchmark",
+        fake_load_benchmark,
     )
     server = create_server(
         ServerConfig(
@@ -1295,6 +1339,7 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
                 "cgroup-2",
                 "resource",
                 "wait",
+                "benchmark",
                 "cleanup",
                 "finish",
             ]
@@ -1308,6 +1353,8 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
                 artifact_root / f"{workload.workload_spec_id}.container-workload-spec.json"
             ).is_file()
             assert (artifact_root / f"{measurement_id}.container-measurement.json").is_file()
+            assert reference["summary"]["container_benchmark_id"] == benchmark.benchmark_id
+            assert (artifact_root / f"{benchmark.benchmark_id}.benchmark.json").is_file()
 
             operations.clear()
             prepared.state = "prepared"

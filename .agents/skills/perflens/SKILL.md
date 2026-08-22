@@ -114,8 +114,9 @@ policy; the user does not need to provide a host PID or repeat long CLI commands
 5. For optimization, keep image digest, fixed recipe, resources, collection mode/event source,
    and benchmark parameters matched. New container IDs and PIDs are normal for managed A/B runs;
    existing-container identity replacement invalidates its session. Analyze and verify both
-   `record` Collections, normalize an absolute containerized benchmark for each side, then call
-   `compare_container_measurements` with the returned measurement, analysis, and benchmark IDs.
+   `record` Collections, require each managed run to return a benchmark ID captured from the fixed
+   private-scratch `benchmark_output`, then call `compare_container_measurements` with the returned
+   measurement, analysis, and benchmark IDs. Never substitute an independently supplied benchmark.
    Managed treatment files come only from the user-reviewed `container-workload.toml`; never pass
    or invent a different path at collection time. Only a `verified_improvement` conclusion from
    that replayed artifact may be reported as Verified Improvement. Existing-container measurements

@@ -898,6 +898,8 @@ class ContainerRunArtifact(ContractModel):
     collection_ids: tuple[CollectionId, ...] = ()
     treatment_path_sha256: tuple[Sha256, ...] = ()
     build_artifact_sha256: tuple[Sha256, ...] = ()
+    benchmark_id: str | None = Field(default=None, pattern=r"^benchmark-[a-f0-9]{16}$")
+    benchmark_content_sha256: Sha256 | None = None
     resource_context_id: str | None = Field(
         default=None,
         pattern=r"^container-resource-[a-f0-9]{20}$",
@@ -918,6 +920,8 @@ class ContainerRunArtifact(ContractModel):
         _validate_unique_sorted(self.build_artifact_sha256, "container build artifact hashes")
         if len(self.treatment_path_sha256) != len(self.build_artifact_sha256):
             raise ValueError("container treatment paths and content hashes must have equal counts")
+        if (self.benchmark_id is None) != (self.benchmark_content_sha256 is None):
+            raise ValueError("container run benchmark identity and content digest must be paired")
         if self.status == "failed_before_exec" and self.exit_code is not None:
             raise ValueError("pre-exec Docker failure cannot claim a workload exit code")
         if self.status != "failed_before_exec" and self.exit_code is None:
@@ -1016,6 +1020,10 @@ class ContainerMeasurementArtifact(ContractModel):
     source_run_content_sha256: Sha256 | None = None
     workload_spec_id: ContainerWorkloadId | None = None
     workload_spec_sha256: Sha256 | None = None
+    correctness_command_sha256: Sha256 | None = None
+    benchmark_output_contract_sha256: Sha256 | None = None
+    source_benchmark_id: str | None = Field(default=None, pattern=r"^benchmark-[a-f0-9]{16}$")
+    source_benchmark_content_sha256: Sha256 | None = None
     environment: ContainerEnvironmentFingerprint
     treatment_sha256: tuple[Sha256, ...] = ()
     resource_observation: ContainerResourceDelta
@@ -1034,12 +1042,27 @@ class ContainerMeasurementArtifact(ContractModel):
             self.source_run_content_sha256,
             self.workload_spec_id,
             self.workload_spec_sha256,
+            self.correctness_command_sha256,
         )
         managed = self.environment.target_kind == "managed_temporary_container"
         if managed and any(value is None for value in run_bindings):
             raise ValueError("managed container measurement requires run and workload bindings")
         if not managed and any(value is not None for value in run_bindings):
             raise ValueError("existing container measurement cannot claim a managed run")
+        benchmark_binding = (
+            self.benchmark_output_contract_sha256,
+            self.source_benchmark_id,
+            self.source_benchmark_content_sha256,
+        )
+        benchmark_binding_count = sum(value is not None for value in benchmark_binding)
+        if benchmark_binding_count not in {0, len(benchmark_binding)}:
+            raise ValueError("container benchmark contract and evidence bindings disagree")
+        if not managed and (
+            any(value is not None for value in benchmark_binding)
+        ):
+            raise ValueError(
+                "existing container measurement cannot claim managed benchmark evidence"
+            )
         _validate_unique_sorted(self.treatment_sha256, "container treatment hashes")
         if self.quality_status == "partial" and not self.limitations:
             raise ValueError("partial container measurement requires a limitation")

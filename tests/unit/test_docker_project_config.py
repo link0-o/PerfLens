@@ -33,6 +33,9 @@ def test_project_policy_is_strict_bounded_and_identity_pinned(tmp_path: Path) ->
     assert policy.managed.working_directory == "/workspace"
     assert policy.managed.arguments == ()
     assert policy.managed.treatment_paths == ()
+    assert policy.managed.benchmark_output == ""
+    assert policy.managed.benchmark_format == "auto"
+    assert policy.managed.benchmark_name is None
     assert_docker_project_policy_current(policy, allowed_roots=(path.parent,))
 
     path.write_text(
@@ -116,6 +119,31 @@ def test_project_policy_rejects_unsafe_treatment_paths(
             "treatment_paths = []",
             f"treatment_paths = {value}",
         ),
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+    with pytest.raises(PerfLensError):
+        load_docker_project_policy(path, allowed_roots=(path.parent,))
+
+
+@pytest.mark.parametrize(
+    ("source", "replacement"),
+    (
+        ('benchmark_output = ""', 'benchmark_output = "../outside.json"'),
+        ('benchmark_format = "auto"', 'benchmark_format = "arbitrary"'),
+        ('benchmark_format = "auto"', 'benchmark_format = ["auto"]'),
+        ('benchmark_name = ""', 'benchmark_name = "throughput"'),
+        ('benchmark_name = ""', 'benchmark_name = "bad\\nname"'),
+    ),
+)
+def test_project_policy_rejects_unsafe_benchmark_recipe(
+    tmp_path: Path,
+    source: str,
+    replacement: str,
+) -> None:
+    path = _policy(tmp_path)
+    path.write_text(
+        render_default_docker_project_policy().replace(source, replacement),
         encoding="utf-8",
     )
     path.chmod(0o600)

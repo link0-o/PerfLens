@@ -76,6 +76,8 @@ def build_container_measurement(
         if (
             run.workload_spec_sha256 != workload.content_sha256
             or run.treatment_path_sha256 != workload.treatment_path_sha256
+            or (workload.benchmark_output_contract_sha256 is None)
+            != (run.benchmark_id is None)
             or collection.collection_id not in run.collection_ids
             or run.resource_context_id != resource_context.resource_context_id
             or run.container_identity_sha256 != target.container_identity_sha256
@@ -93,6 +95,8 @@ def build_container_measurement(
         treatments = tuple(sorted(set((*treatments, *run.build_artifact_sha256))))
         if run.status != "exited" or run.exit_code != 0:
             limitations.add("Managed workload did not complete successfully.")
+        if run.benchmark_id is None:
+            limitations.add("Managed workload did not produce a run-bound benchmark.")
     else:
         limitations.add(
             "Existing-container command, input, and correctness contract are not "
@@ -173,6 +177,16 @@ def build_container_measurement(
         source_run_content_sha256=source_run_content_sha256,
         workload_spec_id=(workload.workload_spec_id if workload is not None else None),
         workload_spec_sha256=workload_spec_sha256,
+        correctness_command_sha256=(
+            workload.correctness_command_sha256 if workload is not None else None
+        ),
+        benchmark_output_contract_sha256=(
+            workload.benchmark_output_contract_sha256 if workload is not None else None
+        ),
+        source_benchmark_id=(run.benchmark_id if run is not None else None),
+        source_benchmark_content_sha256=(
+            run.benchmark_content_sha256 if run is not None else None
+        ),
         environment=environment,
         treatment_sha256=treatments,
         resource_observation=resource_context.delta,
@@ -231,6 +245,8 @@ def compare_container_measurements(
         profile_comparison,
     )
     _verify_benchmark_binding(
+        baseline_measurement,
+        candidate_measurement,
         baseline_benchmark,
         candidate_benchmark,
         benchmark_comparison,
@@ -438,12 +454,20 @@ def _analysis_matches_measurement(
 
 
 def _verify_benchmark_binding(
+    baseline_measurement: ContainerMeasurementArtifact,
+    candidate_measurement: ContainerMeasurementArtifact,
     baseline: BenchmarkArtifact,
     candidate: BenchmarkArtifact,
     comparison: BenchmarkComparison,
 ) -> None:
     if (
-        comparison.baseline_benchmark_id != baseline.benchmark_id
+        baseline_measurement.source_benchmark_id != baseline.benchmark_id
+        or baseline_measurement.source_benchmark_content_sha256
+        != contract_content_sha256(baseline)
+        or candidate_measurement.source_benchmark_id != candidate.benchmark_id
+        or candidate_measurement.source_benchmark_content_sha256
+        != contract_content_sha256(candidate)
+        or comparison.baseline_benchmark_id != baseline.benchmark_id
         or comparison.candidate_benchmark_id != candidate.benchmark_id
         or compare_benchmarks(
             baseline,

@@ -84,6 +84,7 @@ from perflens.contracts.trace import (
     TraceAnalysisVerificationArtifact,
     TraceEvidenceArtifact,
 )
+from perflens.docker.benchmark import load_managed_benchmark
 from perflens.docker.capability import discover_docker_capability
 from perflens.docker.cgroup import (
     CapturedCgroupSnapshot,
@@ -813,6 +814,16 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 )
             run.coordinator.wait(run.prepared, timeout_seconds=remaining)
             assert_treatment_snapshot_current(treatment_snapshot)
+            benchmark = (
+                load_managed_benchmark(
+                    run.prepared.receipt.scratch_directory,
+                    docker_policy.managed.benchmark_output,
+                    source_format=docker_policy.managed.benchmark_format,
+                    benchmark_name=docker_policy.managed.benchmark_name,
+                )
+                if docker_policy.managed.benchmark_output
+                else None
+            )
             cleanup_status = run.coordinator.cleanup(run.prepared)
             finished_at = datetime.now(tz=UTC)
             container_run = build_container_run_artifact(
@@ -823,6 +834,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 cleanup_status=cleanup_status,
                 collection_ids=(executed.collection_id,),
                 build_artifact_sha256=treatment_snapshot.treatment_sha256,
+                benchmark=benchmark,
                 resource_context_id=resource_context.resource_context_id,
                 warnings=(
                     (
@@ -843,6 +855,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 run.authorization.workload.workload_spec_id,
                 "container-workload-spec",
             )
+            if benchmark is not None:
+                store.save(benchmark, benchmark.benchmark_id, "benchmark")
             store.save(container_run, container_run.run_id, "container-run")
             measurement = (
                 build_container_measurement(
@@ -1910,7 +1924,8 @@ def _container_measurement_summary(
         "container_environment_fingerprint_sha256": (
             measurement.environment.environment_fingerprint_sha256
         ),
-        "container_treatment_count": len(measurement.treatment_sha256),
+            "container_treatment_count": len(measurement.treatment_sha256),
+            "container_benchmark_id": measurement.source_benchmark_id,
         "container_measurement_limitations": "; ".join(measurement.limitations),
     }
 

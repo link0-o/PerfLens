@@ -20,6 +20,7 @@ from typing import Any, Literal, cast
 
 from perflens import __version__
 from perflens.application.evidence import contract_content_sha256
+from perflens.contracts.artifacts import BenchmarkArtifact
 from perflens.contracts.docker import (
     ContainerOptimizationSessionArtifact,
     ContainerRunArtifact,
@@ -425,6 +426,7 @@ def build_container_run_artifact(
     cleanup_status: Literal["removed", "preserved_for_manual_cleanup", "not_started"],
     collection_ids: tuple[str, ...] = (),
     build_artifact_sha256: tuple[str, ...] = (),
+    benchmark: BenchmarkArtifact | None = None,
     resource_context_id: str | None = None,
     warnings: tuple[str, ...] = (),
 ) -> ContainerRunArtifact:
@@ -455,6 +457,11 @@ def build_container_run_artifact(
         build_artifact_sha256,
         "build artifact identities",
     )
+    benchmark_content_sha256 = (
+        contract_content_sha256(benchmark) if benchmark is not None else None
+    )
+    if (workload.benchmark_output_contract_sha256 is None) != (benchmark is None):
+        raise _managed_error("Container benchmark output differs from its workload contract")
     target = prepared.target.artifact
     identity = _sha256_text(
         "perflens-container-run-v1",
@@ -484,6 +491,8 @@ def build_container_run_artifact(
         collection_ids=canonical_collections,
         treatment_path_sha256=workload.treatment_path_sha256,
         build_artifact_sha256=canonical_builds,
+        benchmark_id=benchmark.benchmark_id if benchmark is not None else None,
+        benchmark_content_sha256=benchmark_content_sha256,
         resource_context_id=resource_context_id,
         cleanup_status=cleanup_status,
         warnings=warnings,

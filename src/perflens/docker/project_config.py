@@ -39,6 +39,9 @@ _MANAGED_KEYS = {
     "memory_bytes",
     "pids",
     "treatment_paths",
+    "benchmark_output",
+    "benchmark_format",
+    "benchmark_name",
 }
 
 
@@ -53,6 +56,9 @@ class ManagedDockerProjectPolicy:
     memory_bytes: int
     pids: int
     treatment_paths: tuple[str, ...]
+    benchmark_output: str
+    benchmark_format: Literal["auto", "perflens", "pyperf", "google_benchmark", "hyperfine"]
+    benchmark_name: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +134,13 @@ pids = 256
 # 用于标识 A/B 改动的项目内相对路径. 公开产物不保存路径, 仅保存合同哈希; 留空时仍可
 # 分析, 但不能声称 Verified Improvement.
 treatment_paths = []
+# Optional JSON written by the fixed workload under /perflens-scratch. When configured, PerfLens
+# reads it before cleanup and binds the normalized benchmark to this exact container run.
+# 固定 workload 可在 /perflens-scratch 下写入此 JSON. 配置后 PerfLens 会在清理前读取,
+# 并把规范化 benchmark 绑定到本次容器运行。
+benchmark_output = ""
+benchmark_format = "auto"
+benchmark_name = ""
 """
 
 
@@ -301,6 +314,34 @@ def _validate_managed(
     )
     if len(set(treatment_paths)) != len(treatment_paths):
         raise _policy_error("Docker managed treatment paths must be unique")
+    benchmark_output_value = values["benchmark_output"]
+    benchmark_format_value = values["benchmark_format"]
+    benchmark_name_value = values["benchmark_name"]
+    if not isinstance(benchmark_output_value, str):
+        raise _policy_error("Docker managed benchmark output must be a string")
+    benchmark_output = (
+        _project_relative_path(benchmark_output_value, "benchmark output")
+        if benchmark_output_value
+        else ""
+    )
+    if not isinstance(benchmark_format_value, str) or benchmark_format_value not in {
+        "auto",
+        "perflens",
+        "pyperf",
+        "google_benchmark",
+        "hyperfine",
+    }:
+        raise _policy_error("Docker managed benchmark format is unsupported")
+    if (
+        not isinstance(benchmark_name_value, str)
+        or len(benchmark_name_value.encode()) > 256
+        or any(
+            ord(character) < 0x20 or ord(character) == 0x7F
+            for character in benchmark_name_value
+        )
+        or (benchmark_name_value and not benchmark_output)
+    ):
+        raise _policy_error("Docker managed benchmark name is invalid or has no output")
     if enabled and (not image or not entrypoint or not user):
         raise _policy_error("Enabled managed Docker workflow requires image, entrypoint, and user")
     return ManagedDockerProjectPolicy(
@@ -313,6 +354,12 @@ def _validate_managed(
         memory_bytes=cast(int, values["memory_bytes"]),
         pids=cast(int, values["pids"]),
         treatment_paths=tuple(sorted(treatment_paths)),
+        benchmark_output=benchmark_output,
+        benchmark_format=cast(
+            Literal["auto", "perflens", "pyperf", "google_benchmark", "hyperfine"],
+            benchmark_format_value,
+        ),
+        benchmark_name=benchmark_name_value or None,
     )
 
 

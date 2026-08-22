@@ -19,6 +19,10 @@ from perflens.contracts.docker import (
     ContainerWorkloadSpecArtifact,
 )
 from perflens.docker.adapter import DockerCommandAdapter
+from perflens.docker.benchmark import (
+    benchmark_output_contract_sha256,
+    workload_command_contract_sha256,
+)
 from perflens.docker.capability import open_local_docker_adapter
 from perflens.docker.existing import discover_existing_container_processes
 from perflens.docker.identity import (
@@ -295,6 +299,15 @@ class ExistingDockerRuntime:
         self._managed_root()
         gate = self._inspect_gate()
         managed = self._project_policy.managed
+        benchmark_contract = (
+            benchmark_output_contract_sha256(
+                managed.benchmark_output,
+                managed.benchmark_format,
+                managed.benchmark_name,
+            )
+            if managed.benchmark_output
+            else None
+        )
         workload = build_container_workload_spec(
             project=self._project,
             gate=gate,
@@ -312,6 +325,11 @@ class ExistingDockerRuntime:
             max_active_seconds=self._project_policy.max_active_seconds,
             hard_expiry_seconds=self._project_policy.hard_expiry_seconds,
             trace_max_duration_seconds=self._project_policy.trace_max_duration_seconds,
+            correctness_command_sha256=workload_command_contract_sha256(
+                managed.entrypoint,
+                managed.arguments,
+            ),
+            benchmark_output_contract_sha256=benchmark_contract,
             treatment_paths=managed.treatment_paths,
         )
         with self._session_lock:

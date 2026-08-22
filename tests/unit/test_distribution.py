@@ -54,6 +54,7 @@ def test_project_skill_install_copies_the_complete_skill_and_refuses_overwrite(
     assert "perflens-container-gate" in docker_text
     assert "Docker Socket" in docker_text
     assert "[managed].treatment_paths" in docker_text
+    assert "[managed].benchmark_output" in docker_text
     assert "compare_container_measurements" in docker_text
     with pytest.raises(PerfLensError) as captured:
         install_project_skill(project)

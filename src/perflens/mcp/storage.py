@@ -395,6 +395,10 @@ class ArtifactStore:
                 or context.source_collection_id not in run.collection_ids
             ):
                 raise self._identity_error(run_id, "container-run")
+        if run.benchmark_id is not None:
+            benchmark = self.load_benchmark(run.benchmark_id)
+            if contract_content_sha256(benchmark) != run.benchmark_content_sha256:
+                raise self._identity_error(run_id, "container-run")
         return run
 
     def load_container_workload_spec(
@@ -755,6 +759,13 @@ class ArtifactStore:
             if measurement.workload_spec_id is not None
             else None
         )
+        if measurement.source_benchmark_id is not None:
+            benchmark = self.load_benchmark(measurement.source_benchmark_id)
+            if (
+                contract_content_sha256(benchmark)
+                != measurement.source_benchmark_content_sha256
+            ):
+                raise self._identity_error(measurement_id, "container-measurement")
         replayed = build_container_measurement(
             collection,
             context,

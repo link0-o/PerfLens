@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from perflens.benchmarks.adapters import load_benchmark
+from perflens.benchmarks.adapters import load_benchmark, load_benchmark_bytes
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 
@@ -78,3 +78,13 @@ def test_multiple_benchmarks_require_explicit_selection(tmp_path: Path) -> None:
         load_benchmark(profile)
     selected = load_benchmark(profile, benchmark_name="b")
     assert selected.name == "b"
+
+
+def test_bounded_bytes_adapter_rejects_size_and_encoding() -> None:
+    with pytest.raises(PerfLensError, match="max_input_bytes must be positive"):
+        load_benchmark_bytes(b"{}", max_input_bytes=0)
+    with pytest.raises(PerfLensError) as oversized:
+        load_benchmark_bytes(b"{}", max_input_bytes=1)
+    assert oversized.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+    with pytest.raises(PerfLensError, match="not valid JSON"):
+        load_benchmark_bytes(b"\xff")

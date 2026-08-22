@@ -142,6 +142,8 @@ def _workload() -> ContainerWorkloadSpecArtifact:
         resources=ContainerResourceLimits(cpus=1, memory_bytes=64 << 20, pids=32),
         allowed_modes=("stat", "record"),
         authorization_mode="bounded_session",
+        correctness_command_sha256="5" * 64,
+        benchmark_output_contract_sha256="6" * 64,
         treatment_path_sha256=(treatment_path_sha256,),
         workload_fingerprint="4" * 64,
         content_sha256="0" * 64,
@@ -163,6 +165,7 @@ def _run(
     *,
     marker: str,
     treatment: str,
+    benchmark: BenchmarkArtifact,
 ) -> ContainerRunArtifact:
     target = collection.container_target
     assert target is not None
@@ -186,6 +189,8 @@ def _run(
         collection_ids=(collection.collection_id,),
         treatment_path_sha256=workload.treatment_path_sha256,
         build_artifact_sha256=(treatment,),
+        benchmark_id=benchmark.benchmark_id,
+        benchmark_content_sha256=contract_content_sha256(benchmark),
         resource_context_id=resource.resource_context_id,
         cleanup_status="removed",
         content_sha256="0" * 64,
@@ -243,7 +248,7 @@ def _benchmark(
     containerized: bool | None = True,
 ) -> BenchmarkArtifact:
     return BenchmarkArtifact(
-        benchmark_id=benchmark_id,
+        benchmark_id=f"benchmark-{hashlib.sha256(benchmark_id.encode()).hexdigest()[:16]}",
         name="throughput",
         commit=commit,
         build_type="release",
@@ -273,12 +278,20 @@ def _benchmark(
     )
 
 
-def _measurement_pair(tmp_path: Path):
+def _measurement_pair(
+    tmp_path: Path,
+    *,
+    benchmarks: tuple[BenchmarkArtifact, BenchmarkArtifact] | None = None,
+):
     baseline_profile = tmp_path / "baseline.folded"
     candidate_profile = tmp_path / "candidate.folded"
     baseline_profile.write_text("main;slow 80\nmain;other 20\n", encoding="utf-8")
     candidate_profile.write_text("main;slow 60\nmain;other 40\n", encoding="utf-8")
     workload = _workload()
+    bound_benchmarks = benchmarks or (
+        _benchmark("benchmark-before", (100, 101, 99), commit="before"),
+        _benchmark("benchmark-after", (120, 121, 119), commit="after"),
+    )
     collections = (
         _collection(baseline_profile, marker="b", host_pid=1200),
         _collection(candidate_profile, marker="c", host_pid=2400),
@@ -293,8 +306,22 @@ def _measurement_pair(tmp_path: Path):
         if collection.container_target is not None
     )
     runs = (
-        _run(collections[0], resources[0], workload, marker="b", treatment="1" * 64),
-        _run(collections[1], resources[1], workload, marker="c", treatment="2" * 64),
+        _run(
+            collections[0],
+            resources[0],
+            workload,
+            marker="b",
+            treatment="1" * 64,
+            benchmark=bound_benchmarks[0],
+        ),
+        _run(
+            collections[1],
+            resources[1],
+            workload,
+            marker="c",
+            treatment="2" * 64,
+            benchmark=bound_benchmarks[1],
+        ),
     )
     measurements = tuple(
         build_container_measurement(
@@ -338,6 +365,7 @@ def test_measurement_rejects_cross_collection_and_tampered_evidence(tmp_path: Pa
         workload,
         marker="d",
         treatment="3" * 64,
+        benchmark=_benchmark("benchmark-wrong", (1, 1, 1), commit="wrong"),
     )
     with pytest.raises(PerfLensError, match="belongs to different Collection"):
         build_container_measurement(
@@ -388,8 +416,6 @@ def test_verified_improvement_requires_full_matched_evidence(tmp_path: Path) -> 
 
 
 def test_missing_correctness_or_non_container_benchmark_stays_qualified(tmp_path: Path) -> None:
-    _, _, _, _, measurements, analyses = _measurement_pair(tmp_path)
-    profile_comparison = compare_profiles(analyses[0], analyses[1])
     baseline = _benchmark(
         "benchmark-before",
         (100, 101, 99),
@@ -404,6 +430,11 @@ def test_missing_correctness_or_non_container_benchmark_stays_qualified(tmp_path
         error_count=None,
         containerized=None,
     )
+    _, _, _, _, measurements, analyses = _measurement_pair(
+        tmp_path,
+        benchmarks=(baseline, candidate),
+    )
+    profile_comparison = compare_profiles(analyses[0], analyses[1])
     benchmark_comparison = compare_benchmarks(baseline, candidate)
 
     result = compare_container_measurements(
@@ -454,6 +485,19 @@ def test_comparison_rejects_tampered_analysis_and_comparison(tmp_path: Path) -> 
             baseline_benchmark=benchmarks[0],
             candidate_benchmark=benchmarks[1],
             benchmark_comparison=forged,
+        )
+    substituted = _benchmark("benchmark-substitute", (130, 131, 129), commit="after")
+    substituted_comparison = compare_benchmarks(benchmarks[0], substituted)
+    with pytest.raises(PerfLensError, match="Benchmark comparison content failed"):
+        compare_container_measurements(
+            measurements[0],
+            measurements[1],
+            baseline_analysis=analyses[0],
+            candidate_analysis=analyses[1],
+            profile_comparison=profile_comparison,
+            baseline_benchmark=benchmarks[0],
+            candidate_benchmark=substituted,
+            benchmark_comparison=substituted_comparison,
         )
 
 
@@ -569,6 +613,7 @@ def test_store_replays_container_measurement_links_before_returning_it(
         allow_writes=True,
     )
     measurement = measurements[0]
+    benchmark = _benchmark("benchmark-before", (100, 101, 99), commit="before")
     path = store.save(
         measurement,
         measurement.measurement_id,
@@ -587,6 +632,9 @@ def test_store_replays_container_measurement_links_before_returning_it(
     def load_workload(_artifact_id: str) -> ContainerWorkloadSpecArtifact:
         return workload
 
+    def load_bound_benchmark(_artifact_id: str) -> BenchmarkArtifact:
+        return benchmark
+
     monkeypatch.setattr(store, "load_collection", load_collection)
     monkeypatch.setattr(
         store,
@@ -599,6 +647,7 @@ def test_store_replays_container_measurement_links_before_returning_it(
         "load_container_workload_spec",
         load_workload,
     )
+    monkeypatch.setattr(store, "load_benchmark", load_bound_benchmark)
 
     assert store.load_container_measurement(measurement.measurement_id) == measurement
 

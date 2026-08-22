@@ -56,14 +56,43 @@ def load_benchmark(
             recoverable=True,
             details={"actual_bytes": max(size, len(raw_bytes)), "max_input_bytes": max_input_bytes},
         )
+    return load_benchmark_bytes(
+        raw_bytes,
+        source_format=source_format,
+        benchmark_name=benchmark_name,
+        max_input_bytes=max_input_bytes,
+    )
+
+
+def load_benchmark_bytes(
+    raw_bytes: bytes,
+    *,
+    source_format: BenchmarkFormat = "auto",
+    benchmark_name: str | None = None,
+    max_input_bytes: int = 64 << 20,
+) -> BenchmarkArtifact:
+    """Normalize one already identity-pinned, bounded benchmark payload."""
+    if max_input_bytes < 1:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "benchmark",
+            "max_input_bytes must be positive",
+        )
+    if len(raw_bytes) > max_input_bytes:
+        raise PerfLensError(
+            ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+            "benchmark",
+            "Benchmark JSON exceeds max_input_bytes",
+            recoverable=True,
+            details={"actual_bytes": len(raw_bytes), "max_input_bytes": max_input_bytes},
+        )
     try:
         raw: object = json.loads(raw_bytes)
-    except json.JSONDecodeError as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
             "benchmark",
             "Benchmark input is not valid JSON",
-            details={"path": str(safe_path)},
         ) from exc
     selected_format = _detect_format(raw) if source_format == "auto" else source_format
     if selected_format == "perflens":
