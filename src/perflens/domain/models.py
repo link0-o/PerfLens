@@ -106,6 +106,7 @@ class StackSample:
     thread_name: str = UNKNOWN
     cpu: int | None = None
     timestamp: float | None = None
+    sample_context: str = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +233,12 @@ class AggregationResult:
     weight_source: str
     call_graph_weight: int
     unknown_self_weight: int
+    kernel_context_self_weight: int
+    user_context_self_weight: int
+    unknown_context_self_weight: int
+    unresolved_kernel_self_weight: int
+    unresolved_user_self_weight: int
+    unresolved_unknown_context_self_weight: int
     source_line_frame_count: int
     source_line_self_weight: int
     inline_frame_count: int

@@ -18,7 +18,7 @@ MCP or Collector identity. Links in writable directories are rejected.
 For offline profile analysis, install only the main package:
 
 ```bash
-sudo apt install ./perflens_0.3.1-7_amd64.deb
+sudo apt install ./perflens_0.3.1-12_amd64.deb
 cd /absolute/path/to/project
 perflens init
 ```
@@ -27,8 +27,8 @@ For automatic collection, install both packages and generate a reviewed policy:
 
 ```bash
 sudo apt install \
-  ./perflens_0.3.1-7_amd64.deb \
-  ./perflens-collector_0.3.1-7_amd64.deb
+  ./perflens_0.3.1-12_amd64.deb \
+  ./perflens-collector_0.3.1-12_amd64.deb
 
 perflens setup \
   --project /absolute/path/to/project \

@@ -29,13 +29,13 @@ Docker 参数、整容器 perf 聚合，也不包含计划进入 v0.4.0 的 C/C+
 |---|---|
 | Ruff | 通过 |
 | Pyright 严格模式 | 0 错误、0 警告 |
-| Python 3.12 | 1069 通过；覆盖率 85.15% |
-| Python 3.13 | 1069 通过；覆盖率 85.15% |
+| Python 3.12 | 1077 通过；覆盖率 85.13% |
+| Python 3.13 | 1077 通过；覆盖率 85.13% |
 | Rust 格式/Clippy/测试 | 通过；64 个测试 |
 | Rust 依赖 | 使用官方本地 advisory DB 干净克隆运行 `cargo audit` 无发现；`cargo deny check` 通过 |
 | 协议/Schema | 生成文件无差异；Python/Rust 有效与无效 golden 通过 |
 | Python 包 | wheel 与 sdist 可复现构建，并通过隔离安装冒烟 |
-| Debian 包 | 两个可复现 `0.3.1-7` amd64 DEB 通过提取/包冒烟；不激活服务或 Docker |
+| Debian 包 | 两个可复现 `0.3.1-12` amd64 DEB 通过提取/包冒烟；不激活服务或 Docker |
 
 具体数量只描述本次候选检出，测试增加后会变化。覆盖率门槛保持 85%，不得为了发布降低。
 

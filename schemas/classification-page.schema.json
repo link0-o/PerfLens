@@ -308,6 +308,33 @@
           "title": "Input Sha256",
           "type": "string"
         },
+        "kernel_context_self_percent": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kernel Context Self Percent"
+        },
+        "kernel_context_self_weight": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kernel Context Self Weight"
+        },
         "limitations": {
           "default": [],
           "items": {
@@ -430,6 +457,60 @@
           "title": "Unicode Replacement Count",
           "type": "integer"
         },
+        "unknown_context_self_percent": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unknown Context Self Percent"
+        },
+        "unknown_context_self_weight": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unknown Context Self Weight"
+        },
+        "unresolved_kernel_self_percent": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unresolved Kernel Self Percent"
+        },
+        "unresolved_kernel_self_weight": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unresolved Kernel Self Weight"
+        },
         "unresolved_self_percent": {
           "maximum": 100,
           "minimum": 0,
@@ -440,6 +521,87 @@
           "minimum": 0,
           "title": "Unresolved Self Weight",
           "type": "integer"
+        },
+        "unresolved_unknown_context_self_percent": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unresolved Unknown Context Self Percent"
+        },
+        "unresolved_unknown_context_self_weight": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unresolved Unknown Context Self Weight"
+        },
+        "unresolved_user_self_percent": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unresolved User Self Percent"
+        },
+        "unresolved_user_self_weight": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unresolved User Self Weight"
+        },
+        "user_context_self_percent": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "User Context Self Percent"
+        },
+        "user_context_self_weight": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "User Context Self Weight"
         },
         "warning_count": {
           "minimum": 0,

@@ -6,6 +6,7 @@ import hashlib
 import re
 from collections import defaultdict
 from pathlib import Path
+from typing import cast
 
 from perflens.application.evidence import (
     compute_analysis_content_sha256,
@@ -15,6 +16,7 @@ from perflens.application.evidence import (
 from perflens.contracts.artifacts import (
     AnalysisArtifact,
     AnalysisVerificationArtifact,
+    EvidenceQuality,
     Hotspot,
     VerificationCheck,
 )
@@ -151,6 +153,22 @@ def verify_analysis_artifact(
             "non-truncated warning count does not match retained warnings",
         )
     _require(quality.unresolved_self_weight <= metadata.total_weight, "unresolved weight overflow")
+    has_sample_context = _has_complete_sample_context(quality)
+    if has_sample_context:
+        _require(
+            cast(int, quality.kernel_context_self_weight)
+            + cast(int, quality.user_context_self_weight)
+            + cast(int, quality.unknown_context_self_weight)
+            == metadata.total_weight,
+            "sample-context Self weights do not sum to total weight",
+        )
+        _require(
+            cast(int, quality.unresolved_kernel_self_weight)
+            + cast(int, quality.unresolved_user_self_weight)
+            + cast(int, quality.unresolved_unknown_context_self_weight)
+            == quality.unresolved_self_weight,
+            "unresolved sample-context weights do not sum to unresolved Self weight",
+        )
     _require(quality.call_graph_weight <= metadata.total_weight, "call-graph weight overflow")
     _require(
         quality.source_line_self_weight <= metadata.total_weight,
@@ -161,6 +179,44 @@ def verify_analysis_artifact(
         == _percent(quality.unresolved_self_weight, metadata.total_weight),
         "unresolved Self percentage mismatch",
     )
+    if has_sample_context:
+        for weight, percent, label in (
+            (
+                quality.kernel_context_self_weight,
+                quality.kernel_context_self_percent,
+                "kernel-context Self",
+            ),
+            (
+                quality.user_context_self_weight,
+                quality.user_context_self_percent,
+                "user-context Self",
+            ),
+            (
+                quality.unknown_context_self_weight,
+                quality.unknown_context_self_percent,
+                "unknown-context Self",
+            ),
+            (
+                quality.unresolved_kernel_self_weight,
+                quality.unresolved_kernel_self_percent,
+                "unresolved kernel-context Self",
+            ),
+            (
+                quality.unresolved_user_self_weight,
+                quality.unresolved_user_self_percent,
+                "unresolved user-context Self",
+            ),
+            (
+                quality.unresolved_unknown_context_self_weight,
+                quality.unresolved_unknown_context_self_percent,
+                "unresolved unknown-context Self",
+            ),
+        ):
+            _require(
+                cast(float, percent)
+                == _percent(cast(int, weight), metadata.total_weight),
+                f"{label} percentage mismatch",
+            )
     _require(
         quality.call_graph_weight_percent
         == _percent(quality.call_graph_weight, metadata.total_weight),
@@ -574,6 +630,10 @@ def _verify_conclusion_gate(analysis: AnalysisArtifact) -> None:
         expected_allowed.add("source_line_observation")
     if quality.total_weight and is_on_cpu_sampling_event(quality.event):
         expected_allowed.add("on_cpu_hotspot_distribution")
+    if _has_complete_sample_context(quality) and (
+        quality.kernel_context_self_weight or quality.user_context_self_weight
+    ):
+        expected_allowed.add("sample_privilege_distribution")
     _require(allowed == expected_allowed, "allowed conclusions do not match the evidence fields")
     _require(not allowed.intersection(forbidden), "a conclusion is both allowed and forbidden")
     _require("performance_root_cause" in forbidden, "root-cause claim is not gated")
@@ -626,6 +686,29 @@ def _verify_conclusion_gate(analysis: AnalysisArtifact) -> None:
             "cross_time_jit_symbol_replay" in forbidden,
             "unretained JIT symbol context does not gate cross-time replay claims",
         )
+
+
+def _has_complete_sample_context(quality: EvidenceQuality) -> bool:
+    values = (
+        quality.kernel_context_self_weight,
+        quality.kernel_context_self_percent,
+        quality.user_context_self_weight,
+        quality.user_context_self_percent,
+        quality.unknown_context_self_weight,
+        quality.unknown_context_self_percent,
+        quality.unresolved_kernel_self_weight,
+        quality.unresolved_kernel_self_percent,
+        quality.unresolved_user_self_weight,
+        quality.unresolved_user_self_percent,
+        quality.unresolved_unknown_context_self_weight,
+        quality.unresolved_unknown_context_self_percent,
+    )
+    present = tuple(value is not None for value in values)
+    _require(
+        not any(present) or all(present),
+        "sample-context metrics are only partially present",
+    )
+    return all(present)
 
 
 def _verify_event_semantics(analysis: AnalysisArtifact) -> None:

@@ -255,7 +255,20 @@ class PerfDataStream:
             "--ns",
         ]
         if self._symfs_path is not None:
-            argv.extend(("--symfs", str(self._symfs_path)))
+            # perf's default inline expansion can emit synthetic inline Frames
+            # that contain an IP and symbol but no DSO.  That representation is
+            # ambiguous after the target container exits, so container analysis
+            # deliberately keeps the physical Frame and its verified module
+            # identity.  Full source paths are required for a fail-closed mapping
+            # back into the explicitly authorized project workspace.
+            argv.extend(
+                (
+                    "--no-inline",
+                    "--full-source-path",
+                    "--symfs",
+                    str(self._symfs_path),
+                )
+            )
         argv.extend(("-F", fields, "-i", str(safe_input)))
         with text_path.open(mode) as output:
             return self._runner.run_to_file(

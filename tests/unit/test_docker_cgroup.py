@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
+import threading
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,6 +17,8 @@ from perflens.contracts.docker import (
     ContainerTargetArtifact,
 )
 from perflens.docker.cgroup import (
+    CapturedCgroupSnapshot,
+    CgroupSnapshotMonitor,
     CgroupV2ResourceReader,
     build_container_resource_context,
 )
@@ -253,7 +256,6 @@ def test_cgroup_reader_uses_path_only_directory_anchor(
     cgroup_root = tmp_path / "cgroup"
     target, directory = _resolved_target(cgroup_root)
     _initial_files(directory)
-    reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
     original_open = os.open
     directory_flags: list[int] = []
 
@@ -271,6 +273,7 @@ def test_cgroup_reader_uses_path_only_directory_anchor(
         return original_open(path, flags, mode, dir_fd=dir_fd)
 
     monkeypatch.setattr(os, "open", guarded_open)
+    reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
     captured = reader.capture()
 
     assert captured.snapshot.cpu_usage_usec == 1000
@@ -287,7 +290,6 @@ def test_cgroup_directory_open_error_reports_only_errno_name(
     cgroup_root = tmp_path / "cgroup"
     target, directory = _resolved_target(cgroup_root)
     _initial_files(directory)
-    reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
     original_open = os.open
 
     def denied_open(
@@ -303,7 +305,7 @@ def test_cgroup_directory_open_error_reports_only_errno_name(
 
     monkeypatch.setattr(os, "open", denied_open)
     with pytest.raises(PerfLensError) as captured:
-        reader.capture()
+        CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
 
     assert captured.value.code is ErrorCode.PROFILE_PARSE_FAILED
     assert "EACCES" in captured.value.message
@@ -318,7 +320,6 @@ def test_cgroup_resource_open_error_reports_only_errno_name(
     cgroup_root = tmp_path / "cgroup"
     target, directory = _resolved_target(cgroup_root)
     _initial_files(directory)
-    reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
     original_open = os.open
 
     def denied_open(
@@ -334,7 +335,7 @@ def test_cgroup_resource_open_error_reports_only_errno_name(
 
     monkeypatch.setattr(os, "open", denied_open)
     with pytest.raises(PerfLensError) as captured:
-        reader.capture()
+        CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
 
     assert captured.value.code is ErrorCode.PROFILE_PARSE_FAILED
     assert "EACCES" in captured.value.message
@@ -583,7 +584,237 @@ def test_cgroup_resource_symlink_oversize_and_directory_replacement_are_rejected
     _initial_files(directory)
     with pytest.raises(PerfLensError) as captured:
         reader.capture()
-    assert "inode changed" in captured.value.message
+    assert "identity changed" in captured.value.message
+
+
+def test_pinned_cgroup_resources_survive_normal_directory_removal(tmp_path: Path) -> None:
+    cgroup_root = tmp_path / "cgroup"
+    target, directory = _resolved_target(cgroup_root)
+    _initial_files(directory)
+    reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
+    started = datetime(2026, 8, 21, tzinfo=UTC)
+    before = reader.capture(observed_at=started)
+
+    _later_files(directory)
+    for child in directory.iterdir():
+        child.unlink()
+    directory.rmdir()
+
+    after = reader.capture(observed_at=started + timedelta(seconds=1))
+    context = build_container_resource_context(
+        reader,
+        before,
+        after,
+        source_collection_id=_SOURCE_COLLECTION_ID,
+        source_output_sha256=_SOURCE_OUTPUT_SHA256,
+        created_at=started + timedelta(seconds=2),
+    )
+    assert context.delta.cpu_usage_usec == 600
+    assert context.quality_status == "partial"
+    assert any("removed the cgroup path" in value for value in context.limitations)
+
+    reader.close()
+    with pytest.raises(PerfLensError) as captured:
+        reader.capture()
+    assert "already closed" in captured.value.message
+
+
+def test_cgroup_monitor_returns_a_partial_lower_bound_after_lifecycle_removal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cgroup_root = tmp_path / "cgroup"
+    target, directory = _resolved_target(cgroup_root)
+    _initial_files(directory)
+    reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
+    baseline = reader.capture(observed_at=datetime(2026, 8, 21, tzinfo=UTC))
+    monitor = CgroupSnapshotMonitor(reader, baseline, sample_interval_seconds=1.0)
+    monitor.start()
+
+    for child in directory.iterdir():
+        child.unlink()
+    directory.rmdir()
+    original_capture = CgroupV2ResourceReader.capture
+
+    def unavailable_after_removal(
+        selected: CgroupV2ResourceReader,
+        *,
+        observed_at: datetime | None = None,
+    ) -> CapturedCgroupSnapshot:
+        if selected.path_is_removed():
+            raise PerfLensError(
+                ErrorCode.PROFILE_PARSE_FAILED,
+                "docker_cgroup",
+                "simulated removed cgroup read failure",
+            )
+        return original_capture(selected, observed_at=observed_at)
+
+    monkeypatch.setattr(CgroupV2ResourceReader, "capture", unavailable_after_removal)
+    final = monitor.finish()
+
+    assert final.snapshot.cpu_usage_usec == baseline.snapshot.cpu_usage_usec
+    assert any("lower bounds" in value for value in final.limitations)
+    reader.close()
+
+
+def test_cgroup_monitor_samples_during_the_collection_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cgroup_root = tmp_path / "cgroup"
+    target, directory = _resolved_target(cgroup_root)
+    _initial_files(directory)
+    reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
+    baseline = reader.capture(observed_at=datetime(2026, 8, 21, tzinfo=UTC))
+    _later_files(directory)
+    original_capture = CgroupV2ResourceReader.capture
+    background_sampled = threading.Event()
+    capture_count = 0
+    capture_lock = threading.Lock()
+
+    def observed_capture(
+        selected: CgroupV2ResourceReader,
+        *,
+        observed_at: datetime | None = None,
+    ) -> CapturedCgroupSnapshot:
+        nonlocal capture_count
+        captured = original_capture(selected, observed_at=observed_at)
+        with capture_lock:
+            capture_count += 1
+            if capture_count >= 2:
+                background_sampled.set()
+        return captured
+
+    monkeypatch.setattr(CgroupV2ResourceReader, "capture", observed_capture)
+    monitor = CgroupSnapshotMonitor(reader, baseline, sample_interval_seconds=0.01)
+    monitor.start()
+    assert background_sampled.wait(timeout=1.0)
+    final = monitor.finish()
+
+    assert final.snapshot.cpu_usage_usec == 1600
+    assert not final.limitations
+    reader.close()
+
+
+def test_cgroup_monitor_detects_lifecycle_removal_in_background(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cgroup_root = tmp_path / "cgroup"
+    target, directory = _resolved_target(cgroup_root)
+    _initial_files(directory)
+    reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
+    baseline = reader.capture(observed_at=datetime(2026, 8, 21, tzinfo=UTC))
+    monitor = CgroupSnapshotMonitor(reader, baseline, sample_interval_seconds=0.01)
+    monitor.start()
+
+    for child in directory.iterdir():
+        child.unlink()
+    directory.rmdir()
+    background_observed_removal = threading.Event()
+    original_capture = CgroupV2ResourceReader.capture
+
+    def unavailable_after_removal(
+        selected: CgroupV2ResourceReader,
+        *,
+        observed_at: datetime | None = None,
+    ) -> CapturedCgroupSnapshot:
+        if selected.path_is_removed():
+            background_observed_removal.set()
+            raise PerfLensError(
+                ErrorCode.PROFILE_PARSE_FAILED,
+                "docker_cgroup",
+                "simulated removed cgroup read failure",
+            )
+        return original_capture(selected, observed_at=observed_at)
+
+    monkeypatch.setattr(CgroupV2ResourceReader, "capture", unavailable_after_removal)
+    assert background_observed_removal.wait(timeout=1.0)
+    final = monitor.finish()
+
+    assert final.snapshot.cpu_usage_usec == baseline.snapshot.cpu_usage_usec
+    assert any("lower bounds" in value for value in final.limitations)
+    reader.close()
+
+
+def test_cgroup_monitor_lifecycle_is_bounded_and_single_use(tmp_path: Path) -> None:
+    cgroup_root = tmp_path / "cgroup"
+    target, directory = _resolved_target(cgroup_root)
+    _initial_files(directory)
+    reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
+    baseline = reader.capture(observed_at=datetime(2026, 8, 21, tzinfo=UTC))
+
+    with pytest.raises(ValueError):
+        CgroupSnapshotMonitor(reader, baseline, sample_interval_seconds=0.001)
+    monitor = CgroupSnapshotMonitor(reader, baseline, sample_interval_seconds=1.0)
+    with pytest.raises(PerfLensError):
+        monitor.finish()
+    monitor.start()
+    monitor.stop()
+    monitor.stop()
+    with pytest.raises(PerfLensError):
+        monitor.start()
+    reader.close()
+
+
+def test_cgroup_monitor_refuses_to_close_over_a_live_sampling_thread(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cgroup_root = tmp_path / "cgroup"
+    target, directory = _resolved_target(cgroup_root)
+    _initial_files(directory)
+    reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
+    baseline = reader.capture(observed_at=datetime(2026, 8, 21, tzinfo=UTC))
+    monitor = CgroupSnapshotMonitor(reader, baseline, sample_interval_seconds=1.0)
+    monitor.start()
+
+    def bounded_join(_thread: threading.Thread, timeout: float | None = None) -> None:
+        assert timeout == 2.0
+
+    def remains_alive(_thread: threading.Thread) -> bool:
+        return True
+
+    monkeypatch.setattr(threading.Thread, "join", bounded_join)
+    monkeypatch.setattr(threading.Thread, "is_alive", remains_alive)
+    with pytest.raises(PerfLensError) as captured:
+        monitor.stop()
+    assert "did not stop within its bound" in captured.value.message
+
+    monkeypatch.undo()
+    monitor.stop()
+    reader.close()
+
+
+def test_cgroup_monitor_never_hides_a_non_lifecycle_read_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cgroup_root = tmp_path / "cgroup"
+    target, directory = _resolved_target(cgroup_root)
+    _initial_files(directory)
+    reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
+    baseline = reader.capture(observed_at=datetime(2026, 8, 21, tzinfo=UTC))
+    monitor = CgroupSnapshotMonitor(reader, baseline, sample_interval_seconds=1.0)
+    monitor.start()
+
+    def unsafe_read(
+        _selected: CgroupV2ResourceReader,
+        *,
+        observed_at: datetime | None = None,
+    ) -> CapturedCgroupSnapshot:
+        del observed_at
+        raise PerfLensError(
+            ErrorCode.PROFILE_PARSE_FAILED,
+            "docker_cgroup",
+            "simulated resource identity failure",
+        )
+
+    monkeypatch.setattr(CgroupV2ResourceReader, "capture", unsafe_read)
+    with pytest.raises(PerfLensError) as captured:
+        monitor.finish()
+    assert "identity failure" in captured.value.message
+    reader.close()
 
 
 def test_reader_rejects_public_private_cgroup_digest_mismatch(tmp_path: Path) -> None:

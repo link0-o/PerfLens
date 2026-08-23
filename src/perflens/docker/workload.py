@@ -213,11 +213,18 @@ def build_container_workload_spec(
         benchmark_output_contract_sha256 or "",
         *treatment_path_sha256,
     )
+    created_at_text = timestamp.isoformat()
+    artifact_identity = _hash_parts(
+        "perflens-container-workload-artifact-v1",
+        __version__,
+        fingerprint,
+        created_at_text,
+    )
     provisional = ContainerWorkloadSpecArtifact(
         schema_version="1.0",
         perflens_version=__version__,
-        workload_spec_id=f"container-workload-{fingerprint[:20]}",
-        created_at=timestamp.isoformat(),
+        workload_spec_id=f"container-workload-{artifact_identity[:20]}",
+        created_at=created_at_text,
         project_identity_sha256=project.identity_sha256,
         image_digest=image_digest,
         container_gate_sha256=gate.sha256,

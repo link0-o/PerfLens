@@ -124,7 +124,10 @@ PerfLens never invokes sudo, changes sysctl, grants capabilities, mounts tracefs
 
 ## Existing perf.data cannot be decoded
 
-Use a `perf` build compatible with the recording host and pass its absolute path with `--perf-path`. If the binary container remains incompatible, export text on the source host with the documented field set and use `analyze-perf-script`. PerfLens does not parse the binary format directly.
+Use a `perf` build compatible with the recording host and pass its absolute path with `--perf-path`.
+If the binary container remains incompatible, export text on the source host with the documented
+`comm,pid,tid,cpu,misc,time,event,period,ip,sym,dso,srcline` field set and use
+`analyze-perf-script`. PerfLens does not parse the binary format directly.
 
 ## Symbols or source lines are missing
 

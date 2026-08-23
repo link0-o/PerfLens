@@ -29,13 +29,18 @@ from perflens.application.evidence import (
 )
 from perflens.application.verify_analysis import verify_analysis_artifact
 from perflens.collection.collector import DEFAULT_MAX_OUTPUT_BYTES
-from perflens.contracts.artifacts import AnalysisArtifact, CollectionArtifact
+from perflens.contracts.artifacts import (
+    AnalysisArtifact,
+    CollectionArtifact,
+    ContainerCollectionTargetBinding,
+)
 from perflens.contracts.docker import (
     ContainerModuleEvidence,
     ContainerModuleSnapshotArtifact,
     ContainerModuleSnapshotLimits,
     ContainerSourceMappingEvidence,
     ContainerSymbolContextArtifact,
+    ContainerTargetArtifact,
     derive_container_module_snapshot_id,
     derive_container_symbol_context_id,
 )
@@ -84,6 +89,97 @@ class VerifiedContainerSymfs:
     root: Path
     identity_sha256: str
     module_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ContainerRootBinding:
+    target_id: str
+    target_content_sha256: str
+    container_identity_sha256: str
+    host_pid: int
+    host_uid: int
+    host_start_time_ticks: int
+    container_pid: int
+    mount_namespace_inode: int
+    cgroup_inode: int
+
+
+class PinnedContainerProcessRoot:
+    """Descriptor-pinned container root captured while a target is still live.
+
+    Managed workloads may exit before ``perf record`` finishes draining its output.
+    This object keeps only a read-only directory descriptor and the already-verified
+    target binding; it does not keep the process alive or enumerate its filesystem.
+    """
+
+    def __init__(
+        self,
+        root: _PinnedProcessRoot,
+        binding: _ContainerRootBinding,
+    ) -> None:
+        self._root = root
+        self._binding = binding
+
+    @property
+    def identity(self) -> tuple[int, ...]:
+        return self._root.identity
+
+    def assert_bound_to(
+        self,
+        target: ContainerTargetArtifact | ContainerCollectionTargetBinding,
+    ) -> None:
+        if _container_root_binding(target) != self._binding:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "container_symbols",
+                "Pinned container root does not match the Collection target",
+            )
+        self._root.assert_descriptor_unchanged()
+
+    def inspect_module(
+        self,
+        record: RecordedModule,
+        *,
+        container_identity_sha256: str,
+        remaining_bytes: int,
+        max_module_bytes: int,
+    ) -> tuple[ContainerModuleEvidence, int]:
+        return self._root.inspect_module(
+            record,
+            container_identity_sha256=container_identity_sha256,
+            remaining_bytes=remaining_bytes,
+            max_module_bytes=max_module_bytes,
+        )
+
+    def close(self) -> None:
+        self._root.close()
+
+    def __enter__(self) -> PinnedContainerProcessRoot:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
+
+
+def pin_container_process_root(
+    target: ContainerTargetArtifact | ContainerCollectionTargetBinding,
+    *,
+    proc_root: Path = Path("/proc"),
+    reader: LinuxContainerIdentityReader | None = None,
+) -> PinnedContainerProcessRoot:
+    """Pin one verified target root before a short managed workload is released."""
+    assert_container_target_current(target, reader=reader)
+    root = _PinnedProcessRoot(proc_root, target.host_pid)
+    try:
+        root.__enter__()
+        # Revalidate around descriptor acquisition so PID reuse, namespace changes,
+        # and root replacement cannot be hidden between the two observations.
+        assert_container_target_current(target, reader=reader)
+        root.assert_unchanged()
+    except BaseException:
+        root.close()
+        raise
+    return PinnedContainerProcessRoot(root, _container_root_binding(target))
 
 
 class PerfBuildIdListAdapter:
@@ -204,6 +300,7 @@ def capture_container_module_snapshot(
     build_id_reader: Callable[[Path], BuildIdListResult] | None = None,
     limits: ContainerModuleSnapshotLimits | None = None,
     created_at: datetime | None = None,
+    pinned_process_root: PinnedContainerProcessRoot | None = None,
 ) -> ContainerModuleSnapshotArtifact:
     """Capture only modules with hits in one Docker record Collection.
 
@@ -245,6 +342,10 @@ def capture_container_module_snapshot(
             "container module snapshot timestamp must include a timezone",
         )
     target = collection.container_target
+    if pinned_process_root is not None:
+        # Binding mismatches are security failures, not recoverable symbol loss.
+        # Check this before the partial-evidence block below.
+        pinned_process_root.assert_bound_to(target)
     limitations: list[str] = []
     modules: list[ContainerModuleEvidence] = []
     referenced_count = 0
@@ -274,36 +375,43 @@ def capture_container_module_snapshot(
         modules_truncated = referenced_count > len(selected_records) or result.records_truncated
         if modules_truncated:
             limitations.append("Referenced container modules were truncated by policy.")
-        assert_container_target_current(
-            target,
-            reader=reader,
-            allow_managed_exec_transition=True,
-        )
-        with _PinnedProcessRoot(proc_root, target.host_pid) as pinned_root:
+        if pinned_process_root is not None:
             root_identity_sha256 = _root_identity_sha256(
                 target.container_identity_sha256,
                 target.namespace.mount_namespace_inode,
-                pinned_root.identity,
+                pinned_process_root.identity,
             )
-            consumed_bytes = 0
-            for record in selected_records:
-                module, charged_bytes = pinned_root.inspect_module(
-                    record,
-                    container_identity_sha256=target.container_identity_sha256,
-                    remaining_bytes=max(
-                        0,
-                        effective_limits.max_total_module_bytes - consumed_bytes,
-                    ),
-                    max_module_bytes=effective_limits.max_module_bytes,
-                )
-                consumed_bytes += charged_bytes
-                modules.append(module)
+            modules = _inspect_recorded_modules(
+                pinned_process_root,
+                selected_records,
+                container_identity_sha256=target.container_identity_sha256,
+                limits=effective_limits,
+            )
+            pinned_process_root.assert_bound_to(target)
+        else:
             assert_container_target_current(
                 target,
                 reader=reader,
                 allow_managed_exec_transition=True,
             )
-            pinned_root.assert_unchanged()
+            with _PinnedProcessRoot(proc_root, target.host_pid) as pinned_root:
+                root_identity_sha256 = _root_identity_sha256(
+                    target.container_identity_sha256,
+                    target.namespace.mount_namespace_inode,
+                    pinned_root.identity,
+                )
+                modules = _inspect_recorded_modules(
+                    pinned_root,
+                    selected_records,
+                    container_identity_sha256=target.container_identity_sha256,
+                    limits=effective_limits,
+                )
+                assert_container_target_current(
+                    target,
+                    reader=reader,
+                    allow_managed_exec_transition=True,
+                )
+                pinned_root.assert_unchanged()
     except PerfLensError as exc:
         if exc.stage == "evidence_validation":
             raise
@@ -360,6 +468,27 @@ def capture_container_module_snapshot(
             )
         }
     )
+
+
+def _inspect_recorded_modules(
+    pinned_root: _PinnedProcessRoot | PinnedContainerProcessRoot,
+    records: tuple[RecordedModule, ...],
+    *,
+    container_identity_sha256: str,
+    limits: ContainerModuleSnapshotLimits,
+) -> list[ContainerModuleEvidence]:
+    modules: list[ContainerModuleEvidence] = []
+    consumed_bytes = 0
+    for record in records:
+        module, charged_bytes = pinned_root.inspect_module(
+            record,
+            container_identity_sha256=container_identity_sha256,
+            remaining_bytes=max(0, limits.max_total_module_bytes - consumed_bytes),
+            max_module_bytes=limits.max_module_bytes,
+        )
+        consumed_bytes += charged_bytes
+        modules.append(module)
+    return modules
 
 
 @contextmanager
@@ -962,6 +1091,8 @@ class _PinnedProcessRoot:
             raise _symbol_error("configured procfs root is unavailable") from exc
         self._host_pid = host_pid
         self._root_fd: int | None = None
+        self._root_identity: tuple[int, ...] = ()
+        self._pinned_mounts: dict[PurePosixPath, tuple[int, tuple[int, ...]]] = {}
         self.identity: tuple[int, ...] = ()
 
     def __enter__(self) -> _PinnedProcessRoot:
@@ -973,7 +1104,15 @@ class _PinnedProcessRoot:
         if not stat.S_ISDIR(metadata.st_mode):
             self.close()
             raise _symbol_error("target process root is not a directory")
-        self.identity = _stat_identity(metadata)
+        self._root_identity = _stat_identity(metadata)
+        # ``/workspace`` is a separate read-only bind mount for every managed
+        # container.  Pin it while the Gate is live: retaining only the rootfs
+        # descriptor does not retain a nested mount after Docker tears down the
+        # container mount namespace.  Failure to pin remains recoverable because
+        # image-root modules can still be inspected and the snapshot will report
+        # unavailable workspace modules instead of guessing.
+        self._pin_mount_if_available(_DEFAULT_CONTAINER_WORKSPACE)
+        self.identity = self._combined_identity()
         return self
 
     def inspect_module(
@@ -1079,11 +1218,25 @@ class _PinnedProcessRoot:
     def _open_regular_beneath(self, container_path: str) -> int:
         if self._root_fd is None:
             raise RuntimeError("process root is not open")
-        parts = PurePosixPath(container_path).parts
-        descriptor = os.dup(self._root_fd)
+        requested = PurePosixPath(container_path)
+        selected_fd = self._root_fd
+        relative_parts = requested.parts[1:]
+        for mount_path, (mount_fd, _identity) in sorted(
+            self._pinned_mounts.items(),
+            key=lambda item: len(item[0].parts),
+            reverse=True,
+        ):
+            try:
+                relative = requested.relative_to(mount_path)
+            except ValueError:
+                continue
+            selected_fd = mount_fd
+            relative_parts = relative.parts
+            break
+        descriptor = os.dup(selected_fd)
         try:
-            for index, part in enumerate(parts[1:]):
-                final = index == len(parts[1:]) - 1
+            for index, part in enumerate(relative_parts):
+                final = index == len(relative_parts) - 1
                 flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
                 if not final:
                     flags |= os.O_DIRECTORY
@@ -1100,15 +1253,66 @@ class _PinnedProcessRoot:
                 raise
             raise _symbol_error("container module could not be safely opened") from exc
 
+    def _pin_mount_if_available(self, container_path: PurePosixPath) -> None:
+        if self._root_fd is None:
+            raise RuntimeError("process root is not open")
+        descriptor = os.dup(self._root_fd)
+        try:
+            for part in container_path.parts[1:]:
+                next_descriptor = os.open(
+                    part,
+                    os.O_RDONLY
+                    | os.O_DIRECTORY
+                    | getattr(os, "O_CLOEXEC", 0)
+                    | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=descriptor,
+                )
+                os.close(descriptor)
+                descriptor = next_descriptor
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise OSError("pinned container mount is not a directory")
+        except OSError:
+            os.close(descriptor)
+            return
+        self._pinned_mounts[container_path] = (descriptor, _stat_identity(metadata))
+
+    def _combined_identity(self) -> tuple[int, ...]:
+        identity = list(self._root_identity)
+        for mount_path, (_descriptor, mount_identity) in sorted(
+            self._pinned_mounts.items(),
+            key=lambda item: item[0].as_posix(),
+        ):
+            path_marker = hashlib.sha256(mount_path.as_posix().encode()).digest()[:8]
+            identity.append(int.from_bytes(path_marker, byteorder="big"))
+            identity.extend(mount_identity)
+        return tuple(identity)
+
     def assert_unchanged(self) -> None:
-        if self._root_fd is None or _stat_identity(os.fstat(self._root_fd)) != self.identity:
-            raise _symbol_error("target process root changed during module inspection")
+        self.assert_descriptor_unchanged()
         current_root = self._open_current_root()
         try:
-            if _stat_identity(os.fstat(current_root)) != self.identity:
+            if _stat_identity(os.fstat(current_root)) != self._root_identity:
                 raise _symbol_error("target process root changed during module inspection")
         finally:
             os.close(current_root)
+
+    def assert_descriptor_unchanged(self) -> None:
+        if self._root_fd is None:
+            raise _symbol_error("pinned target process root is closed")
+        try:
+            current_identity = _stat_identity(os.fstat(self._root_fd))
+        except OSError as exc:
+            raise _symbol_error("pinned target process root is unavailable") from exc
+        if current_identity != self._root_identity:
+            raise _symbol_error("target process root changed during module inspection")
+        for descriptor, expected_identity in self._pinned_mounts.values():
+            try:
+                current_mount_identity = _stat_identity(os.fstat(descriptor))
+            except OSError as exc:
+                raise _symbol_error("pinned container mount is unavailable") from exc
+            if current_mount_identity != expected_identity:
+                raise _symbol_error("pinned container mount changed during module inspection")
 
     def _open_current_root(self) -> int:
         process_path = self._proc_root / str(self._host_pid)
@@ -1132,9 +1336,14 @@ class _PinnedProcessRoot:
             raise _symbol_error("target process root is unavailable") from exc
 
     def close(self) -> None:
+        for descriptor, _identity in self._pinned_mounts.values():
+            os.close(descriptor)
+        self._pinned_mounts.clear()
         if self._root_fd is not None:
             os.close(self._root_fd)
             self._root_fd = None
+        self._root_identity = ()
+        self.identity = ()
 
     def __exit__(self, *_args: object) -> None:
         self.close()
@@ -1308,6 +1517,27 @@ def _unique_recorded_modules(
             continue
         by_path[record.container_path] = record
     return tuple(by_path[path] for path in sorted(by_path)), conflict
+
+
+def _container_root_binding(
+    target: ContainerTargetArtifact | ContainerCollectionTargetBinding,
+) -> _ContainerRootBinding:
+    target_content_sha256 = (
+        target.content_sha256
+        if isinstance(target, ContainerTargetArtifact)
+        else target.target_content_sha256
+    )
+    return _ContainerRootBinding(
+        target_id=target.target_id,
+        target_content_sha256=target_content_sha256,
+        container_identity_sha256=target.container_identity_sha256,
+        host_pid=target.host_pid,
+        host_uid=target.host_uid,
+        host_start_time_ticks=target.host_start_time_ticks,
+        container_pid=target.container_pid,
+        mount_namespace_inode=target.namespace.mount_namespace_inode,
+        cgroup_inode=target.cgroup.inode,
+    )
 
 
 def _build_id_from_handle(handle: BinaryIO) -> str | None:

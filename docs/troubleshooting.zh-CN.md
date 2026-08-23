@@ -172,7 +172,7 @@ PerfLens 不会执行 sudo、修改 sysctl、授予 capability、挂载 tracefs 
 
 ```bash
 perf script --ns \
-  -F comm,pid,tid,cpu,time,event,period,ip,sym,dso,srcline \
+  -F comm,pid,tid,cpu,misc,time,event,period,ip,sym,dso,srcline \
   -i perf.data > profile.perf-script
 ```
 

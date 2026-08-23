@@ -51,6 +51,7 @@ from perflens.docker.symbols import (
     build_container_symbol_context,
     capture_container_module_snapshot,
     materialize_container_workspace_symfs,
+    pin_container_process_root,
     project_container_analysis,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -389,6 +390,130 @@ def test_container_module_snapshot_and_source_mapping_are_identity_bound(
     assert projected.metadata.conversion.argv[0] == "@PRIVATE_CONVERTER@"
     assert projected_context.source_analysis_id == projected.analysis_id
     assert projected_context.source_analysis_content_sha256 == projected.content_sha256
+
+
+def test_pinned_container_root_survives_short_lived_proc_entry(
+    fixture_root: Path,
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    binding = _binding(identity)
+    proc_root = tmp_path / "proc"
+    process_directory = proc_root / str(identity.host_pid)
+    module = process_directory / "root" / "workspace" / "build" / "app"
+    build_id = _compile_module(module, fixture_root / "symbols" / "sample.c")
+    profile = tmp_path / "profile.data"
+    profile.write_bytes(b"PERFILE2")
+    collection = _collection(profile, binding)
+
+    pinned = pin_container_process_root(
+        binding,
+        proc_root=proc_root,
+        reader=cast(LinuxContainerIdentityReader, _Reader(identity)),
+    )
+    # Model procfs retiring /proc/<pid> after a short workload exits. The open
+    # descriptor remains bound to the same container root and exact module bytes.
+    process_directory.rename(tmp_path / "retired-process")
+    try:
+        snapshot = capture_container_module_snapshot(
+            collection,
+            proc_root=proc_root,
+            reader=cast(LinuxContainerIdentityReader, _Reader(identity, unavailable=True)),
+            build_id_reader=lambda _path: _module_result(
+                build_id,
+                "/workspace/build/app",
+            ),
+            pinned_process_root=pinned,
+        )
+    finally:
+        pinned.close()
+
+    assert snapshot.status == "verified"
+    assert snapshot.referenced_module_count == 1
+    assert snapshot.modules[0].status == "verified"
+    assert snapshot.modules[0].observed_build_id == build_id
+    assert snapshot.process_root_identity_sha256 is not None
+
+
+def test_pinned_container_workspace_survives_nested_mount_retirement(
+    fixture_root: Path,
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    binding = _binding(identity)
+    proc_root = tmp_path / "proc"
+    process_root = proc_root / str(identity.host_pid) / "root"
+    workspace = process_root / "workspace"
+    module = workspace / "build" / "app"
+    build_id = _compile_module(module, fixture_root / "symbols" / "sample.c")
+    pinned = pin_container_process_root(
+        binding,
+        proc_root=proc_root,
+        reader=cast(LinuxContainerIdentityReader, _Reader(identity)),
+    )
+    # Model Docker detaching the read-only /workspace bind mount after the
+    # container exits.  A replacement at the same path must not be trusted;
+    # the descriptor pinned while the Gate was live remains the only source.
+    workspace.rename(tmp_path / "retired-workspace")
+    replacement = process_root / "workspace" / "build" / "app"
+    replacement_source = tmp_path / "replacement.c"
+    replacement_source.write_text("int main(void) { return 7; }\n", encoding="utf-8")
+    replacement_build_id = _compile_module(
+        replacement,
+        replacement_source,
+    )
+    assert replacement_build_id != build_id
+    try:
+        evidence, charged_bytes = pinned.inspect_module(
+            RecordedModule(build_id, "/workspace/build/app"),
+            container_identity_sha256=binding.container_identity_sha256,
+            remaining_bytes=64 << 20,
+            max_module_bytes=64 << 20,
+        )
+    finally:
+        pinned.close()
+
+    assert evidence.status == "verified"
+    assert evidence.observed_build_id == build_id
+    assert charged_bytes > 0
+
+
+def test_pinned_container_root_rejects_a_different_collection_binding(
+    fixture_root: Path,
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    binding = _binding(identity)
+    proc_root = tmp_path / "proc"
+    module = proc_root / str(identity.host_pid) / "root" / "opt" / "app"
+    build_id = _compile_module(module, fixture_root / "symbols" / "sample.c")
+    profile = tmp_path / "profile.data"
+    profile.write_bytes(b"PERFILE2")
+    collection = _collection(profile, binding).model_copy(
+        update={
+            "container_target": binding.model_copy(
+                update={"target_content_sha256": "f" * 64}
+            )
+        }
+    )
+    pinned = pin_container_process_root(
+        binding,
+        proc_root=proc_root,
+        reader=cast(LinuxContainerIdentityReader, _Reader(identity)),
+    )
+    try:
+        with pytest.raises(PerfLensError) as raised:
+            capture_container_module_snapshot(
+                collection,
+                proc_root=proc_root,
+                build_id_reader=lambda _path: _module_result(build_id),
+                pinned_process_root=pinned,
+            )
+    finally:
+        pinned.close()
+
+    assert raised.value.code == ErrorCode.PATH_SAFETY_VIOLATION
+    assert "does not match the Collection target" in raised.value.message
 
 
 def test_verified_workspace_module_is_materialized_in_private_symfs(

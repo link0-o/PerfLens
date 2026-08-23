@@ -88,6 +88,7 @@ from perflens.docker.benchmark import load_managed_benchmark
 from perflens.docker.capability import discover_docker_capability
 from perflens.docker.cgroup import (
     CapturedCgroupSnapshot,
+    CgroupSnapshotMonitor,
     CgroupV2ResourceReader,
     build_container_resource_context,
 )
@@ -106,9 +107,11 @@ from perflens.docker.project_config import (
 )
 from perflens.docker.runtime import ExistingDockerRuntime
 from perflens.docker.symbols import (
+    PinnedContainerProcessRoot,
     build_container_symbol_context,
     capture_container_module_snapshot,
     materialize_container_workspace_symfs,
+    pin_container_process_root,
     project_container_analysis,
 )
 from perflens.docker.treatment import (
@@ -261,6 +264,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
 
     def capture_module_snapshot(
         executed: _ExecutedBrokerPlan,
+        *,
+        pinned_process_root: PinnedContainerProcessRoot | None = None,
     ) -> ContainerModuleSnapshotArtifact | None:
         collection = executed.collection
         if (
@@ -275,6 +280,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         snapshot = capture_container_module_snapshot(
             collection,
             perf_path=config.perf_path,
+            pinned_process_root=pinned_process_root,
         )
         store.save(
             snapshot,
@@ -547,7 +553,6 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             container_pid=container_pid,
         )
         target = resolved_target.artifact
-        resource_reader = CgroupV2ResourceReader(resolved_target)
         plan = create_collection_plan(
             CollectionPlanRequest(
                 mode=mode,
@@ -571,14 +576,19 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 recoverable=True,
                 details={"warnings": "; ".join(plan.warnings)},
             )
+        resource_reader = CgroupV2ResourceReader(resolved_target)
         reserve_active_seconds = math.ceil(plan.duration_seconds)
-        lease = docker_runtime.begin_existing_run(
-            session_id,
-            target,
-            requested_modes=(mode,),
-            reserve_active_seconds=reserve_active_seconds,
-            reserve_evidence_bytes=plan.max_output_bytes,
-        )
+        try:
+            lease = docker_runtime.begin_existing_run(
+                session_id,
+                target,
+                requested_modes=(mode,),
+                reserve_active_seconds=reserve_active_seconds,
+                reserve_evidence_bytes=plan.max_output_bytes,
+            )
+        except BaseException:
+            resource_reader.close()
+            raise
         started = time.monotonic()
         executed: _ExecutedBrokerPlan | None = None
         before_snapshot: CapturedCgroupSnapshot | None = None
@@ -619,6 +629,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 source_collection_id=executed.collection_id,
                 source_output_sha256=executed.output_sha256,
             )
+            resource_reader.close()
             store.save(
                 resource_context,
                 resource_context.resource_context_id,
@@ -636,6 +647,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "container-measurement",
                 )
         except BaseException:
+            resource_reader.close()
             with suppress(PerfLensError):
                 docker_runtime.finish_existing_run(
                     session_id,
@@ -736,6 +748,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         )
         started = time.monotonic()
         executed: _ExecutedBrokerPlan | None = None
+        resource_reader: CgroupV2ResourceReader | None = None
+        resource_monitor: CgroupSnapshotMonitor | None = None
+        pinned_process_root: PinnedContainerProcessRoot | None = None
         project_root = policy.workspace_root(docker_policy.path.parent.parent)
         treatment_snapshot = capture_treatment_snapshot(
             project_root,
@@ -762,20 +777,6 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 )
             target = run.prepared.target.artifact
             namespace_attestation = namespace_attestation_from_target(target)
-            resource_reader = CgroupV2ResourceReader(run.prepared.target)
-            before_snapshot: CapturedCgroupSnapshot | None = None
-
-            def capture_and_release_workload() -> None:
-                nonlocal before_snapshot
-                if before_snapshot is not None:
-                    raise PerfLensError(
-                        ErrorCode.PATH_SAFETY_VIOLATION,
-                        "docker_resource_context",
-                        "Managed Docker resource baseline callback was invoked more than once",
-                    )
-                before_snapshot = resource_reader.capture()
-                run.coordinator.release(run.prepared)
-
             plan = create_collection_plan(
                 CollectionPlanRequest(
                     mode=mode,
@@ -800,18 +801,62 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     recoverable=True,
                     details={"warnings": "; ".join(plan.warnings)},
                 )
+            # Persist the immutable authorization recipe before starting collection. Its
+            # per-authorization artifact ID is distinct from the stable workload fingerprint,
+            # so repeated sessions remain auditable without colliding in append-only storage.
+            store.save(
+                run.authorization.workload,
+                run.authorization.workload.workload_spec_id,
+                "container-workload-spec",
+            )
+            if mode == "record":
+                # The Gate is still live here. Pin its already-verified container root
+                # before release so short workloads cannot disappear before perf's
+                # Build-ID hits are matched to exact module bytes.
+                try:
+                    pinned_process_root = pin_container_process_root(target)
+                except PerfLensError as exc:
+                    # Symbol capture is evidence enrichment, not a prerequisite for raw
+                    # collection. A same-target root that is merely unreadable (for example,
+                    # a cross-UID rootful container) keeps the previous truthful partial path.
+                    # Identity failures from docker_identity still abort before Gate release.
+                    if exc.stage != "container_symbols" or not exc.recoverable:
+                        raise
+            resource_reader = CgroupV2ResourceReader(run.prepared.target)
+            before_snapshot = resource_reader.capture()
+            resource_monitor = CgroupSnapshotMonitor(resource_reader, before_snapshot)
+            workload_released = False
+
+            def capture_and_release_workload() -> None:
+                nonlocal workload_released
+                if workload_released:
+                    raise PerfLensError(
+                        ErrorCode.PATH_SAFETY_VIOLATION,
+                        "docker_resource_context",
+                        "Managed Docker resource baseline callback was invoked more than once",
+                    )
+                assert resource_monitor is not None
+                resource_monitor.start()
+                try:
+                    run.coordinator.release(run.prepared)
+                except BaseException:
+                    with suppress(PerfLensError):
+                        resource_monitor.stop()
+                    raise
+                workload_released = True
+
             executed = execute_broker_plan(
                 plan,
                 ready_callback=capture_and_release_workload,
                 namespace_attestation=namespace_attestation,
             )
-            if before_snapshot is None:
+            if not workload_released:
                 raise PerfLensError(
                     ErrorCode.EXTERNAL_TOOL_FAILED,
                     "docker_resource_context",
                     "Collector completed without releasing the managed Docker workload",
                 )
-            after_snapshot = resource_reader.capture()
+            after_snapshot = resource_monitor.finish()
             resource_context = build_container_resource_context(
                 resource_reader,
                 before_snapshot,
@@ -819,12 +864,21 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 source_collection_id=executed.collection_id,
                 source_output_sha256=executed.output_sha256,
             )
+            resource_reader.close()
             store.save(
                 resource_context,
                 resource_context.resource_context_id,
                 "container-resource-context",
             )
-            module_snapshot = capture_module_snapshot(executed)
+            try:
+                module_snapshot = capture_module_snapshot(
+                    executed,
+                    pinned_process_root=pinned_process_root,
+                )
+            finally:
+                if pinned_process_root is not None:
+                    pinned_process_root.close()
+                    pinned_process_root = None
             elapsed = math.ceil(time.monotonic() - started)
             remaining = workload_timeout_seconds - elapsed
             if remaining <= 0:
@@ -871,11 +925,6 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 run,
                 actual_active_seconds=max(1, math.ceil(time.monotonic() - started)),
                 actual_evidence_bytes=executed.evidence_bytes,
-            )
-            store.save(
-                run.authorization.workload,
-                run.authorization.workload.workload_spec_id,
-                "container-workload-spec",
             )
             if benchmark is not None:
                 store.save(benchmark, benchmark.benchmark_id, "benchmark")
@@ -926,6 +975,19 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 ),
             )
         except BaseException:
+            if pinned_process_root is not None:
+                pinned_process_root.close()
+            resource_reader_can_close = True
+            if resource_monitor is not None:
+                try:
+                    resource_monitor.stop()
+                except PerfLensError:
+                    # Preserve the original collection failure. A still-running bounded monitor
+                    # owns its Reader until its daemon thread exits; closing descriptors under
+                    # that thread would create a use-after-close race.
+                    resource_reader_can_close = False
+            if resource_reader is not None and resource_reader_can_close:
+                resource_reader.close()
             with suppress(PerfLensError):
                 run.coordinator.cleanup(run.prepared)
             with suppress(PerfLensError):
@@ -1203,6 +1265,21 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "total_weight": analysis.metadata.total_weight,
                 "hotspot_count": len(analysis.hotspots),
                 "unresolved_self_percent": (analysis.evidence_quality.unresolved_self_percent),
+                "kernel_context_self_percent": (
+                    analysis.evidence_quality.kernel_context_self_percent
+                ),
+                "user_context_self_percent": (
+                    analysis.evidence_quality.user_context_self_percent
+                ),
+                "unknown_context_self_percent": (
+                    analysis.evidence_quality.unknown_context_self_percent
+                ),
+                "unresolved_kernel_self_percent": (
+                    analysis.evidence_quality.unresolved_kernel_self_percent
+                ),
+                "unresolved_user_self_percent": (
+                    analysis.evidence_quality.unresolved_user_self_percent
+                ),
                 "warning_count": analysis.evidence_quality.warning_count,
                 **_container_symbol_summary(
                     symbol_context,
@@ -1302,6 +1379,21 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "total_weight": analysis.metadata.total_weight,
                 "hotspot_count": len(analysis.hotspots),
                 "unresolved_self_percent": (analysis.evidence_quality.unresolved_self_percent),
+                "kernel_context_self_percent": (
+                    analysis.evidence_quality.kernel_context_self_percent
+                ),
+                "user_context_self_percent": (
+                    analysis.evidence_quality.user_context_self_percent
+                ),
+                "unknown_context_self_percent": (
+                    analysis.evidence_quality.unknown_context_self_percent
+                ),
+                "unresolved_kernel_self_percent": (
+                    analysis.evidence_quality.unresolved_kernel_self_percent
+                ),
+                "unresolved_user_self_percent": (
+                    analysis.evidence_quality.unresolved_user_self_percent
+                ),
                 "warning_count": analysis.evidence_quality.warning_count,
             },
             evidence_quality=analysis.evidence_quality,

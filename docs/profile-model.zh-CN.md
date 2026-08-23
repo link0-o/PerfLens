@@ -12,11 +12,14 @@ Occurrence count 会对每一个帧位置计数，因此能够单独保留递归
 值固定为 `unknown`、`sample_count` 和 `folded_weight`。
 
 对于 `perf script`，PerfLens 支持明确的
-`comm,pid,tid,cpu,time,event,period,ip,sym,dso,srcline` 字段。perf 输出的调用链会从
+`comm,pid,tid,cpu,misc,time,event,period,ip,sym,dso,srcline` 字段。perf 输出的调用链会从
 “叶子优先”规范化为“根优先”。period 会成为对应事件原生单位的权重：
 `cpu-clock`/`task-clock` 为纳秒、cycles 为周期、instructions 为指令；陌生事件使用
 `event_count`，不会猜测物理单位。没有 period 时会明确回退为一个样本。IP、原始符号、
 DSO、内核状态和源码行/列会继续绑定到经过驻留复用的 Frame。
+`misc` 的采样权限标记会保留为用户态、内核态或未知上下文。EvidenceQuality 会分别报告这些
+上下文的 Self 权重，并按上下文拆分 unresolved Self 权重，避免把内核符号被隐藏误报成
+用户态或容器模块符号化失败。
 
 热点按规范化的 `(symbol, DSO)` 分组，因此同一个函数内部的不同指令地址不会被拆开。
 公开调用路径采用相同的 `(symbol, DSO)` 身份，因此渲染结果相同的地址/源码变体会合并
@@ -59,7 +62,8 @@ Analysis 同时包含两种摘要：
 
 每份 Analysis 都带同一份 EvidenceQuality，MCP 的热点、详情、调用路径和分类接口也会原样
 返回它。字段包括原始输入/Collection 身份、事件来源与回退、样本/权重语义、解析和注释
-计数、未知 Self 权重、任意源码帧出现次数、独立的叶帧 Self 源码覆盖率、调用栈覆盖率、
+计数、未知 Self 权重及其采样权限上下文拆分、任意源码帧出现次数、独立的叶帧 Self
+源码覆盖率、调用栈覆盖率、
 规范化合并、输出省略权重以及允许/禁止结论。
 
 `perflens verify-analysis` 和 MCP `verify_analysis` 会独立复核：

@@ -14,12 +14,16 @@ source. Folded input fixes those values to `unknown`,
 `sample_count`, and `folded_weight`.
 
 For `perf script`, PerfLens supports the explicit fields
-`comm,pid,tid,cpu,time,event,period,ip,sym,dso,srcline`. Callchains emitted by
+`comm,pid,tid,cpu,misc,time,event,period,ip,sym,dso,srcline`. Callchains emitted by
 perf are normalized from leaf-first to root-first. Period uses the event's native
 unit: CPU/task clock is nanoseconds, cycles is cycles, and instructions is
 instructions. Unfamiliar events remain `event_count` instead of receiving a guessed
 physical unit; absent period falls back explicitly to one sample. IP, raw symbol,
 DSO, kernel status, and source line/column remain attached to interned frames.
+The `misc` sample privilege marker is retained as user, kernel, or unknown context.
+EvidenceQuality reports those Self-weight distributions separately and also splits unresolved
+Self weight by context, so hidden kernel symbols are not misreported as failed user/container
+symbolization.
 
 Hotspots group by normalized `(symbol, DSO)`, so different instruction
 addresses inside one function are not split. Public call paths use the same
@@ -67,7 +71,8 @@ goldens, cross-language fixtures, and explicit quality limits bound external unc
 
 The Analysis and every Agent-facing hotspot/details/path/classification response carry the same
 EvidenceQuality header. It exposes source identity, event fallback, record/weight semantics,
-parser/annotation counters, unresolved Self weight, source-line Frame occurrences, independent
+parser/annotation counters, unresolved Self weight and its sample-privilege split, source-line
+Frame occurrences, independent
 leaf-Self source coverage, call-graph coverage, normalization merges, omitted output weight, and
 allowed/forbidden conclusions.
 

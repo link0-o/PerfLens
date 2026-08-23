@@ -30,13 +30,13 @@ C/C++/Java/Python/Go runtime-lock adapters.
 |---|---|
 | Ruff | passed |
 | Pyright strict mode | 0 errors, 0 warnings |
-| Python 3.12 | 1069 passed; 85.15% coverage |
-| Python 3.13 | 1069 passed; 85.15% coverage |
+| Python 3.12 | 1077 passed; 85.13% coverage |
+| Python 3.13 | 1077 passed; 85.13% coverage |
 | Rust format/Clippy/tests | passed; 64 tests |
 | Rust dependencies | `cargo audit` clean with the official local advisory DB clone; `cargo deny check` passed |
 | Protocol/Schema | generated files clean; Python/Rust valid and invalid goldens passed |
 | Python packages | wheel and sdist built reproducibly and passed isolated smoke tests |
-| Debian packages | two reproducible `0.3.1-7` amd64 DEBs passed extract/package smoke; no service or Docker activation |
+| Debian packages | two reproducible `0.3.1-12` amd64 DEBs passed extract/package smoke; no service or Docker activation |
 
 Exact counts describe this candidate checkout and will change as tests grow. The coverage gate
 remains 85% and must not be lowered for a release.

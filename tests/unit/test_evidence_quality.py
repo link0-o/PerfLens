@@ -13,7 +13,7 @@ from perflens.application.evidence import (
     verify_collection_artifact,
 )
 from perflens.application.verify_analysis import verify_analysis_artifact
-from perflens.contracts.artifacts import CollectionArtifact, PerfStatMetric
+from perflens.contracts.artifacts import AnalysisArtifact, CollectionArtifact, PerfStatMetric
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.domain.models import ResourceLimits
 from perflens.metrics.perf_stat import PerfStatMetricAdapter
@@ -98,6 +98,65 @@ def test_analysis_verifier_rejects_tampered_hotspot_weight(tmp_path: Path) -> No
 
     assert captured.value.code is ErrorCode.PROFILE_PARSE_FAILED
     assert captured.value.stage == "evidence_validation"
+
+
+def test_analysis_verifier_preserves_pre_v5_artifact_hash_compatibility(
+    tmp_path: Path,
+) -> None:
+    profile = tmp_path / "legacy.folded"
+    profile.write_text("root;leaf 7\n", encoding="utf-8")
+    current = analyze_folded(profile)
+    payload = current.model_dump(mode="json")
+    for field in (
+        "kernel_context_self_weight",
+        "kernel_context_self_percent",
+        "user_context_self_weight",
+        "user_context_self_percent",
+        "unknown_context_self_weight",
+        "unknown_context_self_percent",
+        "unresolved_kernel_self_weight",
+        "unresolved_kernel_self_percent",
+        "unresolved_user_self_weight",
+        "unresolved_user_self_percent",
+        "unresolved_unknown_context_self_weight",
+        "unresolved_unknown_context_self_percent",
+    ):
+        payload["evidence_quality"].pop(field)
+    payload["content_sha256"] = "0" * 64
+    legacy = AnalysisArtifact.model_validate(payload)
+    legacy = legacy.model_copy(
+        update={"content_sha256": compute_analysis_content_sha256(legacy)}
+    )
+
+    # Structural verification remains valid after an upgrade. A requested
+    # source replay may legitimately differ once the recorded parser version
+    # is superseded, so that is a separate compatibility boundary.
+    verification = verify_analysis_artifact(legacy, verify_source=False)
+
+    assert verification.status == "partial"
+    assert all(check.status in {"passed", "skipped"} for check in verification.checks)
+    assert legacy.evidence_quality.kernel_context_self_weight is None
+    assert "sample_privilege_distribution" not in legacy.evidence_quality.allowed_conclusions
+
+
+def test_analysis_verifier_rejects_partial_sample_context_group(tmp_path: Path) -> None:
+    profile = tmp_path / "profile.folded"
+    profile.write_text("root;leaf 7\n", encoding="utf-8")
+    artifact = analyze_folded(profile)
+    tampered_quality = artifact.evidence_quality.model_copy(
+        update={"kernel_context_self_weight": None}
+    )
+    tampered = artifact.model_copy(update={"evidence_quality": tampered_quality})
+    tampered = tampered.model_copy(
+        update={"content_sha256": compute_analysis_content_sha256(tampered)}
+    )
+
+    with pytest.raises(PerfLensError, match="deterministic verification") as captured:
+        verify_analysis_artifact(tampered, verify_source=False)
+
+    assert captured.value.details["failure"] == (
+        "sample-context metrics are only partially present"
+    )
 
 
 def test_analysis_verifier_rejects_tampered_agent_conclusion_gate(tmp_path: Path) -> None:

@@ -17,6 +17,7 @@ from perflens.docker.workload import (
     inspect_managed_project_root,
 )
 from perflens.domain.errors import PerfLensError
+from perflens.mcp.storage import ArtifactStore, PathPolicy
 
 
 def _gate(tmp_path: Path) -> Path:
@@ -59,6 +60,59 @@ def test_builder_binds_project_gate_and_fixed_sandbox(tmp_path: Path) -> None:
     assert str(project_path) not in serialized
     assert str(gate.path) not in serialized
     assert "src/workload.py" not in serialized
+
+
+def test_repeated_authorizations_keep_a_stable_fingerprint_and_unique_artifact_ids(
+    tmp_path: Path,
+) -> None:
+    project_path = tmp_path / "project"
+    project_path.mkdir()
+    project = inspect_managed_project_root(project_path)
+    gate = inspect_container_gate(
+        _gate(tmp_path),
+        trusted_owner_uids=(os.geteuid(),),
+    )
+
+    def build(created_at: datetime) -> ContainerWorkloadSpecArtifact:
+        return build_container_workload_spec(
+            project=project,
+            gate=gate,
+            image_digest="sha256:" + "a" * 64,
+            entrypoint="/workspace/workload",
+            arguments=("--verify",),
+            container_user=f"{os.geteuid()}:{os.getegid()}",
+            cpus=1,
+            memory_bytes=64 << 20,
+            pids=32,
+            allowed_modes=("record",),
+            treatment_paths=("src/workload.cpp",),
+            created_at=created_at,
+        )
+
+    first = build(datetime(2026, 8, 23, 12, 0, tzinfo=UTC))
+    repeated = build(datetime(2026, 8, 23, 12, 1, tzinfo=UTC))
+    identical = build(datetime(2026, 8, 23, 12, 0, tzinfo=UTC))
+
+    assert repeated.workload_fingerprint == first.workload_fingerprint
+    assert repeated.workload_spec_id != first.workload_spec_id
+    assert repeated.content_sha256 != first.content_sha256
+    assert identical == first
+
+    store = ArtifactStore(
+        tmp_path / "artifacts",
+        PathPolicy((tmp_path,)),
+        allow_writes=True,
+    )
+    first_path = store.save(first, first.workload_spec_id, "container-workload-spec")
+    repeated_path = store.save(
+        repeated,
+        repeated.workload_spec_id,
+        "container-workload-spec",
+    )
+    assert repeated_path != first_path
+    assert store.save(identical, identical.workload_spec_id, "container-workload-spec") == (
+        first_path
+    )
 
 
 def test_builder_rejects_gate_replacement_after_authorization(tmp_path: Path) -> None:

@@ -8,7 +8,7 @@ import stat
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 from mcp.client import Client
@@ -89,19 +89,25 @@ def _docker_target() -> ContainerTargetArtifact:
     )
 
 
-def _fake_docker_plan() -> CollectionPlanArtifact:
+def _fake_docker_plan(
+    *,
+    mode: Literal["record", "stat"] = "stat",
+) -> CollectionPlanArtifact:
     return CollectionPlanArtifact(
         schema_version="1.0",
         plan_id="plan-" + "a" * 20,
-        mode="stat",
+        mode=mode,
         target_type="pid",
         target_pid=1234,
         target_uid=os.geteuid(),
         target_start_time_ticks=5678,
         backend="privileged_broker",
         duration_seconds=1,
-        events=("task-clock",),
+        frequency_hz=99 if mode == "record" else None,
+        call_graph="dwarf" if mode == "record" else None,
+        events=("task-clock",) if mode == "stat" else (),
         requested_event_source="software_only",
+        record_event="cpu-clock" if mode == "record" else None,
         max_output_bytes=1000,
         expires_at="2026-08-21T01:00:00+00:00",
         policy_status="allowed",
@@ -112,6 +118,8 @@ def _fake_docker_plan() -> CollectionPlanArtifact:
 def _fake_docker_collection(
     tmp_path: Path,
     target: ContainerTargetArtifact,
+    *,
+    mode: Literal["record", "stat"] = "stat",
 ) -> CollectionArtifact:
     binding = ContainerCollectionTargetBinding(
         target_id=target.target_id,
@@ -140,24 +148,30 @@ def _fake_docker_collection(
         adapter_recipe_id=target.adapter_recipe_id,
         adapter_sha256=target.adapter_sha256,
     )
+    output_path = tmp_path / ("fake.perf.data" if mode == "record" else "fake.stat.csv")
+    output_payload = b"PERFILE2" if mode == "record" else b"c" * 120
+    output_path.write_bytes(output_payload)
     return CollectionArtifact(
         schema_version="1.0",
-        collection_id="collection-" + "b" * 16,
-        mode="stat",
+        collection_id="collection-" + ("d" if mode == "record" else "b") * 16,
+        mode=mode,
         target_type="pid",
         target_argument_count=0,
         target_pid=1234,
         target_runtime="docker",
         container_target=binding,
-        output_path=str(tmp_path / "fake.stat.csv"),
-        output_sha256="c" * 64,
-        output_bytes=120,
-        output_format="perf_stat_delimited",
+        output_path=str(output_path),
+        output_sha256=hashlib.sha256(output_payload).hexdigest(),
+        output_bytes=len(output_payload),
+        output_format="perf_data" if mode == "record" else "perf_stat_delimited",
         perf_executable="/usr/bin/perf",
         started_at="2026-08-21T00:00:00+00:00",
         finished_at="2026-08-21T00:00:01+00:00",
         duration_seconds=1,
-        events=("task-clock",),
+        frequency_hz=99 if mode == "record" else None,
+        call_graph="dwarf" if mode == "record" else None,
+        record_event="cpu-clock" if mode == "record" else None,
+        events=("task-clock",) if mode == "stat" else (),
         requested_event_source="software_only",
         actual_event_source="software",
         evidence_limitations=(
@@ -171,17 +185,24 @@ def _fake_docker_collection(
         host_kernel_release="6.12-test",
         perf_executable_sha256="b" * 64,
         metrics=(
-            PerfStatMetric(
-                event="task-clock",
-                value=1000,
-                unit="msec",
-                status="measured",
-            ),
+            (
+                PerfStatMetric(
+                    event="task-clock",
+                    value=1000,
+                    unit="msec",
+                    status="measured",
+                ),
+            )
+            if mode == "stat"
+            else ()
         ),
     )
 
 
-def _managed_workload() -> ContainerWorkloadSpecArtifact:
+def _managed_workload(
+    *,
+    allowed_modes: tuple[Literal["record", "stat"], ...] = ("stat",),
+) -> ContainerWorkloadSpecArtifact:
     treatment_path_sha256 = hashlib.sha256(
         b"perflens-container-treatment-path-v1\0workload.py"
     ).hexdigest()
@@ -197,7 +218,7 @@ def _managed_workload() -> ContainerWorkloadSpecArtifact:
         working_directory="/workspace",
         container_user=f"{os.geteuid()}:{os.getegid()}",
         resources=ContainerResourceLimits(cpus=1, memory_bytes=64 << 20, pids=32),
-        allowed_modes=("stat",),
+        allowed_modes=allowed_modes,
         authorization_mode="per_run",
         max_workload_runs=1,
         correctness_command_sha256="4" * 64,
@@ -242,6 +263,7 @@ def _managed_session(
     workload_spec_sha256: str,
     *,
     state: str = "active",
+    allowed_modes: tuple[Literal["record", "stat"], ...] = ("stat",),
 ) -> ContainerOptimizationSessionArtifact:
     inactive = None if state == "active" else "Docker authorization budget was exhausted."
     provisional = ContainerOptimizationSessionArtifact(
@@ -256,7 +278,7 @@ def _managed_session(
         client_connection_identity_sha256="2" * 64,
         authorization_receipt_sha256="3" * 64,
         workload_spec_sha256=workload_spec_sha256,
-        allowed_modes=("stat",),
+        allowed_modes=allowed_modes,
         state=cast(Any, state),
         max_workload_runs=1,
         workload_runs_used=1 if state != "active" else 0,
@@ -712,11 +734,16 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
     class FakeCgroupReader:
         def __init__(self, resolved: SimpleNamespace) -> None:
             assert resolved.artifact == target
+            self.closed = False
 
         def capture(self) -> object:
+            assert not self.closed
             snapshot = object()
             resource_captures.append(snapshot)
             return snapshot
+
+        def close(self) -> None:
+            self.closed = True
 
     def fake_build_resource(
         _reader: FakeCgroupReader,
@@ -1079,6 +1106,7 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
     target = _managed_docker_target()
     workload = _managed_workload()
     collection = _fake_docker_collection(tmp_path, target)
+    record_collection = _fake_docker_collection(tmp_path, target, mode="record")
     active_session = _managed_session(workload.content_sha256)
     exhausted_session = _managed_session(workload.content_sha256, state="exhausted")
     resource_context = make_container_resource_context(
@@ -1145,11 +1173,36 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
         def __init__(self, resolved: SimpleNamespace) -> None:
             assert resolved.artifact == target
             self.capture_count = 0
+            self.closed = False
 
         def capture(self) -> object:
+            assert not self.closed
             self.capture_count += 1
             operations.append(f"cgroup-{self.capture_count}")
             return object()
+
+        def close(self) -> None:
+            if not self.closed:
+                self.closed = True
+                operations.append("cgroup-close")
+
+    class FakeCgroupMonitor:
+        def __init__(self, reader: FakeCgroupReader, baseline: object) -> None:
+            self.reader = reader
+            self.baseline = baseline
+            self.started = False
+
+        def start(self) -> None:
+            assert not self.started
+            self.started = True
+            self.reader.capture()
+
+        def finish(self) -> object:
+            assert self.started
+            return self.reader.capture()
+
+        def stop(self) -> None:
+            return None
 
     def fake_build_resource(
         _reader: FakeCgroupReader,
@@ -1160,9 +1213,48 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
         source_output_sha256: str,
     ):
         operations.append("resource")
-        assert source_collection_id == collection.collection_id
-        assert source_output_sha256 == collection.output_sha256
+        expected_collection = (
+            record_collection
+            if source_output_sha256 == record_collection.output_sha256
+            else collection
+        )
+        assert source_collection_id == expected_collection.collection_id
+        assert source_output_sha256 == expected_collection.output_sha256
         return resource_context
+
+    class FakePinnedProcessRoot:
+        def close(self) -> None:
+            operations.append("module-root-close")
+
+    pinned_process_root = FakePinnedProcessRoot()
+    pin_failure = {"value": False}
+
+    def fake_pin_process_root(pinned_target: ContainerTargetArtifact) -> FakePinnedProcessRoot:
+        assert pinned_target == target
+        if pin_failure["value"]:
+            operations.append("module-root-pin-unavailable")
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "container_symbols",
+                "simulated unreadable process root",
+                recoverable=True,
+            )
+        operations.append("module-root-pin")
+        return pinned_process_root
+
+    def fake_capture_module_snapshot(
+        captured_collection: CollectionArtifact,
+        **kwargs: object,
+    ) -> None:
+        assert captured_collection == record_collection
+        expected_root = None if pin_failure["value"] else pinned_process_root
+        assert kwargs["pinned_process_root"] is expected_root
+        operations.append("module-snapshot")
+        raise PerfLensError(
+            ErrorCode.PROFILE_PARSE_FAILED,
+            "container_symbols",
+            "simulated post-collection symbol conversion failure",
+        )
 
     class FakeDockerRuntime:
         def __init__(self, **_kwargs: object) -> None:
@@ -1199,7 +1291,7 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
         **_kwargs: object,
     ) -> CollectionPlanArtifact:
         requests.append(request)
-        plan = _fake_docker_plan()
+        plan = _fake_docker_plan(mode="record" if request.mode == "record" else "stat")
         if plan_denied["value"]:
             return plan.model_copy(
                 update={
@@ -1246,7 +1338,7 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
 
         def collect(
             self,
-            _plan: CollectionPlanArtifact,
+            selected_plan: CollectionPlanArtifact,
             *,
             ready_callback: Any = None,
         ) -> CollectionArtifact:
@@ -1260,13 +1352,22 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
                     "collector_broker",
                     "simulated managed Docker collection failure",
                 )
-            return collection
+            return record_collection if selected_plan.mode == "record" else collection
 
     monkeypatch.setattr("perflens.mcp.server.ExistingDockerRuntime", fake_runtime_factory)
     monkeypatch.setattr("perflens.mcp.server.create_collection_plan", fake_create_plan)
     monkeypatch.setattr("perflens.mcp.server.assert_plan_current", fake_assert_current)
     monkeypatch.setattr("perflens.mcp.server.CollectorBrokerClient", FakeBrokerClient)
     monkeypatch.setattr("perflens.mcp.server.CgroupV2ResourceReader", FakeCgroupReader)
+    monkeypatch.setattr("perflens.mcp.server.CgroupSnapshotMonitor", FakeCgroupMonitor)
+    monkeypatch.setattr(
+        "perflens.mcp.server.pin_container_process_root",
+        fake_pin_process_root,
+    )
+    monkeypatch.setattr(
+        "perflens.mcp.server.capture_container_module_snapshot",
+        fake_capture_module_snapshot,
+    )
     monkeypatch.setattr(
         "perflens.mcp.server.build_container_resource_context",
         fake_build_resource,
@@ -1306,7 +1407,7 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             collector_socket=tmp_path / "collector.sock",
             automatic_collection_policy=AutomaticCollectionPolicy(
                 enabled=True,
-                allowed_modes=("stat",),
+                allowed_modes=("record", "stat"),
                 max_duration_seconds=10,
                 max_output_bytes=1000,
             ),
@@ -1379,11 +1480,13 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             assert isinstance(measurement_id, str)
             assert operations == [
                 "prepare",
-                "broker",
                 "cgroup-1",
-                "release",
+                "broker",
                 "cgroup-2",
+                "release",
+                "cgroup-3",
                 "resource",
+                "cgroup-close",
                 "wait",
                 "benchmark",
                 "cleanup",
@@ -1401,6 +1504,75 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             assert (artifact_root / f"{measurement_id}.container-measurement.json").is_file()
             assert reference["summary"]["container_benchmark_id"] == benchmark.benchmark_id
             assert (artifact_root / f"{benchmark.benchmark_id}.benchmark.json").is_file()
+
+            operations.clear()
+            prepared.state = "prepared"
+            prepared.exit_code = None
+            symbol_failure = await client.call_tool(
+                "collect_managed_docker_workload",
+                {
+                    "session_id": active_session.session_id,
+                    "mode": "record",
+                    "duration_seconds": 1,
+                    "workload_timeout_seconds": 30,
+                    "event_source": "software_only",
+                    "max_output_bytes": 1000,
+                },
+            )
+            assert symbol_failure.is_error
+            assert "simulated post-collection symbol conversion failure" in str(
+                symbol_failure.content
+            )
+            assert operations == [
+                "prepare",
+                "module-root-pin",
+                "cgroup-1",
+                "broker",
+                "cgroup-2",
+                "release",
+                "cgroup-3",
+                "resource",
+                "cgroup-close",
+                "module-snapshot",
+                "module-root-close",
+                "cleanup",
+                "finish",
+            ]
+
+            operations.clear()
+            prepared.state = "prepared"
+            prepared.exit_code = None
+            pin_failure["value"] = True
+            unavailable_pin = await client.call_tool(
+                "collect_managed_docker_workload",
+                {
+                    "session_id": active_session.session_id,
+                    "mode": "record",
+                    "duration_seconds": 1,
+                    "workload_timeout_seconds": 30,
+                    "event_source": "software_only",
+                    "max_output_bytes": 1000,
+                },
+            )
+            assert unavailable_pin.is_error
+            assert "simulated post-collection symbol conversion failure" in str(
+                unavailable_pin.content
+            )
+            assert operations == [
+                "prepare",
+                "module-root-pin-unavailable",
+                "cgroup-1",
+                "broker",
+                "cgroup-2",
+                "release",
+                "cgroup-3",
+                "resource",
+                "cgroup-close",
+                "module-snapshot",
+                "cleanup",
+                "finish",
+            ]
+            pin_failure["value"] = False
 
             operations.clear()
             prepared.state = "prepared"
@@ -1466,9 +1638,11 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             assert "baseline callback was invoked more than once" in str(duplicate_callback.content)
             assert operations == [
                 "prepare",
-                "broker",
                 "cgroup-1",
+                "broker",
+                "cgroup-2",
                 "release",
+                "cgroup-close",
                 "cleanup",
                 "finish",
             ]
@@ -1491,7 +1665,14 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             )
             assert missing_callback.is_error
             assert "without releasing the managed Docker workload" in str(missing_callback.content)
-            assert operations == ["prepare", "broker", "cleanup", "finish"]
+            assert operations == [
+                "prepare",
+                "cgroup-1",
+                "broker",
+                "cgroup-close",
+                "cleanup",
+                "finish",
+            ]
 
             operations.clear()
             prepared.state = "prepared"
@@ -1513,9 +1694,11 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             assert failed.is_error
             assert operations == [
                 "prepare",
-                "broker",
                 "cgroup-1",
+                "broker",
+                "cgroup-2",
                 "release",
+                "cgroup-close",
                 "cleanup",
                 "finish",
             ]

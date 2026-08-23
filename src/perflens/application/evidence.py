@@ -453,6 +453,20 @@ def validate_aggregation_invariants(
     if result.source_line_self_weight > result.total_weight:
         failures.append("source-line Self weight exceeds total profile weight")
     if (
+        result.kernel_context_self_weight
+        + result.user_context_self_weight
+        + result.unknown_context_self_weight
+        != result.total_weight
+    ):
+        failures.append("sample-context Self weights do not sum to total profile weight")
+    if (
+        result.unresolved_kernel_self_weight
+        + result.unresolved_user_self_weight
+        + result.unresolved_unknown_context_self_weight
+        != result.unknown_self_weight
+    ):
+        failures.append("unresolved sample-context weights do not sum to unknown Self weight")
+    if (
         source_type in {"perf_script", "perf_data"}
         and diagnostics.malformed_records == 0
         and diagnostics.frame_lines != result.total_frame_count + diagnostics.duplicate_frame_lines
@@ -486,6 +500,15 @@ def build_evidence_quality(
 ) -> EvidenceQuality:
     total = result.total_weight
     unresolved_self_percent = _percent(result.unknown_self_weight, total)
+    kernel_context_self_percent = _percent(result.kernel_context_self_weight, total)
+    user_context_self_percent = _percent(result.user_context_self_weight, total)
+    unknown_context_self_percent = _percent(result.unknown_context_self_weight, total)
+    unresolved_kernel_self_percent = _percent(result.unresolved_kernel_self_weight, total)
+    unresolved_user_self_percent = _percent(result.unresolved_user_self_weight, total)
+    unresolved_unknown_context_self_percent = _percent(
+        result.unresolved_unknown_context_self_weight,
+        total,
+    )
     call_graph_weight_percent = _percent(result.call_graph_weight, total)
     source_line_self_percent = _percent(result.source_line_self_weight, total)
     omitted_hotspot_self_weight = max(0, total - exported_hotspot_self_weight)
@@ -517,6 +540,21 @@ def build_evidence_quality(
         )
     if result.unknown_self_weight:
         partial_reasons.append(f"{unresolved_self_percent:.3f}% of Self weight is unresolved.")
+        if result.unresolved_kernel_self_weight:
+            limitations.append(
+                f"{unresolved_kernel_self_percent:.3f}% of Self weight is unresolved in "
+                "kernel-context samples."
+            )
+        if result.unresolved_user_self_weight:
+            limitations.append(
+                f"{unresolved_user_self_percent:.3f}% of Self weight is unresolved in "
+                "user-context samples."
+            )
+        if result.unresolved_unknown_context_self_weight:
+            limitations.append(
+                f"{unresolved_unknown_context_self_percent:.3f}% of Self weight is unresolved "
+                "where sample privilege context is unavailable."
+            )
     if conversion.diagnostics:
         partial_reasons.append("The external converter emitted diagnostics.")
     if omitted_hotspot_self_weight:
@@ -572,6 +610,8 @@ def build_evidence_quality(
         allowed.append("source_line_observation")
     if total and is_on_cpu_sampling_event(result.event):
         allowed.append("on_cpu_hotspot_distribution")
+    if result.kernel_context_self_weight or result.user_context_self_weight:
+        allowed.append("sample_privilege_distribution")
 
     forbidden = ["performance_root_cause", "verified_improvement"]
     if actual_event_source != "hardware":
@@ -627,6 +667,22 @@ def build_evidence_quality(
         aggregated_frame_occurrence_count=result.total_frame_count,
         unresolved_self_weight=result.unknown_self_weight,
         unresolved_self_percent=unresolved_self_percent,
+        kernel_context_self_weight=result.kernel_context_self_weight,
+        kernel_context_self_percent=kernel_context_self_percent,
+        user_context_self_weight=result.user_context_self_weight,
+        user_context_self_percent=user_context_self_percent,
+        unknown_context_self_weight=result.unknown_context_self_weight,
+        unknown_context_self_percent=unknown_context_self_percent,
+        unresolved_kernel_self_weight=result.unresolved_kernel_self_weight,
+        unresolved_kernel_self_percent=unresolved_kernel_self_percent,
+        unresolved_user_self_weight=result.unresolved_user_self_weight,
+        unresolved_user_self_percent=unresolved_user_self_percent,
+        unresolved_unknown_context_self_weight=(
+            result.unresolved_unknown_context_self_weight
+        ),
+        unresolved_unknown_context_self_percent=(
+            unresolved_unknown_context_self_percent
+        ),
         call_graph_weight=result.call_graph_weight,
         call_graph_weight_percent=call_graph_weight_percent,
         source_line_frame_count=result.source_line_frame_count,

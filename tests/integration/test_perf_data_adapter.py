@@ -27,7 +27,7 @@ def test_perf_data_uses_explicit_perf_script_adapter(tmp_path: Path) -> None:
         "    print('perf version test-1')\n"
         "    raise SystemExit(0)\n"
         "expected = ['script', '--force', '--ns', '-F', "
-        "'comm,pid,tid,cpu,time,event,period,ip,sym,dso,srcline', '-i']\n"
+        "'comm,pid,tid,cpu,misc,time,event,period,ip,sym,dso,srcline', '-i']\n"
         "assert sys.argv[1:7] == expected, sys.argv\n"
         "print('app 9/10 [001] 1.25: 11 cycles: 400010 leaf (/tmp/perf-9.map)')\n"
     )
@@ -86,7 +86,7 @@ def test_perf_data_retries_without_cpu_for_legacy_recordings(tmp_path: Path) -> 
         "    print(\"Samples for 'cpu-clock' event do not have CPU attribute set. "
         "Cannot print 'cpu' field.\", file=sys.stderr)\n"
         "    raise SystemExit(255)\n"
-        "assert fields == 'comm,pid,tid,time,event,period,ip,sym,dso,srcline'\n"
+        "assert fields == 'comm,pid,tid,misc,time,event,period,ip,sym,dso,srcline'\n"
         "print('app 9/10 1.25: 11 cpu-clock: 400010 leaf (/app) /src/app.c:7')\n",
         encoding="utf-8",
     )
@@ -130,8 +130,10 @@ def test_perf_data_uses_verified_symfs_without_publishing_private_path(
         "if args == ['--version']:\n"
         "    print('perf version symfs-test')\n"
         "    raise SystemExit(0)\n"
-        "assert args[:4] == ['script', '--force', '--ns', '--symfs'], args\n"
-        f"assert pathlib.Path(args[4]) == pathlib.Path({str(symfs)!r}), args\n"
+        "assert args[:6] == [\n"
+        "    'script', '--force', '--ns', '--no-inline', '--full-source-path', '--symfs'\n"
+        "], args\n"
+        f"assert pathlib.Path(args[6]) == pathlib.Path({str(symfs)!r}), args\n"
         "print('app 9/10 [001] 1.25: 11 cpu-clock: 400010 leaf (/workspace/app)')\n",
         encoding="utf-8",
     )
@@ -148,6 +150,8 @@ def test_perf_data_uses_verified_symfs_without_publishing_private_path(
     assert str(symfs) not in conversion.argv
     assert f"@VERIFIED_CONTAINER_SYMFS_SHA256:{symfs_identity}" in conversion.argv
     assert f"verified_container_symfs_sha256:{symfs_identity}" in conversion.compatibility_fallbacks
+    assert "--no-inline" in conversion.argv
+    assert "--full-source-path" in conversion.argv
     assert analysis.hotspots[0].symbol == "leaf"
 
 
@@ -236,7 +240,7 @@ def test_perf_data_does_not_retry_unrelated_perf_failure(tmp_path: Path) -> None
         "    print('perf version test-1')\n"
         "    raise SystemExit(0)\n"
         "fields = sys.argv[sys.argv.index('-F') + 1]\n"
-        "if fields == 'comm,pid,tid,time,event,period,ip,sym,dso,srcline':\n"
+        "if fields == 'comm,pid,tid,misc,time,event,period,ip,sym,dso,srcline':\n"
         "    print('unsafe broad retry occurred')\n"
         "    raise SystemExit(0)\n"
         "print('unrelated corrupt perf.data error', file=sys.stderr)\n"

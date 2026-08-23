@@ -138,6 +138,25 @@ class EvidenceQuality(ContractModel):
     aggregated_frame_occurrence_count: int = Field(ge=0)
     unresolved_self_weight: int = Field(ge=0)
     unresolved_self_percent: float = Field(ge=0, le=100)
+    # Optional only for backward-compatible loading and hashing of Analysis
+    # artifacts produced before perf-script-v5. New analyses always populate
+    # this complete group, and the independent verifier rejects partial groups.
+    kernel_context_self_weight: int | None = Field(default=None, ge=0)
+    kernel_context_self_percent: float | None = Field(default=None, ge=0, le=100)
+    user_context_self_weight: int | None = Field(default=None, ge=0)
+    user_context_self_percent: float | None = Field(default=None, ge=0, le=100)
+    unknown_context_self_weight: int | None = Field(default=None, ge=0)
+    unknown_context_self_percent: float | None = Field(default=None, ge=0, le=100)
+    unresolved_kernel_self_weight: int | None = Field(default=None, ge=0)
+    unresolved_kernel_self_percent: float | None = Field(default=None, ge=0, le=100)
+    unresolved_user_self_weight: int | None = Field(default=None, ge=0)
+    unresolved_user_self_percent: float | None = Field(default=None, ge=0, le=100)
+    unresolved_unknown_context_self_weight: int | None = Field(default=None, ge=0)
+    unresolved_unknown_context_self_percent: float | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+    )
     call_graph_weight: int = Field(ge=0)
     call_graph_weight_percent: float = Field(ge=0, le=100)
     source_line_frame_count: int = Field(ge=0)

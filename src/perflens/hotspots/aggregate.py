@@ -38,13 +38,19 @@ class HotspotAggregator:
         "_has_call_graph",
         "_hotspots",
         "_inline_frame_count",
+        "_kernel_context_self_weight",
         "_limits",
         "_record_count",
         "_source_line_frame_count",
         "_source_line_self_weight",
         "_total_frame_count",
         "_total_weight",
+        "_unknown_context_self_weight",
         "_unknown_self_weight",
+        "_unresolved_kernel_self_weight",
+        "_unresolved_unknown_context_self_weight",
+        "_unresolved_user_self_weight",
+        "_user_context_self_weight",
         "_weight_source",
         "_weight_unit",
     )
@@ -60,6 +66,12 @@ class HotspotAggregator:
         self._has_call_graph = False
         self._call_graph_weight = 0
         self._unknown_self_weight = 0
+        self._kernel_context_self_weight = 0
+        self._user_context_self_weight = 0
+        self._unknown_context_self_weight = 0
+        self._unresolved_kernel_self_weight = 0
+        self._unresolved_user_self_weight = 0
+        self._unresolved_unknown_context_self_weight = 0
         self._source_line_frame_count = 0
         self._source_line_self_weight = 0
         self._inline_frame_count = 0
@@ -88,8 +100,20 @@ class HotspotAggregator:
         leaf_key = (leaf_frame.symbol, leaf_frame.dso)
         leaf = self._hotspots.setdefault(leaf_key, HotspotAccumulator())
         leaf.self_weight += sample.weight
+        if sample.sample_context == "kernel":
+            self._kernel_context_self_weight += sample.weight
+        elif sample.sample_context == "user":
+            self._user_context_self_weight += sample.weight
+        else:
+            self._unknown_context_self_weight += sample.weight
         if leaf_frame.is_unknown:
             self._unknown_self_weight += sample.weight
+            if sample.sample_context == "kernel":
+                self._unresolved_kernel_self_weight += sample.weight
+            elif sample.sample_context == "user":
+                self._unresolved_user_self_weight += sample.weight
+            else:
+                self._unresolved_unknown_context_self_weight += sample.weight
         if leaf_frame.source_line is not None:
             self._source_line_self_weight += sample.weight
 
@@ -208,6 +232,14 @@ class HotspotAggregator:
             weight_source=self._weight_source or "folded_weight",
             call_graph_weight=self._call_graph_weight,
             unknown_self_weight=self._unknown_self_weight,
+            kernel_context_self_weight=self._kernel_context_self_weight,
+            user_context_self_weight=self._user_context_self_weight,
+            unknown_context_self_weight=self._unknown_context_self_weight,
+            unresolved_kernel_self_weight=self._unresolved_kernel_self_weight,
+            unresolved_user_self_weight=self._unresolved_user_self_weight,
+            unresolved_unknown_context_self_weight=(
+                self._unresolved_unknown_context_self_weight
+            ),
             source_line_frame_count=self._source_line_frame_count,
             source_line_self_weight=self._source_line_self_weight,
             inline_frame_count=self._inline_frame_count,

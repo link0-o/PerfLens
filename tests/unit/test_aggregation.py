@@ -87,6 +87,28 @@ def test_different_event_or_weight_unit_is_rejected() -> None:
         aggregator.add(StackSample((frame,), 1, event="instructions"))
 
 
+def test_self_weight_is_conserved_by_sample_privilege_context() -> None:
+    table = FrameTable()
+    unknown = table.intern("[unknown]", dso="[unknown]", is_unknown=True)
+    resolved = table.intern("work", dso="app")
+    result = _result(
+        table,
+        [
+            StackSample((unknown,), weight=7, sample_context="kernel"),
+            StackSample((unknown,), weight=3, sample_context="user"),
+            StackSample((resolved,), weight=5, sample_context="user"),
+            StackSample((resolved,), weight=2),
+        ],
+    )
+
+    assert result.kernel_context_self_weight == 7
+    assert result.user_context_self_weight == 8
+    assert result.unknown_context_self_weight == 2
+    assert result.unresolved_kernel_self_weight == 7
+    assert result.unresolved_user_self_weight == 3
+    assert result.unresolved_unknown_context_self_weight == 0
+
+
 def test_call_paths_are_aggregated_and_deterministic() -> None:
     table = FrameTable()
     root = table.intern("root")

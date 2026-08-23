@@ -6,6 +6,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
+- Verified Docker `record` analysis now disables ambiguous inline expansion, requests full source
+  paths only inside the private verified symfs, and classifies perf sample privilege context. User
+  frames map back to the authorized workspace while unresolved restricted kernel frames remain an
+  explicit evidence limitation instead of being misreported as failed container symbolization.
 - Empty but structurally valid `perf record` outputs now produce a verified `partial` Analysis
   with zero samples and no hotspot conclusions instead of failing deterministic verification or
   inventing an observed event.
@@ -20,9 +24,22 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - Managed Docker guidance now treats a confirmed run count as an exact consent boundary: one
   requested run means one collection call, failures are not silently retried, and collection
   duration is documented as a maximum window rather than a way to prolong the workload.
-- Docker cgroup snapshots now use an `O_PATH` directory anchor, so fixed cgroup-v2 resource files
-  remain readable on hosts that grant traversal but not directory-list permission. Safe errno
-  names distinguish permission failures from container-lifecycle races without exposing paths.
+- Docker cgroup snapshots now pin an `O_PATH` directory anchor and the fixed controller-file
+  allowlist before the Container Gate releases the workload. A bounded monitor retains the last
+  identity-verified snapshot when Docker removes a short-lived workload's cgroup; the resulting
+  resource delta is explicitly `partial` and a lower bound instead of failing with `ENOENT` or
+  presenting incomplete counters as exact. Replaced directories/files still fail closed, and safe
+  errno names distinguish permission failures without exposing private paths.
+- Repeated managed-Docker authorizations now keep the semantic `workload_fingerprint` stable while
+  assigning each timestamped WorkloadSpec artifact its own content-bound identifier. The immutable
+  recipe is persisted before collection begins, preventing an earlier session's valid artifact from
+  causing a late `Artifact identifier already exists with different content` failure after perf
+  evidence and container resource context have already been collected.
+- Managed `record` now pins both the already-verified container root and its read-only `/workspace`
+  bind mount while the Gate is still alive, then matches only perf Build-ID hits against those
+  descriptors after collection. Docker may retire the nested mount after a short workload exits
+  without losing descriptor-bound access to the workspace module; unreadable cross-UID roots still
+  degrade to partial symbol evidence, while target-binding mismatches fail before workload release.
 
 ## [0.3.1] - 2026-08-22
 

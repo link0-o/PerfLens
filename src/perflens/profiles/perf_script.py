@@ -23,44 +23,45 @@ from perflens.profiles.events import perf_period_unit
 from perflens.profiles.text import sanitize_surrogateescaped_text
 from perflens.stacks.normalize import normalize_symbol
 
-PERF_SCRIPT_FIELDS = "comm,pid,tid,cpu,time,event,period,ip,sym,dso,srcline"
-PERF_SCRIPT_FIELDS_WITHOUT_CPU = "comm,pid,tid,time,event,period,ip,sym,dso,srcline"
+PERF_SCRIPT_FIELDS = "comm,pid,tid,cpu,misc,time,event,period,ip,sym,dso,srcline"
+PERF_SCRIPT_FIELDS_WITHOUT_CPU = "comm,pid,tid,misc,time,event,period,ip,sym,dso,srcline"
 PERF_WEIGHT_SOURCE = "perf_period"
-PERF_SCRIPT_PARSER_VERSION = "perf-script-v4"
+PERF_SCRIPT_PARSER_VERSION = "perf-script-v5"
 
 _HEADER_SLASH = re.compile(
     r"^(?P<comm>.*?)\s+(?P<pid>\d+)/(?P<tid>\d+)\s+"
-    r"\[(?P<cpu>\d+)\]\s+(?P<time>\d+(?:\.\d+)?):\s+"
+    r"\[(?P<cpu>\d+)\]\s+(?:(?P<misc>[A-Za-z.]+)\s+)?(?P<time>\d+(?:\.\d+)?):\s+"
     r"(?:(?P<period>\d+)\s+)?(?P<event>\S+):(?:\s+(?P<tail>.*))?$"
 )
 _HEADER_SPLIT = re.compile(
     r"^(?P<comm>.*?)\s+(?P<pid>\d+)\s+(?P<tid>\d+)\s+"
-    r"\[(?P<cpu>\d+)\]\s+(?P<time>\d+(?:\.\d+)?):\s+"
+    r"\[(?P<cpu>\d+)\]\s+(?:(?P<misc>[A-Za-z.]+)\s+)?(?P<time>\d+(?:\.\d+)?):\s+"
     r"(?:(?P<period>\d+)\s+)?(?P<event>\S+):(?:\s+(?P<tail>.*))?$"
 )
 _HEADER_LEGACY = re.compile(
     r"^(?P<comm>.*?)\s+(?P<pid>\d+)\s+"
-    r"\[(?P<cpu>\d+)\]\s+(?P<time>\d+(?:\.\d+)?):\s+"
+    r"\[(?P<cpu>\d+)\]\s+(?:(?P<misc>[A-Za-z.]+)\s+)?(?P<time>\d+(?:\.\d+)?):\s+"
     r"(?:(?P<period>\d+)\s+)?(?P<event>\S+):(?:\s+(?P<tail>.*))?$"
 )
 _HEADER_SLASH_WITHOUT_CPU = re.compile(
     r"^(?P<comm>.*?)\s+(?P<pid>\d+)/(?P<tid>\d+)\s+"
-    r"(?P<time>\d+(?:\.\d+)?):\s+"
+    r"(?:(?P<misc>[A-Za-z.]+)\s+)?(?P<time>\d+(?:\.\d+)?):\s+"
     r"(?:(?P<period>\d+)\s+)?(?P<event>\S+):(?:\s+(?P<tail>.*))?$"
 )
 _HEADER_SPLIT_WITHOUT_CPU = re.compile(
     r"^(?P<comm>.*?)\s+(?P<pid>\d+)\s+(?P<tid>\d+)\s+"
-    r"(?P<time>\d+(?:\.\d+)?):\s+"
+    r"(?:(?P<misc>[A-Za-z.]+)\s+)?(?P<time>\d+(?:\.\d+)?):\s+"
     r"(?:(?P<period>\d+)\s+)?(?P<event>\S+):(?:\s+(?P<tail>.*))?$"
 )
 _HEADER_LEGACY_WITHOUT_CPU = re.compile(
     r"^(?P<comm>.*?)\s+(?P<pid>\d+)\s+"
-    r"(?P<time>\d+(?:\.\d+)?):\s+"
+    r"(?:(?P<misc>[A-Za-z.]+)\s+)?(?P<time>\d+(?:\.\d+)?):\s+"
     r"(?:(?P<period>\d+)\s+)?(?P<event>\S+):(?:\s+(?P<tail>.*))?$"
 )
 _FRAME = re.compile(r"^(?P<ip>(?:0x)?[0-9a-fA-F]+)\s+(?P<body>.+)$")
 _FRAME_ANNOTATION = re.compile(r"^(?P<label>.+)\[(?P<ip>[0-9a-fA-F]+)\]$")
 _SOURCE_ANNOTATION = re.compile(r"^(?P<source>.+:\d+(?::\d+)?)(?P<inline>\s+\(inlined\))?$")
+_MISSING_SOURCE_ANNOTATION = re.compile(r"^\?\?:(?:0|\?)$")
 _PYTHON_PERF_MAP = re.compile(r"^perf-\d+\.map$")
 _SOURCE = re.compile(r"^(?P<file>.*?):(?P<line>\d+)(?::(?P<column>\d+))?$")
 
@@ -75,6 +76,7 @@ class _Header:
     event: str
     weight: int
     weight_source: str
+    sample_context: str
 
 
 @dataclass(slots=True)
@@ -301,6 +303,7 @@ class PerfScriptStream:
             event=fields["event"],
             weight=weight,
             weight_source=weight_source,
+            sample_context=self._sample_context(fields.get("misc")),
         )
         return header, (fields.get("tail") or "").strip()
 
@@ -389,6 +392,11 @@ class PerfScriptStream:
             return consumed
 
         source_match = _SOURCE_ANNOTATION.fullmatch(text)
+        if _MISSING_SOURCE_ANNOTATION.fullmatch(text) is not None:
+            # ``perf script -F srcline`` emits this separate annotation for a
+            # physical frame whose debug information has no source location.
+            # It is explicit missing evidence, not malformed input.
+            return True
         if source_match is None or previous.source_file is not None:
             return False
         source_file, source_line, source_column = self._parse_source(
@@ -485,6 +493,12 @@ class PerfScriptStream:
         return normalized or "0"
 
     @staticmethod
+    def _sample_context(misc: str | None) -> str:
+        if not misc:
+            return "unknown"
+        return {"U": "user", "K": "kernel"}.get(misc[0].upper(), "unknown")
+
+    @staticmethod
     def _parse_source(
         source: str | None,
     ) -> tuple[str | None, int | None, int | None]:
@@ -544,6 +558,7 @@ class PerfScriptStream:
             thread_name=header.command,
             cpu=header.cpu,
             timestamp=header.timestamp,
+            sample_context=header.sample_context,
         )
 
     def _same_physical_frame(self, left_id: int, right_id: int) -> bool:

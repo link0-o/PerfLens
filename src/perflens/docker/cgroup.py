@@ -7,6 +7,9 @@ import hashlib
 import os
 import re
 import stat
+import threading
+from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -30,6 +33,23 @@ _MAX_TOTAL_BYTES = 256 << 10
 _MAX_LINES = 512
 _MEMORY_EVENT_NAME = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 _CPUSET = re.compile(r"^[0-9,-]{1,4096}$")
+_REQUIRED_RESOURCE_FILES = (
+    "cpu.stat",
+    "cpu.max",
+    "cpuset.cpus.effective",
+    "memory.current",
+    "memory.max",
+    "memory.events",
+    "pids.current",
+    "pids.max",
+)
+_OPTIONAL_RESOURCE_FILES = (
+    "memory.pressure",
+    "io.stat",
+    "io.max",
+    "io.pressure",
+)
+_RESOURCE_FILES = (*_REQUIRED_RESOURCE_FILES, *_OPTIONAL_RESOURCE_FILES)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +73,13 @@ class _ReadBudget:
 
 
 class CgroupV2ResourceReader:
-    """Read only the cgroup directory already bound by a ContainerTargetArtifact."""
+    """Read one identity-pinned cgroup already bound by a ContainerTargetArtifact.
+
+    Docker may remove a stopped container's cgroup before the Broker response reaches the MCP
+    process.  Pinning the directory and fixed controller files while the target is known alive
+    prevents that normal lifecycle transition from turning valid performance evidence into a
+    path-reopen race.  The pinned descriptors never permit arbitrary resource names.
+    """
 
     def __init__(
         self,
@@ -67,30 +93,76 @@ class CgroupV2ResourceReader:
         if not relative_path.startswith("/") or ".." in path.parts or str(path) != relative_path:
             raise _resource_error("Verified Docker cgroup path is invalid")
         directory = root.joinpath(*path.parts[1:])
+        directory_descriptor = -1
+        resource_descriptors: dict[str, int | None] = {}
         try:
             resolved = directory.resolve(strict=True)
-            metadata = directory.stat(follow_symlinks=False)
+            directory_descriptor = _open_directory_anchor(directory)
+            metadata = os.fstat(directory_descriptor)
+            path_metadata = directory.stat(follow_symlinks=False)
+            if (
+                resolved != directory
+                or not stat.S_ISDIR(metadata.st_mode)
+                or (metadata.st_dev, metadata.st_ino)
+                != (path_metadata.st_dev, path_metadata.st_ino)
+                or metadata.st_ino != target.kernel.cgroup_inode
+                or metadata.st_ino != target.artifact.cgroup.inode
+            ):
+                raise _resource_error("Verified Docker cgroup directory identity does not match")
+            expected_identity = _sha256_text(
+                "cgroup-v2",
+                target.artifact.container_identity_sha256,
+                relative_path,
+                str(metadata.st_ino),
+            )
+            if expected_identity != target.artifact.cgroup.identity_sha256:
+                raise _resource_error(
+                    "Verified Docker cgroup digest does not match its private path"
+                )
+            for name in _RESOURCE_FILES:
+                resource_descriptors[name] = _open_resource_descriptor(
+                    directory_descriptor,
+                    name,
+                    required=name in _REQUIRED_RESOURCE_FILES,
+                )
         except OSError as exc:
-            raise _resource_error("Verified Docker cgroup directory is unavailable") from exc
-        if (
-            resolved != directory
-            or not stat.S_ISDIR(metadata.st_mode)
-            or metadata.st_ino != target.kernel.cgroup_inode
-            or metadata.st_ino != target.artifact.cgroup.inode
-        ):
-            raise _resource_error("Verified Docker cgroup directory identity does not match")
-        expected_identity = _sha256_text(
-            "cgroup-v2",
-            target.artifact.container_identity_sha256,
-            relative_path,
-            str(metadata.st_ino),
-        )
-        if expected_identity != target.artifact.cgroup.identity_sha256:
-            raise _resource_error("Verified Docker cgroup digest does not match its private path")
+            _close_descriptors(resource_descriptors.values())
+            _close_descriptors((directory_descriptor,))
+            error_name = errno.errorcode.get(exc.errno or -1, "UNKNOWN")
+            raise _resource_error(
+                f"Verified Docker cgroup directory is unavailable ({error_name})"
+            ) from exc
+        except BaseException:
+            _close_descriptors(resource_descriptors.values())
+            _close_descriptors((directory_descriptor,))
+            raise
         self._directory = directory
+        self._directory_descriptor = directory_descriptor
+        self._resource_descriptors = resource_descriptors
+        self._expected_device = metadata.st_dev
         self._expected_inode = metadata.st_ino
         self._container_identity_sha256 = target.artifact.container_identity_sha256
         self._cgroup_identity_sha256 = expected_identity
+        self._closed = False
+
+    def __enter__(self) -> CgroupV2ResourceReader:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Release every pinned descriptor; calling close more than once is safe."""
+        if getattr(self, "_closed", True):
+            return
+        self._closed = True
+        _close_descriptors(self._resource_descriptors.values())
+        self._resource_descriptors.clear()
+        _close_descriptors((self._directory_descriptor,))
+        self._directory_descriptor = -1
 
     @property
     def container_identity_sha256(self) -> str:
@@ -104,143 +176,248 @@ class CgroupV2ResourceReader:
     def cgroup_inode(self) -> int:
         return self._expected_inode
 
+    def path_is_removed(self) -> bool:
+        """Return true only when the identity-pinned cgroup path no longer exists."""
+        try:
+            self._directory.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return False
+
     def capture(self, *, observed_at: datetime | None = None) -> CapturedCgroupSnapshot:
-        # The cgroup directory itself is only a path anchor for fixed openat(2) reads.  O_RDONLY
-        # needlessly requires directory read/list permission, which Docker/systemd may withhold
-        # while still granting the execute/search permission required to read known controller
-        # files.  O_PATH preserves that least-privilege boundary and still supports fstat(2) plus
-        # openat(2); every child is opened separately as O_RDONLY below.
-        flags = (
-            getattr(os, "O_PATH", os.O_RDONLY)
-            | os.O_DIRECTORY
-            | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
-        )
-        try:
-            descriptor = os.open(self._directory, flags)
-        except OSError as exc:
-            error_name = errno.errorcode.get(exc.errno or -1, "UNKNOWN")
-            raise _resource_error(
-                f"Docker cgroup directory cannot be opened safely ({error_name})"
-            ) from exc
-        try:
-            opened = os.fstat(descriptor)
-            if not stat.S_ISDIR(opened.st_mode) or opened.st_ino != self._expected_inode:
-                raise _resource_error("Docker cgroup inode changed before resource capture")
-            budget = _ReadBudget()
-            limitations: list[str] = []
-            cpu = _parse_cpu_stat(_read_text(descriptor, "cpu.stat", budget=budget))
-            for field in (
-                "user_usec",
-                "system_usec",
-                "nr_periods",
-                "nr_throttled",
-                "throttled_usec",
-            ):
-                if field not in cpu:
-                    limitations.append(f"cpu.stat omits optional {field}.")
-            cpu_quota, cpu_period = _parse_cpu_max(_read_text(descriptor, "cpu.max", budget=budget))
-            cpuset = _parse_cpuset(_read_text(descriptor, "cpuset.cpus.effective", budget=budget))
-            memory_current = _parse_unsigned_scalar(
-                _read_text(descriptor, "memory.current", budget=budget),
-                "memory.current",
-            )
-            memory_max = _parse_max_scalar(
-                _read_text(descriptor, "memory.max", budget=budget),
-                "memory.max",
-            )
-            memory_events = _parse_memory_events(
-                _read_text(descriptor, "memory.events", budget=budget)
-            )
-            pids_current = _parse_unsigned_scalar(
-                _read_text(descriptor, "pids.current", budget=budget),
-                "pids.current",
-            )
-            pids_max = _parse_max_scalar(
-                _read_text(descriptor, "pids.max", budget=budget),
-                "pids.max",
-            )
-            memory_pressure_text = _read_optional_text(
-                descriptor,
-                "memory.pressure",
-                budget=budget,
-            )
-            if memory_pressure_text is None:
-                memory_pressure = None
-                limitations.append("memory.pressure is unavailable for this cgroup.")
-            else:
-                memory_pressure = _parse_pressure(memory_pressure_text, "memory.pressure")
-                if memory_pressure.some_total_us is None or memory_pressure.full_total_us is None:
-                    limitations.append("memory.pressure omits a pressure class.")
-            io_text = _read_optional_text(descriptor, "io.stat", budget=budget)
-            if io_text is None:
-                io_devices: tuple[CgroupIoDeviceSnapshot, ...] = ()
-                limitations.append("io.stat is unavailable for this cgroup.")
-            else:
-                io_devices = _parse_io_stat(io_text)
-            io_max_text = _read_optional_text(descriptor, "io.max", budget=budget)
-            if io_max_text is None:
-                io_limits: tuple[CgroupIoDeviceLimit, ...] = ()
-                limitations.append("io.max is unavailable for this cgroup.")
-            else:
-                io_limits = _parse_io_max(io_max_text)
-            io_pressure_text = _read_optional_text(
-                descriptor,
-                "io.pressure",
-                budget=budget,
-            )
-            if io_pressure_text is None:
-                io_pressure = None
-                limitations.append("io.pressure is unavailable for this cgroup.")
-            else:
-                io_pressure = _parse_pressure(io_pressure_text, "io.pressure")
-                if io_pressure.some_total_us is None or io_pressure.full_total_us is None:
-                    limitations.append("io.pressure omits a pressure class.")
-            _assert_directory_current(
+        if self._closed:
+            raise _resource_error("Docker cgroup resource reader is already closed")
+        opened = os.fstat(self._directory_descriptor)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or (opened.st_dev, opened.st_ino)
+            != (self._expected_device, self._expected_inode)
+        ):
+            raise _resource_error("Docker cgroup pinned directory identity changed")
+        budget = _ReadBudget()
+        limitations = list(
+            _validate_pinned_paths(
                 self._directory,
-                opened_device=opened.st_dev,
-                opened_inode=opened.st_ino,
+                self._directory_descriptor,
+                self._resource_descriptors,
+                expected_device=self._expected_device,
+                expected_inode=self._expected_inode,
             )
-            timestamp = observed_at or datetime.now(tz=UTC)
-            snapshot = ContainerResourceSnapshot(
-                observed_at=timestamp.isoformat(),
-                cpu_usage_usec=cpu["usage_usec"],
-                cpu_user_usec=cpu.get("user_usec"),
-                cpu_system_usec=cpu.get("system_usec"),
-                cpu_nr_periods=cpu.get("nr_periods"),
-                cpu_nr_throttled=cpu.get("nr_throttled"),
-                cpu_throttled_usec=cpu.get("throttled_usec"),
-                cpu_quota_usec=cpu_quota,
-                cpu_period_usec=cpu_period,
-                cpuset_cpus_effective=cpuset,
-                memory_current_bytes=memory_current,
-                memory_max_bytes=memory_max,
-                memory_events=memory_events,
-                memory_pressure=memory_pressure,
-                io_devices=io_devices,
-                io_limits=io_limits,
-                io_pressure=io_pressure,
-                pids_current=pids_current,
-                pids_max=pids_max,
+        )
+        cpu = _parse_cpu_stat(self._read_text("cpu.stat", budget=budget))
+        for field in (
+            "user_usec",
+            "system_usec",
+            "nr_periods",
+            "nr_throttled",
+            "throttled_usec",
+        ):
+            if field not in cpu:
+                limitations.append(f"cpu.stat omits optional {field}.")
+        cpu_quota, cpu_period = _parse_cpu_max(self._read_text("cpu.max", budget=budget))
+        cpuset = _parse_cpuset(self._read_text("cpuset.cpus.effective", budget=budget))
+        memory_current = _parse_unsigned_scalar(
+            self._read_text("memory.current", budget=budget),
+            "memory.current",
+        )
+        memory_max = _parse_max_scalar(
+            self._read_text("memory.max", budget=budget),
+            "memory.max",
+        )
+        memory_events = _parse_memory_events(self._read_text("memory.events", budget=budget))
+        pids_current = _parse_unsigned_scalar(
+            self._read_text("pids.current", budget=budget),
+            "pids.current",
+        )
+        pids_max = _parse_max_scalar(
+            self._read_text("pids.max", budget=budget),
+            "pids.max",
+        )
+        memory_pressure_text = self._read_optional_text(
+            "memory.pressure",
+            budget=budget,
+        )
+        if memory_pressure_text is None:
+            memory_pressure = None
+            limitations.append("memory.pressure is unavailable for this cgroup.")
+        else:
+            memory_pressure = _parse_pressure(memory_pressure_text, "memory.pressure")
+            if memory_pressure.some_total_us is None or memory_pressure.full_total_us is None:
+                limitations.append("memory.pressure omits a pressure class.")
+        io_text = self._read_optional_text("io.stat", budget=budget)
+        if io_text is None:
+            io_devices: tuple[CgroupIoDeviceSnapshot, ...] = ()
+            limitations.append("io.stat is unavailable for this cgroup.")
+        else:
+            io_devices = _parse_io_stat(io_text)
+        io_max_text = self._read_optional_text("io.max", budget=budget)
+        if io_max_text is None:
+            io_limits: tuple[CgroupIoDeviceLimit, ...] = ()
+            limitations.append("io.max is unavailable for this cgroup.")
+        else:
+            io_limits = _parse_io_max(io_max_text)
+        io_pressure_text = self._read_optional_text(
+            "io.pressure",
+            budget=budget,
+        )
+        if io_pressure_text is None:
+            io_pressure = None
+            limitations.append("io.pressure is unavailable for this cgroup.")
+        else:
+            io_pressure = _parse_pressure(io_pressure_text, "io.pressure")
+            if io_pressure.some_total_us is None or io_pressure.full_total_us is None:
+                limitations.append("io.pressure omits a pressure class.")
+        timestamp = observed_at or datetime.now(tz=UTC)
+        snapshot = ContainerResourceSnapshot(
+            observed_at=timestamp.isoformat(),
+            cpu_usage_usec=cpu["usage_usec"],
+            cpu_user_usec=cpu.get("user_usec"),
+            cpu_system_usec=cpu.get("system_usec"),
+            cpu_nr_periods=cpu.get("nr_periods"),
+            cpu_nr_throttled=cpu.get("nr_throttled"),
+            cpu_throttled_usec=cpu.get("throttled_usec"),
+            cpu_quota_usec=cpu_quota,
+            cpu_period_usec=cpu_period,
+            cpuset_cpus_effective=cpuset,
+            memory_current_bytes=memory_current,
+            memory_max_bytes=memory_max,
+            memory_events=memory_events,
+            memory_pressure=memory_pressure,
+            io_devices=io_devices,
+            io_limits=io_limits,
+            io_pressure=io_pressure,
+            pids_current=pids_current,
+            pids_max=pids_max,
+        )
+        limitation_tuple = tuple(sorted(set(limitations)))
+        snapshot_sha256 = _captured_snapshot_sha256(
+            snapshot,
+            limitation_tuple,
+            container_identity_sha256=self._container_identity_sha256,
+            cgroup_identity_sha256=self._cgroup_identity_sha256,
+            cgroup_inode=self._expected_inode,
+        )
+        return CapturedCgroupSnapshot(
+            snapshot,
+            limitation_tuple,
+            self._container_identity_sha256,
+            self._cgroup_identity_sha256,
+            self._expected_inode,
+            snapshot_sha256,
+        )
+
+    def _read_text(self, name: str, *, budget: _ReadBudget) -> str:
+        result = self._read_optional_text(name, budget=budget)
+        if result is None:
+            raise _resource_error(f"required cgroup resource file {name} is unavailable")
+        return result
+
+    def _read_optional_text(self, name: str, *, budget: _ReadBudget) -> str | None:
+        try:
+            descriptor = self._resource_descriptors[name]
+        except KeyError as exc:
+            raise _resource_error("cgroup resource name is outside the fixed allowlist") from exc
+        if descriptor is None:
+            return None
+        return _read_pinned_text(descriptor, budget=budget)
+
+
+class CgroupSnapshotMonitor:
+    """Retain the last verified cgroup snapshot across a short collection window."""
+
+    def __init__(
+        self,
+        reader: CgroupV2ResourceReader,
+        baseline: CapturedCgroupSnapshot,
+        *,
+        sample_interval_seconds: float = 0.05,
+    ) -> None:
+        if not 0.01 <= sample_interval_seconds <= 1.0:
+            raise ValueError("cgroup sample interval is outside its fixed bound")
+        _verify_captured_snapshot(reader, baseline)
+        self._reader = reader
+        self._baseline = baseline
+        self._latest = baseline
+        self._interval = sample_interval_seconds
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._error: PerfLensError | None = None
+        self._lifecycle_ended = False
+        self._state = "pending"
+
+    def start(self) -> None:
+        if self._state != "pending":
+            raise _resource_error("Docker cgroup snapshot monitor is single-use")
+        # Capture once while the Gate is still holding the workload.  This guarantees a second,
+        # time-ordered snapshot even when the fixed workload exits before the first periodic tick.
+        self._latest = self._reader.capture()
+        self._state = "running"
+        self._thread = threading.Thread(
+            target=self._sample,
+            name="perflens-cgroup-snapshot",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def finish(self) -> CapturedCgroupSnapshot:
+        if self._state != "running" or self._thread is None:
+            raise _resource_error("Docker cgroup snapshot monitor was not started")
+        self._stop.set()
+        self._thread.join(timeout=2.0)
+        if self._thread.is_alive():
+            raise _resource_error("Docker cgroup snapshot monitor did not stop within its bound")
+        with self._lock:
+            error = self._error
+            latest = self._latest
+            lifecycle_ended = self._lifecycle_ended
+        if error is not None:
+            raise error
+        try:
+            latest = self._reader.capture()
+        except PerfLensError:
+            if not self._reader.path_is_removed():
+                raise
+            lifecycle_ended = True
+        self._state = "finished"
+        if lifecycle_ended:
+            latest = _add_snapshot_limitation(
+                self._reader,
+                latest,
+                "Docker removed the cgroup before the final resource read; deltas end at the "
+                "last verified snapshot and are lower bounds for the collection window.",
             )
-            limitation_tuple = tuple(sorted(limitations))
-            snapshot_sha256 = _captured_snapshot_sha256(
-                snapshot,
-                limitation_tuple,
-                container_identity_sha256=self._container_identity_sha256,
-                cgroup_identity_sha256=self._cgroup_identity_sha256,
-                cgroup_inode=self._expected_inode,
-            )
-            return CapturedCgroupSnapshot(
-                snapshot,
-                limitation_tuple,
-                self._container_identity_sha256,
-                self._cgroup_identity_sha256,
-                self._expected_inode,
-                snapshot_sha256,
-            )
-        finally:
-            os.close(descriptor)
+        if _parse_timestamp(latest.snapshot.observed_at) <= _parse_timestamp(
+            self._baseline.snapshot.observed_at
+        ):
+            raise _resource_error("Docker cgroup monitor did not produce a time-ordered snapshot")
+        return latest
+
+    def stop(self) -> None:
+        """Stop sampling during an unrelated collection failure without replacing that error."""
+        if self._state != "running" or self._thread is None:
+            return
+        self._stop.set()
+        self._thread.join(timeout=2.0)
+        if self._thread.is_alive():
+            raise _resource_error("Docker cgroup snapshot monitor did not stop within its bound")
+        self._state = "stopped"
+
+    def _sample(self) -> None:
+        while not self._stop.wait(self._interval):
+            try:
+                captured = self._reader.capture()
+            except PerfLensError as exc:
+                with self._lock:
+                    if self._reader.path_is_removed():
+                        self._lifecycle_ended = True
+                    else:
+                        self._error = exc
+                return
+            with self._lock:
+                self._latest = captured
 
 
 def build_container_resource_context(
@@ -384,18 +561,30 @@ def build_container_resource_context(
     )
 
 
-def _read_text(descriptor: int, name: str, *, budget: _ReadBudget) -> str:
-    result = _read_optional_text(descriptor, name, budget=budget)
-    if result is None:
-        raise _resource_error(f"required cgroup resource file {name} is unavailable")
-    return result
+def _open_directory_anchor(path: Path) -> int:
+    # O_PATH requires only search permission and pins the exact cgroup directory without granting
+    # directory listing.  Every accepted child name comes from the fixed constants above.
+    flags = (
+        getattr(os, "O_PATH", os.O_RDONLY)
+        | os.O_DIRECTORY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    return os.open(path, flags)
 
 
-def _read_optional_text(descriptor: int, name: str, *, budget: _ReadBudget) -> str | None:
+def _open_resource_descriptor(
+    directory_descriptor: int,
+    name: str,
+    *,
+    required: bool,
+) -> int | None:
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        file_descriptor = os.open(name, flags, dir_fd=descriptor)
-    except FileNotFoundError:
+        descriptor = os.open(name, flags, dir_fd=directory_descriptor)
+    except FileNotFoundError as exc:
+        if required:
+            raise _resource_error(f"required cgroup resource file {name} is unavailable") from exc
         return None
     except OSError as exc:
         error_name = errno.errorcode.get(exc.errno or -1, "UNKNOWN")
@@ -403,12 +592,24 @@ def _read_optional_text(descriptor: int, name: str, *, budget: _ReadBudget) -> s
             f"cgroup resource file cannot be opened safely ({error_name})"
         ) from exc
     try:
-        metadata = os.fstat(file_descriptor)
+        metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
             raise _resource_error("cgroup resource entry is not a regular file")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _read_pinned_text(descriptor: int, *, budget: _ReadBudget) -> str:
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise _resource_error("pinned cgroup resource is not a regular file")
+        os.lseek(descriptor, 0, os.SEEK_SET)
         chunks: list[bytes] = []
         total = 0
-        while chunk := os.read(file_descriptor, min(8192, _MAX_FILE_BYTES - total + 1)):
+        while chunk := os.read(descriptor, min(8192, _MAX_FILE_BYTES - total + 1)):
             chunks.append(chunk)
             total += len(chunk)
             if total > _MAX_FILE_BYTES:
@@ -418,8 +619,75 @@ def _read_optional_text(descriptor: int, name: str, *, budget: _ReadBudget) -> s
             return b"".join(chunks).decode("ascii", errors="strict")
         except UnicodeDecodeError as exc:
             raise _resource_error("cgroup resource file is not ASCII") from exc
-    finally:
-        os.close(file_descriptor)
+    except PerfLensError:
+        raise
+    except OSError as exc:
+        error_name = errno.errorcode.get(exc.errno or -1, "UNKNOWN")
+        raise _resource_error(f"pinned cgroup resource cannot be read ({error_name})") from exc
+
+
+def _validate_pinned_paths(
+    path: Path,
+    directory_descriptor: int,
+    resources: dict[str, int | None],
+    *,
+    expected_device: int,
+    expected_inode: int,
+) -> tuple[str, ...]:
+    try:
+        current = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return (
+            "Docker removed the cgroup path after PerfLens pinned its resource descriptors; "
+            "the retained final snapshot is partial.",
+        )
+    except OSError as exc:
+        error_name = errno.errorcode.get(exc.errno or -1, "UNKNOWN")
+        raise _resource_error(
+            f"Docker cgroup path cannot be revalidated ({error_name})"
+        ) from exc
+    if (current.st_dev, current.st_ino) != (expected_device, expected_inode):
+        raise _resource_error("Docker cgroup directory identity changed after it was pinned")
+
+    limitations: list[str] = []
+    for name in _RESOURCE_FILES:
+        descriptor = resources[name]
+        try:
+            current_resource = os.stat(
+                name,
+                dir_fd=directory_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError as exc:
+            if descriptor is None:
+                continue
+            raise _resource_error("Pinned cgroup resource path disappeared unexpectedly") from exc
+        except OSError as exc:
+            error_name = errno.errorcode.get(exc.errno or -1, "UNKNOWN")
+            raise _resource_error(
+                f"Pinned cgroup resource path cannot be revalidated ({error_name})"
+            ) from exc
+        if descriptor is None:
+            limitations.append(
+                f"{name} appeared after the cgroup resource set was pinned and was excluded."
+            )
+            continue
+        pinned_resource = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(current_resource.st_mode)
+            or (current_resource.st_dev, current_resource.st_ino)
+            != (pinned_resource.st_dev, pinned_resource.st_ino)
+        ):
+            raise _resource_error("Pinned cgroup resource identity changed")
+    return tuple(limitations)
+
+
+def _close_descriptors(descriptors: Iterable[int | None]) -> None:
+    for descriptor in descriptors:
+        if descriptor is None or descriptor < 0:
+            continue
+        with suppress(OSError):
+            os.close(descriptor)
 
 
 def _parse_cpu_stat(text: str) -> dict[str, int]:
@@ -662,17 +930,6 @@ def _checked_delta(before: int, after: int, label: str) -> int:
     return after - before
 
 
-def _assert_directory_current(path: Path, *, opened_device: int, opened_inode: int) -> None:
-    try:
-        current = path.stat(follow_symlinks=False)
-    except OSError as exc:
-        raise _resource_error(
-            "Docker cgroup directory disappeared during resource capture"
-        ) from exc
-    if (current.st_dev, current.st_ino) != (opened_device, opened_inode):
-        raise _resource_error("Docker cgroup directory changed during resource capture")
-
-
 def _captured_snapshot_sha256(
     snapshot: ContainerResourceSnapshot,
     limitations: tuple[str, ...],
@@ -710,6 +967,29 @@ def _verify_captured_snapshot(
     )
     if expected != captured.snapshot_sha256:
         raise _resource_error("cgroup snapshot content digest does not match")
+
+
+def _add_snapshot_limitation(
+    reader: CgroupV2ResourceReader,
+    captured: CapturedCgroupSnapshot,
+    limitation: str,
+) -> CapturedCgroupSnapshot:
+    _verify_captured_snapshot(reader, captured)
+    limitations = tuple(sorted({*captured.limitations, limitation}))
+    return CapturedCgroupSnapshot(
+        snapshot=captured.snapshot,
+        limitations=limitations,
+        container_identity_sha256=captured.container_identity_sha256,
+        cgroup_identity_sha256=captured.cgroup_identity_sha256,
+        cgroup_inode=captured.cgroup_inode,
+        snapshot_sha256=_captured_snapshot_sha256(
+            captured.snapshot,
+            limitations,
+            container_identity_sha256=captured.container_identity_sha256,
+            cgroup_identity_sha256=captured.cgroup_identity_sha256,
+            cgroup_inode=captured.cgroup_inode,
+        ),
+    )
 
 
 def _validate_root(path: Path) -> Path:

@@ -124,6 +124,54 @@ def test_parses_python_perf_map_source_and_ignores_redundant_annotations(
     assert diagnostics.malformed_records == 0
 
 
+def test_explicit_missing_source_annotation_is_not_a_parse_warning(tmp_path: Path) -> None:
+    profile = tmp_path / "missing-source-annotation.perf-script"
+    profile.write_text(
+        "native 1/1 [000] 1.0: 17 cpu-clock:\n"
+        "        400101 leaf (/opt/native/app)\n"
+        "  ??:0\n"
+        "        400000 parent (/opt/native/app)\n"
+        "  ??:?\n",
+        encoding="utf-8",
+    )
+
+    with _open(profile) as stream:
+        samples = list(stream)
+        frames = [stream.frame_table.resolve(frame_id) for frame_id in samples[0].frames]
+        diagnostics = stream.diagnostics()
+
+    assert [frame.symbol for frame in frames] == ["parent", "leaf"]
+    assert all(frame.source_file is None for frame in frames)
+    assert diagnostics.warning_count == 0
+    assert diagnostics.source_annotation_lines == 0
+
+
+def test_sample_privilege_context_is_preserved(tmp_path: Path) -> None:
+    profile = tmp_path / "sample-context.perf-script"
+    profile.write_text(
+        "native 1/1 [000] K 1.0: 17 cpu-clock:\n"
+        "        400101 [unknown] ([unknown])\n\n"
+        "native 1/1 [000] U 2.0: 19 cpu-clock:\n"
+        "        400102 user_leaf (/opt/native/app)\n",
+        encoding="utf-8",
+    )
+
+    with _open(profile) as stream:
+        samples = list(stream)
+
+    assert [sample.sample_context for sample in samples] == ["kernel", "user"]
+
+    artifact = analyze_perf_script(profile)
+    quality = artifact.evidence_quality
+    assert quality.kernel_context_self_weight == 17
+    assert quality.user_context_self_weight == 19
+    assert quality.unknown_context_self_weight == 0
+    assert quality.unresolved_kernel_self_weight == 17
+    assert quality.unresolved_user_self_weight == 0
+    assert quality.unresolved_unknown_context_self_weight == 0
+    assert "sample_privilege_distribution" in quality.allowed_conclusions
+
+
 def test_mismatched_address_annotation_remains_a_visible_warning(tmp_path: Path) -> None:
     profile = tmp_path / "mismatched-annotation.perf-script"
     profile.write_text(
