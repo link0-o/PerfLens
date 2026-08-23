@@ -1,6 +1,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::io::{Read, Write};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
@@ -9,8 +10,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const CONTROL_PATH: &str = "/run/perflens-gate/control.sock";
-const READY_FRAME: &[u8] = b"PERFLENS_GATE_V1 READY\n";
-const EXEC_FRAME: &[u8] = b"PERFLENS_GATE_V1 EXEC\n";
+const READY_PREFIX: &[u8] = b"PERFLENS_GATE_V2 READY\0";
+const READY_FRAME_LEN: usize = READY_PREFIX.len() + (4 * std::mem::size_of::<u64>());
+const EXEC_FRAME: &[u8] = b"PERFLENS_GATE_V2 EXEC\n";
 const MAX_ARGUMENTS: usize = 256;
 const MAX_ARGUMENT_BYTES: usize = 65_536;
 const CONTROL_TIMEOUT: Duration = Duration::from_mins(1);
@@ -22,6 +24,14 @@ struct GateCommand {
     control: PathBuf,
     executable: OsString,
     arguments: Vec<OsString>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NamespaceIdentity {
+    pid: u64,
+    user: u64,
+    mount: u64,
+    cgroup: u64,
 }
 
 fn main() -> ExitCode {
@@ -97,9 +107,10 @@ fn run(command: &GateCommand) -> ExitCode {
 
 fn await_execution_release(control_path: &Path) -> Result<(), &'static str> {
     let mut control = connect_control(control_path)?;
+    let ready = ready_frame(namespace_identity()?);
     if control.set_read_timeout(Some(CONTROL_TIMEOUT)).is_err()
         || control.set_write_timeout(Some(CONTROL_TIMEOUT)).is_err()
-        || control.write_all(READY_FRAME).is_err()
+        || control.write_all(&ready).is_err()
     {
         return Err("control handshake failed");
     }
@@ -112,6 +123,37 @@ fn await_execution_release(control_path: &Path) -> Result<(), &'static str> {
         return Err("execution release contains an extra frame");
     }
     Ok(())
+}
+
+fn namespace_identity() -> Result<NamespaceIdentity, &'static str> {
+    Ok(NamespaceIdentity {
+        pid: namespace_inode("pid")?,
+        user: namespace_inode("user")?,
+        mount: namespace_inode("mnt")?,
+        cgroup: namespace_inode("cgroup")?,
+    })
+}
+
+fn namespace_inode(name: &str) -> Result<u64, &'static str> {
+    let inode = std::fs::metadata(Path::new("/proc/self/ns").join(name))
+        .map_err(|_| "self namespace identity is unavailable")?
+        .ino();
+    if inode == 0 {
+        return Err("self namespace identity is invalid");
+    }
+    Ok(inode)
+}
+
+fn ready_frame(identity: NamespaceIdentity) -> [u8; READY_FRAME_LEN] {
+    let mut frame = [0_u8; READY_FRAME_LEN];
+    frame[..READY_PREFIX.len()].copy_from_slice(READY_PREFIX);
+    let mut offset = READY_PREFIX.len();
+    for inode in [identity.pid, identity.user, identity.mount, identity.cgroup] {
+        let end = offset + std::mem::size_of::<u64>();
+        frame[offset..end].copy_from_slice(&inode.to_be_bytes());
+        offset = end;
+    }
+    frame
 }
 
 fn connect_control(control_path: &Path) -> Result<UnixStream, &'static str> {
@@ -138,8 +180,8 @@ fn connect_control(control_path: &Path) -> Result<UnixStream, &'static str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CONTROL_PATH, EXEC_FRAME, GateCommand, READY_FRAME, await_execution_release,
-        parse_arguments,
+        CONTROL_PATH, EXEC_FRAME, GateCommand, NamespaceIdentity, READY_FRAME_LEN, READY_PREFIX,
+        await_execution_release, namespace_identity, parse_arguments, ready_frame,
     };
     use std::ffi::OsString;
     use std::fs;
@@ -234,16 +276,17 @@ mod tests {
 
     #[test]
     fn waits_for_exact_ready_and_release_frames() {
+        let expected_ready = ready_frame(namespace_identity().expect("read test namespaces"));
         let directory = private_test_directory();
         let socket = directory.join("control.sock");
         let listener = UnixListener::bind(&socket).expect("bind gate test socket");
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept gate test peer");
-            let mut ready = [0_u8; READY_FRAME.len()];
+            let mut ready = [0_u8; READY_FRAME_LEN];
             stream
                 .read_exact(&mut ready)
                 .expect("read gate ready frame");
-            assert_eq!(ready, READY_FRAME);
+            assert_eq!(ready, expected_ready);
             stream
                 .write_all(EXEC_FRAME)
                 .expect("write execution release");
@@ -255,7 +298,7 @@ mod tests {
         let listener = UnixListener::bind(&socket).expect("bind extra-frame test socket");
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept extra-frame peer");
-            let mut ready = [0_u8; READY_FRAME.len()];
+            let mut ready = [0_u8; READY_FRAME_LEN];
             stream
                 .read_exact(&mut ready)
                 .expect("read second ready frame");
@@ -272,6 +315,7 @@ mod tests {
 
     #[test]
     fn retries_a_fixed_control_socket_until_it_appears() {
+        let expected_ready = ready_frame(namespace_identity().expect("read test namespaces"));
         let directory = private_test_directory();
         let socket = directory.join("control.sock");
         let delayed_socket = socket.clone();
@@ -279,11 +323,11 @@ mod tests {
             thread::sleep(Duration::from_millis(30));
             let listener = UnixListener::bind(&delayed_socket).expect("bind delayed socket");
             let (mut stream, _) = listener.accept().expect("accept delayed gate peer");
-            let mut ready = [0_u8; READY_FRAME.len()];
+            let mut ready = [0_u8; READY_FRAME_LEN];
             stream
                 .read_exact(&mut ready)
                 .expect("read delayed ready frame");
-            assert_eq!(ready, READY_FRAME);
+            assert_eq!(ready, expected_ready);
             stream
                 .write_all(EXEC_FRAME)
                 .expect("write delayed execution release");
@@ -292,5 +336,23 @@ mod tests {
         server.join().expect("join delayed socket server");
         fs::remove_file(&socket).expect("remove delayed socket");
         fs::remove_dir(&directory).expect("remove delayed socket directory");
+    }
+
+    #[test]
+    fn ready_frame_is_fixed_width_and_network_order() {
+        let identity = NamespaceIdentity {
+            pid: 101,
+            user: 102,
+            mount: 103,
+            cgroup: 104,
+        };
+        let frame = ready_frame(identity);
+        assert_eq!(&frame[..READY_PREFIX.len()], READY_PREFIX);
+        assert_eq!(frame.len(), READY_FRAME_LEN);
+        let values = frame[READY_PREFIX.len()..]
+            .chunks_exact(8)
+            .map(|value| u64::from_be_bytes(value.try_into().expect("eight-byte inode")))
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![101, 102, 103, 104]);
     }
 }

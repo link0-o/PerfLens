@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 import subprocess
 import sys
@@ -18,6 +19,7 @@ from perflens.docker.adapter import (
 )
 from perflens.docker.identity import (
     LinuxContainerIdentityReader,
+    NamespaceIdentity,
     assert_container_target_current,
     bind_container_collection_target,
     build_managed_container_target_artifact,
@@ -252,6 +254,135 @@ def test_reader_identifies_the_unavailable_namespace(tmp_path: Path) -> None:
     assert captured.value.recoverable is True
 
 
+def test_reader_uses_authenticated_gate_namespace_only_when_procfs_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader, proc_root, _ = _identity_filesystem(tmp_path)
+    _write_process(
+        proc_root,
+        host_pid=1002,
+        container_pid=12,
+        start_time=9876,
+        executable_name="worker",
+    )
+    original_open = os.open
+    original_readlink = os.readlink
+
+    def deny_namespace_open(
+        path: str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if path == "ns/mnt" and dir_fd is not None:
+            raise PermissionError(errno.EPERM, "namespace read denied")
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    def deny_namespace_readlink(
+        path: str,
+        *,
+        dir_fd: int | None = None,
+    ) -> str:
+        if path == "ns/mnt" and dir_fd is not None:
+            raise PermissionError(errno.EACCES, "namespace link denied")
+        return original_readlink(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", deny_namespace_open)
+    monkeypatch.setattr(os, "readlink", deny_namespace_readlink)
+    attestation = NamespaceIdentity(pid=101, user=102, mount=103, cgroup=104)
+    identity = reader.inspect_process(
+        1002,
+        namespace_attestation=attestation,
+    )
+    assert identity.namespace == attestation
+
+
+def test_reader_does_not_mask_missing_namespace_with_gate_attestation(
+    tmp_path: Path,
+) -> None:
+    reader, proc_root, _ = _identity_filesystem(tmp_path)
+    _write_process(
+        proc_root,
+        host_pid=1002,
+        container_pid=12,
+        start_time=9876,
+        executable_name="worker",
+    )
+    (proc_root / "1002/ns/mnt").unlink()
+    with pytest.raises(PerfLensError, match="mnt namespace"):
+        reader.inspect_process(
+            1002,
+            namespace_attestation=NamespaceIdentity(
+                pid=101,
+                user=102,
+                mount=103,
+                cgroup=104,
+            ),
+        )
+
+
+def test_reader_rejects_gate_namespace_that_disagrees_with_readable_procfs(
+    tmp_path: Path,
+) -> None:
+    reader, proc_root, _ = _identity_filesystem(tmp_path)
+    _write_process(
+        proc_root,
+        host_pid=1002,
+        container_pid=12,
+        start_time=9876,
+        executable_name="worker",
+    )
+    with pytest.raises(PerfLensError, match="differs from the Gate attestation"):
+        reader.inspect_process(
+            1002,
+            namespace_attestation=NamespaceIdentity(
+                pid=999,
+                user=102,
+                mount=103,
+                cgroup=104,
+            ),
+        )
+
+
+def test_reader_rejects_invalid_or_malformed_gate_namespace_attestation(
+    tmp_path: Path,
+) -> None:
+    reader, proc_root, _ = _identity_filesystem(tmp_path)
+    _write_process(
+        proc_root,
+        host_pid=1002,
+        container_pid=12,
+        start_time=9876,
+        executable_name="worker",
+    )
+    with pytest.raises(PerfLensError, match="attestation is invalid"):
+        reader.inspect_process(
+            1002,
+            namespace_attestation=NamespaceIdentity(
+                pid=0,
+                user=102,
+                mount=103,
+                cgroup=104,
+            ),
+        )
+
+    namespace = proc_root / "1002/ns/pid"
+    namespace.unlink()
+    namespace.symlink_to("pid:[0]")
+    with pytest.raises(PerfLensError, match="namespace identity is malformed"):
+        reader.inspect_process(
+            1002,
+            namespace_attestation=NamespaceIdentity(
+                pid=101,
+                user=102,
+                mount=103,
+                cgroup=104,
+            ),
+        )
+
+
 def test_reader_rejects_malformed_namespace_magic_link(tmp_path: Path) -> None:
     reader, proc_root, _ = _identity_filesystem(tmp_path)
     _write_process(
@@ -407,6 +538,73 @@ def test_managed_target_uses_separate_fixed_recipe_without_private_identity(
     serialized = artifact.model_dump_json()
     assert _CONTAINER_ID not in serialized
     assert "/docker/test-container" not in serialized
+
+
+def test_managed_target_allows_only_the_post_gate_executable_transition(
+    tmp_path: Path,
+) -> None:
+    reader, proc_root, _ = _identity_filesystem(tmp_path)
+    _write_process(
+        proc_root,
+        host_pid=1001,
+        container_pid=1,
+        start_time=9001,
+        executable_name="perflens-gate",
+    )
+    artifact = build_managed_container_target_artifact(
+        adapter=_adapter(),
+        instance=parse_container_instance(_inspect()),
+        target=reader.inspect_process(1001),
+        created_at=datetime(2026, 8, 21, tzinfo=UTC),
+    )
+    binding = bind_container_collection_target(artifact, reader=reader)
+
+    (proc_root / "1001/comm").write_text("workload\n", encoding="ascii")
+    with pytest.raises(PerfLensError, match="identity changed"):
+        assert_container_target_current(binding, reader=reader)
+    assert_container_target_current(
+        binding,
+        reader=reader,
+        allow_managed_exec_transition=True,
+    )
+
+    (proc_root / "1001/stat").write_text(
+        _stat_text(1001, 9002, name="workload"),
+        encoding="ascii",
+    )
+    with pytest.raises(PerfLensError, match="identity changed"):
+        assert_container_target_current(
+            binding,
+            reader=reader,
+            allow_managed_exec_transition=True,
+        )
+
+
+def test_existing_target_never_accepts_an_executable_transition(tmp_path: Path) -> None:
+    reader, proc_root, _ = _identity_filesystem(tmp_path)
+    _write_process(
+        proc_root,
+        host_pid=1001,
+        container_pid=1,
+        start_time=9001,
+        executable_name="init",
+    )
+    artifact = resolve_existing_container_target(
+        _adapter(),
+        "service",
+        host_pid=1001,
+        reader=reader,
+        created_at=datetime(2026, 8, 21, tzinfo=UTC),
+    ).artifact
+    binding = bind_container_collection_target(artifact, reader=reader)
+    (proc_root / "1001/comm").write_text("replacement\n", encoding="ascii")
+
+    with pytest.raises(PerfLensError, match="identity changed"):
+        assert_container_target_current(
+            binding,
+            reader=reader,
+            allow_managed_exec_transition=True,
+        )
 
 
 def test_managed_target_rejects_non_init_process_and_naive_timestamp(

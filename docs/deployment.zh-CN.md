@@ -118,7 +118,8 @@ Agent 客户端的 MCP 权限弹窗、持久工具允许列表或自动批准模
 不代表用户同意某个已经解析出的镜像、命令、目标或预算。Skill 必须先展示完整授权摘要，
 停止当前回复并等待用户下一条明确确认，然后才能调用授权工具。如果希望由客户端权限弹窗
 承担这次确认，不要把 `authorize_docker_session` 或
-`authorize_managed_docker_session` 永久加入允许列表。
+`authorize_managed_docker_session` 永久加入允许列表。调用时必须携带摘要中展示的精确、
+非空 `allowed_modes`；后续扩大模式集合必须重新展示摘要并取得新的明确确认。
 
 ## 从当前 wheel 部署
 

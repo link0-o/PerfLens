@@ -19,6 +19,17 @@ class BrokerCollectRequest(ContractModel):
     plan: CollectionPlanArtifact
     report_ready: bool = Field(default=False, strict=True)
 
+    @model_validator(mode="after")
+    def require_managed_readiness_barrier(self) -> BrokerCollectRequest:
+        target = self.plan.container_target
+        if (
+            target is not None
+            and target.target_kind == "managed_temporary_container"
+            and not self.report_ready
+        ):
+            raise ValueError("Managed Docker Broker targets require the readiness barrier")
+        return self
+
 
 class BrokerHealthRequest(ContractModel):
     schema_version: Literal["1.1"] = BROKER_SCHEMA_VERSION

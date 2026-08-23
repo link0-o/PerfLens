@@ -543,10 +543,17 @@ def _verify_collection_provenance(analysis: AnalysisArtifact) -> None:
         _require(collection.frequency_hz is not None, "record Collection frequency is missing")
         _require(collection.call_graph is not None, "record Collection call graph is missing")
         _require(collection.record_event is not None, "record Collection event is missing")
-        _require(
-            canonical_perf_event(quality.event) == collection.record_event,
-            "parsed profile event differs from the source Collection event",
-        )
+        if quality.sample_count == 0:
+            _require(quality.total_weight == 0, "empty profile contains weighted evidence")
+            _require(
+                quality.event == "unknown",
+                "empty profile claims an observed source Collection event",
+            )
+        else:
+            _require(
+                canonical_perf_event(quality.event) == collection.record_event,
+                "parsed profile event differs from the source Collection event",
+            )
         _require(
             (collection.record_event == "cycles")
             == (collection.actual_event_source == "hardware"),

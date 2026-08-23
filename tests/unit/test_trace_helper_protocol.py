@@ -69,6 +69,24 @@ def test_trace_helper_valid_golden_frames_and_unavailable_health() -> None:
     assert response.result.supported_modes == ()
 
 
+def test_managed_docker_trace_request_requires_readiness_barrier() -> None:
+    fixture = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures/trace_helper/valid/docker-sched.jsonl"
+    )
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+    container = payload["target"]["container"]
+    container["target_kind"] = "managed_temporary_container"
+    container["container_pid"] = 1
+    container["adapter_recipe_id"] = "local-docker-managed-v1"
+
+    with pytest.raises(ValueError, match="readiness barrier"):
+        TraceHelperCollectPidRequest.model_validate(payload)
+
+    payload["report_ready"] = True
+    assert TraceHelperCollectPidRequest.model_validate(payload).report_ready is True
+
+
 @pytest.mark.parametrize(
     "fixture",
     sorted(

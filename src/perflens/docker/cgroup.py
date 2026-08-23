@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import re
@@ -104,8 +105,13 @@ class CgroupV2ResourceReader:
         return self._expected_inode
 
     def capture(self, *, observed_at: datetime | None = None) -> CapturedCgroupSnapshot:
+        # The cgroup directory itself is only a path anchor for fixed openat(2) reads.  O_RDONLY
+        # needlessly requires directory read/list permission, which Docker/systemd may withhold
+        # while still granting the execute/search permission required to read known controller
+        # files.  O_PATH preserves that least-privilege boundary and still supports fstat(2) plus
+        # openat(2); every child is opened separately as O_RDONLY below.
         flags = (
-            os.O_RDONLY
+            getattr(os, "O_PATH", os.O_RDONLY)
             | os.O_DIRECTORY
             | getattr(os, "O_CLOEXEC", 0)
             | getattr(os, "O_NOFOLLOW", 0)
@@ -113,7 +119,10 @@ class CgroupV2ResourceReader:
         try:
             descriptor = os.open(self._directory, flags)
         except OSError as exc:
-            raise _resource_error("Docker cgroup directory cannot be opened safely") from exc
+            error_name = errno.errorcode.get(exc.errno or -1, "UNKNOWN")
+            raise _resource_error(
+                f"Docker cgroup directory cannot be opened safely ({error_name})"
+            ) from exc
         try:
             opened = os.fstat(descriptor)
             if not stat.S_ISDIR(opened.st_mode) or opened.st_ino != self._expected_inode:
@@ -389,7 +398,10 @@ def _read_optional_text(descriptor: int, name: str, *, budget: _ReadBudget) -> s
     except FileNotFoundError:
         return None
     except OSError as exc:
-        raise _resource_error("cgroup resource file cannot be opened safely") from exc
+        error_name = errno.errorcode.get(exc.errno or -1, "UNKNOWN")
+        raise _resource_error(
+            f"cgroup resource file cannot be opened safely ({error_name})"
+        ) from exc
     try:
         metadata = os.fstat(file_descriptor)
         if not stat.S_ISREG(metadata.st_mode):

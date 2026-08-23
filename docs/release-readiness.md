@@ -2,7 +2,7 @@
 
 [简体中文](release-readiness.zh-CN.md) | English
 
-This is the 2026-08-22 local validation record for the v0.3.1 release candidate. It is not a
+This is the 2026-08-23 local validation record for the v0.3.1 release candidate. It is not a
 substitute for the tag workflow or for acceptance on each deployed host. Every release reruns the
 [release procedure](releasing.md), and a configured workflow is not evidence that its remote run
 passed.
@@ -26,17 +26,17 @@ C/C++/Java/Python/Go runtime-lock adapters.
 
 ## Automated local gates
 
-| Gate | 2026-08-22 candidate result |
+| Gate | 2026-08-23 candidate result |
 |---|---|
 | Ruff | passed |
 | Pyright strict mode | 0 errors, 0 warnings |
-| Python 3.12 | 1022 passed; 85.03% coverage |
-| Python 3.13 | 1022 passed; 85.03% coverage |
-| Rust format/Clippy/tests | passed; 54 tests |
+| Python 3.12 | 1069 passed; 85.15% coverage |
+| Python 3.13 | 1069 passed; 85.15% coverage |
+| Rust format/Clippy/tests | passed; 64 tests |
 | Rust dependencies | `cargo audit` clean with the official local advisory DB clone; `cargo deny check` passed |
 | Protocol/Schema | generated files clean; Python/Rust valid and invalid goldens passed |
 | Python packages | wheel and sdist built reproducibly and passed isolated smoke tests |
-| Debian packages | two reproducible `0.3.1-2` amd64 DEBs passed extract/package smoke; no service or Docker activation |
+| Debian packages | two reproducible `0.3.1-7` amd64 DEBs passed extract/package smoke; no service or Docker activation |
 
 Exact counts describe this candidate checkout and will change as tests grow. The coverage gate
 remains 85% and must not be lowered for a release.

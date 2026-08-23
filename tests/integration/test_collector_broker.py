@@ -1013,7 +1013,10 @@ def test_cap_perfmon_broker_revalidates_pid_identity_before_software_retry(
         real_assert_plan_current = broker_server.assert_plan_current
         validations = 0
 
-        def revalidate(changing_plan: CollectionPlanArtifact) -> None:
+        def revalidate(
+            changing_plan: CollectionPlanArtifact,
+            **_kwargs: object,
+        ) -> None:
             nonlocal validations
             validations += 1
             if validations == 3:
@@ -1417,7 +1420,10 @@ def test_paranoid3_broker_preserves_docker_identity_for_cpu_modes(
         required_privilege="cap_sys_admin_or_policy_change",
     )
 
-    def accept_current_plan(_plan: CollectionPlanArtifact) -> None:
+    def accept_current_plan(
+        _plan: CollectionPlanArtifact,
+        **_kwargs: object,
+    ) -> None:
         return None
 
     monkeypatch.setattr(broker_server, "assert_plan_current", accept_current_plan)

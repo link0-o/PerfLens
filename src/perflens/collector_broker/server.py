@@ -69,6 +69,7 @@ from perflens.contracts.artifacts import (
     CollectionPlanArtifact,
     CollectorHealthArtifact,
 )
+from perflens.docker.identity import namespace_attestation_from_target
 from perflens.domain.errors import ErrorCode, PerfLensError, stable_error_id
 from perflens.metrics.perf_stat import PerfStatMetricAdapter
 from perflens.privileged_helper.client import HelperClient
@@ -316,7 +317,7 @@ class CollectorBrokerServer:
     ) -> CollectionArtifact | BrokerTraceEvidenceReference:
         plan = request.plan
         self._authorize(peer_uid, plan)
-        assert_plan_current(plan)
+        self._assert_execution_plan_current(plan)
         if plan.mode in {"sched", "off_cpu", "lock"}:
             assert self._trace_coordinator is not None
             self._authorize_spool_capacity(
@@ -365,6 +366,28 @@ class CollectorBrokerServer:
             }
         )
 
+    def _assert_execution_plan_current(self, plan: CollectionPlanArtifact) -> None:
+        """Recheck locally, deferring unreadable Docker namespaces only to a Rust Helper."""
+        helper_revalidates = (
+            self._policy.privilege_mode == "paranoid3_helper"
+            or plan.mode in {"sched", "off_cpu", "lock"}
+        )
+        namespace_attestation = None
+        if helper_revalidates and plan.target_runtime == "docker":
+            if plan.container_target is None:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "authorization",
+                    "Docker collection plan lost its required target binding",
+                )
+            namespace_attestation = namespace_attestation_from_target(
+                plan.container_target
+            )
+        if namespace_attestation is None:
+            assert_plan_current(plan)
+        else:
+            assert_plan_current(plan, namespace_attestation=namespace_attestation)
+
     def _narrow_fallback_to_collector_policy(
         self,
         plan: CollectionPlanArtifact,
@@ -385,6 +408,23 @@ class CollectorBrokerServer:
         *,
         ready_callback: Callable[[], None] | None = None,
     ) -> CollectionArtifact:
+        readiness_reported = False
+
+        def report_ready() -> None:
+            nonlocal readiness_reported
+            if readiness_reported:
+                return
+            if ready_callback is not None:
+                ready_callback()
+            readiness_reported = True
+
+        def assert_current_target() -> None:
+            assert_plan_current(
+                plan,
+                allow_managed_exec_transition=readiness_reported,
+            )
+
+        effective_ready_callback = report_ready if ready_callback is not None else None
         events = plan.events or self._policy.allowed_stat_events
         record_event: Literal["cycles", "cpu-clock"] = plan.record_event or DEFAULT_RECORD_EVENT
         duration_seconds = plan.duration_seconds
@@ -396,7 +436,8 @@ class CollectorBrokerServer:
         elif plan.fallback_allowed:
             use_hardware, fallback_reason, probe_seconds = self._probe_hardware_pmu(
                 plan,
-                ready_callback=ready_callback,
+                pid_identity_validator=assert_current_target,
+                ready_callback=effective_ready_callback,
             )
             duration_seconds -= probe_seconds
             if not use_hardware:
@@ -409,7 +450,7 @@ class CollectorBrokerServer:
         def execute_selected_profile() -> CollectionArtifact:
             # Probe and failed-attempt time create another PID-reuse/expiry boundary. Recheck the
             # original owner/start-time binding before every formal hardware or software attempt.
-            assert_plan_current(plan)
+            assert_current_target()
             return collect_profile(
                 CollectionRequest(
                     mode=plan.mode,
@@ -431,8 +472,11 @@ class CollectorBrokerServer:
                     timeout_seconds=min(duration_seconds + 10, 86_400),
                     max_output_bytes=plan.max_output_bytes,
                 ),
-                pid_identity_validator=lambda: assert_plan_current(plan),
-                ready_callback=ready_callback,
+                pid_identity_validator=assert_current_target,
+                ready_callback=effective_ready_callback,
+                record_build_id_mmap=(
+                    plan.target_runtime == "docker" and plan.mode == "record"
+                ),
             )
 
         hardware_started = time.monotonic()
@@ -480,6 +524,7 @@ class CollectorBrokerServer:
         self,
         plan: CollectionPlanArtifact,
         *,
+        pid_identity_validator: Callable[[], None] | None = None,
         ready_callback: Callable[[], None] | None = None,
     ) -> tuple[bool, str | None, float]:
         if plan.duration_seconds < _HARDWARE_PROBE_MINIMUM_PLAN_SECONDS:
@@ -505,7 +550,11 @@ class CollectorBrokerServer:
                         timeout_seconds=min(probe_seconds + 10, 86_400),
                         max_output_bytes=min(plan.max_output_bytes, 1 << 20),
                     ),
-                    pid_identity_validator=lambda: assert_plan_current(plan),
+                    pid_identity_validator=(
+                        pid_identity_validator
+                        if pid_identity_validator is not None
+                        else lambda: assert_plan_current(plan)
+                    ),
                     ready_callback=ready_callback,
                 )
             except PerfLensError as exc:

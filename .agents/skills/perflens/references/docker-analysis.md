@@ -15,6 +15,9 @@ runtime, not a Collector privilege mode: `cpu_only`/`full_diagnostics` still con
   to expose a tool. Before either authorization tool is called, show the exact resolved target or
   workload summary, end the response, and require a fresh explicit reply from the user. Never fill
   the fixed authorization token merely because the tool call itself would be auto-approved.
+- The modes passed to either authorization tool must exactly match the modes shown in that summary.
+  Pass that explicit, non-empty subset through `allowed_modes`; omission and empty sets are rejected.
+  A later mode expansion requires a new summary and explicit authorization.
 - Rootful UID-0 targets are denied unless an administrator separately enabled the dedicated
   Collector policy. A performance-session confirmation does not grant that host policy.
 - Every collection plan binds the full container/image digest, host PID/UID/start time, container
@@ -54,6 +57,13 @@ session when the fixed workload specification is unchanged. Image digest, entryp
 mount policy, network/resources, project identity, Gate binary, allowed modes, or session budget
 changes do invalidate it.
 
+The session's run count is only an upper bound. An authorization summary for one execution permits
+one call even when the session budget is larger. A failed call must be reported without an
+automatic retry unless the confirmed summary explicitly budgeted that retry or the user confirms a
+new attempt. Likewise, collection duration caps observation; it does not keep the container
+workload alive. When the workload exits after two seconds, a ten-second request still observes only
+that workload lifetime and must not be presented as a way to obtain ten seconds of CPU samples.
+
 The user-reviewed `[managed].treatment_paths` list contains normalized project-relative files whose
 content identifies the A/B treatment. The list is part of the workload fingerprint and cannot be
 selected by the Agent at collection time. Public artifacts retain only domain-separated path and
@@ -70,6 +80,21 @@ event source/fallback, collection mode, and cleanup state. Container-level cgrou
 the whole container and must not be presented as target-process-exclusive metrics. Never expose
 full inspect JSON, environment, labels, mount source paths, Docker Socket paths, raw foreign task
 metadata, or private authorization tokens.
+
+For Docker `record`, prefer capture-time mmap Build IDs. During later analysis PerfLens may build a
+private temporary `symfs` only from `/workspace` modules whose path digest, Build ID, byte count,
+and SHA-256 match the capture-time module snapshot. The temporary filesystem is reverified and
+destroyed after conversion; its path is replaced by a content identity in public provenance. A
+mismatch or unavailable module remains partial and is never resolved by guessing from the host.
+
+A verified empty `record` Analysis is `partial` evidence with zero samples, no observed event, and
+no allowed hotspot conclusion; it is not deterministic-verification failure and must never be
+filled with inferred hotspots. It also does not by itself prove a Docker, Gate, Collector, PMU, or
+sampling-pipeline failure. Check target-process CPU opportunity separately from whole-container
+CPU and wall time, and keep the cause unknown without a controlled comparison. If a short or
+mostly waiting managed workload produces no samples, a longer or more CPU-intensive recipe is a
+new workload specification and requires a new summary and explicit authorization. An explicit
+`software_only` retry likewise requires its own disclosed collection request.
 
 For matched A/B, require the same image digest and workload spec in v0.3.1. Source edits mounted
 read-only under `/workspace` may change build artifacts, but record their digest; an image rebuild

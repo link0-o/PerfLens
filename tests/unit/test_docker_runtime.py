@@ -244,13 +244,38 @@ def test_managed_runtime_authorizes_only_the_fixed_project_recipe(
     )
 
     session = runtime.authorize_managed(
+        allowed_modes=("stat",),
         explicit_authorization=EXPLICIT_DOCKER_SESSION_AUTHORIZATION,
     )
     assert session.target_kind == "managed_temporary_container"
     assert session.authorization_mode == "per_run"
-    assert session.allowed_modes == ("stat", "record", "sched")
+    assert session.allowed_modes == ("stat",)
     assert session.workload_spec_sha256 is not None
     assert session.existing_target_identity_sha256 is None
+
+    with pytest.raises(PerfLensError) as expanded_run:
+        runtime.prepare_managed_run(
+            session.session_id,
+            requested_modes=("record",),
+            reserve_active_seconds=1,
+            reserve_evidence_bytes=1,
+        )
+    assert expanded_run.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert "outside session authorization" in expanded_run.value.message
+
+    with pytest.raises(PerfLensError) as empty_modes:
+        runtime.authorize_managed(
+            allowed_modes=(),
+            explicit_authorization=EXPLICIT_DOCKER_SESSION_AUTHORIZATION,
+        )
+    assert empty_modes.value.code is ErrorCode.INVALID_INPUT
+
+    with pytest.raises(PerfLensError) as outside_policy:
+        runtime.authorize_managed(
+            allowed_modes=("lock",),
+            explicit_authorization=EXPLICIT_DOCKER_SESSION_AUTHORIZATION,
+        )
+    assert outside_policy.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 
 def test_managed_runtime_rejects_disabled_policy(
@@ -260,6 +285,7 @@ def test_managed_runtime_rejects_disabled_policy(
     runtime, _ = _runtime(tmp_path, monkeypatch)
     with pytest.raises(PerfLensError) as captured:
         runtime.authorize_managed(
+            allowed_modes=("stat",),
             explicit_authorization=EXPLICIT_DOCKER_SESSION_AUTHORIZATION,
         )
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION

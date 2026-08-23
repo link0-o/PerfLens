@@ -286,6 +286,7 @@ class ExistingDockerRuntime:
         self,
         *,
         explicit_authorization: str,
+        allowed_modes: tuple[CollectionMode, ...],
     ) -> ContainerOptimizationSessionArtifact:
         """Authorize the exact managed recipe already pinned in project policy."""
         self._assert_context_current()
@@ -298,6 +299,7 @@ class ExistingDockerRuntime:
             )
         self._managed_root()
         gate = self._inspect_gate()
+        modes = self._authorized_modes(allowed_modes)
         managed = self._project_policy.managed
         benchmark_contract = (
             benchmark_output_contract_sha256(
@@ -319,7 +321,7 @@ class ExistingDockerRuntime:
             cpus=managed.cpus,
             memory_bytes=managed.memory_bytes,
             pids=managed.pids,
-            allowed_modes=self._collection_policy.allowed_modes,
+            allowed_modes=modes,
             authorization_mode=self._project_policy.default_authorization_mode,
             max_workload_runs=self._project_policy.max_workload_runs,
             max_active_seconds=self._project_policy.max_active_seconds,
@@ -491,7 +493,7 @@ class ExistingDockerRuntime:
         self,
         requested: tuple[CollectionMode, ...],
     ) -> tuple[CollectionMode, ...]:
-        modes = requested or self._collection_policy.allowed_modes
+        modes = requested
         if not modes or len(set(modes)) != len(modes):
             raise PerfLensError(
                 ErrorCode.INVALID_INPUT,

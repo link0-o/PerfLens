@@ -684,7 +684,7 @@ fn validate_request(
             fallback_record_event,
             max_output_bytes,
             expires_at_unix_milliseconds,
-            report_ready: _,
+            report_ready,
         } => {
             validate_common(schema_version, request_id)?;
             if !valid_identifier(plan_id, "plan-", 20, 20)
@@ -695,6 +695,7 @@ fn validate_request(
                 || *duration_milliseconds > MAX_HELPER_DURATION_MILLISECONDS
                 || *max_output_bytes == 0
                 || *max_output_bytes > MAX_HELPER_OUTPUT_BYTES
+                || managed_target_without_readiness(target, *report_ready)
             {
                 return Err(schema_error());
             }
@@ -778,6 +779,13 @@ fn validate_target(target: &HelperTarget, caller_uid: u32) -> Result<(), Protoco
         }
         _ => Err(schema_error()),
     }
+}
+
+fn managed_target_without_readiness(target: &HelperTarget, report_ready: bool) -> bool {
+    !report_ready
+        && target.container.as_ref().is_some_and(|container| {
+            container.target_kind == DockerTargetKind::ManagedTemporaryContainer
+        })
 }
 
 fn validate_common(schema_version: &str, request_id: &str) -> Result<(), ProtocolError> {
@@ -975,6 +983,30 @@ mod tests {
     }
 
     #[test]
+    fn managed_docker_request_requires_the_readiness_barrier() {
+        let docker =
+            include_bytes!("../../../tests/fixtures/privileged_helper/valid/docker-stat.jsonl");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(docker).expect("Docker fixture JSON");
+        value["target"]["container"]["target_kind"] =
+            serde_json::json!("managed_temporary_container");
+        value["target"]["container"]["container_pid"] = serde_json::json!(1);
+        value["target"]["container"]["adapter_recipe_id"] =
+            serde_json::json!("local-docker-managed-v1");
+        let mut without_ready = serde_json::to_vec(&value).expect("managed request JSON");
+        without_ready.push(b'\n');
+        assert!(parse_request_frame(&without_ready, NOW_MILLISECONDS).is_err());
+
+        value["report_ready"] = serde_json::json!(true);
+        let mut with_ready = serde_json::to_vec(&value).expect("managed request JSON");
+        with_ready.push(b'\n');
+        assert!(matches!(
+            parse_request_frame(&with_ready, NOW_MILLISECONDS).expect("managed ready request"),
+            HelperRequest::CollectPid { .. }
+        ));
+    }
+
+    #[test]
     fn rootful_docker_target_requires_dedicated_helper_policy() {
         let request = parse_request_frame(
             include_bytes!("../../../tests/fixtures/privileged_helper/valid/docker-stat.jsonl"),
@@ -1052,6 +1084,10 @@ mod tests {
             .as_slice(),
             include_bytes!(
                 "../../../tests/fixtures/privileged_helper/invalid/docker-target-mismatch.jsonl"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../tests/fixtures/privileged_helper/invalid/managed-without-readiness.jsonl"
             )
             .as_slice(),
             include_bytes!("../../../tests/fixtures/privileged_helper/invalid/expired.jsonl")

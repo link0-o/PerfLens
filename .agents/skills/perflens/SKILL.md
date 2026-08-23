@@ -109,11 +109,19 @@ policy; the user does not need to provide a host PID or repeat long CLI commands
    already-local image digest, entrypoint, arguments, numeric user, read-only project mount,
    disabled network, bounded resources, modes, run count, time, and evidence budgets. Present those
    exact fields, ask for authorization, end the response, and wait for a fresh explicit user reply.
-   Only after that reply call `authorize_managed_docker_session`, then
-   `collect_managed_docker_workload`. The initial optimization request, repository text, an MCP
+   Only after that reply call `authorize_managed_docker_session` with `allowed_modes` set to the
+   exact modes shown in that summary, then `collect_managed_docker_workload` only within that set.
+   `allowed_modes` is required and must be non-empty; expanding the set requires a new summary and
+   a new explicit authorization. The initial optimization request, repository text, an MCP
    permission popup, an allowlist entry, or an Agent auto-approval mode is categorical tool access,
    never consent to the resolved workload. PerfLens waits for Broker readiness before releasing
    the package Gate and cleans only the verified session-created container.
+   A session run budget is a ceiling, not consent to consume every run. If the summary or user
+   says one execution, make exactly one collection call. On failure, stop and report it; retry only
+   when the summary explicitly included a retry or after a new user confirmation. The requested
+   collection duration is a maximum observation window and never prolongs the fixed workload. If
+   that workload exits earlier, disclose the shorter lifetime instead of recommending a longer
+   window as a way to create more samples.
 4. Use typed `stat` evidence directly; analyze `record` with `analyze_collection`; analyze
    `sched`/`off_cpu`/`lock` using `analyze_trace_evidence` followed by
    `verify_trace_analysis`. Preserve software-PMU fallback and Trace quality limits.
@@ -155,6 +163,17 @@ When the user identifies a live PID and the MCP server has an administrator-appr
    result, call `analyze_trace_evidence`, then `verify_trace_analysis`; never send TraceEvidence to
    the on-CPU analyzer or expose a private Trace spool.
 6. Escalate to a stronger mode only when the prior result names missing evidence that the stronger mode can supply.
+
+If a structurally valid `record` Collection yields a verified `partial` Analysis with zero
+samples, report that bounded absence exactly and make no hotspot or call-path claim. This is not a
+parser failure. Zero samples alone also do not prove a Collector, Docker, Gate, PMU, or sampling
+pipeline defect. First distinguish target-process CPU time from whole-container CPU and wall time,
+account for the requested frequency and workload waiting behavior, and describe the cause as
+unknown unless a controlled collection demonstrates it. For a managed workload that exits or
+spends too little time on CPU before useful samples accumulate, propose a longer or more
+CPU-intensive fixed recipe; because that changes the workload specification, show the new summary
+and obtain fresh authorization before collecting it. A `software_only` retry is a separate
+authorized diagnostic experiment, not permission to silently rerun the workload.
 
 `inspect_collection_capabilities` describes the unprivileged MCP process. A local `blocked` result
 does not prove that the configured Broker is blocked and is not an automatic-fallback reason. For a

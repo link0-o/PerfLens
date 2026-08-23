@@ -23,6 +23,7 @@ from perflens.contracts.artifacts import (
     ContainerCollectionTargetBinding,
 )
 from perflens.contracts.docker import ContainerTargetArtifact
+from perflens.docker.identity import NamespaceIdentity
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 
@@ -145,7 +146,10 @@ def test_docker_plan_binds_full_kernel_identity_and_revalidates(
     def bind_target(_target: ContainerTargetArtifact) -> ContainerCollectionTargetBinding:
         return binding
 
-    def current_target(_target: object) -> SimpleNamespace:
+    def current_target(
+        _target: object,
+        **_kwargs: object,
+    ) -> SimpleNamespace:
         return SimpleNamespace(
             host_uid=binding.host_uid,
             host_start_time_ticks=binding.host_start_time_ticks,
@@ -170,6 +174,60 @@ def test_docker_plan_binds_full_kernel_identity_and_revalidates(
     assert plan.container_target == binding
     assert plan.plan_id.startswith("plan-")
     assert_plan_current(plan, now=datetime(2026, 8, 21, 0, 1, tzinfo=UTC))
+
+
+def test_docker_plan_threads_authenticated_namespace_attestation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = _docker_target()
+    binding = _collection_binding(target)
+    attestation = NamespaceIdentity(pid=101, user=102, mount=103, cgroup=104)
+    observed: list[NamespaceIdentity | None] = []
+
+    def bind_target(
+        _target: ContainerTargetArtifact,
+        *,
+        namespace_attestation: NamespaceIdentity | None = None,
+    ) -> ContainerCollectionTargetBinding:
+        observed.append(namespace_attestation)
+        return binding
+
+    def current_target(
+        _target: object,
+        *,
+        namespace_attestation: NamespaceIdentity | None = None,
+        allow_managed_exec_transition: bool = False,
+    ) -> SimpleNamespace:
+        assert allow_managed_exec_transition is False
+        observed.append(namespace_attestation)
+        return SimpleNamespace(
+            host_uid=binding.host_uid,
+            host_start_time_ticks=binding.host_start_time_ticks,
+        )
+
+    monkeypatch.setattr(planning, "bind_container_collection_target", bind_target)
+    monkeypatch.setattr(
+        planning,
+        "assert_container_target_current",
+        current_target,
+    )
+    plan = create_collection_plan(
+        CollectionPlanRequest(
+            mode="record",
+            pid=target.host_pid,
+            container_target=target,
+        ),
+        policy=AutomaticCollectionPolicy(enabled=True),
+        capabilities=_capabilities(),
+        now=datetime(2026, 8, 21, tzinfo=UTC),
+        namespace_attestation=attestation,
+    )
+    assert_plan_current(
+        plan,
+        now=datetime(2026, 8, 21, 0, 1, tzinfo=UTC),
+        namespace_attestation=attestation,
+    )
+    assert observed == [attestation, attestation]
 
 
 def test_docker_plan_rejects_pid_mismatch_and_gates_rootful_cross_uid(

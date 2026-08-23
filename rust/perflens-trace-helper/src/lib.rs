@@ -596,10 +596,37 @@ pub(crate) fn assert_pid_identity(target: &TraceHelperTarget) -> io::Result<()> 
     assert_pid_identity_at(target, Path::new("/proc"), Path::new("/sys/fs/cgroup"))
 }
 
+pub(crate) fn assert_pid_identity_after_managed_release(
+    target: &TraceHelperTarget,
+) -> io::Result<()> {
+    assert_pid_identity_for_phase(target, true)
+}
+
+fn assert_pid_identity_for_phase(
+    target: &TraceHelperTarget,
+    allow_managed_exec_transition: bool,
+) -> io::Result<()> {
+    assert_pid_identity_at_phase(
+        target,
+        Path::new("/proc"),
+        Path::new("/sys/fs/cgroup"),
+        allow_managed_exec_transition,
+    )
+}
+
 fn assert_pid_identity_at(
     target: &TraceHelperTarget,
     proc_root: &Path,
     cgroup_root: &Path,
+) -> io::Result<()> {
+    assert_pid_identity_at_phase(target, proc_root, cgroup_root, false)
+}
+
+fn assert_pid_identity_at_phase(
+    target: &TraceHelperTarget,
+    proc_root: &Path,
+    cgroup_root: &Path,
+    allow_managed_exec_transition: bool,
 ) -> io::Result<()> {
     if target.pid == std::process::id() {
         return Err(io::Error::new(
@@ -638,7 +665,13 @@ fn assert_pid_identity_at(
     match (&target.target_runtime, &target.container) {
         (TargetRuntime::Host, None) => {}
         (TargetRuntime::Docker, Some(container)) => {
-            assert_docker_identity(&process_root, cgroup_root, target, container)?;
+            assert_docker_identity(
+                &process_root,
+                cgroup_root,
+                target,
+                container,
+                allow_managed_exec_transition,
+            )?;
         }
         _ => {
             return Err(io::Error::new(
@@ -655,6 +688,7 @@ fn assert_docker_identity(
     cgroup_root: &Path,
     target: &TraceHelperTarget,
     container: &ContainerTargetBinding,
+    allow_managed_exec_transition: bool,
 ) -> io::Result<()> {
     let denied = |message| io::Error::new(io::ErrorKind::PermissionDenied, message);
     let status = fs::read_to_string(proc_root.join("status"))?;
@@ -679,11 +713,13 @@ fn assert_docker_identity(
         }
     }
     let executable_name = fs::read_to_string(proc_root.join("comm"))?;
-    if executable_name
+    let executable_changed = executable_name
         .strip_suffix('\n')
         .unwrap_or(&executable_name)
-        != container.executable_name
-    {
+        != container.executable_name;
+    let executable_transition_allowed = allow_managed_exec_transition
+        && container.target_kind == DockerTargetKind::ManagedTemporaryContainer;
+    if executable_changed && !executable_transition_allowed {
         return Err(denied("Docker target executable identity changed"));
     }
     let cgroup_identity = assert_docker_cgroup(proc_root, cgroup_root, container)?;
@@ -898,7 +934,7 @@ fn validate_request(
             expires_at_unix_milliseconds,
             expected_policy_sha256,
             expected_capture_backend,
-            report_ready: _,
+            report_ready,
         } => {
             validate_common(schema_version, request_id)?;
             if !valid_identifier(plan_id, "trace-plan-", 20)
@@ -911,6 +947,7 @@ fn validate_request(
                 || *max_output_bytes > MAX_TRACE_HELPER_OUTPUT_BYTES
                 || !valid_sha256(expected_policy_sha256)
                 || expected_capture_backend != CAPTURE_BACKEND
+                || managed_target_without_readiness(target, *report_ready)
             {
                 return Err(schema_error());
             }
@@ -983,6 +1020,13 @@ fn validate_target(target: &TraceHelperTarget, caller_uid: u32) -> Result<(), Pr
         }
         _ => Err(schema_error()),
     }
+}
+
+fn managed_target_without_readiness(target: &TraceHelperTarget, report_ready: bool) -> bool {
+    !report_ready
+        && target.container.as_ref().is_some_and(|container| {
+            container.target_kind == DockerTargetKind::ManagedTemporaryContainer
+        })
 }
 
 fn validate_common(schema_version: &str, request_id: &str) -> Result<(), ProtocolError> {
@@ -1089,8 +1133,9 @@ mod tests {
         ContainerCgroupBinding, ContainerNamespaceBinding, ContainerTargetBinding,
         DockerAdapterRecipe, DockerTargetKind, DockerUidMapping, ProtocolErrorKind, TargetRuntime,
         TraceHelperRequest, TraceHelperServerPolicy, TraceHelperTarget, TraceMode,
-        assert_pid_identity, assert_pid_identity_at, docker_identity_fingerprint,
-        handle_connection, parse_request_frame, sha256_nul, target_allowed_by_policy,
+        assert_pid_identity, assert_pid_identity_at, assert_pid_identity_at_phase,
+        docker_identity_fingerprint, handle_connection, parse_request_frame, sha256_nul,
+        target_allowed_by_policy,
     };
 
     const NOW_MILLISECONDS: u64 = 4_102_444_700_000;
@@ -1279,6 +1324,56 @@ mod tests {
         );
     }
 
+    #[test]
+    fn managed_exec_transition_relaxes_only_the_executable_name() {
+        let fixture = docker_identity_fixture();
+        fs::write(fixture.process_root.join("comm"), "workload\n")
+            .expect("replace Gate executable name");
+        assert!(
+            assert_pid_identity_at_phase(
+                &fixture.target,
+                &fixture.proc_root,
+                &fixture.cgroup_root,
+                false,
+            )
+            .is_err()
+        );
+        assert_pid_identity_at_phase(
+            &fixture.target,
+            &fixture.proc_root,
+            &fixture.cgroup_root,
+            true,
+        )
+        .expect("accept the managed Gate exec transition");
+
+        fs::remove_file(fixture.process_root.join("ns/pid")).expect("remove namespace link");
+        symlink("pid:[999]", fixture.process_root.join("ns/pid")).expect("replace namespace link");
+        assert!(
+            assert_pid_identity_at_phase(
+                &fixture.target,
+                &fixture.proc_root,
+                &fixture.cgroup_root,
+                true,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn existing_container_never_accepts_an_executable_transition() {
+        let fixture = docker_identity_fixture();
+        let mut target = fixture.target.clone();
+        let container = target.container.as_mut().expect("Docker binding");
+        container.target_kind = DockerTargetKind::ExistingContainer;
+        container.adapter_recipe_id = DockerAdapterRecipe::LocalDockerReadV1;
+        fs::write(fixture.process_root.join("comm"), "replacement\n")
+            .expect("replace executable name");
+        assert!(
+            assert_pid_identity_at_phase(&target, &fixture.proc_root, &fixture.cgroup_root, true,)
+                .is_err()
+        );
+    }
+
     fn fixture(relative: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/trace_helper")
@@ -1306,6 +1401,29 @@ mod tests {
         ));
         assert!(matches!(
             parse_request_frame(&rootful, NOW_MILLISECONDS).expect("rootful Docker sched"),
+            TraceHelperRequest::CollectPid { .. }
+        ));
+    }
+
+    #[test]
+    fn managed_docker_request_requires_the_readiness_barrier() {
+        let docker = fs::read(fixture("valid/docker-sched.jsonl")).expect("Docker fixture");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&docker).expect("Docker fixture JSON");
+        value["target"]["container"]["target_kind"] =
+            serde_json::json!("managed_temporary_container");
+        value["target"]["container"]["container_pid"] = serde_json::json!(1);
+        value["target"]["container"]["adapter_recipe_id"] =
+            serde_json::json!("local-docker-managed-v1");
+        let mut without_ready = serde_json::to_vec(&value).expect("managed request JSON");
+        without_ready.push(b'\n');
+        assert!(parse_request_frame(&without_ready, NOW_MILLISECONDS).is_err());
+
+        value["report_ready"] = serde_json::json!(true);
+        let mut with_ready = serde_json::to_vec(&value).expect("managed request JSON");
+        with_ready.push(b'\n');
+        assert!(matches!(
+            parse_request_frame(&with_ready, NOW_MILLISECONDS).expect("managed ready request"),
             TraceHelperRequest::CollectPid { .. }
         ));
     }

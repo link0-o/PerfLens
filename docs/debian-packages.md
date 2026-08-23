@@ -18,7 +18,7 @@ MCP or Collector identity. Links in writable directories are rejected.
 For offline profile analysis, install only the main package:
 
 ```bash
-sudo apt install ./perflens_0.3.1-2_amd64.deb
+sudo apt install ./perflens_0.3.1-7_amd64.deb
 cd /absolute/path/to/project
 perflens init
 ```
@@ -27,8 +27,8 @@ For automatic collection, install both packages and generate a reviewed policy:
 
 ```bash
 sudo apt install \
-  ./perflens_0.3.1-2_amd64.deb \
-  ./perflens-collector_0.3.1-2_amd64.deb
+  ./perflens_0.3.1-7_amd64.deb \
+  ./perflens-collector_0.3.1-7_amd64.deb
 
 perflens setup \
   --project /absolute/path/to/project \
@@ -66,7 +66,8 @@ the complete versioned artifact.
 The previous repaired `0.2.0` line kept its upstream version and incremented only the
 Debian revision from `1` to `2`. APT could therefore upgrade an installed
 `0.2.0-1` package to `0.2.0-2`, while the PerfLens CLI still reported `0.2.0`.
-The `0.3.1` upstream release uses Debian revision `1`.
+The current `0.3.1` candidate uses Debian revision `7`; APT treats it as newer than the earlier
+local `0.3.1-1` through `0.3.1-6` candidates while every PerfLens command still reports `0.3.1`.
 
 Docker remains an optional external runtime. Neither package depends on or activates Docker, joins
 a Docker group, writes daemon configuration, or enables project Docker policy. The Container Gate

@@ -7,6 +7,7 @@ one pinned procfs process directory and matched to the container init process.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import re
@@ -81,13 +82,30 @@ class ResolvedContainerTarget:
     artifact: ContainerTargetArtifact
 
 
+def namespace_attestation_from_target(
+    target: ContainerTargetArtifact | ContainerCollectionTargetBinding,
+) -> NamespaceIdentity:
+    """Project the namespace tuple already bound into a typed Docker target."""
+    return NamespaceIdentity(
+        pid=target.namespace.pid_namespace_inode,
+        user=target.namespace.user_namespace_inode,
+        mount=target.namespace.mount_namespace_inode,
+        cgroup=target.namespace.cgroup_namespace_inode,
+    )
+
+
 def bind_container_collection_target(
     target: ContainerTargetArtifact,
     *,
     reader: LinuxContainerIdentityReader | None = None,
+    namespace_attestation: NamespaceIdentity | None = None,
 ) -> ContainerCollectionTargetBinding:
     """Revalidate a public Docker target and project only its collection identity."""
-    current = assert_container_target_current(target, reader=reader)
+    current = assert_container_target_current(
+        target,
+        reader=reader,
+        namespace_attestation=namespace_attestation,
+    )
     return ContainerCollectionTargetBinding(
         target_id=target.target_id,
         target_kind=target.target_kind,
@@ -121,8 +139,10 @@ def assert_container_target_current(
     target: ContainerTargetArtifact | ContainerCollectionTargetBinding,
     *,
     reader: LinuxContainerIdentityReader | None = None,
+    namespace_attestation: NamespaceIdentity | None = None,
+    allow_managed_exec_transition: bool = False,
 ) -> KernelProcessIdentity:
-    """Recheck every public Linux identity field without consulting Docker metadata."""
+    """Recheck Linux identity, optionally after the managed Gate released its workload."""
     if isinstance(target, ContainerTargetArtifact):
         expected_content_sha256 = contract_content_sha256(
             target,
@@ -132,7 +152,14 @@ def assert_container_target_current(
             raise _identity_error("Docker target artifact content digest does not match")
 
     identity_reader = reader or LinuxContainerIdentityReader()
-    current = identity_reader.inspect_process(target.host_pid)
+    current = (
+        identity_reader.inspect_process(target.host_pid)
+        if namespace_attestation is None
+        else identity_reader.inspect_process(
+            target.host_pid,
+            namespace_attestation=namespace_attestation,
+        )
+    )
     expected_namespace = (
         target.namespace.pid_namespace_inode,
         target.namespace.user_namespace_inode,
@@ -145,11 +172,16 @@ def assert_container_target_current(
         current.namespace.mount,
         current.namespace.cgroup,
     )
+    executable_changed = current.executable_name != target.executable_name
+    executable_transition_allowed = (
+        allow_managed_exec_transition
+        and target.target_kind == "managed_temporary_container"
+    )
     if (
         current.host_uid != target.host_uid
         or current.host_start_time_ticks != target.host_start_time_ticks
         or current.container_pid != target.container_pid
-        or current.executable_name != target.executable_name
+        or (executable_changed and not executable_transition_allowed)
         or len(current.nspid) < 2
         or current_namespace != expected_namespace
         or current.cgroup_inode != target.cgroup.inode
@@ -200,9 +232,15 @@ class LinuxContainerIdentityReader:
         self._proc_root = _validate_filesystem_root(proc_root, "procfs")
         self._cgroup_root = _validate_filesystem_root(cgroup_root, "cgroup v2")
 
-    def inspect_process(self, host_pid: int) -> KernelProcessIdentity:
+    def inspect_process(
+        self,
+        host_pid: int,
+        *,
+        namespace_attestation: NamespaceIdentity | None = None,
+    ) -> KernelProcessIdentity:
         if host_pid <= 0 or host_pid == os.getpid():
             raise _identity_error("Docker host PID is invalid")
+        _validate_namespace_attestation(namespace_attestation)
         process_path = self._proc_root / str(host_pid)
         flags = (
             os.O_RDONLY
@@ -218,8 +256,18 @@ class LinuxContainerIdentityReader:
             opened = os.fstat(descriptor)
             if not stat.S_ISDIR(opened.st_mode):
                 raise _identity_error("Docker target procfs entry is not a directory")
-            first = self._read_snapshot(descriptor, host_pid, proc_owner_uid=opened.st_uid)
-            second = self._read_snapshot(descriptor, host_pid, proc_owner_uid=opened.st_uid)
+            first = self._read_snapshot(
+                descriptor,
+                host_pid,
+                proc_owner_uid=opened.st_uid,
+                namespace_attestation=namespace_attestation,
+            )
+            second = self._read_snapshot(
+                descriptor,
+                host_pid,
+                proc_owner_uid=opened.st_uid,
+                namespace_attestation=namespace_attestation,
+            )
             if first != second:
                 raise _identity_error(
                     "Docker target identity changed while it was being verified",
@@ -289,6 +337,7 @@ class LinuxContainerIdentityReader:
         host_pid: int,
         *,
         proc_owner_uid: int,
+        namespace_attestation: NamespaceIdentity | None,
     ) -> KernelProcessIdentity:
         stat_text = _read_proc_text(descriptor, "stat")
         status_text = _read_proc_text(descriptor, "status")
@@ -300,11 +349,39 @@ class LinuxContainerIdentityReader:
             raise _identity_error("Docker target has an unsupported changing UID identity")
         executable_name = _parse_executable_name(comm_text)
         namespace = NamespaceIdentity(
-            pid=_read_namespace_inode(descriptor, "pid"),
-            user=_read_namespace_inode(descriptor, "user"),
-            mount=_read_namespace_inode(descriptor, "mnt"),
-            cgroup=_read_namespace_inode(descriptor, "cgroup"),
+            pid=_read_namespace_inode(
+                descriptor,
+                "pid",
+                unavailable_fallback=(
+                    namespace_attestation.pid if namespace_attestation is not None else None
+                ),
+            ),
+            user=_read_namespace_inode(
+                descriptor,
+                "user",
+                unavailable_fallback=(
+                    namespace_attestation.user if namespace_attestation is not None else None
+                ),
+            ),
+            mount=_read_namespace_inode(
+                descriptor,
+                "mnt",
+                unavailable_fallback=(
+                    namespace_attestation.mount if namespace_attestation is not None else None
+                ),
+            ),
+            cgroup=_read_namespace_inode(
+                descriptor,
+                "cgroup",
+                unavailable_fallback=(
+                    namespace_attestation.cgroup if namespace_attestation is not None else None
+                ),
+            ),
         )
+        if namespace_attestation is not None and namespace != namespace_attestation:
+            raise _identity_error(
+                "Docker target namespace identity differs from the Gate attestation"
+            )
         cgroup_path = _parse_cgroup_v2_path(cgroup_text)
         cgroup_inode = self._read_cgroup_inode(cgroup_path)
         return KernelProcessIdentity(
@@ -766,7 +843,12 @@ def _parse_status(text: str, *, expected_host_pid: int) -> tuple[int, tuple[int,
     return uids[0], nspid
 
 
-def _read_namespace_inode(descriptor: int, namespace: str) -> int:
+def _read_namespace_inode(
+    descriptor: int,
+    namespace: str,
+    *,
+    unavailable_fallback: int | None = None,
+) -> int:
     if namespace not in _NAMESPACE_NAMES:
         raise _identity_error("Docker target namespace kind is not allowed")
 
@@ -785,13 +867,25 @@ def _read_namespace_inode(descriptor: int, namespace: str) -> int:
             namespace_flags,
             dir_fd=descriptor,
         )
-    except OSError:
+    except OSError as open_error:
         # Procfs-compatible test/mount adapters may expose only the canonical
         # magic-link text.  It remains acceptable only when the complete,
         # bounded value matches the kernel namespace grammar below.
         try:
             target = os.readlink(f"ns/{namespace}", dir_fd=descriptor)
         except OSError as exc:
+            permission_errors = {errno.EACCES, errno.EPERM}
+            if (
+                unavailable_fallback is not None
+                and open_error.errno in permission_errors
+                and exc.errno in permission_errors
+            ):
+                # The fixed Gate reports its own namespace tuple only after the
+                # coordinator authenticates its host PID with SO_PEERCRED.  This
+                # fallback is never used for a missing or malformed proc entry,
+                # and privileged execution Helpers re-read the kernel namespace
+                # identity independently before collecting any evidence.
+                return unavailable_fallback
             raise _identity_error(
                 f"Docker target {namespace} namespace identity is unavailable",
                 recoverable=True,
@@ -809,6 +903,17 @@ def _read_namespace_inode(descriptor: int, namespace: str) -> int:
     if matched is None or matched.group("kind") != namespace:
         raise _identity_error("Docker target namespace identity is malformed")
     return int(matched.group("inode"))
+
+
+def _validate_namespace_attestation(value: NamespaceIdentity | None) -> None:
+    if value is None:
+        return
+    maximum = (1 << 64) - 1
+    if any(
+        type(inode) is not int or not 1 <= inode <= maximum
+        for inode in (value.pid, value.user, value.mount, value.cgroup)
+    ):
+        raise _identity_error("Docker Gate namespace attestation is invalid")
 
 
 def _parse_cgroup_v2_path(text: str) -> str:

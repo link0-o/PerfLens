@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import socket
+import struct
 import threading
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -42,8 +43,16 @@ NOW = datetime(2026, 8, 21, 12, tzinfo=UTC)
 CLIENT = "a" * 64
 POLICY = "b" * 64
 CONTAINER_ID = "c" * 64
-READY = b"PERFLENS_GATE_V1 READY\n"
-EXEC = b"PERFLENS_GATE_V1 EXEC\n"
+NAMESPACE = NamespaceIdentity(pid=101, user=102, mount=103, cgroup=104)
+READY_PREFIX = b"PERFLENS_GATE_V2 READY\0"
+READY = READY_PREFIX + struct.pack(
+    "!QQQQ",
+    NAMESPACE.pid,
+    NAMESPACE.user,
+    NAMESPACE.mount,
+    NAMESPACE.cgroup,
+)
+EXEC = b"PERFLENS_GATE_V2 EXEC\n"
 
 
 @dataclass(slots=True)
@@ -52,11 +61,22 @@ class _FakeReader:
     identity_allowed: threading.Event | None = None
     host_uid: int = os.geteuid()
 
-    def inspect_process(self, host_pid: int) -> KernelProcessIdentity:
+    def inspect_process(
+        self,
+        host_pid: int,
+        *,
+        namespace_attestation: NamespaceIdentity | None = None,
+    ) -> KernelProcessIdentity:
         if host_pid != self.host_pid:
             raise AssertionError("unexpected managed host PID")
         if self.identity_allowed is not None and not self.identity_allowed.is_set():
             raise AssertionError("managed identity was read before Gate readiness")
+        if namespace_attestation != NAMESPACE:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "docker_identity",
+                "Docker target namespace identity differs from the Gate attestation",
+            )
         return KernelProcessIdentity(
             host_pid=host_pid,
             host_uid=self.host_uid,
@@ -64,7 +84,7 @@ class _FakeReader:
             container_pid=1,
             nspid=(host_pid, 1),
             executable_name="perflens-conta",
-            namespace=NamespaceIdentity(pid=101, user=102, mount=103, cgroup=104),
+            namespace=NAMESPACE,
             cgroup_relative_path="/docker/managed-test",
             cgroup_inode=105,
         )
@@ -415,7 +435,10 @@ def test_managed_coordinator_authenticates_gate_before_kernel_identity(
     identity_allowed = threading.Event()
     original_accept_gate = managed_module._accept_gate  # pyright: ignore[reportPrivateUsage]
 
-    def tracked_accept_gate(*args: Any, **kwargs: Any) -> tuple[socket.socket, int]:
+    def tracked_accept_gate(
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[socket.socket, int, NamespaceIdentity]:
         accepted = original_accept_gate(*args, **kwargs)
         identity_allowed.set()
         return accepted
@@ -466,7 +489,16 @@ def test_managed_coordinator_preserves_container_when_inspect_policy_is_tampered
     assert str(runtime_root) not in str(captured.value)
 
 
-@pytest.mark.parametrize("gate_frame", (b"BAD GATE FRAME\n", READY + b"EXTRA"))
+@pytest.mark.parametrize(
+    "gate_frame",
+    (
+        b"X" * len(READY),
+        READY[:-1],
+        (b"PERFLENS_GATE_V1 READY\n" + (b"\0" * len(READY)))[: len(READY)],
+        READY_PREFIX + struct.pack("!QQQQ", 0, 102, 103, 104),
+        READY + b"EXTRA",
+    ),
+)
 def test_managed_coordinator_rejects_invalid_or_extra_gate_frame_then_cleans(
     tmp_path: Path,
     gate_frame: bytes,

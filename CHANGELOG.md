@@ -4,6 +4,26 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- Empty but structurally valid `perf record` outputs now produce a verified `partial` Analysis
+  with zero samples and no hotspot conclusions instead of failing deterministic verification or
+  inventing an observed event.
+- Docker authorization tools now require the exact non-empty collection-mode set shown in the
+  user-confirmed summary. A `stat`-only session cannot silently expand to `record` or trace modes;
+  expansion requires a new summary and fresh confirmation.
+- Privileged `record` collection now preserves valid evidence when an authorized target exits
+  before a longer observation window, while retaining bounded output and process-lifecycle checks.
+- Docker `record` captures mmap Build IDs and analysis uses a private, ephemeral symfs only after
+  matching the capture-time path digest, Build ID, size, and content hash. The symfs is reverified,
+  removed after conversion, and never exposes its host path in public provenance.
+- Managed Docker guidance now treats a confirmed run count as an exact consent boundary: one
+  requested run means one collection call, failures are not silently retried, and collection
+  duration is documented as a maximum window rather than a way to prolong the workload.
+- Docker cgroup snapshots now use an `O_PATH` directory anchor, so fixed cgroup-v2 resource files
+  remain readable on hosts that grant traversal but not directory-list permission. Safe errno
+  names distinguish permission failures from container-lifecycle races without exposing paths.
+
 ## [0.3.1] - 2026-08-22
 
 ### Added

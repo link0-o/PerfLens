@@ -76,6 +76,7 @@ def collect_profile(
     *,
     pid_identity_validator: Callable[[], None] | None = None,
     ready_callback: Callable[[], None] | None = None,
+    record_build_id_mmap: bool = False,
 ) -> CollectionArtifact:
     """Run one explicitly authorized collection and publish a new immutable output."""
     _validate_request(request)
@@ -93,6 +94,16 @@ def collect_profile(
             "collection",
             "Collection readiness requires a PID identity validator",
         )
+    if record_build_id_mmap and (
+        request.mode != "record"
+        or request.target.pid is None
+        or pid_identity_validator is None
+    ):
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "collection",
+            "Container Build ID mapping requires an identity-validated PID record collection",
+        )
     safe_output = validate_new_output_file(request.output_path)
     started = datetime.now(tz=UTC)
     temporary_path = _reserve_temporary_path(safe_output)
@@ -108,6 +119,7 @@ def collect_profile(
             target,
             target_type,
             control_argument=control.argument if control is not None else None,
+            record_build_id_mmap=record_build_id_mmap,
         )
         with tempfile.TemporaryFile(mode="w+b") as stdout:
             result = runner.run_to_file(
@@ -394,6 +406,7 @@ def _build_perf_argv(
     target_type: Literal["command", "pid"],
     *,
     control_argument: str | None = None,
+    record_build_id_mmap: bool = False,
 ) -> tuple[str, ...]:
     if request.mode == "record":
         prefix = (
@@ -410,6 +423,8 @@ def _build_perf_argv(
             "-o",
             str(output_path),
         )
+        if record_build_id_mmap:
+            prefix = (*prefix, "--buildid-mmap")
     elif request.mode == "stat":
         prefix = (
             str(perf_path),

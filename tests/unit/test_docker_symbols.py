@@ -22,6 +22,7 @@ from perflens.application.evidence import (
     compute_analysis_content_sha256,
     contract_content_sha256,
 )
+from perflens.application.verify_analysis import verify_analysis_artifact
 from perflens.classification.engine import build_diagnosis_bundle
 from perflens.collection.planning import AutomaticCollectionPolicy
 from perflens.contracts.artifacts import (
@@ -49,6 +50,7 @@ from perflens.docker.symbols import (
     RecordedModule,
     build_container_symbol_context,
     capture_container_module_snapshot,
+    materialize_container_workspace_symfs,
     project_container_analysis,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -211,6 +213,52 @@ def _fake_perf(path: Path) -> Path:
     return path
 
 
+def _fake_empty_perf(path: Path) -> Path:
+    path.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args == ['--version']:\n"
+        "    print('perf version docker-empty-test')\n"
+        "elif args and args[0] == 'script':\n"
+        "    pass\n"
+        "else:\n"
+        "    raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
+
+
+def _fake_symfs_perf(
+    path: Path,
+    build_id: str,
+    *,
+    source_path: str = "/workspace/src/main.c",
+) -> Path:
+    path.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib\n"
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args == ['--version']:\n"
+        "    print('perf version docker-symfs-test')\n"
+        "elif args[:2] == ['buildid-list', '--with-hits']:\n"
+        f"    print('{build_id} /workspace/build/app')\n"
+        "elif args and args[0] == 'script':\n"
+        "    assert '--symfs' in args, args\n"
+        "    symfs = pathlib.Path(args[args.index('--symfs') + 1])\n"
+        "    assert (symfs / 'workspace/build/app').is_file(), args\n"
+        "    print('app 1234/1234 [000] 1.0: 11 cpu-clock: ')\n"
+        f"    print('        400010 work (/workspace/build/app) {source_path}:7')\n"
+        "else:\n"
+        "    raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
+
+
 def _fake_buildid_perf(path: Path, build_id: str) -> Path:
     path.write_text(
         f"#!{sys.executable}\n"
@@ -228,9 +276,9 @@ def _fake_buildid_perf(path: Path, build_id: str) -> Path:
     return path
 
 
-def _module_result(build_id: str) -> BuildIdListResult:
+def _module_result(build_id: str, path: str = "/opt/app") -> BuildIdListResult:
     return BuildIdListResult(
-        records=(RecordedModule(build_id=build_id, container_path="/opt/app"),),
+        records=(RecordedModule(build_id=build_id, container_path=path),),
         observed_record_count=1,
         records_truncated=False,
         diagnostic_count=0,
@@ -341,6 +389,282 @@ def test_container_module_snapshot_and_source_mapping_are_identity_bound(
     assert projected.metadata.conversion.argv[0] == "@PRIVATE_CONVERTER@"
     assert projected_context.source_analysis_id == projected.analysis_id
     assert projected_context.source_analysis_content_sha256 == projected.content_sha256
+
+
+def test_verified_workspace_module_is_materialized_in_private_symfs(
+    fixture_root: Path,
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    workspace = tmp_path / "workspace"
+    workspace_module = workspace / "build" / "app"
+    build_id = _compile_module(
+        workspace_module,
+        fixture_root / "symbols" / "sample.c",
+    )
+    proc_root = tmp_path / "proc"
+    captured_module = proc_root / str(identity.host_pid) / "root" / "workspace" / "build" / "app"
+    captured_module.parent.mkdir(parents=True)
+    shutil.copyfile(workspace_module, captured_module)
+    profile = tmp_path / "profile.data"
+    profile.write_bytes(b"PERFILE2")
+    collection = _collection(profile, _binding(identity))
+    module_result = _module_result(build_id, "/workspace/build/app")
+    snapshot = capture_container_module_snapshot(
+        collection,
+        proc_root=proc_root,
+        reader=cast(LinuxContainerIdentityReader, _Reader(identity)),
+        build_id_reader=lambda _path: module_result,
+    )
+
+    with materialize_container_workspace_symfs(
+        collection,
+        snapshot,
+        workspace_root=workspace,
+        build_id_reader=lambda _path: module_result,
+    ) as symfs:
+        assert symfs is not None
+        assert symfs.module_count == 1
+        copied = symfs.root / "workspace" / "build" / "app"
+        assert copied.read_bytes() == workspace_module.read_bytes()
+        assert stat.S_IMODE(copied.stat().st_mode) == 0o400
+        assert str(symfs.root) not in symfs.identity_sha256
+        private_root = symfs.root
+
+    assert not private_root.exists()
+
+
+def test_workspace_module_mismatch_degrades_without_guessing_symbols(
+    fixture_root: Path,
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    workspace = tmp_path / "workspace"
+    workspace_module = workspace / "build" / "app"
+    build_id = _compile_module(
+        workspace_module,
+        fixture_root / "symbols" / "sample.c",
+    )
+    proc_root = tmp_path / "proc"
+    captured_module = proc_root / str(identity.host_pid) / "root" / "workspace" / "build" / "app"
+    captured_module.parent.mkdir(parents=True)
+    shutil.copyfile(workspace_module, captured_module)
+    profile = tmp_path / "profile.data"
+    profile.write_bytes(b"PERFILE2")
+    collection = _collection(profile, _binding(identity))
+    module_result = _module_result(build_id, "/workspace/build/app")
+    snapshot = capture_container_module_snapshot(
+        collection,
+        proc_root=proc_root,
+        reader=cast(LinuxContainerIdentityReader, _Reader(identity)),
+        build_id_reader=lambda _path: module_result,
+    )
+    workspace_module.write_bytes(b"replaced after collection")
+
+    with materialize_container_workspace_symfs(
+        collection,
+        snapshot,
+        workspace_root=workspace,
+        build_id_reader=lambda _path: module_result,
+    ) as symfs:
+        assert symfs is None
+
+
+def test_workspace_module_copy_without_write_progress_degrades_safely(
+    fixture_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = _identity()
+    workspace = tmp_path / "workspace"
+    workspace_module = workspace / "build" / "app"
+    build_id = _compile_module(
+        workspace_module,
+        fixture_root / "symbols" / "sample.c",
+    )
+    proc_root = tmp_path / "proc"
+    captured_module = proc_root / str(identity.host_pid) / "root" / "workspace" / "build" / "app"
+    captured_module.parent.mkdir(parents=True)
+    shutil.copyfile(workspace_module, captured_module)
+    profile = tmp_path / "profile.data"
+    profile.write_bytes(b"PERFILE2")
+    collection = _collection(profile, _binding(identity))
+    module_result = _module_result(build_id, "/workspace/build/app")
+    snapshot = capture_container_module_snapshot(
+        collection,
+        proc_root=proc_root,
+        reader=cast(LinuxContainerIdentityReader, _Reader(identity)),
+        build_id_reader=lambda _path: module_result,
+    )
+
+    def no_write_progress(_descriptor: int, _buffer: object) -> int:
+        return 0
+
+    monkeypatch.setattr(docker_symbols.os, "write", no_write_progress)
+
+    with materialize_container_workspace_symfs(
+        collection,
+        snapshot,
+        workspace_root=workspace,
+        build_id_reader=lambda _path: module_result,
+    ) as symfs:
+        assert symfs is None
+
+
+def test_materialized_symfs_rejects_analysis_time_mutation(
+    fixture_root: Path,
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    workspace = tmp_path / "workspace"
+    workspace_module = workspace / "build" / "app"
+    build_id = _compile_module(
+        workspace_module,
+        fixture_root / "symbols" / "sample.c",
+    )
+    proc_root = tmp_path / "proc"
+    captured_module = proc_root / str(identity.host_pid) / "root" / "workspace" / "build" / "app"
+    captured_module.parent.mkdir(parents=True)
+    shutil.copyfile(workspace_module, captured_module)
+    profile = tmp_path / "profile.data"
+    profile.write_bytes(b"PERFILE2")
+    collection = _collection(profile, _binding(identity))
+    module_result = _module_result(build_id, "/workspace/build/app")
+    snapshot = capture_container_module_snapshot(
+        collection,
+        proc_root=proc_root,
+        reader=cast(LinuxContainerIdentityReader, _Reader(identity)),
+        build_id_reader=lambda _path: module_result,
+    )
+
+    with (
+        pytest.raises(PerfLensError, match="symfs module identity changed"),
+        materialize_container_workspace_symfs(
+            collection,
+            snapshot,
+            workspace_root=workspace,
+            build_id_reader=lambda _path: module_result,
+        ) as symfs,
+    ):
+        assert symfs is not None
+        copied = symfs.root / "workspace" / "build" / "app"
+        copied.chmod(0o600)
+
+
+def test_workspace_symfs_rejects_mismatched_binding_and_unsafe_inventory(
+    fixture_root: Path,
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    workspace = tmp_path / "workspace"
+    workspace_module = workspace / "build" / "app"
+    build_id = _compile_module(
+        workspace_module,
+        fixture_root / "symbols" / "sample.c",
+    )
+    proc_root = tmp_path / "proc"
+    captured_module = proc_root / str(identity.host_pid) / "root" / "workspace" / "build" / "app"
+    captured_module.parent.mkdir(parents=True)
+    shutil.copyfile(workspace_module, captured_module)
+    profile = tmp_path / "profile.data"
+    profile.write_bytes(b"PERFILE2")
+    collection = _collection(profile, _binding(identity))
+    module_result = _module_result(build_id, "/workspace/build/app")
+    snapshot = capture_container_module_snapshot(
+        collection,
+        proc_root=proc_root,
+        reader=cast(LinuxContainerIdentityReader, _Reader(identity)),
+        build_id_reader=lambda _path: module_result,
+    )
+
+    provisional = snapshot.model_copy(
+        update={"source_output_sha256": "f" * 64, "content_sha256": "0" * 64}
+    )
+    wrong_snapshot = provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+    with (
+        pytest.raises(PerfLensError, match="same Docker Collection"),
+        materialize_container_workspace_symfs(
+            collection,
+            wrong_snapshot,
+            workspace_root=workspace,
+            build_id_reader=lambda _path: module_result,
+        ),
+    ):
+        pass
+
+    conflicting = BuildIdListResult(
+        records=(
+            RecordedModule(build_id, "/workspace/build/app"),
+            RecordedModule("f" * 40, "/workspace/build/app"),
+        ),
+        observed_record_count=2,
+        records_truncated=False,
+        diagnostic_count=0,
+        adapter_sha256="b" * 64,
+    )
+    with materialize_container_workspace_symfs(
+        collection,
+        snapshot,
+        workspace_root=workspace,
+        build_id_reader=lambda _path: conflicting,
+    ) as symfs:
+        assert symfs is None
+
+    workspace_alias = tmp_path / "workspace-alias"
+    workspace_alias.symlink_to(workspace, target_is_directory=True)
+    with materialize_container_workspace_symfs(
+        collection,
+        snapshot,
+        workspace_root=workspace_alias,
+        build_id_reader=lambda _path: module_result,
+    ) as symfs:
+        assert symfs is None
+
+
+def test_materialized_symfs_rejects_added_files(
+    fixture_root: Path,
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    workspace = tmp_path / "workspace"
+    workspace_module = workspace / "build" / "app"
+    build_id = _compile_module(
+        workspace_module,
+        fixture_root / "symbols" / "sample.c",
+    )
+    proc_root = tmp_path / "proc"
+    captured_module = proc_root / str(identity.host_pid) / "root" / "workspace" / "build" / "app"
+    captured_module.parent.mkdir(parents=True)
+    shutil.copyfile(workspace_module, captured_module)
+    profile = tmp_path / "profile.data"
+    profile.write_bytes(b"PERFILE2")
+    collection = _collection(profile, _binding(identity))
+    module_result = _module_result(build_id, "/workspace/build/app")
+    snapshot = capture_container_module_snapshot(
+        collection,
+        proc_root=proc_root,
+        reader=cast(LinuxContainerIdentityReader, _Reader(identity)),
+        build_id_reader=lambda _path: module_result,
+    )
+
+    with (
+        pytest.raises(PerfLensError, match="file set changed"),
+        materialize_container_workspace_symfs(
+            collection,
+            snapshot,
+            workspace_root=workspace,
+            build_id_reader=lambda _path: module_result,
+        ) as symfs,
+    ):
+        assert symfs is not None
+        (symfs.root / "workspace" / "unexpected").write_bytes(b"not verified")
 
 
 def test_perf_buildid_adapter_uses_fixed_recipe_and_bounds_private_records(
@@ -575,9 +899,7 @@ def test_container_module_contract_rejects_tampered_content(
     analysis = analyze_perf_data(
         profile,
         perf_path=_fake_perf(tmp_path / "perf"),
-        collection=build_collection_evidence_provenance(
-            _collection(profile, _binding(identity))
-        ),
+        collection=build_collection_evidence_provenance(_collection(profile, _binding(identity))),
     )
     with pytest.raises(PerfLensError) as snapshot_error:
         build_container_symbol_context(
@@ -618,9 +940,7 @@ def test_projection_and_diagnosis_reject_tampered_symbol_context(
         workspace_root=workspace,
     )
     projected_analysis, projected_context = project_container_analysis(analysis, context)
-    tampered = projected_context.model_copy(
-        update={"limitations": ("tampered after publication",)}
-    )
+    tampered = projected_context.model_copy(update={"limitations": ("tampered after publication",)})
 
     with pytest.raises(PerfLensError) as projection_error:
         project_container_analysis(projected_analysis, tampered)
@@ -709,10 +1029,7 @@ def test_symbol_artifacts_and_diagnosis_are_verified_from_one_snapshot(
     assert module_next is None
     assert context_next is None
     assert store.load_diagnosis(projected_analysis.analysis_id) == diagnosis
-    assert (
-        diagnosis.container_symbol_context_content_sha256
-        == projected_context.content_sha256
-    )
+    assert diagnosis.container_symbol_context_content_sha256 == projected_context.content_sha256
 
     collection_path = artifact_root / f"{collection.collection_id}.collection.json"
     original_collection = collection_path.read_text(encoding="utf-8")
@@ -778,9 +1095,15 @@ def test_mcp_docker_analysis_publishes_verified_symbol_context(
     policy.parent.mkdir()
     policy.write_text(render_default_docker_project_policy(), encoding="utf-8")
     policy.chmod(0o600)
+    workspace_module = project / "build" / "app"
+    build_id = _compile_module(
+        workspace_module,
+        fixture_root / "symbols" / "sample.c",
+    )
     proc_root = tmp_path / "proc"
-    module = proc_root / str(identity.host_pid) / "root" / "opt" / "app"
-    build_id = _compile_module(module, fixture_root / "symbols" / "sample.c")
+    module = proc_root / str(identity.host_pid) / "root" / "workspace" / "build" / "app"
+    module.parent.mkdir(parents=True)
+    shutil.copyfile(workspace_module, module)
     profile = project / "profile.data"
     profile.write_bytes(b"PERFILE2")
     collection = _collection(profile, _binding(identity))
@@ -788,7 +1111,10 @@ def test_mcp_docker_analysis_publishes_verified_symbol_context(
         collection,
         proc_root=proc_root,
         reader=cast(LinuxContainerIdentityReader, _Reader(identity)),
-        build_id_reader=lambda _path: _module_result(build_id),
+        build_id_reader=lambda _path: _module_result(
+            build_id,
+            "/workspace/build/app",
+        ),
     )
     artifact_root = project / "artifacts"
     artifact_root.mkdir()
@@ -807,7 +1133,11 @@ def test_mcp_docker_analysis_publishes_verified_symbol_context(
             docker_project_config=policy,
             collector_socket=tmp_path / "collector.sock",
             automatic_collection_policy=AutomaticCollectionPolicy(enabled=True),
-            perf_path=_fake_perf(tmp_path / "perf"),
+            perf_path=_fake_symfs_perf(
+                tmp_path / "perf",
+                build_id,
+                source_path=str(workspace_source),
+            ),
         )
     )
 
@@ -827,10 +1157,20 @@ def test_mcp_docker_analysis_publishes_verified_symbol_context(
             assert context is not None
             assert context.source_mappings[0].workspace_relative_path == "src/main.c"
             serialized_analysis = store.load_analysis(analysis_id).model_dump_json()
-            assert "/opt/app" not in serialized_analysis
+            assert "/workspace/build/app" not in serialized_analysis
             assert "/workspace/src/main.c" not in serialized_analysis
+            assert str(project) not in serialized_analysis
             assert "/run/secrets/container-token" not in serialized_analysis
             assert "src/main.c:7" in serialized_analysis
+            saved_analysis = store.load_analysis(analysis_id)
+            assert any(
+                item.startswith("verified_container_symfs_sha256:")
+                for item in saved_analysis.metadata.conversion.compatibility_fallbacks
+            )
+            assert all(
+                "perflens-container-symfs-" not in item
+                for item in saved_analysis.metadata.conversion.argv
+            )
 
             diagnosis_result = await client.call_tool(
                 "build_diagnosis_bundle",
@@ -844,6 +1184,95 @@ def test_mcp_docker_analysis_publishes_verified_symbol_context(
             assert all(
                 "not independently verified" not in limitation
                 for limitation in diagnosis.limitations
+            )
+
+    asyncio.run(exercise())
+
+
+def test_mcp_docker_analysis_publishes_empty_record_as_partial(
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    project = tmp_path / "project"
+    project.mkdir()
+    policy = project / "perflens-setup" / "container-workload.toml"
+    policy.parent.mkdir()
+    policy.write_text(render_default_docker_project_policy(), encoding="utf-8")
+    policy.chmod(0o600)
+    profile = project / "profile.data"
+    profile.write_bytes(b"PERFILE2-empty-record")
+    collection = _collection(profile, _binding(identity))
+    snapshot = capture_container_module_snapshot(
+        collection,
+        proc_root=tmp_path / "missing-proc",
+        reader=cast(LinuxContainerIdentityReader, _Reader(identity, unavailable=True)),
+        build_id_reader=lambda _path: BuildIdListResult(
+            records=(),
+            observed_record_count=0,
+            records_truncated=False,
+            diagnostic_count=0,
+            adapter_sha256="b" * 64,
+        ),
+    )
+    assert snapshot.status == "partial"
+    artifact_root = project / "artifacts"
+    artifact_root.mkdir()
+    store = ArtifactStore(artifact_root, PathPolicy((tmp_path,)), allow_writes=True)
+    store.save(collection, collection.collection_id, "collection")
+    store.save(snapshot, snapshot.module_snapshot_id, "container-module-snapshot")
+    server = create_server(
+        ServerConfig(
+            allowed_roots=(tmp_path,),
+            artifact_root=artifact_root,
+            allow_writes=True,
+            allow_process_execution=True,
+            allow_active_collection=True,
+            allow_automatic_collection=True,
+            allow_docker_targets=True,
+            docker_project_config=policy,
+            collector_socket=tmp_path / "collector.sock",
+            automatic_collection_policy=AutomaticCollectionPolicy(enabled=True),
+            perf_path=_fake_empty_perf(tmp_path / "perf-empty"),
+        )
+    )
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            analyzed_result = await client.call_tool(
+                "analyze_collection",
+                {"collection_id": collection.collection_id},
+            )
+            assert not analyzed_result.is_error
+            analyzed = cast(dict[str, object], analyzed_result.structured_content)
+            summary = cast(dict[str, object], analyzed["summary"])
+            assert summary["status"] == "partial"
+            assert summary["quality_status"] == "partial"
+            assert summary["sample_count"] == 0
+            assert summary["hotspot_count"] == 0
+            assert summary["container_symbol_quality"] == "partial"
+            analysis_id = cast(str, analyzed["artifact_id"])
+            analysis = store.load_analysis(analysis_id)
+            assert analysis.metadata.event == "unknown"
+            assert analysis.metadata.weight_source == "sample_count_fallback"
+            assert analysis.evidence_quality.allowed_conclusions == ()
+            assert "The profile contains no usable weighted samples." in (
+                analysis.evidence_quality.limitations
+            )
+            context = store.load_container_symbol_context_for_analysis(analysis_id)
+            assert context is not None
+            assert context.quality_status == "partial"
+
+            tampered_quality = analysis.evidence_quality.model_copy(update={"event": "cpu-clock"})
+            tampered_metadata = analysis.metadata.model_copy(update={"event": "cpu-clock"})
+            tampered = _with_analysis_content(
+                analysis,
+                evidence_quality=tampered_quality,
+                metadata=tampered_metadata,
+            )
+            with pytest.raises(PerfLensError) as event_error:
+                verify_analysis_artifact(tampered, verify_source=False)
+            assert event_error.value.details["failure"] == (
+                "empty profile claims an observed source Collection event"
             )
 
     asyncio.run(exercise())
@@ -869,9 +1298,7 @@ def test_perf_buildid_adapter_rejects_non_utf8_and_tool_replacement(
     profile.write_bytes(b"PERFILE2")
     invalid = tmp_path / "perf-invalid"
     invalid.write_text(
-        f"#!{sys.executable}\n"
-        "import sys\n"
-        "sys.stdout.buffer.write(b'\\xff')\n",
+        f"#!{sys.executable}\nimport sys\nsys.stdout.buffer.write(b'\\xff')\n",
         encoding="utf-8",
     )
     invalid.chmod(invalid.stat().st_mode | stat.S_IXUSR)
@@ -1117,9 +1544,7 @@ def test_public_projection_rejects_malformed_redaction_payloads(
     malformed_conversion = projected.metadata.conversion.model_copy(
         update={"diagnostics": ("redacted-diagnostic-sha256:/run/secrets/token",)}
     )
-    malformed_metadata = projected.metadata.model_copy(
-        update={"conversion": malformed_conversion}
-    )
+    malformed_metadata = projected.metadata.model_copy(update={"conversion": malformed_conversion})
 
     with pytest.raises(PerfLensError) as diagnostic_error:
         docker_symbols.assert_public_container_analysis(
@@ -1145,16 +1570,12 @@ def test_symbol_context_rejects_mismatch_and_unsafe_workspace(
         fixture_root,
         tmp_path,
     )
-    mismatched = snapshot.model_copy(
-        update={"source_collection_id": "collection-" + "2" * 16}
-    )
+    mismatched = snapshot.model_copy(update={"source_collection_id": "collection-" + "2" * 16})
     with pytest.raises(PerfLensError) as mismatch_error:
         build_container_symbol_context(analysis, mismatched, workspace_root=workspace)
     assert mismatch_error.value.code is ErrorCode.PROFILE_PARSE_FAILED
 
-    wrong_target_digest = snapshot.model_copy(
-        update={"container_target_content_sha256": "e" * 64}
-    )
+    wrong_target_digest = snapshot.model_copy(update={"container_target_content_sha256": "e" * 64})
     with pytest.raises(PerfLensError) as target_digest_error:
         build_container_symbol_context(
             analysis,
@@ -1336,16 +1757,12 @@ def test_projection_rejects_wrong_context_and_digests_unmapped_source(
         snapshot,
         workspace_root=workspace,
     )
-    wrong_context = context.model_copy(
-        update={"source_analysis_content_sha256": "f" * 64}
-    )
+    wrong_context = context.model_copy(update={"source_analysis_content_sha256": "f" * 64})
     with pytest.raises(PerfLensError) as mismatch_error:
         project_container_analysis(private_analysis, wrong_context)
     assert mismatch_error.value.code is ErrorCode.PROFILE_PARSE_FAILED
 
-    wrong_collection = context.model_copy(
-        update={"source_collection_id": "collection-" + "9" * 16}
-    )
+    wrong_collection = context.model_copy(update={"source_collection_id": "collection-" + "9" * 16})
     with pytest.raises(PerfLensError) as collection_error:
         project_container_analysis(private_analysis, wrong_collection)
     assert collection_error.value.code is ErrorCode.PROFILE_PARSE_FAILED

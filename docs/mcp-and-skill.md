@@ -45,14 +45,37 @@ This adds the fixed project Docker policy and bounded MCP gates; it does not sta
 execution. Review `perflens-setup/container-workload.toml` before use. The Skill then uses
 `inspect_docker_capability` and `discover_docker_processes`, resolves one exact target, requests
 either `per_run` or `bounded_session` authorization, and calls only the corresponding existing- or
-managed-container collection tool. The session token lives only in that MCP connection and is
-revoked with `revoke_docker_session` or by connection exit.
+managed-container collection tool. The authorization call carries the exact `allowed_modes` shown
+to and confirmed by the user; a later mode expansion requires a new summary and authorization.
+The session token lives only in that MCP connection and is revoked with `revoke_docker_session` or
+by connection exit.
+
+The session run budget is an upper bound, not blanket consent to consume every run. If the confirmed
+summary says one execution, the Skill makes one collection call and reports a failure without a
+silent retry. A retry must have been disclosed in the summary or receive a new confirmation. The
+requested duration is also a maximum observation window: it does not extend the fixed workload's
+lifetime, so a workload that exits after two seconds cannot yield ten seconds of samples merely by
+requesting a ten-second collection.
 
 The default project policy allows `stat` and `record`, with MCP ceilings of 30
 seconds, 99 Hz, 256 MiB per collection, and a 120-second plan lifetime. The
 Skill normally starts near 10 seconds and adapts to the workload. Existing-PID
 attachment is disabled unless onboarding includes
 `--allow-existing-pid-attach`; project-run collection does not require it.
+
+A structurally valid `record` file can still contain zero samples when a short or mostly sleeping
+workload exits before useful sampling occurs. PerfLens publishes this as a verified `partial`
+Analysis with no hotspot conclusions; it does not invent an event or treat the file as corrupt.
+Zero samples alone do not establish a Docker, Gate, Collector, PMU, or sampling-pipeline defect;
+target-process CPU opportunity must be distinguished from whole-container CPU and wall time before
+assigning a cause.
+Changing a managed recipe to run longer or perform more CPU work requires a new authorization
+summary because the workload specification changed.
+Docker `record` requests capture mmap Build IDs. When the capture-time module snapshot verifies a
+`/workspace` module by path digest, Build ID, size, and SHA-256, later analysis copies only that
+exact module into a private temporary `symfs`. The copy is reverified and removed after conversion,
+and public provenance contains only its content identity. Unavailable or changed modules remain
+`partial`; PerfLens does not guess a matching host file.
 An unchanged v0.1.2 Skill is migrated to the shorter `perflens` directory by
 `perflens init --update`, while user-modified content is preserved and refused.
 

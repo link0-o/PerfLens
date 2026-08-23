@@ -44,12 +44,28 @@ perflens init --docker
 该命令增加固定项目 Docker 策略和有界 MCP 门禁，不启动 Docker，也不授予执行权限。使用前
 先审查 `perflens-setup/container-workload.toml`。Skill 随后调用
 `inspect_docker_capability`、`discover_docker_processes`，解析一个精确目标，请求
-`per_run` 或 `bounded_session` 授权，再调用对应的已有容器或托管容器采集工具。会话令牌
-只存在于当前 MCP 连接；`revoke_docker_session` 或连接退出会撤销它。
+`per_run` 或 `bounded_session` 授权，再调用对应的已有容器或托管容器采集工具。授权调用
+携带向用户展示并经用户确认的精确 `allowed_modes`；后续扩大模式集合必须重新展示摘要并
+重新授权。会话令牌只存在于当前 MCP 连接；`revoke_docker_session` 或连接退出会撤销它。
+
+会话的运行次数只是上限，不代表可以自动消耗所有次数。若确认摘要写明“仅执行一次”，Skill
+只能调用一次采集；失败后必须停止并报告，只有摘要事先明确包含重试，或用户再次确认，才能
+重试。请求时长也只是观测窗口上限，不会延长固定 workload 的生命周期；若 workload 两秒后
+退出，把采集时长改为十秒也不会产生十秒 CPU 样本，报告不得作此暗示。
 
 `perflens init` 默认开启项目工作负载自动采集，允许 `stat` 和 `record`，MCP 单次最长
 30 秒、`record` 最大 99 Hz、单次输出最大 256 MiB、一次性计划 120 秒失效；Skill
 通常先请求约 10 秒，并按程序长短调整，不会固定强制采集 10 秒。已有 PID 附加默认关闭。
+短时或大部分时间休眠的 workload 可能在退出前没有积累到有效样本，但生成的 `record`
+文件结构仍然合法。PerfLens 会把它发布为经过校验的 `partial` Analysis，不给出热点结论，
+也不会虚构事件或把文件误报为损坏。仅凭零样本不能断言 Docker、Gate、Collector、PMU
+或采样管线故障；在归因前必须把目标进程实际获得的 CPU 时间与整容器 CPU、墙钟时间区分
+开。若要修改托管配方以延长运行或增加 CPU 工作量，因为 workload spec 已改变，必须重新
+展示授权摘要并取得明确确认。
+Docker `record` 会请求记录 mmap Build ID。采集时模块快照只有在 `/workspace` 模块的路径
+摘要、Build ID、大小和 SHA-256 全部验证通过后，后续分析才会把该模块的精确副本放入私有
+临时 `symfs`。转换结束会再次校验并删除副本，公开 provenance 只保留内容身份；模块缺失或
+发生变化时仍标记为 `partial`，不会猜测某个宿主文件就是目标模块。
 需要调整时可在首次 `init` 或后续 `init --update` 中使用：
 
 ```bash

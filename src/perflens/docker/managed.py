@@ -29,6 +29,7 @@ from perflens.contracts.docker import (
 from perflens.docker.adapter import DockerCommandAdapter, ManagedDockerCreateRequest
 from perflens.docker.identity import (
     LinuxContainerIdentityReader,
+    NamespaceIdentity,
     ResolvedContainerTarget,
     build_managed_container_target_artifact,
     parse_container_instance,
@@ -46,8 +47,10 @@ from perflens.docker.workload import (
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 
-_READY_FRAME = b"PERFLENS_GATE_V1 READY\n"
-_EXEC_FRAME = b"PERFLENS_GATE_V1 EXEC\n"
+_READY_PREFIX = b"PERFLENS_GATE_V2 READY\0"
+_READY_NAMESPACE_IDENTITY = struct.Struct("!QQQQ")
+_READY_FRAME_SIZE = len(_READY_PREFIX) + _READY_NAMESPACE_IDENTITY.size
+_EXEC_FRAME = b"PERFLENS_GATE_V2 EXEC\n"
 _PEER_CREDENTIALS = struct.Struct("=iII")
 _SESSION_LABEL = "io.perflens.session-sha256"
 _WORKLOAD_LABEL = "io.perflens.workload-sha256"
@@ -270,12 +273,15 @@ class ManagedDockerCoordinator:
                 expected_running=True,
             )
             instance = parse_container_instance(running_data)
-            connection, gate_peer_uid = _accept_gate(
+            connection, gate_peer_uid, gate_namespace = _accept_gate(
                 listener.socket,
                 expected_pid=instance.init_host_pid,
                 timeout_seconds=self._gate_wait_seconds,
             )
-            kernel = self._reader.inspect_process(instance.init_host_pid)
+            kernel = self._reader.inspect_process(
+                instance.init_host_pid,
+                namespace_attestation=gate_namespace,
+            )
             if gate_peer_uid != kernel.host_uid:
                 raise _managed_error(
                     "Container Gate peer UID differs from the verified target"
@@ -298,7 +304,10 @@ class ManagedDockerCoordinator:
                 expected_running=True,
             )
             current_instance = parse_container_instance(current_data)
-            current_kernel = self._reader.inspect_process(instance.init_host_pid)
+            current_kernel = self._reader.inspect_process(
+                instance.init_host_pid,
+                namespace_attestation=gate_namespace,
+            )
             if current_instance != instance or current_kernel != kernel:
                 raise _managed_error(
                     "Managed Docker identity changed during Gate authorization",
@@ -427,7 +436,10 @@ class ManagedDockerCoordinator:
             expected_running=True,
         )
         instance = parse_container_instance(data)
-        kernel = self._reader.inspect_process(instance.init_host_pid)
+        kernel = self._reader.inspect_process(
+            instance.init_host_pid,
+            namespace_attestation=prepared.target.kernel.namespace,
+        )
         if instance != prepared.target.instance or kernel != prepared.target.kernel:
             raise _managed_error(
                 "Managed Docker target changed before Gate release",
@@ -733,7 +745,7 @@ def _accept_gate(
     *,
     expected_pid: int,
     timeout_seconds: int,
-) -> tuple[socket.socket, int]:
+) -> tuple[socket.socket, int, NamespaceIdentity]:
     try:
         connection, _ = listener.accept()
     except OSError as exc:
@@ -750,8 +762,18 @@ def _accept_gate(
         peer_pid, peer_uid, _peer_gid = credentials
         if peer_pid != expected_pid:
             raise _managed_error("Container Gate peer identity differs from the verified target")
-        if _receive_exact(connection, len(_READY_FRAME)) != _READY_FRAME:
+        ready = _receive_exact(connection, _READY_FRAME_SIZE)
+        if len(ready) != _READY_FRAME_SIZE or not ready.startswith(_READY_PREFIX):
             raise _managed_error("Container Gate readiness frame is invalid")
+        values = _READY_NAMESPACE_IDENTITY.unpack(ready[len(_READY_PREFIX) :])
+        if any(value <= 0 for value in values):
+            raise _managed_error("Container Gate namespace attestation is invalid")
+        namespace = NamespaceIdentity(
+            pid=values[0],
+            user=values[1],
+            mount=values[2],
+            cgroup=values[3],
+        )
         connection.setblocking(False)
         try:
             trailing = connection.recv(1, socket.MSG_PEEK)
@@ -761,7 +783,7 @@ def _accept_gate(
             connection.settimeout(timeout_seconds)
         if trailing is not None:
             raise _managed_error("Container Gate readiness contains an extra frame")
-        return connection, peer_uid
+        return connection, peer_uid, namespace
     except BaseException as exc:
         connection.close()
         if isinstance(exc, PerfLensError):

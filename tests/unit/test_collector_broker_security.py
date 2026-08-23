@@ -14,11 +14,12 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import pytest
 from pydantic import ValidationError
 
+import perflens.collector_broker.server as broker_server
 from perflens.collection.collector import SOFTWARE_STAT_EVENTS
 from perflens.collector_broker.client import (
     CollectorBrokerClient,
@@ -54,6 +55,7 @@ from perflens.contracts.artifacts import (
     ContainerCollectionNamespaceBinding,
     ContainerCollectionTargetBinding,
 )
+from perflens.docker.identity import NamespaceIdentity
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 
@@ -279,6 +281,133 @@ def test_broker_authorizes_rootless_and_requires_dedicated_rootful_policy(
     )
     with pytest.raises(PerfLensError):
         _broker_with_policy(rootful_policy)._authorize(peer_uid, forged_host)
+
+
+def test_broker_defers_unreadable_docker_namespace_only_to_independent_helper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = _docker_plan(
+        target_uid=os.geteuid(),
+        uid_mapping="rootless_same_uid",
+        rootful_risk_authorized=False,
+    )
+    observed: list[object] = []
+
+    def capture_current(_plan: CollectionPlanArtifact, **kwargs: object) -> None:
+        observed.append(kwargs.get("namespace_attestation"))
+
+    monkeypatch.setattr(broker_server, "assert_plan_current", capture_current)
+    cap_perfmon = _broker_with_policy(_policy(tmp_path))
+    cap_perfmon._assert_execution_plan_current(plan)
+    assert observed.pop() is None
+
+    helper_policy = replace(
+        cap_perfmon._policy,
+        privilege_mode="paranoid3_helper",
+    )
+    helper = _broker_with_policy(helper_policy)
+    helper._assert_execution_plan_current(plan)
+    attestation = observed.pop()
+    assert isinstance(attestation, NamespaceIdentity)
+    assert attestation.pid == 101
+    assert attestation.user == 102
+    assert attestation.mount == 103
+    assert attestation.cgroup == 104
+
+    trace = plan.model_copy(update={"mode": "sched"})
+    cap_perfmon._assert_execution_plan_current(trace)
+    assert observed.pop() is not None
+
+    helper._assert_execution_plan_current(_plan())
+    assert observed.pop() is None
+
+
+def test_cap_perfmon_managed_collection_changes_identity_phase_only_after_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing = _docker_plan(
+        target_uid=os.geteuid(),
+        uid_mapping="rootless_same_uid",
+        rootful_risk_authorized=False,
+    )
+    assert existing.container_target is not None
+    managed_target = existing.container_target.model_copy(
+        update={
+            "target_kind": "managed_temporary_container",
+            "adapter_recipe_id": "local-docker-managed-v1",
+        }
+    )
+    plan = existing.model_copy(
+        update={
+            "mode": "stat",
+            "frequency_hz": None,
+            "call_graph": None,
+            "events": SOFTWARE_STAT_EVENTS,
+            "requested_event_source": "software_only",
+            "record_event": None,
+            "container_target": managed_target,
+        }
+    )
+    policy = _policy(tmp_path)
+    observed_phases: list[bool] = []
+    released: list[str] = []
+
+    def capture_current(
+        _plan: CollectionPlanArtifact,
+        *,
+        allow_managed_exec_transition: bool = False,
+        **_kwargs: object,
+    ) -> None:
+        observed_phases.append(allow_managed_exec_transition)
+
+    def fake_collect_profile(
+        request: object,
+        *,
+        pid_identity_validator: Callable[[], None] | None = None,
+        ready_callback: Callable[[], None] | None = None,
+        record_build_id_mmap: bool = False,
+    ) -> CollectionArtifact:
+        assert not record_build_id_mmap
+        assert pid_identity_validator is not None
+        assert ready_callback is not None
+        pid_identity_validator()
+        ready_callback()
+        ready_callback()
+        pid_identity_validator()
+        output_path = cast(Any, request).output_path
+        payload = b"1;;task-clock;1;100.0;;\n"
+        output_path.write_bytes(payload)
+        return CollectionArtifact(
+            collection_id="collection-ready-phase",
+            mode="stat",
+            target_type="pid",
+            target_argument_count=0,
+            target_pid=plan.target_pid,
+            output_path=str(output_path),
+            output_sha256=hashlib.sha256(payload).hexdigest(),
+            output_bytes=len(payload),
+            output_format="perf_stat_delimited",
+            perf_executable=str(policy.perf_path),
+            started_at="2026-08-23T00:00:00+00:00",
+            finished_at="2026-08-23T00:00:01+00:00",
+            duration_seconds=1,
+            events=SOFTWARE_STAT_EVENTS,
+            requested_event_source="software_only",
+            actual_event_source="software",
+        )
+
+    monkeypatch.setattr(broker_server, "assert_plan_current", capture_current)
+    monkeypatch.setattr(broker_server, "collect_profile", fake_collect_profile)
+    artifact = _broker_with_policy(policy)._collect_with_cap_perfmon(
+        plan,
+        ready_callback=lambda: released.append("released"),
+    )
+
+    assert artifact.container_target == managed_target
+    assert released == ["released"]
+    assert observed_phases == [False, False, True]
 
 
 def test_broker_health_allows_root_admin_without_relaxing_user_policy(
@@ -544,6 +673,35 @@ def test_broker_ready_request_is_strict_and_uses_versioned_protocol() -> None:
             plan=plan,
             report_ready=1,  # type: ignore[arg-type] - verifies strict protocol rejection
         )
+
+
+def test_managed_docker_broker_request_requires_readiness_barrier() -> None:
+    plan = _docker_plan(
+        target_uid=os.geteuid(),
+        uid_mapping="rootless_same_uid",
+        rootful_risk_authorized=False,
+    )
+    assert plan.container_target is not None
+    managed_target = plan.container_target.model_copy(
+        update={
+            "target_kind": "managed_temporary_container",
+            "adapter_recipe_id": "local-docker-managed-v1",
+        }
+    )
+    managed_plan = plan.model_copy(update={"container_target": managed_target})
+
+    with pytest.raises(ValidationError, match="readiness barrier"):
+        BrokerCollectRequest(
+            request_id="request-0123456789abcdef",
+            plan=managed_plan,
+        )
+
+    request = BrokerCollectRequest(
+        request_id="request-0123456789abcdef",
+        plan=managed_plan,
+        report_ready=True,
+    )
+    assert request.report_ready is True
 
 
 def test_client_rejects_mismatched_response_id_over_real_socket(tmp_path: Path) -> None:

@@ -22,6 +22,7 @@ from perflens.collection.collector import (
 from perflens.contracts.artifacts import CollectionCapabilityArtifact, CollectionPlanArtifact
 from perflens.contracts.docker import ContainerTargetArtifact
 from perflens.docker.identity import (
+    NamespaceIdentity,
     assert_container_target_current,
     bind_container_collection_target,
 )
@@ -65,6 +66,7 @@ def create_collection_plan(
     policy: AutomaticCollectionPolicy,
     capabilities: CollectionCapabilityArtifact,
     now: datetime | None = None,
+    namespace_attestation: NamespaceIdentity | None = None,
 ) -> CollectionPlanArtifact:
     """Bind an automatic request to a specific PID incarnation and policy snapshot."""
     _validate_policy(policy)
@@ -80,7 +82,14 @@ def create_collection_plan(
                 "collection_plan",
                 "Docker target host PID differs from the collection request",
             )
-        container_target = bind_container_collection_target(request.container_target)
+        container_target = (
+            bind_container_collection_target(request.container_target)
+            if namespace_attestation is None
+            else bind_container_collection_target(
+                request.container_target,
+                namespace_attestation=namespace_attestation,
+            )
+        )
         target_uid = container_target.host_uid
         start_time_ticks = container_target.host_start_time_ticks
         target_runtime = "docker"
@@ -248,7 +257,13 @@ def inspect_pid_identity(pid: int) -> tuple[int, int]:
     return owner_uid, start_time_ticks
 
 
-def assert_plan_current(plan: CollectionPlanArtifact, *, now: datetime | None = None) -> None:
+def assert_plan_current(
+    plan: CollectionPlanArtifact,
+    *,
+    now: datetime | None = None,
+    namespace_attestation: NamespaceIdentity | None = None,
+    allow_managed_exec_transition: bool = False,
+) -> None:
     if plan.policy_status != "allowed":
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
@@ -289,7 +304,18 @@ def assert_plan_current(plan: CollectionPlanArtifact, *, now: datetime | None = 
                 "authorization",
                 "Docker collection plan lost its required target binding",
             )
-        current = assert_container_target_current(plan.container_target)
+        current = (
+            assert_container_target_current(
+                plan.container_target,
+                allow_managed_exec_transition=allow_managed_exec_transition,
+            )
+            if namespace_attestation is None
+            else assert_container_target_current(
+                plan.container_target,
+                namespace_attestation=namespace_attestation,
+                allow_managed_exec_transition=allow_managed_exec_transition,
+            )
+        )
         target_uid = current.host_uid
         start_time_ticks = current.host_start_time_ticks
     else:

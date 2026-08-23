@@ -60,6 +60,24 @@ def test_privileged_helper_valid_golden_frames() -> None:
     assert response.result.target_pid == 4321
 
 
+def test_managed_docker_helper_request_requires_readiness_barrier() -> None:
+    fixture = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures/privileged_helper/valid/docker-stat.jsonl"
+    )
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+    container = payload["target"]["container"]
+    container["target_kind"] = "managed_temporary_container"
+    container["container_pid"] = 1
+    container["adapter_recipe_id"] = "local-docker-managed-v1"
+
+    with pytest.raises(ValueError, match="readiness barrier"):
+        HelperCollectPidRequest.model_validate(payload)
+
+    payload["report_ready"] = True
+    assert HelperCollectPidRequest.model_validate(payload).report_ready is True
+
+
 @pytest.mark.parametrize(
     "fixture",
     sorted(

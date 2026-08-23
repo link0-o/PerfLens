@@ -324,6 +324,56 @@ def test_pid_collection_waits_for_perf_binding_before_identity_revalidation_and_
     assert not denied_output.exists()
 
 
+def test_docker_pid_record_requests_kernel_mmap_build_ids(tmp_path: Path) -> None:
+    perf = tmp_path / "controlled-record-perf"
+    perf.write_text(
+        f"#!{sys.executable}\n"
+        "import os, pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        "descriptors = args[args.index('--control') + 1].removeprefix('fd:').split(',')\n"
+        "control_fd, ack_fd = map(int, descriptors)\n"
+        "for expected in ('ping', 'enable'):\n"
+        "    command = b''\n"
+        "    while not command.endswith(b'\\n'):\n"
+        "        command += os.read(control_fd, 16)\n"
+        "    assert command == expected.encode() + b'\\n'\n"
+        "    os.write(ack_fd, b'ack\\n\\0')\n"
+        "output.write_bytes(b'PERFILE2' + '\\0'.join(args).encode())\n",
+        encoding="utf-8",
+    )
+    perf.chmod(0o500)
+    output = tmp_path / "docker-record.perf.data"
+
+    artifact = collect_profile(
+        CollectionRequest(
+            mode="record",
+            target=CollectionTarget(pid=os.getppid(), duration_seconds=0.01),
+            output_path=output,
+            authorization=ACTIVE_COLLECTION_AUTHORIZATION,
+            pid_authorization=PID_ATTACH_AUTHORIZATION,
+            perf_path=perf,
+        ),
+        pid_identity_validator=lambda: None,
+        record_build_id_mmap=True,
+    )
+
+    assert artifact.output_format == "perf_data"
+    assert b"--buildid-mmap" in output.read_bytes()
+
+    with pytest.raises(PerfLensError, match="identity-validated PID record"):
+        collect_profile(
+            CollectionRequest(
+                mode="record",
+                target=CollectionTarget(executable=Path(sys.executable)),
+                output_path=tmp_path / "unsafe-command.perf.data",
+                authorization=ACTIVE_COLLECTION_AUTHORIZATION,
+                perf_path=perf,
+            ),
+            record_build_id_mmap=True,
+        )
+
+
 def test_collection_readiness_rejects_non_pid_or_missing_identity_before_temp_reservation(
     tmp_path: Path,
 ) -> None:

@@ -91,6 +91,11 @@ class HelperCollectPidRequest(ContractModel):
         if isinstance(self.target, HelperTarget):
             if self.caller_uid != self.target.uid:
                 raise ValueError("Host Helper target UID must match its caller")
+        elif (
+            self.target.container.target_kind == "managed_temporary_container"
+            and not self.report_ready
+        ):
+            raise ValueError("Managed Docker Helper targets require the readiness barrier")
         elif self.target.container.uid_mapping == "rootful_cross_uid":
             if (
                 self.target.uid != 0

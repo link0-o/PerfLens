@@ -28,6 +28,7 @@ from perflens.contracts.artifacts import (
     ContainerCollectionTargetBinding,
 )
 from perflens.contracts.trace import TraceEvidenceArtifact
+from perflens.docker.identity import NamespaceIdentity
 from perflens.domain.errors import PerfLensError
 from perflens.trace_helper.client import TraceHelperClient
 from perflens.trace_helper.policy import TraceMode, TracePolicy
@@ -272,9 +273,12 @@ def test_trace_coordinator_binds_docker_identity_for_every_trace_mode(
     mode: TraceMode,
 ) -> None:
     plan = _docker_plan(mode)
+    attestations: list[object] = []
+    exec_transition_flags: list[object] = []
 
-    def accept_current_plan(_plan: CollectionPlanArtifact) -> None:
-        return None
+    def accept_current_plan(_plan: CollectionPlanArtifact, **kwargs: object) -> None:
+        attestations.append(kwargs.get("namespace_attestation"))
+        exec_transition_flags.append(kwargs.get("allow_managed_exec_transition", False))
 
     monkeypatch.setattr(
         "perflens.collector_broker.trace.assert_plan_current",
@@ -289,6 +293,13 @@ def test_trace_coordinator_binds_docker_identity_for_every_trace_mode(
     )
 
     assert evidence.mode == mode
+    assert len(attestations) == 3
+    assert all(isinstance(item, NamespaceIdentity) for item in attestations)
+    assert plan.container_target is not None
+    assert {cast(NamespaceIdentity, item).pid for item in attestations} == {
+        plan.container_target.namespace.pid_namespace_inode
+    }
+    assert exec_transition_flags == [False, True, True]
     assert evidence.target.target_runtime == "docker"
     assert evidence.target.container_target == plan.container_target
     analysis = build_trace_analysis(evidence)
@@ -306,7 +317,10 @@ def test_trace_coordinator_requires_dedicated_rootful_grant(
 ) -> None:
     plan = _docker_plan(mode, rootful=True)
 
-    def accept_current_plan(_plan: CollectionPlanArtifact) -> None:
+    def accept_current_plan(
+        _plan: CollectionPlanArtifact,
+        **_kwargs: object,
+    ) -> None:
         return None
 
     monkeypatch.setattr(
@@ -356,7 +370,10 @@ def test_trace_client_rejects_different_container_identity(
 ) -> None:
     plan = _docker_plan("sched")
 
-    def accept_current_plan(_plan: CollectionPlanArtifact) -> None:
+    def accept_current_plan(
+        _plan: CollectionPlanArtifact,
+        **_kwargs: object,
+    ) -> None:
         return None
 
     monkeypatch.setattr(

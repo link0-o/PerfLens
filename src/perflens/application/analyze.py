@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -57,8 +58,15 @@ def analyze_perf_data(
     perf_path: Path | None = None,
     timeout_seconds: float = 300.0,
     collection: CollectionEvidenceProvenance | None = None,
+    symfs_path: Path | None = None,
+    symfs_identity_sha256: str | None = None,
 ) -> AnalysisArtifact:
-    adapter = PerfDataAdapter(perf_path, timeout_seconds=timeout_seconds)
+    adapter = PerfDataAdapter(
+        perf_path,
+        timeout_seconds=timeout_seconds,
+        symfs_path=symfs_path,
+        symfs_identity_sha256=symfs_identity_sha256,
+    )
     return _analyze_profile(
         path,
         "perf_data",
@@ -118,6 +126,17 @@ def _analyze_profile(
         for sample in stream:
             aggregator.add(sample)
         result = aggregator.finish()
+        if source_type != "folded" and result.record_count == 0:
+            # An empty perf transcript does not expose an observed event or period.
+            # Preserve that distinction from the Collection's requested/selected
+            # record event: the latter remains available through provenance, while
+            # the Analysis truthfully reports that it contains no sampled event.
+            result = replace(
+                result,
+                event="unknown",
+                weight_unit="sample_count",
+                weight_source="sample_count_fallback",
+            )
         diagnostics = stream.diagnostics()
         frame_table = stream.frame_table
         conversion = build_conversion_provenance(

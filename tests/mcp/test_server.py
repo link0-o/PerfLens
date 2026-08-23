@@ -425,13 +425,17 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert docker_authorization["const"] == (
                 "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
             )
+            assert "allowed_modes" in tools["authorize_docker_session"].input_schema["required"]
             managed_authorization = tools["authorize_managed_docker_session"].input_schema[
                 "properties"
             ]
-            assert set(managed_authorization) == {"authorization"}
+            assert set(managed_authorization) == {"authorization", "allowed_modes"}
             assert managed_authorization["authorization"]["const"] == (
                 "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
             )
+            assert "allowed_modes" in tools[
+                "authorize_managed_docker_session"
+            ].input_schema["required"]
             managed_collection = tools["collect_managed_docker_workload"].input_schema["properties"]
             assert not {
                 "image",
@@ -829,6 +833,18 @@ def test_docker_target_resolution_authorization_and_revocation_are_typed(
             )
             assert unauthorized.is_error
 
+            missing_modes = await client.call_tool(
+                "authorize_docker_session",
+                {
+                    "container_reference": "service",
+                    "container_pid": 12,
+                    "authorization": (
+                        "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
+                    ),
+                },
+            )
+            assert missing_modes.is_error
+
             authorized = await client.call_tool(
                 "authorize_docker_session",
                 {
@@ -1152,8 +1168,14 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
         def __init__(self, **_kwargs: object) -> None:
             self.prepare_count = 0
 
-        def authorize_managed(self, *, explicit_authorization: str):
+        def authorize_managed(
+            self,
+            *,
+            explicit_authorization: str,
+            allowed_modes: tuple[str, ...],
+        ):
             assert explicit_authorization.startswith("I_EXPLICITLY_AUTHORIZE")
+            assert allowed_modes == ("stat",)
             return active_session
 
         def prepare_managed_run(self, *_args: object, **_kwargs: object):
@@ -1187,7 +1209,10 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             )
         return plan
 
-    def fake_assert_current(_plan: CollectionPlanArtifact) -> None:
+    def fake_assert_current(
+        _plan: CollectionPlanArtifact,
+        **_kwargs: object,
+    ) -> None:
         return None
 
     def fake_build_run(**kwargs: object) -> ContainerRunArtifact:
@@ -1290,12 +1315,23 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
 
     async def exercise() -> None:
         async with Client(server) as client:
-            authorized = await client.call_tool(
+            missing_modes = await client.call_tool(
                 "authorize_managed_docker_session",
                 {
                     "authorization": (
                         "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
                     )
+                },
+            )
+            assert missing_modes.is_error
+
+            authorized = await client.call_tool(
+                "authorize_managed_docker_session",
+                {
+                    "authorization": (
+                        "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
+                    ),
+                    "allowed_modes": ["stat"],
                 },
             )
             assert not authorized.is_error

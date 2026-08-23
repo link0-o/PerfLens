@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import errno
 import hashlib
+import os
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -242,6 +244,102 @@ def test_cgroup_reader_and_delta_cover_bounded_container_resources(tmp_path: Pat
     serialized = context.model_dump_json()
     assert "/docker/test-container" not in serialized
     assert "not exclusive measurements" in serialized
+
+
+def test_cgroup_reader_uses_path_only_directory_anchor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cgroup_root = tmp_path / "cgroup"
+    target, directory = _resolved_target(cgroup_root)
+    _initial_files(directory)
+    reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
+    original_open = os.open
+    directory_flags: list[int] = []
+
+    def guarded_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if dir_fd is None and path == directory:
+            directory_flags.append(flags)
+            if not flags & os.O_PATH:
+                raise PermissionError(errno.EACCES, "directory listing is denied")
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", guarded_open)
+    captured = reader.capture()
+
+    assert captured.snapshot.cpu_usage_usec == 1000
+    assert len(directory_flags) == 1
+    assert directory_flags[0] & os.O_PATH
+    assert directory_flags[0] & os.O_DIRECTORY
+    assert directory_flags[0] & os.O_NOFOLLOW
+
+
+def test_cgroup_directory_open_error_reports_only_errno_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cgroup_root = tmp_path / "cgroup"
+    target, directory = _resolved_target(cgroup_root)
+    _initial_files(directory)
+    reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
+    original_open = os.open
+
+    def denied_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if dir_fd is None and path == directory:
+            raise PermissionError(errno.EACCES, "private path must not escape")
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", denied_open)
+    with pytest.raises(PerfLensError) as captured:
+        reader.capture()
+
+    assert captured.value.code is ErrorCode.PROFILE_PARSE_FAILED
+    assert "EACCES" in captured.value.message
+    assert str(directory) not in captured.value.message
+    assert "private path" not in captured.value.message
+
+
+def test_cgroup_resource_open_error_reports_only_errno_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cgroup_root = tmp_path / "cgroup"
+    target, directory = _resolved_target(cgroup_root)
+    _initial_files(directory)
+    reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
+    original_open = os.open
+
+    def denied_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if dir_fd is not None and path == "cpu.stat":
+            raise PermissionError(errno.EACCES, "private path must not escape")
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", denied_open)
+    with pytest.raises(PerfLensError) as captured:
+        reader.capture()
+
+    assert captured.value.code is ErrorCode.PROFILE_PARSE_FAILED
+    assert "EACCES" in captured.value.message
+    assert str(directory) not in captured.value.message
+    assert "private path" not in captured.value.message
 
 
 def test_missing_optional_pressure_and_io_are_explicitly_partial(tmp_path: Path) -> None:

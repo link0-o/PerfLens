@@ -1,5 +1,6 @@
 //! Fixed-path, policy-bounded `perf` execution for the privileged Helper.
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -37,6 +38,7 @@ const HARDWARE_PROBE_MAX_MILLISECONDS: u64 = 250;
 const HARDWARE_PROBE_OUTPUT_BYTES: u64 = 1 << 20;
 const POST_PROBE_FALLBACK_MINIMUM_MILLISECONDS: u64 = 50;
 const PERF_CONTROL_ACK_MAX_BYTES: usize = 16;
+const PERF_TARGET_EXIT_GRACE: Duration = Duration::from_secs(2);
 const SOFTWARE_STAT_EVENTS: &[&str] = &[
     "task-clock",
     "context-switches",
@@ -120,13 +122,21 @@ where
     }
     authorize_spool_capacity(&spool_root, plan.max_output_bytes, artifact_gid)?;
     consume_plan(&spool_root, &plan.plan_id)?;
+    let readiness_reported = Cell::new(false);
+    let validate_target =
+        |target: &HelperTarget| assert_pid_identity_for_phase(target, readiness_reported.get());
+    let mut report_ready = || {
+        ready_notifier()?;
+        readiness_reported.set(true);
+        Ok(())
+    };
     execute_perf_with_ready(
         plan,
         &perf_path,
         &spool_root,
         artifact_gid,
-        &assert_pid_identity,
-        ready_notifier,
+        &validate_target,
+        &mut report_ready,
     )
 }
 
@@ -248,10 +258,31 @@ fn assert_pid_identity(target: &HelperTarget) -> Result<(), ExecutionError> {
     assert_pid_identity_at(target, Path::new("/proc"), Path::new("/sys/fs/cgroup"))
 }
 
+fn assert_pid_identity_for_phase(
+    target: &HelperTarget,
+    allow_managed_exec_transition: bool,
+) -> Result<(), ExecutionError> {
+    assert_pid_identity_at_phase(
+        target,
+        Path::new("/proc"),
+        Path::new("/sys/fs/cgroup"),
+        allow_managed_exec_transition,
+    )
+}
+
 fn assert_pid_identity_at(
     target: &HelperTarget,
     proc_root: &Path,
     cgroup_root: &Path,
+) -> Result<(), ExecutionError> {
+    assert_pid_identity_at_phase(target, proc_root, cgroup_root, false)
+}
+
+fn assert_pid_identity_at_phase(
+    target: &HelperTarget,
+    proc_root: &Path,
+    cgroup_root: &Path,
+    allow_managed_exec_transition: bool,
 ) -> Result<(), ExecutionError> {
     if target.pid == std::process::id() {
         return Err(denied("Privileged Helper cannot profile its own process"));
@@ -276,7 +307,13 @@ fn assert_pid_identity_at(
     match (&target.target_runtime, &target.container) {
         (TargetRuntime::Host, None) => {}
         (TargetRuntime::Docker, Some(container)) => {
-            assert_docker_identity(&process_root, cgroup_root, target, container)?;
+            assert_docker_identity(
+                &process_root,
+                cgroup_root,
+                target,
+                container,
+                allow_managed_exec_transition,
+            )?;
         }
         _ => return Err(denied("Target runtime and container binding differ")),
     }
@@ -288,6 +325,7 @@ fn assert_docker_identity(
     cgroup_root: &Path,
     target: &HelperTarget,
     container: &crate::ContainerTargetBinding,
+    allow_managed_exec_transition: bool,
 ) -> Result<(), ExecutionError> {
     let status = fs::read_to_string(proc_root.join("status"))
         .map_err(|_error| denied("Docker target status cannot be inspected"))?;
@@ -313,11 +351,13 @@ fn assert_docker_identity(
     }
     let executable_name = fs::read_to_string(proc_root.join("comm"))
         .map_err(|_error| denied("Docker target executable name cannot be inspected"))?;
-    if executable_name
+    let executable_changed = executable_name
         .strip_suffix('\n')
         .unwrap_or(&executable_name)
-        != container.executable_name
-    {
+        != container.executable_name;
+    let executable_transition_allowed = allow_managed_exec_transition
+        && container.target_kind == DockerTargetKind::ManagedTemporaryContainer;
+    if executable_changed && !executable_transition_allowed {
         return Err(denied("Docker target executable identity changed"));
     }
     let cgroup_identity = assert_docker_cgroup(proc_root, cgroup_root, container)?;
@@ -1150,18 +1190,25 @@ where
         artifact_gid,
         publish,
     } = output_settings;
-    let (mut control_writer, control_reader) =
-        UnixStream::pair().map_err(|_error| external_error())?;
-    let (ack_writer, ack_reader) = UnixStream::pair().map_err(|_error| external_error())?;
+    let (mut control_writer, control_reader) = UnixStream::pair().map_err(|_error| {
+        perf_control_error("Privileged Helper could not create its perf control channel")
+    })?;
+    let (ack_writer, ack_reader) = UnixStream::pair().map_err(|_error| {
+        perf_control_error("Privileged Helper could not create its perf acknowledgement channel")
+    })?;
     fcntl(&control_reader, FcntlArg::F_SETFD(FdFlag::empty()))
-        .map_err(|_error| external_error())?;
-    fcntl(&ack_writer, FcntlArg::F_SETFD(FdFlag::empty())).map_err(|_error| external_error())?;
+        .map_err(|_error| perf_control_error("Perf control descriptor could not be inherited"))?;
+    fcntl(&ack_writer, FcntlArg::F_SETFD(FdFlag::empty())).map_err(|_error| {
+        perf_control_error("Perf acknowledgement descriptor could not be inherited")
+    })?;
     control_writer
         .set_write_timeout(Some(Duration::from_secs(5)))
-        .map_err(|_error| external_error())?;
+        .map_err(|_error| perf_control_error("Perf control timeout could not be bounded"))?;
     ack_reader
         .set_read_timeout(Some(Duration::from_secs(5)))
-        .map_err(|_error| external_error())?;
+        .map_err(|_error| {
+            perf_control_error("Perf acknowledgement timeout could not be bounded")
+        })?;
     let control_argument = format!(
         "fd:{},{}",
         control_reader.as_raw_fd(),
@@ -1209,6 +1256,12 @@ where
                 "-o",
                 temporary.to_str().ok_or_else(spool_error)?,
             ]);
+            if plan.target.target_runtime == TargetRuntime::Docker {
+                // Container paths such as /workspace/... are not visible in the Helper's mount
+                // namespace.  Carry the kernel-supplied Build ID in MMAP2 records so later
+                // analysis can bind a sampled path to the exact ELF opened below /proc/<pid>/root.
+                command.arg("--buildid-mmap");
+            }
         }
     }
     command
@@ -1220,7 +1273,9 @@ where
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);
-    let mut child = command.spawn().map_err(|_error| external_error())?;
+    let mut child = command
+        .spawn()
+        .map_err(|_error| perf_control_error("Privileged perf could not be started"))?;
     drop(control_reader);
     drop(ack_writer);
     // `-D -1` makes perf open its target events disabled. `ping` is a non-mutating control command
@@ -1230,7 +1285,9 @@ where
     // perf actually opened.
     if send_perf_control(&mut control_writer, &mut acknowledgements, "ping").is_err() {
         terminate_perf(&mut child, Signal::SIGKILL);
-        return Err(external_error());
+        return Err(perf_control_error(
+            "Privileged perf did not complete its disabled-event binding handshake",
+        ));
     }
     if let Err(error) = target_validator(&plan.target) {
         terminate_perf(&mut child, Signal::SIGKILL);
@@ -1238,7 +1295,9 @@ where
     }
     if send_perf_control(&mut control_writer, &mut acknowledgements, "enable").is_err() {
         terminate_perf(&mut child, Signal::SIGKILL);
-        return Err(external_error());
+        return Err(perf_control_error(
+            "Privileged perf did not acknowledge the bounded enable request",
+        ));
     }
     if let Err(error) = ready_notifier() {
         terminate_perf(&mut child, Signal::SIGKILL);
@@ -1255,10 +1314,8 @@ where
     let duration = Duration::from_millis(plan.duration_milliseconds);
     let mut status = None;
     let mut sent_bounded_sigint = false;
+    let mut target_exited = false;
     while started.elapsed() < duration {
-        if !target_process_exists(plan.target.pid) {
-            break;
-        }
         let completed = match child.try_wait() {
             Ok(value) => value,
             Err(_error) => {
@@ -1268,6 +1325,10 @@ where
         };
         if let Some(completed) = completed {
             status = Some(completed);
+            break;
+        }
+        if !target_process_exists(plan.target.pid) {
+            target_exited = true;
             break;
         }
         let size = temporary.metadata().map_or(0, |metadata| metadata.len());
@@ -1281,27 +1342,34 @@ where
         }
         thread::sleep(Duration::from_millis(20));
     }
+    if status.is_none() && target_exited {
+        status = wait_for_perf_exit(
+            &mut child,
+            temporary,
+            plan.max_output_bytes,
+            Instant::now() + PERF_TARGET_EXIT_GRACE,
+        )?;
+    }
     if status.is_none() {
-        if send_perf_control(&mut control_writer, &mut acknowledgements, "disable").is_err() {
-            terminate_perf(&mut child, Signal::SIGKILL);
-            return Err(external_error());
-        }
-        sent_bounded_sigint =
-            killpg(Pid::from_raw(child.id().cast_signed()), Signal::SIGINT).is_ok();
-        let shutdown_deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let completed = match child.try_wait() {
-                Ok(value) => value,
-                Err(_error) => {
-                    terminate_perf(&mut child, Signal::SIGKILL);
-                    return Err(external_error());
-                }
-            };
-            if let Some(completed) = completed {
-                status = Some(completed);
-                break;
+        if !target_exited
+            && send_perf_control(&mut control_writer, &mut acknowledgements, "disable").is_err()
+        {
+            status = child.try_wait().map_err(|_error| external_error())?;
+            if status.is_none() {
+                terminate_perf(&mut child, Signal::SIGKILL);
+                return Err(external_error());
             }
-            if Instant::now() >= shutdown_deadline {
+        }
+        if status.is_none() {
+            sent_bounded_sigint =
+                killpg(Pid::from_raw(child.id().cast_signed()), Signal::SIGINT).is_ok();
+            status = wait_for_perf_exit(
+                &mut child,
+                temporary,
+                plan.max_output_bytes,
+                Instant::now() + Duration::from_secs(5),
+            )?;
+            if status.is_none() {
                 terminate_perf(&mut child, Signal::SIGKILL);
                 return Err(ExecutionError {
                     code: "RESOURCE_LIMIT_EXCEEDED",
@@ -1309,7 +1377,6 @@ where
                     message: "Privileged perf did not stop within its shutdown limit",
                 });
             }
-            thread::sleep(Duration::from_millis(20));
         }
     }
     let status = status.ok_or_else(external_error)?;
@@ -1385,6 +1452,31 @@ where
 
 fn target_process_exists(pid: u32) -> bool {
     PathBuf::from(format!("/proc/{pid}")).is_dir()
+}
+
+fn wait_for_perf_exit(
+    child: &mut std::process::Child,
+    output: &Path,
+    max_output_bytes: u64,
+    deadline: Instant,
+) -> Result<Option<ExitStatus>, ExecutionError> {
+    loop {
+        if let Some(status) = child.try_wait().map_err(|_error| external_error())? {
+            return Ok(Some(status));
+        }
+        if output.metadata().map_or(0, |metadata| metadata.len()) > max_output_bytes {
+            terminate_perf(child, Signal::SIGKILL);
+            return Err(ExecutionError {
+                code: "RESOURCE_LIMIT_EXCEEDED",
+                stage: "external_tool",
+                message: "Privileged perf exceeded its output limit",
+            });
+        }
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn perf_status_succeeded(status: ExitStatus, sent_bounded_sigint: bool) -> bool {
@@ -1498,6 +1590,14 @@ const fn external_error() -> ExecutionError {
     }
 }
 
+const fn perf_control_error(message: &'static str) -> ExecutionError {
+    ExecutionError {
+        code: "EXTERNAL_TOOL_FAILED",
+        stage: "external_tool",
+        message,
+    }
+}
+
 const fn resource_error(message: &'static str) -> ExecutionError {
     ExecutionError {
         code: "RESOURCE_LIMIT_EXCEEDED",
@@ -1512,7 +1612,7 @@ mod tests {
     use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::ExitStatusExt;
-    use std::process::ExitStatus;
+    use std::process::{Command, ExitStatus};
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, SystemTime};
@@ -1522,9 +1622,10 @@ mod tests {
 
     use super::{
         ExecutionPlan, MAX_DURATION_MILLISECONDS, REPLAY_RETENTION, SOFTWARE_STAT_EVENTS,
-        assert_pid_identity_at, authorize_spool_capacity, consume_plan, denied,
-        docker_identity_fingerprint, execute_perf, execute_perf_with_ready, perf_status_succeeded,
-        prune_replay_markers, read_perf_control_ack, recover_stale_temporary_files, sha256_nul,
+        assert_pid_identity_at, assert_pid_identity_at_phase, authorize_spool_capacity,
+        consume_plan, denied, docker_identity_fingerprint, execute_perf, execute_perf_with_ready,
+        perf_status_succeeded, prune_replay_markers, read_perf_control_ack,
+        recover_stale_temporary_files, sha256_nul,
         stat_output_has_usable_requested_hardware_counts, trusted_root_executable, validate_plan,
         validate_spool_entries,
     };
@@ -1687,6 +1788,56 @@ mod tests {
             .expect("write unsafe cgroup path");
         assert!(
             assert_pid_identity_at(&fixture.target, &fixture.proc_root, &fixture.cgroup_root)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn managed_exec_transition_relaxes_only_the_executable_name() {
+        let fixture = docker_identity_fixture();
+        std::fs::write(fixture.process_root.join("comm"), "workload\n")
+            .expect("replace Gate executable name");
+        assert!(
+            assert_pid_identity_at_phase(
+                &fixture.target,
+                &fixture.proc_root,
+                &fixture.cgroup_root,
+                false,
+            )
+            .is_err()
+        );
+        assert_pid_identity_at_phase(
+            &fixture.target,
+            &fixture.proc_root,
+            &fixture.cgroup_root,
+            true,
+        )
+        .expect("accept the managed Gate exec transition");
+
+        std::fs::remove_file(fixture.process_root.join("ns/pid")).expect("remove namespace link");
+        symlink("pid:[999]", fixture.process_root.join("ns/pid")).expect("replace namespace link");
+        assert!(
+            assert_pid_identity_at_phase(
+                &fixture.target,
+                &fixture.proc_root,
+                &fixture.cgroup_root,
+                true,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn existing_container_never_accepts_an_executable_transition() {
+        let fixture = docker_identity_fixture();
+        let mut target = fixture.target.clone();
+        let container = target.container.as_mut().expect("Docker binding");
+        container.target_kind = DockerTargetKind::ExistingContainer;
+        container.adapter_recipe_id = DockerAdapterRecipe::LocalDockerReadV1;
+        std::fs::write(fixture.process_root.join("comm"), "replacement\n")
+            .expect("replace executable name");
+        assert!(
+            assert_pid_identity_at_phase(&target, &fixture.proc_root, &fixture.cgroup_root, true,)
                 .is_err()
         );
     }
@@ -1866,6 +2017,46 @@ finish
             .expect("make post-probe failure test double executable");
     }
 
+    fn write_target_exit_fake_perf(path: &std::path::Path) {
+        std::fs::write(
+            path,
+            r#"#!/bin/sh
+set -eu
+out=''
+control=''
+pid=''
+buildid_mmap=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) shift; out=$1 ;;
+    --control) shift; control=$1 ;;
+    -p) shift; pid=$1 ;;
+    --buildid-mmap) buildid_mmap=1 ;;
+  esac
+  shift
+done
+[ "$buildid_mmap" = 1 ]
+descriptors=${control#fd:}
+ctl_fd=${descriptors%,*}
+ack_fd=${descriptors#*,}
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'ping' ]
+eval "printf 'ack\n\0' >&${ack_fd}"
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'enable' ]
+eval "printf 'ack\n\0' >&${ack_fd}"
+while kill -0 "$pid" 2>/dev/null; do
+  sleep 0.01
+done
+printf 'PERFILE2-target-exit' > "$out"
+exit 0
+"#,
+        )
+        .expect("write target-exit perf test double");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .expect("make target-exit test double executable");
+    }
+
     #[test]
     fn immutable_policy_accepts_bounded_owner_only_record() {
         assert!(validate_plan(&record_plan(), 1000, false).is_ok());
@@ -1893,6 +2084,58 @@ finish
     fn target_liveness_check_distinguishes_current_and_missing_processes() {
         assert!(super::target_process_exists(std::process::id()));
         assert!(!super::target_process_exists(u32::MAX));
+    }
+
+    #[test]
+    fn record_preserves_valid_evidence_when_the_target_exits_before_the_window() {
+        let _execution_guard = EXECUTION_TEST_LOCK.lock().expect("lock execution test");
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("test clock")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "perflens-target-exit-{}-{}-{nonce}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).expect("create spool");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("secure spool");
+        let fake_perf = directory.join("perf-test-double");
+        write_target_exit_fake_perf(&fake_perf);
+        let mut target = Command::new("/bin/sleep")
+            .arg("0.20")
+            .spawn()
+            .expect("start bounded target");
+        let target_pid = target.id();
+        let waiter = std::thread::spawn(move || target.wait().expect("reap bounded target"));
+        let mut plan = record_plan();
+        plan.target.pid = target_pid;
+        plan.target.uid = geteuid().as_raw();
+        plan.target.target_runtime = TargetRuntime::Docker;
+        plan.duration_milliseconds = 1_000;
+        plan.requested_event_source = RequestedEventSource::SoftwareOnly;
+        plan.record_event = Some(RecordEvent::CpuClock);
+
+        let result = execute_perf(
+            &plan,
+            &fake_perf,
+            &directory,
+            nix::unistd::getegid().as_raw(),
+            &|_target| Ok(()),
+        )
+        .expect("preserve a completed target's valid perf evidence");
+
+        waiter.join().expect("join target waiter");
+        let artifact = directory.join(&result.artifact_name);
+        assert_eq!(
+            std::fs::read(&artifact).expect("read target-exit evidence"),
+            b"PERFILE2-target-exit"
+        );
+        assert!(result.finished_at_unix_milliseconds < result.started_at_unix_milliseconds + 1_000);
+        std::fs::remove_file(artifact).expect("remove artifact");
+        std::fs::remove_file(fake_perf).expect("remove test double");
+        std::fs::remove_dir(directory).expect("remove spool");
     }
 
     #[test]

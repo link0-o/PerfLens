@@ -50,9 +50,7 @@ from perflens.symbols.elf import read_elf_build_id
 from perflens.symbols.source import PathMapping, SourceLocator
 
 _BUILD_ID_LINE = re.compile(r"^(?P<build_id>[a-fA-F0-9]{8,128})\s+(?P<path>.+)$")
-_SOURCE_LOCATION_WITH_LINE = re.compile(
-    r"^(?P<path>.+):(?P<line>[1-9][0-9]*)(?::[1-9][0-9]*)?$"
-)
+_SOURCE_LOCATION_WITH_LINE = re.compile(r"^(?P<path>.+):(?P<line>[1-9][0-9]*)(?::[1-9][0-9]*)?$")
 _REDACTED_DIAGNOSTIC = re.compile(r"^redacted-diagnostic-sha256:[a-f0-9]{64}$")
 _REDACTED_PREVIEW = re.compile(r"^redacted-preview-sha256:[a-f0-9]{64}$")
 _RECIPE_ID = "perf-buildid-list-with-hits-v1"
@@ -61,6 +59,7 @@ _MAX_BUILD_ID_LINE_CHARS = 8192
 _MAX_SOURCE_MAPPINGS = 256
 _HASH_CHUNK_BYTES = 1 << 20
 _DEFAULT_CONTAINER_WORKSPACE = PurePosixPath("/workspace")
+_SYMFS_RECIPE_ID = "verified-container-workspace-symfs-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +75,15 @@ class BuildIdListResult:
     records_truncated: bool
     diagnostic_count: int
     adapter_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedContainerSymfs:
+    """Private, analysis-time filesystem containing only verified workspace modules."""
+
+    root: Path
+    identity_sha256: str
+    module_count: int
 
 
 class PerfBuildIdListAdapter:
@@ -266,7 +274,11 @@ def capture_container_module_snapshot(
         modules_truncated = referenced_count > len(selected_records) or result.records_truncated
         if modules_truncated:
             limitations.append("Referenced container modules were truncated by policy.")
-        assert_container_target_current(target, reader=reader)
+        assert_container_target_current(
+            target,
+            reader=reader,
+            allow_managed_exec_transition=True,
+        )
         with _PinnedProcessRoot(proc_root, target.host_pid) as pinned_root:
             root_identity_sha256 = _root_identity_sha256(
                 target.container_identity_sha256,
@@ -286,7 +298,11 @@ def capture_container_module_snapshot(
                 )
                 consumed_bytes += charged_bytes
                 modules.append(module)
-            assert_container_target_current(target, reader=reader)
+            assert_container_target_current(
+                target,
+                reader=reader,
+                allow_managed_exec_transition=True,
+            )
             pinned_root.assert_unchanged()
     except PerfLensError as exc:
         if exc.stage == "evidence_validation":
@@ -346,6 +362,169 @@ def capture_container_module_snapshot(
     )
 
 
+@contextmanager
+def materialize_container_workspace_symfs(
+    collection: CollectionArtifact,
+    snapshot: ContainerModuleSnapshotArtifact,
+    *,
+    workspace_root: Path,
+    perf_path: Path | None = None,
+    build_id_reader: Callable[[Path], BuildIdListResult] | None = None,
+    container_workspace: PurePosixPath = _DEFAULT_CONTAINER_WORKSPACE,
+) -> Generator[VerifiedContainerSymfs | None]:
+    """Create a private ``perf script --symfs`` tree from capture-bound modules.
+
+    The raw profile is rerun through the fixed Build-ID adapter only to recover
+    private container paths.  A path is copied only when its salted path digest,
+    Build ID, byte count, and SHA-256 all match the capture-time module snapshot.
+    Nothing outside the authorized ``/workspace`` mapping is materialized.
+    """
+    verify_collection_artifact(collection, max_output_bytes=DEFAULT_MAX_OUTPUT_BYTES)
+    _require_contract_content(
+        snapshot,
+        snapshot.content_sha256,
+        "container module snapshot content digest does not match its evidence",
+    )
+    if (
+        collection.target_runtime != "docker"
+        or collection.mode != "record"
+        or collection.output_format != "perf_data"
+        or collection.container_target is None
+        or snapshot.source_collection_id != collection.collection_id
+        or snapshot.source_output_sha256 != collection.output_sha256
+        or snapshot.container_target_id != collection.container_target.target_id
+        or snapshot.container_target_content_sha256
+        != collection.container_target.target_content_sha256
+        or snapshot.container_identity_sha256
+        != collection.container_target.container_identity_sha256
+    ):
+        raise PerfLensError(
+            ErrorCode.PROFILE_PARSE_FAILED,
+            "container_symbols",
+            "container symfs inputs do not describe the same Docker Collection",
+        )
+    verified_modules = {
+        item.container_path_sha256: item for item in snapshot.modules if item.status == "verified"
+    }
+    if not verified_modules:
+        yield None
+        return
+    try:
+        safe_workspace = _safe_workspace_root(workspace_root)
+        with _private_profile_snapshot(collection) as profile_snapshot:
+            result = (
+                build_id_reader(profile_snapshot)
+                if build_id_reader is not None
+                else PerfBuildIdListAdapter(
+                    perf_path,
+                    max_output_bytes=snapshot.limits.max_build_id_output_bytes,
+                ).inspect(profile_snapshot)
+            )
+    except PerfLensError as exc:
+        if exc.stage == "evidence_validation":
+            raise
+        yield None
+        return
+    records, conflicting_paths = _unique_recorded_modules(result.records)
+    if conflicting_paths:
+        yield None
+        return
+
+    with tempfile.TemporaryDirectory(prefix="perflens-container-symfs-") as directory:
+        symfs_root = Path(directory)
+        symfs_root.chmod(0o700)
+        copied: list[tuple[Path, tuple[int, ...], str, int]] = []
+        manifest_entries: list[str] = []
+        try:
+            with _PinnedWorkspaceRoot(safe_workspace) as pinned_workspace:
+                for record in records:
+                    if not _is_beneath_prefix(record.container_path, container_workspace):
+                        continue
+                    path_digest = _private_path_digest(
+                        snapshot.container_identity_sha256,
+                        record.container_path,
+                        domain="module",
+                    )
+                    evidence = verified_modules.get(path_digest)
+                    if (
+                        evidence is None
+                        or evidence.recorded_build_id != record.build_id
+                        or evidence.observed_build_id != record.build_id
+                        or evidence.content_sha256 is None
+                        or evidence.file_bytes is None
+                    ):
+                        continue
+                    relative = PurePosixPath(record.container_path).relative_to(container_workspace)
+                    if not relative.parts or relative == PurePosixPath("."):
+                        continue
+                    source_fd = pinned_workspace.open_verified_module(
+                        relative,
+                        evidence=evidence,
+                    )
+                    try:
+                        destination = symfs_root.joinpath(
+                            *PurePosixPath(record.container_path).parts[1:]
+                        )
+                        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                        _copy_verified_module(
+                            source_fd,
+                            destination,
+                            expected_sha256=evidence.content_sha256,
+                            expected_bytes=evidence.file_bytes,
+                        )
+                    finally:
+                        os.close(source_fd)
+                    metadata = destination.stat(follow_symlinks=False)
+                    copied.append(
+                        (
+                            destination,
+                            _stat_identity(metadata),
+                            evidence.content_sha256,
+                            evidence.file_bytes,
+                        )
+                    )
+                    manifest_entries.append(
+                        "\0".join(
+                            (
+                                path_digest,
+                                record.build_id,
+                                evidence.content_sha256,
+                                str(evidence.file_bytes),
+                            )
+                        )
+                    )
+                pinned_workspace.assert_unchanged()
+        except PerfLensError:
+            yield None
+            return
+        if not copied:
+            yield None
+            return
+        identity_sha256 = hashlib.sha256(
+            "\0".join(
+                (
+                    _SYMFS_RECIPE_ID,
+                    collection.collection_id,
+                    collection.output_sha256,
+                    snapshot.content_sha256,
+                    result.adapter_sha256,
+                    *sorted(manifest_entries),
+                )
+            ).encode()
+        ).hexdigest()
+        materialized = VerifiedContainerSymfs(
+            root=symfs_root,
+            identity_sha256=identity_sha256,
+            module_count=len(copied),
+        )
+        root_identity = _stat_identity(symfs_root.stat(follow_symlinks=False))
+        _verify_materialized_symfs(symfs_root, root_identity, copied)
+        try:
+            yield materialized
+        finally:
+            _verify_materialized_symfs(symfs_root, root_identity, copied)
+
+
 def build_container_symbol_context(
     analysis: AnalysisArtifact,
     snapshot: ContainerModuleSnapshotArtifact,
@@ -367,8 +546,7 @@ def build_container_symbol_context(
         or collection.collection_id != snapshot.source_collection_id
         or collection.output_sha256 != snapshot.source_output_sha256
         or collection.container_target_id != snapshot.container_target_id
-        or collection.container_target_content_sha256
-        != snapshot.container_target_content_sha256
+        or collection.container_target_content_sha256 != snapshot.container_target_content_sha256
     ):
         raise PerfLensError(
             ErrorCode.PROFILE_PARSE_FAILED,
@@ -419,10 +597,11 @@ def build_container_symbol_context(
     )
     mappings: list[ContainerSourceMappingEvidence] = []
     limitations = list(snapshot.limitations)
+    host_workspace = (
+        PurePosixPath(safe_workspace.as_posix()) if safe_workspace is not None else None
+    )
     if locator is None:
-        limitations.append(
-            "No authorized Docker workspace was available for source-path mapping."
-        )
+        limitations.append("No authorized Docker workspace was available for source-path mapping.")
     for source_path, line in exported_locations:
         path_digest = _private_path_digest(
             snapshot.container_identity_sha256,
@@ -434,8 +613,10 @@ def build_container_symbol_context(
         try:
             if locator is None or safe_workspace is None:
                 raise LookupError("authorized workspace is unavailable")
-            if not _is_beneath_prefix(source_path, container_workspace):
-                raise ValueError("source is not below the authorized container workspace")
+            if not _is_beneath_prefix(source_path, container_workspace) and (
+                host_workspace is None or not _is_beneath_prefix(source_path, host_workspace)
+            ):
+                raise ValueError("source is not below an authorized workspace path")
             mapped = locator.map_path(Path(source_path))
             relative = mapped.relative_to(safe_workspace).as_posix()
             status = "mapped"
@@ -532,8 +713,7 @@ def project_container_analysis(
             "container Analysis projection does not match its verified symbol context",
         )
     mapping_by_location = {
-        (item.container_source_path_sha256, item.line): item
-        for item in context.source_mappings
+        (item.container_source_path_sha256, item.line): item for item in context.source_mappings
     }
 
     def public_symbol(value: str) -> str:
@@ -714,9 +894,7 @@ def project_container_analysis(
     )
     provisional_context = context.model_copy(
         update={
-            "symbol_context_id": derive_container_symbol_context_id(
-                projected_analysis.analysis_id
-            ),
+            "symbol_context_id": derive_container_symbol_context_id(projected_analysis.analysis_id),
             "source_analysis_id": projected_analysis.analysis_id,
             "source_analysis_content_sha256": projected_analysis.content_sha256,
             "content_sha256": "0" * 64,
@@ -760,18 +938,12 @@ def assert_public_container_analysis(analysis: AnalysisArtifact) -> None:
         or public_argv[0] != "@PRIVATE_CONVERTER@"
         or public_argv.count("@PRIVATE_INPUT@") != 1
         or any(
-            _contains_private_path(item)
-            for item in public_argv[1:]
-            if item != "@PRIVATE_INPUT@"
+            _contains_private_path(item) for item in public_argv[1:] if item != "@PRIVATE_INPUT@"
         )
         or any(_contains_private_path(value) for value in unsafe_values)
+        or any(_REDACTED_DIAGNOSTIC.fullmatch(item) is None for item in conversion.diagnostics)
         or any(
-            _REDACTED_DIAGNOSTIC.fullmatch(item) is None
-            for item in conversion.diagnostics
-        )
-        or any(
-            warning.preview is not None
-            and _REDACTED_PREVIEW.fullmatch(warning.preview) is None
+            warning.preview is not None and _REDACTED_PREVIEW.fullmatch(warning.preview) is None
             for warning in analysis.warnings
         )
     ):
@@ -968,6 +1140,131 @@ class _PinnedProcessRoot:
         self.close()
 
 
+class _PinnedWorkspaceRoot:
+    """Descriptor-pinned view of the one authorized project workspace."""
+
+    def __init__(self, root: Path) -> None:
+        self._root = root
+        self._root_fd: int | None = None
+        self._identity: tuple[int, ...] = ()
+
+    def __enter__(self) -> _PinnedWorkspaceRoot:
+        try:
+            self._root_fd = os.open(
+                self._root,
+                os.O_RDONLY
+                | os.O_DIRECTORY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+        except OSError as exc:
+            raise _symbol_error("authorized Docker workspace cannot be pinned") from exc
+        metadata = os.fstat(self._root_fd)
+        if not stat.S_ISDIR(metadata.st_mode):
+            self.close()
+            raise _symbol_error("authorized Docker workspace is not a directory")
+        self._identity = _stat_identity(metadata)
+        return self
+
+    def open_verified_module(
+        self,
+        relative: PurePosixPath,
+        *,
+        evidence: ContainerModuleEvidence,
+    ) -> int:
+        if self._root_fd is None:
+            raise RuntimeError("workspace root is not open")
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            raise _symbol_error("container workspace module path is unsafe")
+        descriptor = os.dup(self._root_fd)
+        try:
+            for index, part in enumerate(relative.parts):
+                final = index == len(relative.parts) - 1
+                flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+                if not final:
+                    flags |= os.O_DIRECTORY
+                next_descriptor = os.open(part, flags, dir_fd=descriptor)
+                os.close(descriptor)
+                descriptor = next_descriptor
+            before = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or evidence.file_bytes is None
+                or evidence.content_sha256 is None
+                or before.st_size != evidence.file_bytes
+            ):
+                raise _symbol_error("workspace module identity does not match its snapshot")
+            with os.fdopen(os.dup(descriptor), "rb", closefd=True) as handle:
+                build_id = _build_id_from_handle(handle)
+                digest, size = _sha256_handle(handle, max_bytes=evidence.file_bytes)
+            after = os.fstat(descriptor)
+            if (
+                _stat_identity(before) != _stat_identity(after)
+                or size != evidence.file_bytes
+                or digest != evidence.content_sha256
+                or build_id != evidence.recorded_build_id
+            ):
+                raise _symbol_error("workspace module changed or mismatched its snapshot")
+            current = self._open_relative(relative)
+            try:
+                if _stat_identity(os.fstat(current)) != _stat_identity(after):
+                    raise _symbol_error("workspace module path changed during verification")
+            finally:
+                os.close(current)
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def _open_relative(self, relative: PurePosixPath) -> int:
+        if self._root_fd is None:
+            raise RuntimeError("workspace root is not open")
+        descriptor = os.dup(self._root_fd)
+        try:
+            for index, part in enumerate(relative.parts):
+                final = index == len(relative.parts) - 1
+                flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+                if not final:
+                    flags |= os.O_DIRECTORY
+                next_descriptor = os.open(part, flags, dir_fd=descriptor)
+                os.close(descriptor)
+                descriptor = next_descriptor
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise _symbol_error("workspace module is not a regular file")
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def assert_unchanged(self) -> None:
+        if self._root_fd is None or _stat_identity(os.fstat(self._root_fd)) != self._identity:
+            raise _symbol_error("authorized Docker workspace changed during verification")
+        current = -1
+        try:
+            current = os.open(
+                self._root,
+                os.O_RDONLY
+                | os.O_DIRECTORY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+            if _stat_identity(os.fstat(current)) != self._identity:
+                raise _symbol_error("authorized Docker workspace path was replaced")
+        except OSError as exc:
+            raise _symbol_error("authorized Docker workspace path is unavailable") from exc
+        finally:
+            if current >= 0:
+                os.close(current)
+
+    def close(self) -> None:
+        if self._root_fd is not None:
+            os.close(self._root_fd)
+            self._root_fd = None
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
+
+
 def _analysis_source_locations(
     analysis: AnalysisArtifact,
 ) -> tuple[tuple[str, int | None], ...]:
@@ -1035,6 +1332,119 @@ def _sha256_handle(handle: BinaryIO, *, max_bytes: int) -> tuple[str, int]:
 def _sha256_path(path: Path) -> tuple[str, int]:
     with path.open("rb") as handle:
         return _sha256_handle(handle, max_bytes=1 << 30)
+
+
+def _safe_workspace_root(workspace_root: Path) -> Path:
+    requested = workspace_root.expanduser().absolute()
+    try:
+        resolved = workspace_root.expanduser().resolve(strict=True)
+        metadata = resolved.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise _symbol_error("authorized Docker workspace is unavailable") from exc
+    if resolved != requested or not stat.S_ISDIR(metadata.st_mode):
+        raise _symbol_error("authorized Docker workspace path is not canonical")
+    return resolved
+
+
+def _copy_verified_module(
+    source_fd: int,
+    destination: Path,
+    *,
+    expected_sha256: str,
+    expected_bytes: int,
+) -> None:
+    destination_fd = -1
+    try:
+        destination_fd = os.open(
+            destination,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o400,
+        )
+        os.lseek(source_fd, 0, os.SEEK_SET)
+        digest = hashlib.sha256()
+        copied = 0
+        while copied <= expected_bytes:
+            chunk = os.read(
+                source_fd,
+                min(_HASH_CHUNK_BYTES, expected_bytes + 1 - copied),
+            )
+            if not chunk:
+                break
+            copied += len(chunk)
+            if copied > expected_bytes:
+                raise _symbol_error("workspace module exceeded its recorded size")
+            digest.update(chunk)
+            view = memoryview(chunk)
+            while view:
+                written = os.write(destination_fd, view)
+                if written <= 0:
+                    raise _symbol_error("verified workspace module copy made no write progress")
+                view = view[written:]
+        if copied != expected_bytes or digest.hexdigest() != expected_sha256:
+            raise _symbol_error("workspace module copy does not match capture-time evidence")
+        os.fchmod(destination_fd, 0o400)
+    except OSError as exc:
+        raise _symbol_error("verified workspace module could not be materialized") from exc
+    finally:
+        if destination_fd >= 0:
+            os.close(destination_fd)
+
+
+def _verify_materialized_symfs(
+    root: Path,
+    root_identity: tuple[int, ...],
+    copied: list[tuple[Path, tuple[int, ...], str, int]],
+) -> None:
+    try:
+        root_metadata = root.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise _symbol_error("verified container symfs disappeared during analysis") from exc
+    if (
+        _stat_identity(root_metadata) != root_identity
+        or not stat.S_ISDIR(root_metadata.st_mode)
+        or root_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(root_metadata.st_mode) != 0o700
+    ):
+        raise _symbol_error("verified container symfs identity changed during analysis")
+    expected_paths = {path for path, _identity, _digest, _size in copied}
+    observed_paths: set[Path] = set()
+    for directory, directory_names, file_names in os.walk(root, followlinks=False):
+        current = Path(directory)
+        for name in directory_names:
+            metadata = (current / name).stat(follow_symlinks=False)
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise _symbol_error("verified container symfs contains an unsafe directory")
+        for name in file_names:
+            observed_paths.add(current / name)
+    if observed_paths != expected_paths:
+        raise _symbol_error("verified container symfs file set changed during analysis")
+    for path, identity, expected_sha256, expected_bytes in copied:
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                path,
+                os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            )
+            metadata = os.fstat(descriptor)
+            if (
+                _stat_identity(metadata) != identity
+                or not stat.S_ISREG(metadata.st_mode)
+                or stat.S_IMODE(metadata.st_mode) != 0o400
+            ):
+                raise _symbol_error("verified container symfs module identity changed")
+            with os.fdopen(os.dup(descriptor), "rb", closefd=True) as handle:
+                digest, size = _sha256_handle(handle, max_bytes=expected_bytes)
+            if digest != expected_sha256 or size != expected_bytes:
+                raise _symbol_error("verified container symfs module content changed")
+        except OSError as exc:
+            raise _symbol_error("verified container symfs module is unavailable") from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
 
 
 @contextmanager

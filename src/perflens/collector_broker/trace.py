@@ -35,6 +35,7 @@ from perflens.contracts.trace import (
     TraceRawArtifactReference,
     TraceResourceLimits,
 )
+from perflens.docker.identity import namespace_attestation_from_target
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.domain.trace import ResourceLimits, TargetIdentity
 from perflens.profiles.kernel_trace_stream import (
@@ -52,6 +53,34 @@ from perflens.trace_helper.protocol import (
 
 _MAX_PUBLIC_EVIDENCE_BYTES = 256 << 20
 _NORMALIZATION_VERSION = "trace-normalizer-v1"
+
+
+def _assert_helper_plan_current(
+    plan: CollectionPlanArtifact,
+    *,
+    allow_managed_exec_transition: bool = False,
+) -> None:
+    """Recheck accessible PID fields; the Trace Helper verifies namespaces itself."""
+    namespace_attestation = None
+    if plan.target_runtime == "docker":
+        if plan.container_target is None:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "trace_backend",
+                "Docker trace plan lost its container identity binding",
+            )
+        namespace_attestation = namespace_attestation_from_target(plan.container_target)
+    if namespace_attestation is None:
+        assert_plan_current(
+            plan,
+            allow_managed_exec_transition=allow_managed_exec_transition,
+        )
+    else:
+        assert_plan_current(
+            plan,
+            namespace_attestation=namespace_attestation,
+            allow_managed_exec_transition=allow_managed_exec_transition,
+        )
 
 
 def _trace_helper_target_from_plan(
@@ -144,7 +173,7 @@ class TraceCollectionCoordinator:
             raise ValueError("Trace coordinator requires a Trace collection plan")
         mode = cast(TraceMode, plan.mode)
         self._authorize(peer_uid, plan)
-        assert_plan_current(plan)
+        _assert_helper_plan_current(plan)
         trace_plan_id = _trace_plan_id(plan)
         helper_target = _trace_helper_target_from_plan(plan)
         request = TraceHelperCollectPidRequest(
@@ -163,7 +192,7 @@ class TraceCollectionCoordinator:
             report_ready=ready_callback is not None,
         )
         result = self._helper.collect(request, ready_callback=ready_callback)
-        assert_plan_current(plan)
+        _assert_helper_plan_current(plan, allow_managed_exec_transition=True)
         raw_path = self._policy.private_spool / result.artifact_name
         capture = self._capture_manifest(plan, result.mode)
         collection_digest = hashlib.sha256(
@@ -231,7 +260,7 @@ class TraceCollectionCoordinator:
             perflens_version=__version__,
             container_target=plan.container_target,
         )
-        assert_plan_current(plan)
+        _assert_helper_plan_current(plan, allow_managed_exec_transition=True)
         return self._publish(plan, evidence)
 
     def _authorize(self, peer_uid: int, plan: CollectionPlanArtifact) -> None:

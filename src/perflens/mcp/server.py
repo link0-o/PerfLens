@@ -95,6 +95,10 @@ from perflens.docker.comparison import (
     build_container_measurement,
     compare_container_measurements,
 )
+from perflens.docker.identity import (
+    NamespaceIdentity,
+    namespace_attestation_from_target,
+)
 from perflens.docker.managed import build_container_run_artifact
 from perflens.docker.project_config import (
     assert_docker_project_policy_current,
@@ -104,6 +108,7 @@ from perflens.docker.runtime import ExistingDockerRuntime
 from perflens.docker.symbols import (
     build_container_symbol_context,
     capture_container_module_snapshot,
+    materialize_container_workspace_symfs,
     project_container_analysis,
 )
 from perflens.docker.treatment import (
@@ -282,8 +287,12 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         plan: CollectionPlanArtifact,
         *,
         ready_callback: Callable[[], None] | None = None,
+        namespace_attestation: NamespaceIdentity | None = None,
     ) -> _ExecutedBrokerPlan:
-        assert_plan_current(plan)
+        if namespace_attestation is None:
+            assert_plan_current(plan)
+        else:
+            assert_plan_current(plan, namespace_attestation=namespace_attestation)
         assert config.collector_socket is not None
         client = CollectorBrokerClient(
             config.collector_socket,
@@ -434,7 +443,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "Authorize one project-bound existing-container performance session. This stores "
             "only process-local authorization and does not execute or profile the target. A "
             "fresh user reply to the exact session summary is required; MCP tool permission is "
-            "not workload consent."
+            "not workload consent. allowed_modes is required and must exactly equal the "
+            "non-empty mode set shown in that summary; expanding it requires a new summary and "
+            "fresh authorization."
         ),
         annotations=AUTHORIZES_DOCKER,
         meta={"perflens/permission": "DOCKER_AUTHORIZATION"},
@@ -443,10 +454,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     async def authorize_docker_session(
         container_reference: str,
         authorization: Literal["I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"],
+        allowed_modes: tuple[CollectionMode, ...],
         host_pid: int | None = None,
         container_pid: int | None = None,
         authorization_mode: Literal["per_run", "bounded_session"] | None = None,
-        allowed_modes: tuple[CollectionMode, ...] = (),
     ) -> ContainerOptimizationSessionArtifact:
         _require_docker_targets(config)
         assert docker_runtime is not None
@@ -465,7 +476,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "Authorize the exact immutable image, command, mounts, resource limits, modes, and "
             "budget pinned in this project's Docker policy. This never builds or pulls an image. "
             "A fresh user reply to that exact summary is required; MCP tool permission is not "
-            "workload consent."
+            "workload consent. allowed_modes is required and must exactly equal the non-empty "
+            "mode set shown in that summary; expanding it requires a new summary and fresh "
+            "authorization."
         ),
         annotations=AUTHORIZES_DOCKER,
         meta={"perflens/permission": "DOCKER_AUTHORIZATION"},
@@ -473,10 +486,12 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     )
     async def authorize_managed_docker_session(
         authorization: Literal["I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"],
+        allowed_modes: tuple[CollectionMode, ...],
     ) -> ContainerOptimizationSessionArtifact:
         _require_docker_targets(config)
         assert docker_runtime is not None
         return docker_runtime.authorize_managed(
+            allowed_modes=allowed_modes,
             explicit_authorization=authorization,
         )
 
@@ -746,6 +761,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "Managed Docker treatment files differ from the authorized workload",
                 )
             target = run.prepared.target.artifact
+            namespace_attestation = namespace_attestation_from_target(target)
             resource_reader = CgroupV2ResourceReader(run.prepared.target)
             before_snapshot: CapturedCgroupSnapshot | None = None
 
@@ -774,6 +790,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 ),
                 policy=config.automatic_collection_policy,
                 capabilities=inspect_collection_capabilities(config.perf_path),
+                namespace_attestation=namespace_attestation,
             )
             if plan.policy_status != "allowed":
                 raise PerfLensError(
@@ -786,6 +803,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             executed = execute_broker_plan(
                 plan,
                 ready_callback=capture_and_release_workload,
+                namespace_attestation=namespace_attestation,
             )
             if before_snapshot is None:
                 raise PerfLensError(
@@ -1116,11 +1134,6 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 recoverable=True,
             )
         safe_path = policy.input_file(collection.output_path)
-        analysis = analyze_perf_data(
-            safe_path,
-            perf_path=config.perf_path,
-            collection=build_collection_evidence_provenance(collection),
-        )
         symbol_context: ContainerSymbolContextArtifact | None = None
         if collection.target_runtime == "docker":
             snapshot = store.load_container_module_snapshot_for_collection(collection_id)
@@ -1134,16 +1147,43 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     snapshot.module_snapshot_id,
                     "container-module-snapshot",
                 )
+            workspace_root = docker_policy.path.parent.parent if docker_policy is not None else None
+            if workspace_root is None:
+                analysis = analyze_perf_data(
+                    safe_path,
+                    perf_path=config.perf_path,
+                    collection=build_collection_evidence_provenance(collection),
+                )
+            else:
+                with materialize_container_workspace_symfs(
+                    collection,
+                    snapshot,
+                    workspace_root=workspace_root,
+                    perf_path=config.perf_path,
+                ) as symfs:
+                    analysis = analyze_perf_data(
+                        safe_path,
+                        perf_path=config.perf_path,
+                        collection=build_collection_evidence_provenance(collection),
+                        symfs_path=symfs.root if symfs is not None else None,
+                        symfs_identity_sha256=(
+                            symfs.identity_sha256 if symfs is not None else None
+                        ),
+                    )
             symbol_context = build_container_symbol_context(
                 analysis,
                 snapshot,
-                workspace_root=(
-                    docker_policy.path.parent.parent if docker_policy is not None else None
-                ),
+                workspace_root=workspace_root,
             )
             analysis, symbol_context = project_container_analysis(
                 analysis,
                 symbol_context,
+            )
+        else:
+            analysis = analyze_perf_data(
+                safe_path,
+                perf_path=config.perf_path,
+                collection=build_collection_evidence_provenance(collection),
             )
         store.save(analysis, analysis.analysis_id, "analysis")
         if symbol_context is not None:

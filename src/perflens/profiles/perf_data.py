@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import re
 import shutil
+import stat
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -29,11 +32,20 @@ from perflens.profiles.perf_script import (
 )
 from perflens.stacks.normalize import SYMBOL_NORMALIZATION_VERSION
 
+_SHA256 = re.compile(r"^[a-f0-9]{64}$")
+
 
 class PerfDataAdapter:
     """Convert perf's binary container using an allowlisted ``perf script`` command."""
 
-    def __init__(self, perf_path: Path | None = None, *, timeout_seconds: float = 300.0) -> None:
+    def __init__(
+        self,
+        perf_path: Path | None = None,
+        *,
+        timeout_seconds: float = 300.0,
+        symfs_path: Path | None = None,
+        symfs_identity_sha256: str | None = None,
+    ) -> None:
         selected = perf_path or _find_perf()
         try:
             self._perf_path = selected.expanduser().resolve(strict=True)
@@ -46,6 +58,38 @@ class PerfDataAdapter:
             ) from exc
         self._timeout_seconds = timeout_seconds
         self._runner = CommandRunner({self._perf_path})
+        if (symfs_path is None) != (symfs_identity_sha256 is None):
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "container_symbols",
+                "A verified symfs path and identity must be supplied together",
+            )
+        self._symfs_path: Path | None = None
+        self._symfs_identity_sha256: str | None = None
+        if symfs_path is not None and symfs_identity_sha256 is not None:
+            try:
+                resolved_symfs = symfs_path.expanduser().resolve(strict=True)
+                metadata = resolved_symfs.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "container_symbols",
+                    "Verified container symfs is unavailable",
+                ) from exc
+            if (
+                resolved_symfs != symfs_path.expanduser().absolute()
+                or not stat.S_ISDIR(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_mode & 0o022
+                or _SHA256.fullmatch(symfs_identity_sha256) is None
+            ):
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "container_symbols",
+                    "Verified container symfs identity or permissions are unsafe",
+                )
+            self._symfs_path = resolved_symfs
+            self._symfs_identity_sha256 = symfs_identity_sha256
 
     def can_handle(self, source: ProfileSource) -> bool:
         return source.source_type == "perf_data" or source.path.name.endswith("perf.data")
@@ -64,6 +108,8 @@ class PerfDataAdapter:
             perf_path=self._perf_path,
             runner=self._runner,
             timeout_seconds=self._timeout_seconds,
+            symfs_path=self._symfs_path,
+            symfs_identity_sha256=self._symfs_identity_sha256,
         )
 
 
@@ -81,6 +127,8 @@ class PerfDataStream:
         "_runner",
         "_sample_cpu_missing",
         "_script_stream",
+        "_symfs_identity_sha256",
+        "_symfs_path",
         "_temporary_directory",
         "_timeout_seconds",
         "_transcript_bytes",
@@ -95,12 +143,16 @@ class PerfDataStream:
         perf_path: Path,
         runner: CommandRunner,
         timeout_seconds: float,
+        symfs_path: Path | None,
+        symfs_identity_sha256: str | None,
     ) -> None:
         self._path = path
         self._limits = limits
         self._perf_path = perf_path
         self._runner = runner
         self._timeout_seconds = timeout_seconds
+        self._symfs_path = symfs_path
+        self._symfs_identity_sha256 = symfs_identity_sha256
         self._sample_cpu_missing = False
         self._argv: tuple[str, ...] = ()
         self._converter_diagnostics: tuple[str, ...] = ()
@@ -152,7 +204,7 @@ class PerfDataStream:
                     PERF_SCRIPT_FIELDS_WITHOUT_CPU,
                     exclusive=False,
                 )
-            self._argv = result.argv
+            self._argv = self._provenance_argv(result.argv)
             self._capture_converter_diagnostics(result)
             self._transcript_sha256, self._transcript_bytes = _sha256_file(text_path)
             if _sha256_file(self._perf_path)[0] != self._converter_sha256:
@@ -196,18 +248,18 @@ class PerfDataStream:
         exclusive: bool,
     ) -> CommandResult:
         mode = "xb" if exclusive else "wb"
+        argv = [
+            str(self._perf_path),
+            "script",
+            "--force",
+            "--ns",
+        ]
+        if self._symfs_path is not None:
+            argv.extend(("--symfs", str(self._symfs_path)))
+        argv.extend(("-F", fields, "-i", str(safe_input)))
         with text_path.open(mode) as output:
             return self._runner.run_to_file(
-                (
-                    str(self._perf_path),
-                    "script",
-                    "--force",
-                    "--ns",
-                    "-F",
-                    fields,
-                    "-i",
-                    str(safe_input),
-                ),
+                tuple(argv),
                 output,
                 limits=CommandLimits(
                     timeout_seconds=self._timeout_seconds,
@@ -242,6 +294,12 @@ class PerfDataStream:
     def conversion_provenance(self) -> ProfileConversionProvenance:
         if self._transcript_sha256 is None or self._converter_sha256 is None:
             raise RuntimeError("ProfileStream must be entered before reading provenance")
+        compatibility_fallbacks = ("missing_sample_cpu",) if self._sample_cpu_missing else ()
+        if self._symfs_identity_sha256 is not None:
+            compatibility_fallbacks = (
+                *compatibility_fallbacks,
+                f"verified_container_symfs_sha256:{self._symfs_identity_sha256}",
+            )
         return ProfileConversionProvenance(
             adapter="perf_data",
             parser_version=PERF_SCRIPT_PARSER_VERSION,
@@ -253,9 +311,15 @@ class PerfDataStream:
             locale="C",
             transcript_sha256=self._transcript_sha256,
             transcript_bytes=self._transcript_bytes,
-            compatibility_fallbacks=("missing_sample_cpu",) if self._sample_cpu_missing else (),
+            compatibility_fallbacks=compatibility_fallbacks,
             diagnostics=self._converter_diagnostics,
         )
+
+    def _provenance_argv(self, argv: tuple[str, ...]) -> tuple[str, ...]:
+        if self._symfs_path is None or self._symfs_identity_sha256 is None:
+            return argv
+        placeholder = f"@VERIFIED_CONTAINER_SYMFS_SHA256:{self._symfs_identity_sha256}"
+        return tuple(placeholder if item == str(self._symfs_path) else item for item in argv)
 
     def __iter__(self) -> Iterator[StackSample]:
         if self._script_stream is None:

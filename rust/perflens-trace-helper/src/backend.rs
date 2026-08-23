@@ -187,7 +187,7 @@ pub fn capture(
     ring.poll(0)?;
     drop(ring);
     drop(links);
-    assert_target_identity(target)?;
+    assert_target_identity_after_release(target)?;
 
     retain_events_in_window(&mut callback.events, start, finish);
     callback
@@ -387,6 +387,10 @@ fn enumerate_target_tids(target: &TraceHelperTarget) -> io::Result<Vec<u32>> {
 
 fn assert_target_identity(target: &TraceHelperTarget) -> io::Result<()> {
     crate::assert_pid_identity(target)
+}
+
+fn assert_target_identity_after_release(target: &TraceHelperTarget) -> io::Result<()> {
+    crate::assert_pid_identity_after_managed_release(target)
 }
 
 fn monotonic_nanoseconds() -> io::Result<u64> {
