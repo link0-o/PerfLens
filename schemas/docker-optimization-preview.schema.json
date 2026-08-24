@@ -1,0 +1,276 @@
+{
+  "$defs": {
+    "DockerOptimizationBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "hard_expiry_seconds": {
+          "maximum": 7200,
+          "minimum": 1,
+          "title": "Hard Expiry Seconds",
+          "type": "integer"
+        },
+        "max_build_seconds": {
+          "maximum": 900,
+          "minimum": 1,
+          "title": "Max Build Seconds",
+          "type": "integer"
+        },
+        "max_builds": {
+          "maximum": 4,
+          "minimum": 2,
+          "title": "Max Builds",
+          "type": "integer"
+        },
+        "max_candidate_rounds": {
+          "maximum": 3,
+          "minimum": 1,
+          "title": "Max Candidate Rounds",
+          "type": "integer"
+        },
+        "max_evidence_bytes": {
+          "maximum": 1073741824,
+          "minimum": 1,
+          "title": "Max Evidence Bytes",
+          "type": "integer"
+        },
+        "max_recoverable_retries": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Max Recoverable Retries",
+          "type": "integer"
+        },
+        "max_temporary_image_bytes": {
+          "maximum": 10737418240,
+          "minimum": 1,
+          "title": "Max Temporary Image Bytes",
+          "type": "integer"
+        },
+        "max_total_build_seconds": {
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Max Total Build Seconds",
+          "type": "integer"
+        },
+        "max_workload_active_seconds": {
+          "maximum": 1800,
+          "minimum": 1,
+          "title": "Max Workload Active Seconds",
+          "type": "integer"
+        },
+        "max_workload_runs": {
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Max Workload Runs",
+          "type": "integer"
+        },
+        "record_frequency_hz": {
+          "maximum": 99,
+          "minimum": 1,
+          "title": "Record Frequency Hz",
+          "type": "integer"
+        },
+        "record_max_duration_seconds": {
+          "maximum": 30,
+          "minimum": 1,
+          "title": "Record Max Duration Seconds",
+          "type": "integer"
+        },
+        "trace_max_duration_seconds": {
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Trace Max Duration Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_candidate_rounds",
+        "max_builds",
+        "max_workload_runs",
+        "max_recoverable_retries",
+        "max_build_seconds",
+        "max_total_build_seconds",
+        "max_workload_active_seconds",
+        "hard_expiry_seconds",
+        "max_evidence_bytes",
+        "max_temporary_image_bytes",
+        "record_max_duration_seconds",
+        "record_frequency_hz",
+        "trace_max_duration_seconds"
+      ],
+      "title": "DockerOptimizationBudget",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "allowed_modes": {
+      "items": {
+        "enum": [
+          "stat",
+          "record",
+          "sched",
+          "off_cpu",
+          "lock"
+        ],
+        "type": "string"
+      },
+      "title": "Allowed Modes",
+      "type": "array"
+    },
+    "authorization_summary_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Authorization Summary Sha256",
+      "type": "string"
+    },
+    "base_image_present": {
+      "title": "Base Image Present",
+      "type": "boolean"
+    },
+    "baseline_build_required": {
+      "const": true,
+      "default": true,
+      "title": "Baseline Build Required",
+      "type": "boolean"
+    },
+    "baseline_context_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Baseline Context Content Sha256",
+      "type": "string"
+    },
+    "baseline_context_id": {
+      "pattern": "^docker-build-context-[a-f0-9]{20}$",
+      "title": "Baseline Context Id",
+      "type": "string"
+    },
+    "budget": {
+      "$ref": "#/$defs/DockerOptimizationBudget"
+    },
+    "build_capability_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Build Capability Content Sha256",
+      "type": "string"
+    },
+    "build_capability_id": {
+      "pattern": "^docker-build-capability-[a-f0-9]{20}$",
+      "title": "Build Capability Id",
+      "type": "string"
+    },
+    "client_connection_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Client Connection Identity Sha256",
+      "type": "string"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "expires_at": {
+      "title": "Expires At",
+      "type": "string"
+    },
+    "mutable_dependency_lock": {
+      "title": "Mutable Dependency Lock",
+      "type": "boolean"
+    },
+    "mutable_dockerfile": {
+      "title": "Mutable Dockerfile",
+      "type": "boolean"
+    },
+    "network_tier": {
+      "enum": [
+        "local_only",
+        "pinned_pull",
+        "admin_builder_network"
+      ],
+      "title": "Network Tier",
+      "type": "string"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "planned_actions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Planned Actions",
+      "type": "array"
+    },
+    "preview_id": {
+      "pattern": "^docker-optimization-preview-[a-f0-9]{20}$",
+      "title": "Preview Id",
+      "type": "string"
+    },
+    "project_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Project Identity Sha256",
+      "type": "string"
+    },
+    "project_policy_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Project Policy Sha256",
+      "type": "string"
+    },
+    "recipe_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Recipe Content Sha256",
+      "type": "string"
+    },
+    "recipe_id": {
+      "pattern": "^docker-build-recipe-[a-f0-9]{20}$",
+      "title": "Recipe Id",
+      "type": "string"
+    },
+    "runtime_capability_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Runtime Capability Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "preview_id",
+    "created_at",
+    "expires_at",
+    "project_identity_sha256",
+    "client_connection_identity_sha256",
+    "project_policy_sha256",
+    "runtime_capability_sha256",
+    "build_capability_id",
+    "build_capability_content_sha256",
+    "recipe_id",
+    "recipe_content_sha256",
+    "baseline_context_id",
+    "baseline_context_content_sha256",
+    "allowed_modes",
+    "network_tier",
+    "base_image_present",
+    "mutable_dockerfile",
+    "mutable_dependency_lock",
+    "budget",
+    "planned_actions",
+    "authorization_summary_sha256",
+    "content_sha256"
+  ],
+  "title": "DockerOptimizationPreviewArtifact",
+  "type": "object"
+}

@@ -370,6 +370,11 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "collect_profile",
                 "inspect_collection_capabilities",
                 "inspect_docker_capability",
+                "inspect_docker_optimization_capability",
+                "preview_docker_optimization_session",
+                "authorize_docker_optimization_session",
+                "build_docker_optimization_candidate",
+                "revoke_docker_optimization_session",
                 "discover_docker_processes",
                 "resolve_docker_target",
                 "authorize_docker_session",
@@ -419,6 +424,12 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["revoke_docker_session"].meta == {
                 "perflens/permission": "DOCKER_AUTHORIZATION"
             }
+            assert tools["authorize_docker_optimization_session"].meta == {
+                "perflens/permission": "DOCKER_OPTIMIZATION_AUTHORIZATION"
+            }
+            assert tools["build_docker_optimization_candidate"].meta == {
+                "perflens/permission": "DOCKER_OPTIMIZATION_BUILD"
+            }
             assert tools["authorize_managed_docker_session"].meta == {
                 "perflens/permission": "DOCKER_AUTHORIZATION"
             }
@@ -458,6 +469,24 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert "allowed_modes" in tools[
                 "authorize_managed_docker_session"
             ].input_schema["required"]
+            optimization_authorization = tools[
+                "authorize_docker_optimization_session"
+            ].input_schema["properties"]
+            assert optimization_authorization["authorization"]["const"] == (
+                "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
+            )
+            optimization_build = tools[
+                "build_docker_optimization_candidate"
+            ].input_schema["properties"]
+            assert not {
+                "image",
+                "dockerfile",
+                "context",
+                "build_args",
+                "network",
+                "docker_options",
+                "source_path",
+            }.intersection(optimization_build)
             managed_collection = tools["collect_managed_docker_workload"].input_schema["properties"]
             assert not {
                 "image",
@@ -705,6 +734,130 @@ def test_docker_capability_requires_project_opt_in(
             assert "changed after MCP startup" in str(replaced.content)
 
     asyncio.run(exercise())
+
+
+def test_docker_optimization_requires_separate_project_opt_in(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    policy = tmp_path / "perflens-setup/container-workload.toml"
+    policy.parent.mkdir()
+    policy.write_text(render_default_docker_project_policy(), encoding="utf-8")
+    policy.chmod(0o600)
+    server = create_server(
+        ServerConfig(
+            (tmp_path,),
+            artifact_root,
+            allow_writes=True,
+            allow_process_execution=True,
+            allow_active_collection=True,
+            allow_automatic_collection=True,
+            allow_docker_targets=True,
+            docker_project_config=policy,
+            collector_socket=tmp_path / "collector.sock",
+            automatic_collection_policy=AutomaticCollectionPolicy(enabled=True),
+        )
+    )
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            capability = await client.call_tool(
+                "inspect_docker_optimization_capability",
+                {},
+            )
+            assert capability.is_error
+            assert "disabled by project MCP policy" in str(capability.content)
+            preview = await client.call_tool(
+                "preview_docker_optimization_session",
+                {"allowed_modes": ["stat"]},
+            )
+            assert preview.is_error
+
+    asyncio.run(exercise())
+
+
+def test_docker_optimization_preview_authorize_build_and_revoke_are_bound(
+    tmp_path: Path,
+) -> None:
+    from tests.unit.test_docker_optimization_runtime import make_optimization_runtime
+
+    runtime, project, adapter = make_optimization_runtime(tmp_path)
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    policy = project / "container-workload.toml"
+    server = create_server(
+        ServerConfig(
+            (tmp_path,),
+            artifact_root,
+            allow_writes=True,
+            allow_process_execution=True,
+            allow_active_collection=True,
+            allow_automatic_collection=True,
+            allow_docker_targets=True,
+            allow_docker_optimization=True,
+            docker_project_config=policy,
+            collector_socket=tmp_path / "collector.sock",
+            automatic_collection_policy=AutomaticCollectionPolicy(
+                enabled=True,
+                allowed_modes=("stat", "record"),
+            ),
+            docker_optimization_runtime_factory=lambda: runtime,
+        )
+    )
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            preview_result = await client.call_tool(
+                "preview_docker_optimization_session",
+                {"allowed_modes": ["stat", "record"]},
+            )
+            assert not preview_result.is_error
+            preview = _structured(preview_result)
+            invalid = await client.call_tool(
+                "authorize_docker_optimization_session",
+                {
+                    "preview_id": preview["preview_id"],
+                    "preview_content_sha256": preview["content_sha256"],
+                    "authorization_summary_sha256": preview[
+                        "authorization_summary_sha256"
+                    ],
+                    "authorization": (
+                        "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
+                    ),
+                },
+            )
+            assert not invalid.is_error
+            session = _structured(invalid)
+            baseline_result = await client.call_tool(
+                "build_docker_optimization_candidate",
+                {
+                    "session_id": session["session_id"],
+                    "build_kind": "baseline",
+                    "candidate_round": 0,
+                },
+            )
+            assert not baseline_result.is_error
+            baseline = _structured(baseline_result)
+            assert baseline["artifact_type"] == "docker-build"
+            (project / "src/app").write_bytes(b"candidate")
+            candidate_result = await client.call_tool(
+                "build_docker_optimization_candidate",
+                {
+                    "session_id": session["session_id"],
+                    "build_kind": "candidate",
+                    "candidate_round": 1,
+                },
+            )
+            assert not candidate_result.is_error
+            revoked_result = await client.call_tool(
+                "revoke_docker_optimization_session",
+                {"session_id": session["session_id"]},
+            )
+            assert not revoked_result.is_error
+            assert _structured(revoked_result)["state"] == "revoked"
+
+    asyncio.run(exercise())
+    assert len(adapter.cleaned) == 2
+    assert len(tuple(artifact_root.glob("*.docker-build.json"))) == 2
 
 
 def test_docker_target_resolution_authorization_and_revocation_are_typed(

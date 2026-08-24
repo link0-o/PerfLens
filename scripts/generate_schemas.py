@@ -80,6 +80,8 @@ from perflens.contracts.docker_build import (
     DockerBuildCapabilityArtifact,
     DockerBuildContextArtifact,
     DockerBuildRecipeArtifact,
+    DockerOptimizationPreviewArtifact,
+    DockerOptimizationSessionArtifact,
 )
 from perflens.contracts.runtime_locks import (
     RuntimeAdapterCapabilityArtifact,
@@ -172,6 +174,8 @@ MODELS = {
     "docker-build-recipe.schema.json": DockerBuildRecipeArtifact,
     "docker-build-context.schema.json": DockerBuildContextArtifact,
     "docker-build.schema.json": DockerBuildArtifact,
+    "docker-optimization-preview.schema.json": DockerOptimizationPreviewArtifact,
+    "docker-optimization-session.schema.json": DockerOptimizationSessionArtifact,
     "container-target.schema.json": ContainerTargetArtifact,
     "container-process-inventory.schema.json": ContainerProcessInventoryArtifact,
     "container-resource-context.schema.json": ContainerResourceContextArtifact,

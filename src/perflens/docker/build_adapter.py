@@ -761,6 +761,53 @@ class TypedDockerBuildAdapter:
         return result
 
 
+def open_local_docker_build_adapter(
+    *,
+    administrator_policy: DockerAdministratorBuilderPolicy | None = None,
+    docker_path: Path = Path("/usr/bin/docker"),
+    config_directory: Path = Path("/usr/share/perflens/docker-empty-config"),
+    rootful_socket: Path = Path("/run/docker.sock"),
+    rootless_socket: Path | None = None,
+    invoking_uid: int | None = None,
+    trusted_tool_owner_uids: tuple[int, ...] = (0,),
+    trusted_policy_owner_uids: tuple[int, ...] = (0,),
+) -> TypedDockerBuildAdapter:
+    """Open only the first fixed local endpoint and first system Buildx plugin."""
+    uid = os.geteuid() if invoking_uid is None else invoking_uid
+    rootless = rootless_socket or Path(f"/run/user/{uid}/docker.sock")
+    if rootless.exists() or rootless.is_socket():
+        endpoint = rootless
+        endpoint_kind: Literal["local_rootful", "local_rootless"] = "local_rootless"
+    elif rootful_socket.exists() or rootful_socket.is_socket():
+        endpoint = rootful_socket
+        endpoint_kind = "local_rootful"
+    else:
+        raise _build_error("No fixed local Docker Unix socket is available")
+    buildx_path = next(
+        (
+            directory / "docker-buildx"
+            for directory in _SYSTEM_BUILDX_PLUGIN_DIRECTORIES
+            if (directory / "docker-buildx").exists()
+            or (directory / "docker-buildx").is_symlink()
+        ),
+        None,
+    )
+    if buildx_path is None:
+        raise _build_error("No fixed system Docker Buildx plugin is available")
+    return TypedDockerBuildAdapter(
+        docker_path=docker_path,
+        buildx_path=buildx_path,
+        endpoint_path=endpoint,
+        endpoint_kind=endpoint_kind,
+        config_directory=config_directory,
+        builder_name=(administrator_policy.builder_name if administrator_policy else "default"),
+        administrator_policy=administrator_policy,
+        trusted_tool_owner_uids=trusted_tool_owner_uids,
+        trusted_policy_owner_uids=trusted_policy_owner_uids,
+        invoking_uid=uid,
+    )
+
+
 def _read_and_validate_dockerfile(
     snapshot: DockerBuildContextSnapshot,
     *,

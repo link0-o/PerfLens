@@ -21,7 +21,20 @@ BuildCapabilityId = Annotated[str, Field(pattern=r"^docker-build-capability-[a-f
 BuildRecipeId = Annotated[str, Field(pattern=r"^docker-build-recipe-[a-f0-9]{20}$")]
 BuildContextId = Annotated[str, Field(pattern=r"^docker-build-context-[a-f0-9]{20}$")]
 BuildArtifactId = Annotated[str, Field(pattern=r"^docker-build-[a-f0-9]{20}$")]
+OptimizationPreviewId = Annotated[
+    str,
+    Field(pattern=r"^docker-optimization-preview-[a-f0-9]{20}$"),
+]
+OptimizationSessionId = Annotated[
+    str,
+    Field(pattern=r"^docker-optimization-session-[a-f0-9]{20}$"),
+]
+OptimizationSessionArtifactId = Annotated[
+    str,
+    Field(pattern=r"^docker-optimization-session-state-[a-f0-9]{20}$"),
+]
 NetworkTier = Literal["local_only", "pinned_pull", "admin_builder_network"]
+OptimizationCollectionMode = Literal["stat", "record", "sched", "off_cpu", "lock"]
 
 
 def _timestamp(value: str, label: str) -> datetime:
@@ -87,6 +100,42 @@ def derive_docker_build_artifact_id(
         str(candidate_round),
         final_image_digest,
         started_at,
+    )
+
+
+def derive_docker_optimization_preview_id(
+    project_identity_sha256: str,
+    recipe_content_sha256: str,
+    context_content_sha256: str,
+    created_at: str,
+) -> str:
+    return _derived_id(
+        "docker-optimization-preview",
+        "perflens-docker-optimization-preview-v1",
+        project_identity_sha256,
+        recipe_content_sha256,
+        context_content_sha256,
+        created_at,
+    )
+
+
+def derive_docker_optimization_session_artifact_id(
+    session_id: str,
+    state: str,
+    updated_at: str,
+    builds_used: int,
+    workload_runs_used: int,
+    evidence_bytes_used: int,
+) -> str:
+    return _derived_id(
+        "docker-optimization-session-state",
+        "perflens-docker-optimization-session-state-v1",
+        session_id,
+        state,
+        updated_at,
+        str(builds_used),
+        str(workload_runs_used),
+        str(evidence_bytes_used),
     )
 
 
@@ -391,4 +440,141 @@ class DockerBuildArtifact(ContractModel):
         )
         if self.build_id != expected_id:
             raise ValueError("Docker Build Artifact ID does not match its Context and round")
+        return self
+
+
+class DockerOptimizationPreviewArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    preview_id: OptimizationPreviewId
+    created_at: str
+    expires_at: str
+    project_identity_sha256: Sha256
+    client_connection_identity_sha256: Sha256
+    project_policy_sha256: Sha256
+    runtime_capability_sha256: Sha256
+    build_capability_id: BuildCapabilityId
+    build_capability_content_sha256: Sha256
+    recipe_id: BuildRecipeId
+    recipe_content_sha256: Sha256
+    baseline_context_id: BuildContextId
+    baseline_context_content_sha256: Sha256
+    allowed_modes: tuple[OptimizationCollectionMode, ...]
+    network_tier: NetworkTier
+    base_image_present: bool
+    baseline_build_required: Literal[True] = True
+    mutable_dockerfile: bool
+    mutable_dependency_lock: bool
+    budget: DockerOptimizationBudget
+    planned_actions: tuple[str, ...]
+    warnings: tuple[str, ...] = ()
+    authorization_summary_sha256: Sha256
+    content_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_preview(self) -> DockerOptimizationPreviewArtifact:
+        created = _timestamp(self.created_at, "Docker optimization Preview creation time")
+        expires = _timestamp(self.expires_at, "Docker optimization Preview expiry time")
+        if expires <= created:
+            raise ValueError("Docker optimization Preview must expire after creation")
+        canonical_modes = ("stat", "record", "sched", "off_cpu", "lock")
+        if (
+            not self.allowed_modes
+            or len(set(self.allowed_modes)) != len(self.allowed_modes)
+            or tuple(sorted(self.allowed_modes, key=canonical_modes.index)) != self.allowed_modes
+        ):
+            raise ValueError("Docker optimization Preview modes must be non-empty and canonical")
+        if not self.planned_actions or len(self.planned_actions) > 32:
+            raise ValueError("Docker optimization Preview requires bounded planned actions")
+        expected_id = derive_docker_optimization_preview_id(
+            self.project_identity_sha256,
+            self.recipe_content_sha256,
+            self.baseline_context_content_sha256,
+            self.created_at,
+        )
+        if self.preview_id != expected_id:
+            raise ValueError("Docker optimization Preview ID does not match its evidence")
+        return self
+
+
+class DockerOptimizationSessionArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    session_artifact_id: OptimizationSessionArtifactId
+    session_id: OptimizationSessionId
+    created_at: str
+    updated_at: str
+    expires_at: str
+    state: Literal["active", "revoked", "expired", "exhausted", "failed"]
+    project_identity_sha256: Sha256
+    client_connection_identity_sha256: Sha256
+    project_policy_sha256: Sha256
+    preview_id: OptimizationPreviewId
+    preview_content_sha256: Sha256
+    build_capability_content_sha256: Sha256
+    recipe_id: BuildRecipeId
+    recipe_content_sha256: Sha256
+    authorization_receipt_sha256: Sha256
+    allowed_modes: tuple[OptimizationCollectionMode, ...]
+    budget: DockerOptimizationBudget
+    builds_used: int = Field(ge=0, le=4)
+    candidate_rounds_used: int = Field(ge=0, le=3)
+    workload_runs_used: int = Field(ge=0, le=10)
+    recoverable_retries_used: int = Field(ge=0, le=1)
+    build_seconds_used: int = Field(ge=0, le=3600)
+    workload_active_seconds_used: int = Field(ge=0, le=1800)
+    evidence_bytes_used: int = Field(ge=0, le=1 << 30)
+    temporary_image_bytes_used: int = Field(ge=0, le=10 << 30)
+    baseline_build_id: BuildArtifactId | None = None
+    latest_candidate_build_id: BuildArtifactId | None = None
+    invalidation_reason: str | None = Field(default=None, max_length=512)
+    content_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_session(self) -> DockerOptimizationSessionArtifact:
+        created = _timestamp(self.created_at, "Docker optimization Session creation time")
+        updated = _timestamp(self.updated_at, "Docker optimization Session update time")
+        expires = _timestamp(self.expires_at, "Docker optimization Session expiry time")
+        if updated < created or expires <= created:
+            raise ValueError("Docker optimization Session timestamps are inconsistent")
+        canonical_modes = ("stat", "record", "sched", "off_cpu", "lock")
+        if (
+            not self.allowed_modes
+            or len(set(self.allowed_modes)) != len(self.allowed_modes)
+            or tuple(sorted(self.allowed_modes, key=canonical_modes.index)) != self.allowed_modes
+        ):
+            raise ValueError("Docker optimization Session modes must be non-empty and canonical")
+        if (
+            self.builds_used > self.budget.max_builds
+            or self.candidate_rounds_used > self.budget.max_candidate_rounds
+            or self.workload_runs_used > self.budget.max_workload_runs
+            or self.recoverable_retries_used > self.budget.max_recoverable_retries
+            or self.build_seconds_used > self.budget.max_total_build_seconds
+            or self.workload_active_seconds_used > self.budget.max_workload_active_seconds
+            or self.evidence_bytes_used > self.budget.max_evidence_bytes
+            or self.temporary_image_bytes_used > self.budget.max_temporary_image_bytes
+        ):
+            raise ValueError("Docker optimization Session counters exceed their budget")
+        if self.builds_used == 0 and self.baseline_build_id is not None:
+            raise ValueError("Docker optimization Session cannot bind a baseline before a build")
+        if self.candidate_rounds_used and (
+            self.baseline_build_id is None or self.latest_candidate_build_id is None
+        ):
+            raise ValueError("Docker optimization Session candidate count requires a Build ID")
+        if not self.candidate_rounds_used and self.latest_candidate_build_id is not None:
+            raise ValueError("Docker optimization Session cannot bind a candidate before a round")
+        if self.state == "active" and self.invalidation_reason is not None:
+            raise ValueError("active Docker optimization Session cannot have an end reason")
+        if self.state != "active" and not self.invalidation_reason:
+            raise ValueError("inactive Docker optimization Session must explain why it ended")
+        expected_id = derive_docker_optimization_session_artifact_id(
+            self.session_id,
+            self.state,
+            self.updated_at,
+            self.builds_used,
+            self.workload_runs_used,
+            self.evidence_bytes_used,
+        )
+        if self.session_artifact_id != expected_id:
+            raise ValueError("Docker optimization Session Artifact ID is inconsistent")
         return self

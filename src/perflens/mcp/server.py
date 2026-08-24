@@ -77,6 +77,12 @@ from perflens.contracts.docker import (
     ContainerTargetArtifact,
     DockerRuntimeCapabilityArtifact,
 )
+from perflens.contracts.docker_build import (
+    DockerBuildCapabilityArtifact,
+    DockerOptimizationPreviewArtifact,
+    DockerOptimizationSessionArtifact,
+    OptimizationCollectionMode,
+)
 from perflens.contracts.trace import (
     LockAnalysisArtifact,
     OffCpuAnalysisArtifact,
@@ -85,6 +91,8 @@ from perflens.contracts.trace import (
     TraceEvidenceArtifact,
 )
 from perflens.docker.benchmark import load_managed_benchmark
+from perflens.docker.build_adapter import open_local_docker_build_adapter
+from perflens.docker.builder_policy import load_docker_administrator_builder_policy
 from perflens.docker.capability import discover_docker_capability
 from perflens.docker.cgroup import (
     CapturedCgroupSnapshot,
@@ -101,11 +109,13 @@ from perflens.docker.identity import (
     namespace_attestation_from_target,
 )
 from perflens.docker.managed import build_container_run_artifact
+from perflens.docker.optimization_runtime import DockerOptimizationRuntime
 from perflens.docker.project_config import (
     assert_docker_project_policy_current,
     load_docker_project_policy,
 )
 from perflens.docker.runtime import ExistingDockerRuntime
+from perflens.docker.runtime_root import prepare_default_managed_runtime_root
 from perflens.docker.symbols import (
     PinnedContainerProcessRoot,
     build_container_symbol_context,
@@ -169,8 +179,10 @@ class ServerConfig:
     allow_automatic_collection: bool = False
     allow_project_execution: bool = False
     allow_docker_targets: bool = False
+    allow_docker_optimization: bool = False
     docker_project_config: Path | None = None
     docker_runtime_root: Path | None = None
+    docker_builder_policy: Path | None = None
     docker_gate_path: Path = Path("/usr/lib/perflens/perflens-container-gate")
     collector_socket: Path | None = None
     automatic_collection_policy: AutomaticCollectionPolicy = field(
@@ -178,6 +190,7 @@ class ServerConfig:
     )
     perf_path: Path | None = None
     max_artifact_bytes: int = 128 << 20
+    docker_optimization_runtime_factory: Callable[[], DockerOptimizationRuntime] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,6 +225,19 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         raise ValueError("Docker project policy cannot be set while Docker targets are disabled")
     if not config.allow_docker_targets and config.docker_runtime_root is not None:
         raise ValueError("Docker runtime root cannot be set while Docker targets are disabled")
+    if config.allow_docker_optimization and not config.allow_docker_targets:
+        raise ValueError("Docker optimization requires Docker targets")
+    if config.allow_docker_optimization and (
+        not config.allow_writes or not config.allow_process_execution
+    ):
+        raise ValueError("Docker optimization requires writes and process execution")
+    if not config.allow_docker_optimization and config.docker_builder_policy is not None:
+        raise ValueError("Docker Builder policy requires Docker optimization")
+    if (
+        not config.allow_docker_optimization
+        and config.docker_optimization_runtime_factory is not None
+    ):
+        raise ValueError("Docker optimization runtime factory requires Docker optimization")
     docker_policy = (
         load_docker_project_policy(
             config.docker_project_config,
@@ -261,6 +287,39 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         version=__version__,
     )
     collection_plans: dict[str, CollectionPlanArtifact] = {}
+    docker_optimization_runtime: DockerOptimizationRuntime | None = None
+
+    def get_docker_optimization_runtime() -> DockerOptimizationRuntime:
+        nonlocal docker_optimization_runtime
+        _require_docker_optimization(config)
+        if docker_optimization_runtime is not None:
+            return docker_optimization_runtime
+        if config.docker_optimization_runtime_factory is not None:
+            docker_optimization_runtime = config.docker_optimization_runtime_factory()
+            return docker_optimization_runtime
+        assert docker_policy is not None
+        project = inspect_managed_project_root(docker_policy.path.parent.parent)
+        administrator_policy = (
+            load_docker_administrator_builder_policy(config.docker_builder_policy)
+            if config.docker_builder_policy is not None
+            else None
+        )
+        runtime_root = config.docker_runtime_root or prepare_default_managed_runtime_root(project)
+        docker_optimization_runtime = DockerOptimizationRuntime(
+            project=project,
+            project_policy=docker_policy,
+            allowed_roots=config.allowed_roots,
+            private_root=runtime_root,
+            runtime_capability_factory=discover_docker_capability,
+            build_adapter_factory=lambda: open_local_docker_build_adapter(
+                administrator_policy=administrator_policy,
+            ),
+            collector_available=lambda: (
+                config.collector_socket is not None and config.collector_socket.exists()
+            ),
+            collector_modes=config.automatic_collection_policy.allowed_modes,
+        )
+        return docker_optimization_runtime
 
     def capture_module_snapshot(
         executed: _ExecutedBrokerPlan,
@@ -398,6 +457,149 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             allowed_roots=config.allowed_roots,
         )
         return discover_docker_capability()
+
+    @server.tool(
+        name="inspect_docker_optimization_capability",
+        description=(
+            "Inspect the fixed local Docker/Buildx/Builder identities, project build contract, "
+            "Benchmark requirement, base-image presence, and Collector modes. This is read-only "
+            "and never builds, pulls, runs, profiles, or modifies source."
+        ),
+        annotations=READ_ONLY,
+        meta={"perflens/permission": "READ_ONLY"},
+        structured_output=True,
+    )
+    async def inspect_docker_optimization_capability() -> DockerBuildCapabilityArtifact:
+        return get_docker_optimization_runtime().inspect_capability()
+
+    @server.tool(
+        name="preview_docker_optimization_session",
+        description=(
+            "Capture the exact authorized build context and return the complete content-bound "
+            "one-confirmation optimization summary. This does not build or pull. The user must "
+            "confirm this exact Preview before authorization."
+        ),
+        annotations=WRITES_ARTIFACTS,
+        meta={"perflens/permission": "READ_ONLY_CONTEXT_SNAPSHOT"},
+        structured_output=True,
+    )
+    async def preview_docker_optimization_session(
+        allowed_modes: tuple[OptimizationCollectionMode, ...],
+    ) -> DockerOptimizationPreviewArtifact:
+        runtime = get_docker_optimization_runtime()
+        result = runtime.preview(allowed_modes=allowed_modes)
+        store.save(
+            result.capability,
+            result.capability.capability_id,
+            "docker-build-capability",
+        )
+        store.save(result.recipe, result.recipe.recipe_id, "docker-build-recipe")
+        store.save(result.context, result.context.context_id, "docker-build-context")
+        store.save(
+            result.preview,
+            result.preview.preview_id,
+            "docker-optimization-preview",
+        )
+        return result.preview
+
+    @server.tool(
+        name="authorize_docker_optimization_session",
+        description=(
+            "Authorize the exact Docker optimization Preview once. This stores a process-local "
+            "secret and permits only its fixed paths, build recipe, modes, and budgets; it does "
+            "not itself build, run, profile, modify source, commit, push, tag, or release."
+        ),
+        annotations=AUTHORIZES_DOCKER,
+        meta={"perflens/permission": "DOCKER_OPTIMIZATION_AUTHORIZATION"},
+        structured_output=True,
+    )
+    async def authorize_docker_optimization_session(
+        preview_id: str,
+        preview_content_sha256: str,
+        authorization_summary_sha256: str,
+        authorization: Literal[
+            "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
+        ],
+    ) -> DockerOptimizationSessionArtifact:
+        runtime = get_docker_optimization_runtime()
+        session = runtime.authorize(
+            preview_id=preview_id,
+            preview_content_sha256=preview_content_sha256,
+            authorization_summary_sha256=authorization_summary_sha256,
+            explicit_authorization=authorization,
+        )
+        store.save(
+            session,
+            session.session_artifact_id,
+            "docker-optimization-session",
+        )
+        return session
+
+    @server.tool(
+        name="build_docker_optimization_candidate",
+        description=(
+            "Build one baseline or next candidate from the already-authorized immutable context "
+            "and mutable Treatment paths. It accepts no image, command, path, build argument, "
+            "network option, or Docker flag from the caller."
+        ),
+        annotations=EXECUTES_TARGET,
+        meta={"perflens/permission": "DOCKER_OPTIMIZATION_BUILD"},
+        structured_output=True,
+    )
+    async def build_docker_optimization_candidate(
+        session_id: str,
+        build_kind: Literal["baseline", "candidate"],
+        candidate_round: int,
+    ) -> ArtifactReference:
+        runtime = get_docker_optimization_runtime()
+        result = runtime.build(
+            session_id,
+            build_kind=build_kind,
+            candidate_round=candidate_round,
+        )
+        store.save(result.build, result.build.build_id, "docker-build")
+        store.save(
+            result.session,
+            result.session.session_artifact_id,
+            "docker-optimization-session",
+        )
+        return ArtifactReference(
+            artifact_id=result.build.build_id,
+            artifact_type="docker-build",
+            uri=store.uri(result.build.build_id, "docker-build"),
+            summary={
+                "session_id": result.session.session_id,
+                "session_artifact_id": result.session.session_artifact_id,
+                "build_kind": result.build.build_kind,
+                "candidate_round": result.build.candidate_round,
+                "final_image_digest": result.build.final_image_digest,
+                "image_size_bytes": result.build.image_size_bytes,
+                "builds_used": result.session.builds_used,
+                "candidate_rounds_used": result.session.candidate_rounds_used,
+            },
+        )
+
+    @server.tool(
+        name="revoke_docker_optimization_session",
+        description=(
+            "Revoke one in-memory Docker optimization authorization and conservatively clean "
+            "only verified session-owned temporary image tags and private snapshots."
+        ),
+        annotations=REVOKES_DOCKER,
+        meta={"perflens/permission": "DOCKER_OPTIMIZATION_AUTHORIZATION"},
+        structured_output=True,
+    )
+    async def revoke_docker_optimization_session(
+        session_id: str,
+    ) -> DockerOptimizationSessionArtifact:
+        runtime = get_docker_optimization_runtime()
+        session = runtime.revoke(session_id)
+        store.save(
+            session,
+            session.session_artifact_id,
+            "docker-optimization-session",
+        )
+        return session
 
     @server.tool(
         name="discover_docker_processes",
@@ -2185,6 +2387,20 @@ def _require_docker_targets(config: ServerConfig) -> None:
         )
 
 
+def _require_docker_optimization(config: ServerConfig) -> None:
+    _require_docker_targets(config)
+    if not config.allow_docker_optimization:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "authorization",
+            "Docker optimization sessions are disabled by project MCP policy",
+            recoverable=True,
+            suggested_actions=(
+                "Enable the schema 1.1 optimization contract and regenerate project integration.",
+            ),
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the PerfLens MCP server over stdio")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -2197,8 +2413,10 @@ def main() -> None:
     parser.add_argument("--allow-automatic-collection", action="store_true")
     parser.add_argument("--allow-project-execution", action="store_true")
     parser.add_argument("--allow-docker-targets", action="store_true")
+    parser.add_argument("--allow-docker-optimization", action="store_true")
     parser.add_argument("--docker-project-config", type=Path)
     parser.add_argument("--docker-runtime-root", type=Path)
+    parser.add_argument("--docker-builder-policy", type=Path)
     parser.add_argument(
         "--docker-gate-path",
         type=Path,
@@ -2233,8 +2451,10 @@ def main() -> None:
             allow_automatic_collection=arguments.allow_automatic_collection,
             allow_project_execution=arguments.allow_project_execution,
             allow_docker_targets=arguments.allow_docker_targets,
+            allow_docker_optimization=arguments.allow_docker_optimization,
             docker_project_config=arguments.docker_project_config,
             docker_runtime_root=arguments.docker_runtime_root,
+            docker_builder_policy=arguments.docker_builder_policy,
             docker_gate_path=arguments.docker_gate_path,
             collector_socket=arguments.collector_socket,
             automatic_collection_policy=AutomaticCollectionPolicy(
