@@ -25,6 +25,7 @@ from perflens.docker.build_context import (
     assert_docker_build_context_snapshot_current,
     build_docker_build_recipe,
     capture_docker_build_context,
+    open_docker_build_context_snapshot,
 )
 from perflens.docker.project_config import (
     load_docker_project_policy,
@@ -348,6 +349,29 @@ def test_snapshot_revalidation_rejects_replacement_and_content_change(tmp_path: 
 
     with pytest.raises(PerfLensError) as captured:
         assert_docker_build_context_snapshot_current(snapshot)
+    assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_snapshot_stream_detects_content_change_while_consumed(tmp_path: Path) -> None:
+    project, private, policy, recipe = _recipe_and_policy(tmp_path)
+    snapshot = capture_docker_build_context(
+        policy,
+        recipe,
+        project_root=project,
+        private_directory=private,
+        created_at=NOW,
+    )
+    with (
+        pytest.raises(PerfLensError) as captured,
+        open_docker_build_context_snapshot(snapshot) as stream,
+    ):
+        assert stream.read(1)
+        snapshot.archive_path.chmod(0o600)
+        with snapshot.archive_path.open("r+b") as replacement:
+            replacement.seek(0)
+            replacement.write(b"changed")
+            replacement.flush()
+            os.fsync(replacement.fileno())
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 

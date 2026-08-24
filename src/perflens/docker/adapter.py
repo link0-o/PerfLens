@@ -98,7 +98,7 @@ class DockerCommandAdapter:
         if not trusted_gate_owner_uids:
             raise _managed_error("Managed Container Gate requires trusted owner UIDs")
         self._trusted_gate_owner_uids = trusted_gate_owner_uids
-        self._config_directory = _validate_empty_config_directory(
+        self._config_directory = inspect_empty_docker_config_directory(
             config_directory,
             trusted_owner_uids=trusted_cli_owner_uids,
         )
@@ -637,7 +637,7 @@ def assert_docker_endpoint_current(
         )
 
 
-def _validate_empty_config_directory(
+def inspect_empty_docker_config_directory(
     path: Path,
     *,
     trusted_owner_uids: tuple[int, ...],

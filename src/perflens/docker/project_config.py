@@ -18,7 +18,7 @@ _IMAGE_DIGEST = re.compile(r"^(?:|sha256:[a-f0-9]{64})$")
 _CONTAINER_USER = re.compile(r"^(?:|[0-9]{1,10}(?::[0-9]{1,10})?)$")
 _BUILD_ARGUMENT_NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
 _SENSITIVE_BUILD_ARGUMENT = re.compile(
-    r"(?:^|_)(?:CREDENTIAL|PASSWORD|PRIVATE|SECRET|TOKEN)(?:_|$)"
+    r"(?:^|_)(?:ACCESS_KEY|AUTH|CREDENTIAL|PASSWORD|PRIVATE|PROXY|SECRET|TOKEN)(?:_|$)"
 )
 _BUILDER_POLICY_ID = re.compile(r"^(?:|[a-z0-9][a-z0-9._-]{0,127})$")
 _TOP_LEVEL_KEYS_V1 = {

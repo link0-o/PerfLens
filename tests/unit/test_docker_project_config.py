@@ -138,6 +138,7 @@ def test_project_policy_accepts_bounded_schema_1_1_optimization(tmp_path: Path) 
         ("max_builds = 4", "max_builds = 3"),
         ("build_args = []", 'build_args = ["TOKEN", "A=1"]'),
         ("build_args = []", 'build_args = ["API_TOKEN=credential"]'),
+        ("build_args = []", 'build_args = ["HTTP_PROXY=http://unreviewed"]'),
         ("build_args = []", 'build_args = ["A=1", "A=2"]'),
     ),
 )

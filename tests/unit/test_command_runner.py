@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import sys
 from pathlib import Path
 
@@ -105,3 +106,33 @@ def test_runner_wraps_output_write_failures() -> None:
             output,
         )
     assert captured.value.code is ErrorCode.OUTPUT_WRITE_FAILED
+
+
+def test_runner_accepts_only_an_open_regular_stdin_file(tmp_path: Path) -> None:
+    runner, executable = _runner()
+    input_path = tmp_path / "context.tar"
+    input_path.write_bytes(b"fixed-input")
+    output = io.BytesIO()
+    with input_path.open("rb") as input_stream:
+        runner.run_to_file(
+            (str(executable), "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"),
+            output,
+            stdin=input_stream,
+        )
+    assert output.getvalue() == b"fixed-input"
+
+    read_descriptor, write_descriptor = os.pipe()
+    try:
+        with (
+            os.fdopen(read_descriptor, "rb", closefd=False) as pipe_stream,
+            pytest.raises(PerfLensError) as captured,
+        ):
+            runner.run_to_file(
+                (str(executable), "-c", "pass"),
+                io.BytesIO(),
+                stdin=pipe_stream,
+            )
+        assert captured.value.code is ErrorCode.INVALID_INPUT
+    finally:
+        os.close(read_descriptor)
+        os.close(write_descriptor)

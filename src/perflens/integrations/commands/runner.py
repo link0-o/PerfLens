@@ -6,6 +6,7 @@ import math
 import os
 import selectors
 import signal
+import stat
 import subprocess
 import time
 from collections.abc import Callable, Collection, Sequence
@@ -67,6 +68,7 @@ class CommandRunner:
         argv: Sequence[str],
         stdout: BinaryIO,
         *,
+        stdin: BinaryIO | None = None,
         limits: CommandLimits | None = None,
         watched_output: Path | None = None,
         pass_fds: Collection[int] = (),
@@ -76,6 +78,7 @@ class CommandRunner:
         self._validate_limits(effective_limits)
         safe_argv = self._validate_argv(argv)
         safe_pass_fds = self._validate_pass_fds(pass_fds)
+        stdin_descriptor = self._validate_stdin(stdin)
         started = time.monotonic()
         process: subprocess.Popen[bytes] | None = None
         stderr_buffer = bytearray()
@@ -87,7 +90,7 @@ class CommandRunner:
             try:
                 process = subprocess.Popen(  # noqa: S603 - canonicalized and allowlisted
                     safe_argv,
-                    stdin=subprocess.DEVNULL,
+                    stdin=(subprocess.DEVNULL if stdin_descriptor is None else stdin_descriptor),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     shell=False,
@@ -260,6 +263,27 @@ class CommandRunner:
                 details={"executable": str(resolved)},
             )
         return (str(resolved), *argv[1:])
+
+    @staticmethod
+    def _validate_stdin(stdin: BinaryIO | None) -> int | None:
+        if stdin is None:
+            return None
+        try:
+            descriptor = stdin.fileno()
+            metadata = os.fstat(descriptor)
+        except (OSError, ValueError) as exc:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "external_tool",
+                "External command input must be an open regular file",
+            ) from exc
+        if descriptor < 0 or not stat.S_ISREG(metadata.st_mode):
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "external_tool",
+                "External command input must be an open regular file",
+            )
+        return descriptor
 
     @staticmethod
     def _validate_pass_fds(pass_fds: Collection[int]) -> tuple[int, ...]:

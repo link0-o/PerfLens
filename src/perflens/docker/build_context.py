@@ -8,7 +8,8 @@ import os
 import stat
 import tarfile
 import tempfile
-from contextlib import suppress
+from collections.abc import Generator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -364,6 +365,40 @@ def assert_docker_build_context_snapshot_current(snapshot: DockerBuildContextSna
     sha256, size = _hash_regular_file(path)
     if sha256 != snapshot.artifact.archive_sha256 or size != snapshot.artifact.archive_bytes:
         raise _context_error("Docker build context archive content changed after capture")
+
+
+@contextmanager
+def open_docker_build_context_snapshot(
+    snapshot: DockerBuildContextSnapshot,
+) -> Generator[BinaryIO]:
+    """Open the exact archive identity and re-hash it after the consumer returns."""
+    assert_docker_build_context_snapshot_current(snapshot)
+    try:
+        descriptor = os.open(
+            snapshot.archive_path,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as exc:
+        raise _context_error("Docker build context archive cannot be opened safely") from exc
+    try:
+        if _identity(os.fstat(descriptor)) != snapshot.archive_identity:
+            raise _context_error("Docker build context archive identity changed before use")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            yield stream
+            stream.seek(0)
+            digest = hashlib.sha256()
+            size = 0
+            while chunk := stream.read(1 << 20):
+                digest.update(chunk)
+                size += len(chunk)
+            if (
+                _identity(os.fstat(descriptor)) != snapshot.archive_identity
+                or digest.hexdigest() != snapshot.artifact.archive_sha256
+                or size != snapshot.artifact.archive_bytes
+            ):
+                raise _context_error("Docker build context archive changed while it was consumed")
+    finally:
+        os.close(descriptor)
 
 
 def _capture_entry(
