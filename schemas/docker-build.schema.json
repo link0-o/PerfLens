@@ -1,0 +1,162 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "build_id": {
+      "pattern": "^docker-build-[a-f0-9]{20}$",
+      "title": "Build Id",
+      "type": "string"
+    },
+    "build_kind": {
+      "enum": [
+        "baseline",
+        "candidate"
+      ],
+      "title": "Build Kind",
+      "type": "string"
+    },
+    "builder_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Builder Identity Sha256",
+      "type": "string"
+    },
+    "candidate_round": {
+      "maximum": 3,
+      "minimum": 0,
+      "title": "Candidate Round",
+      "type": "integer"
+    },
+    "cleanup_eligible": {
+      "title": "Cleanup Eligible",
+      "type": "boolean"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "context_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Context Content Sha256",
+      "type": "string"
+    },
+    "context_id": {
+      "pattern": "^docker-build-context-[a-f0-9]{20}$",
+      "title": "Context Id",
+      "type": "string"
+    },
+    "final_image_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Final Image Digest",
+      "type": "string"
+    },
+    "finished_at": {
+      "title": "Finished At",
+      "type": "string"
+    },
+    "iid_file_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Iid File Sha256",
+      "type": "string"
+    },
+    "image_size_bytes": {
+      "exclusiveMinimum": 0,
+      "maximum": 10737418240,
+      "title": "Image Size Bytes",
+      "type": "integer"
+    },
+    "immutable_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Immutable Manifest Sha256",
+      "type": "string"
+    },
+    "limitations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "metadata_file_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Metadata File Sha256",
+      "type": "string"
+    },
+    "network_policy_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Network Policy Sha256",
+      "type": "string"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "platform": {
+      "pattern": "^linux/[a-z0-9_]+(?:/[a-z0-9_.-]+)?$",
+      "title": "Platform",
+      "type": "string"
+    },
+    "provenance_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Provenance Sha256",
+      "type": "string"
+    },
+    "recipe_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Recipe Content Sha256",
+      "type": "string"
+    },
+    "recipe_id": {
+      "pattern": "^docker-build-recipe-[a-f0-9]{20}$",
+      "title": "Recipe Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "started_at": {
+      "title": "Started At",
+      "type": "string"
+    },
+    "status": {
+      "const": "verified",
+      "default": "verified",
+      "title": "Status",
+      "type": "string"
+    },
+    "treatment_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Treatment Manifest Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "build_id",
+    "build_kind",
+    "candidate_round",
+    "started_at",
+    "finished_at",
+    "recipe_id",
+    "recipe_content_sha256",
+    "context_id",
+    "context_content_sha256",
+    "builder_identity_sha256",
+    "network_policy_sha256",
+    "final_image_digest",
+    "platform",
+    "image_size_bytes",
+    "iid_file_sha256",
+    "metadata_file_sha256",
+    "provenance_sha256",
+    "immutable_manifest_sha256",
+    "treatment_manifest_sha256",
+    "cleanup_eligible",
+    "content_sha256"
+  ],
+  "title": "DockerBuildArtifact",
+  "type": "object"
+}

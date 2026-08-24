@@ -1,0 +1,261 @@
+{
+  "$defs": {
+    "DockerOptimizationBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "hard_expiry_seconds": {
+          "maximum": 7200,
+          "minimum": 1,
+          "title": "Hard Expiry Seconds",
+          "type": "integer"
+        },
+        "max_build_seconds": {
+          "maximum": 900,
+          "minimum": 1,
+          "title": "Max Build Seconds",
+          "type": "integer"
+        },
+        "max_builds": {
+          "maximum": 4,
+          "minimum": 2,
+          "title": "Max Builds",
+          "type": "integer"
+        },
+        "max_candidate_rounds": {
+          "maximum": 3,
+          "minimum": 1,
+          "title": "Max Candidate Rounds",
+          "type": "integer"
+        },
+        "max_evidence_bytes": {
+          "maximum": 1073741824,
+          "minimum": 1,
+          "title": "Max Evidence Bytes",
+          "type": "integer"
+        },
+        "max_recoverable_retries": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Max Recoverable Retries",
+          "type": "integer"
+        },
+        "max_temporary_image_bytes": {
+          "maximum": 10737418240,
+          "minimum": 1,
+          "title": "Max Temporary Image Bytes",
+          "type": "integer"
+        },
+        "max_total_build_seconds": {
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Max Total Build Seconds",
+          "type": "integer"
+        },
+        "max_workload_active_seconds": {
+          "maximum": 1800,
+          "minimum": 1,
+          "title": "Max Workload Active Seconds",
+          "type": "integer"
+        },
+        "max_workload_runs": {
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Max Workload Runs",
+          "type": "integer"
+        },
+        "record_frequency_hz": {
+          "maximum": 99,
+          "minimum": 1,
+          "title": "Record Frequency Hz",
+          "type": "integer"
+        },
+        "record_max_duration_seconds": {
+          "maximum": 30,
+          "minimum": 1,
+          "title": "Record Max Duration Seconds",
+          "type": "integer"
+        },
+        "trace_max_duration_seconds": {
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Trace Max Duration Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_candidate_rounds",
+        "max_builds",
+        "max_workload_runs",
+        "max_recoverable_retries",
+        "max_build_seconds",
+        "max_total_build_seconds",
+        "max_workload_active_seconds",
+        "hard_expiry_seconds",
+        "max_evidence_bytes",
+        "max_temporary_image_bytes",
+        "record_max_duration_seconds",
+        "record_frequency_hz",
+        "trace_max_duration_seconds"
+      ],
+      "title": "DockerOptimizationBudget",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "base_image_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Base Image Digest",
+      "type": "string"
+    },
+    "benchmark_contract_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Benchmark Contract Sha256",
+      "type": "string"
+    },
+    "budget": {
+      "$ref": "#/$defs/DockerOptimizationBudget"
+    },
+    "build_arguments_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Build Arguments Sha256",
+      "type": "string"
+    },
+    "builder_policy_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Builder Policy Id"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "context_path_contract_sha256": {
+      "items": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "title": "Context Path Contract Sha256",
+      "type": "array"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "dockerfile_path_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Dockerfile Path Sha256",
+      "type": "string"
+    },
+    "mutable_dependency_lock": {
+      "title": "Mutable Dependency Lock",
+      "type": "boolean"
+    },
+    "mutable_dockerfile": {
+      "title": "Mutable Dockerfile",
+      "type": "boolean"
+    },
+    "mutable_path_contract_sha256": {
+      "items": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "title": "Mutable Path Contract Sha256",
+      "type": "array"
+    },
+    "network_tier": {
+      "enum": [
+        "local_only",
+        "pinned_pull",
+        "admin_builder_network"
+      ],
+      "title": "Network Tier",
+      "type": "string"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "platform": {
+      "pattern": "^linux/[a-z0-9_]+(?:/[a-z0-9_.-]+)?$",
+      "title": "Platform",
+      "type": "string"
+    },
+    "project_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Project Identity Sha256",
+      "type": "string"
+    },
+    "project_policy_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Project Policy Sha256",
+      "type": "string"
+    },
+    "recipe_id": {
+      "pattern": "^docker-build-recipe-[a-f0-9]{20}$",
+      "title": "Recipe Id",
+      "type": "string"
+    },
+    "resource_contract_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Resource Contract Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "target": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target"
+    },
+    "workload_contract_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Workload Contract Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "recipe_id",
+    "created_at",
+    "project_identity_sha256",
+    "project_policy_sha256",
+    "context_path_contract_sha256",
+    "mutable_path_contract_sha256",
+    "dockerfile_path_sha256",
+    "platform",
+    "build_arguments_sha256",
+    "base_image_digest",
+    "network_tier",
+    "workload_contract_sha256",
+    "benchmark_contract_sha256",
+    "resource_contract_sha256",
+    "mutable_dockerfile",
+    "mutable_dependency_lock",
+    "budget",
+    "content_sha256"
+  ],
+  "title": "DockerBuildRecipeArtifact",
+  "type": "object"
+}

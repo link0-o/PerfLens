@@ -1,0 +1,243 @@
+{
+  "$defs": {
+    "DockerBuildToolProjection": {
+      "additionalProperties": false,
+      "properties": {
+        "binary_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Binary Sha256",
+          "type": "string"
+        },
+        "tool": {
+          "enum": [
+            "docker",
+            "buildx",
+            "buildkit"
+          ],
+          "title": "Tool",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "version",
+        "binary_sha256"
+      ],
+      "title": "DockerBuildToolProjection",
+      "type": "object"
+    },
+    "DockerBuilderProjection": {
+      "additionalProperties": false,
+      "properties": {
+        "builder_image_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Builder Image Digest"
+        },
+        "driver": {
+          "enum": [
+            "docker",
+            "docker-container"
+          ],
+          "title": "Driver",
+          "type": "string"
+        },
+        "identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Identity Sha256",
+          "type": "string"
+        },
+        "network_policy_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Network Policy Sha256"
+        },
+        "root_owned": {
+          "title": "Root Owned",
+          "type": "boolean"
+        },
+        "source_policy_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Policy Sha256"
+        }
+      },
+      "required": [
+        "driver",
+        "identity_sha256",
+        "root_owned"
+      ],
+      "title": "DockerBuilderProjection",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "available_network_tiers": {
+      "default": [],
+      "items": {
+        "enum": [
+          "local_only",
+          "pinned_pull",
+          "admin_builder_network"
+        ],
+        "type": "string"
+      },
+      "title": "Available Network Tiers",
+      "type": "array"
+    },
+    "base_image_present": {
+      "title": "Base Image Present",
+      "type": "boolean"
+    },
+    "benchmark_configured": {
+      "title": "Benchmark Configured",
+      "type": "boolean"
+    },
+    "build_supported": {
+      "title": "Build Supported",
+      "type": "boolean"
+    },
+    "builder": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DockerBuilderProjection"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "buildx_tool": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DockerBuildToolProjection"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "capability_id": {
+      "pattern": "^docker-build-capability-[a-f0-9]{20}$",
+      "title": "Capability Id",
+      "type": "string"
+    },
+    "checked_at": {
+      "title": "Checked At",
+      "type": "string"
+    },
+    "collector_available": {
+      "title": "Collector Available",
+      "type": "boolean"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "docker_tool": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DockerBuildToolProjection"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "limitations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "next_steps": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "project_policy_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Project Policy Sha256",
+      "type": "string"
+    },
+    "runtime_capability_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Runtime Capability Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "available",
+        "partial",
+        "unavailable"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "capability_id",
+    "checked_at",
+    "status",
+    "runtime_capability_sha256",
+    "project_policy_sha256",
+    "base_image_present",
+    "benchmark_configured",
+    "collector_available",
+    "build_supported",
+    "content_sha256"
+  ],
+  "title": "DockerBuildCapabilityArtifact",
+  "type": "object"
+}

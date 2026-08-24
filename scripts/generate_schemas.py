@@ -75,6 +75,12 @@ from perflens.contracts.docker import (
     ContainerWorkloadSpecArtifact,
     DockerRuntimeCapabilityArtifact,
 )
+from perflens.contracts.docker_build import (
+    DockerBuildArtifact,
+    DockerBuildCapabilityArtifact,
+    DockerBuildContextArtifact,
+    DockerBuildRecipeArtifact,
+)
 from perflens.contracts.runtime_locks import (
     RuntimeAdapterCapabilityArtifact,
     RuntimeLockAnalysisArtifact,
@@ -159,11 +165,13 @@ MODELS = {
     "runtime-adapter-capability.schema.json": RuntimeAdapterCapabilityArtifact,
     "runtime-lock-evidence.schema.json": RuntimeLockEvidenceArtifact,
     "runtime-lock-analysis.schema.json": RuntimeLockAnalysisArtifact,
-    "runtime-lock-analysis-verification.schema.json": (
-        RuntimeLockAnalysisVerificationArtifact
-    ),
+    "runtime-lock-analysis-verification.schema.json": (RuntimeLockAnalysisVerificationArtifact),
     "runtime-lock-import-header.schema.json": RuntimeLockImportHeader,
     "docker-runtime-capability.schema.json": DockerRuntimeCapabilityArtifact,
+    "docker-build-capability.schema.json": DockerBuildCapabilityArtifact,
+    "docker-build-recipe.schema.json": DockerBuildRecipeArtifact,
+    "docker-build-context.schema.json": DockerBuildContextArtifact,
+    "docker-build.schema.json": DockerBuildArtifact,
     "container-target.schema.json": ContainerTargetArtifact,
     "container-process-inventory.schema.json": ContainerProcessInventoryArtifact,
     "container-resource-context.schema.json": ContainerResourceContextArtifact,

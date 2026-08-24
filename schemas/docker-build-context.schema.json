@@ -1,0 +1,199 @@
+{
+  "$defs": {
+    "DockerBuildContextEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "content_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Sha256"
+        },
+        "entry_type": {
+          "enum": [
+            "regular",
+            "directory",
+            "symlink"
+          ],
+          "title": "Entry Type",
+          "type": "string"
+        },
+        "mode": {
+          "maximum": 511,
+          "minimum": 0,
+          "title": "Mode",
+          "type": "integer"
+        },
+        "mutable": {
+          "title": "Mutable",
+          "type": "boolean"
+        },
+        "path_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Path Sha256",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        },
+        "symlink_target_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Symlink Target Sha256"
+        }
+      },
+      "required": [
+        "path_sha256",
+        "entry_type",
+        "mode",
+        "size",
+        "mutable"
+      ],
+      "title": "DockerBuildContextEntry",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "archive_bytes": {
+      "exclusiveMinimum": 0,
+      "maximum": 3221225472,
+      "title": "Archive Bytes",
+      "type": "integer"
+    },
+    "archive_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Archive Sha256",
+      "type": "string"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "context_id": {
+      "pattern": "^docker-build-context-[a-f0-9]{20}$",
+      "title": "Context Id",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/DockerBuildContextEntry"
+      },
+      "title": "Entries",
+      "type": "array"
+    },
+    "entry_count": {
+      "maximum": 100000,
+      "minimum": 1,
+      "title": "Entry Count",
+      "type": "integer"
+    },
+    "immutable_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Immutable Manifest Sha256",
+      "type": "string"
+    },
+    "limitations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "mutable_entry_count": {
+      "minimum": 1,
+      "title": "Mutable Entry Count",
+      "type": "integer"
+    },
+    "mutable_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Mutable Manifest Sha256",
+      "type": "string"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "project_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Project Identity Sha256",
+      "type": "string"
+    },
+    "quality_status": {
+      "const": "verified",
+      "default": "verified",
+      "title": "Quality Status",
+      "type": "string"
+    },
+    "recipe_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Recipe Content Sha256",
+      "type": "string"
+    },
+    "recipe_id": {
+      "pattern": "^docker-build-recipe-[a-f0-9]{20}$",
+      "title": "Recipe Id",
+      "type": "string"
+    },
+    "regular_file_count": {
+      "minimum": 1,
+      "title": "Regular File Count",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "total_regular_bytes": {
+      "maximum": 2147483648,
+      "minimum": 0,
+      "title": "Total Regular Bytes",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "context_id",
+    "created_at",
+    "recipe_id",
+    "recipe_content_sha256",
+    "project_identity_sha256",
+    "entry_count",
+    "regular_file_count",
+    "mutable_entry_count",
+    "total_regular_bytes",
+    "entries",
+    "immutable_manifest_sha256",
+    "mutable_manifest_sha256",
+    "archive_sha256",
+    "archive_bytes",
+    "content_sha256"
+  ],
+  "title": "DockerBuildContextArtifact",
+  "type": "object"
+}
