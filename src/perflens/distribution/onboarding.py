@@ -37,7 +37,10 @@ from perflens.distribution.skill import (
     recorded_project_skill_path,
     refresh_project_skill,
 )
-from perflens.docker.project_config import render_default_docker_project_policy
+from perflens.docker.project_config import (
+    load_docker_project_policy,
+    render_default_docker_project_policy,
+)
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _MAX_GUIDE_BYTES = 256 << 10
@@ -110,6 +113,13 @@ def run_project_setup(
         project,
         previous_artifact,
         enabled=docker_runtime_enabled,
+    )
+    docker_optimization_enabled = bool(
+        previous_docker_config is not None
+        and load_docker_project_policy(
+            previous_docker_config,
+            allowed_roots=(project,),
+        ).optimization.enabled
     )
     docker_project_config = output / _DOCKER_PROJECT_CONFIG_NAME
     selected_automatic_modes = (
@@ -191,6 +201,7 @@ def run_project_setup(
         automatic_max_output_bytes=automatic_max_output_bytes,
         automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
         allow_docker_targets=docker_runtime_enabled,
+        allow_docker_optimization=docker_optimization_enabled,
         docker_project_config=(docker_project_config if docker_runtime_enabled else None),
         collector_spool_root=collector_spool_root,
         mcp_command=mcp_command,
@@ -210,6 +221,7 @@ def run_project_setup(
         automatic_max_output_bytes=automatic_max_output_bytes,
         automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
         allow_docker_targets=docker_runtime_enabled,
+        allow_docker_optimization=docker_optimization_enabled,
         docker_project_config=(docker_project_config if docker_runtime_enabled else None),
         collector_spool_root=collector_spool_root,
         mcp_command=mcp_command,
@@ -422,6 +434,7 @@ def run_project_setup(
             collector_privilege_mode=collector_privilege_mode,
             collector_feature_profile=collector_feature_profile,
             docker_runtime_enabled=docker_runtime_enabled,
+            docker_optimization_enabled=docker_optimization_enabled,
             container_workload_config_path=(
                 str(docker_project_config) if docker_runtime_enabled else None
             ),

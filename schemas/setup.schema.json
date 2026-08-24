@@ -168,6 +168,11 @@
       "default": null,
       "title": "Container Workload Config Path"
     },
+    "docker_optimization_enabled": {
+      "default": false,
+      "title": "Docker Optimization Enabled",
+      "type": "boolean"
+    },
     "docker_runtime_enabled": {
       "default": false,
       "title": "Docker Runtime Enabled",

@@ -45,6 +45,11 @@ from perflens.contracts.docker import (
     derive_container_module_snapshot_id,
     derive_container_symbol_context_id,
 )
+from perflens.contracts.docker_build import (
+    DockerBuildArtifact,
+    DockerOptimizationIterationArtifact,
+    DockerOptimizationSessionArtifact,
+)
 from perflens.contracts.trace import (
     LockAnalysisArtifact,
     OffCpuAnalysisArtifact,
@@ -55,6 +60,9 @@ from perflens.contracts.trace import (
 from perflens.docker.comparison import (
     build_container_measurement,
     compare_container_measurements,
+)
+from perflens.docker.optimization_comparison import (
+    compare_docker_optimization_iteration,
 )
 from perflens.docker.symbols import assert_public_container_analysis
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -446,6 +454,93 @@ class ArtifactStore:
         )
         self._verify_container_matched_comparison(comparison, comparison_id)
         return comparison
+
+    def load_docker_build(self, build_id: str) -> DockerBuildArtifact:
+        build = self._load(build_id, "docker-build", DockerBuildArtifact)
+        self._require_embedded_id(build.build_id, build_id, "docker-build")
+        self._verify_docker_content(build, build.content_sha256, build_id, "docker-build")
+        return build
+
+    def load_docker_optimization_session(
+        self,
+        session_artifact_id: str,
+    ) -> DockerOptimizationSessionArtifact:
+        session = self._load(
+            session_artifact_id,
+            "docker-optimization-session",
+            DockerOptimizationSessionArtifact,
+        )
+        self._require_embedded_id(
+            session.session_artifact_id,
+            session_artifact_id,
+            "docker-optimization-session",
+        )
+        self._verify_docker_content(
+            session,
+            session.content_sha256,
+            session_artifact_id,
+            "docker-optimization-session",
+        )
+        return session
+
+    def load_docker_optimization_iteration(
+        self,
+        iteration_id: str,
+    ) -> DockerOptimizationIterationArtifact:
+        iteration = self._load(
+            iteration_id,
+            "docker-optimization-iteration",
+            DockerOptimizationIterationArtifact,
+        )
+        self._require_embedded_id(
+            iteration.iteration_id,
+            iteration_id,
+            "docker-optimization-iteration",
+        )
+        self._verify_docker_content(
+            iteration,
+            iteration.content_sha256,
+            iteration_id,
+            "docker-optimization-iteration",
+        )
+        session = self.load_docker_optimization_session(iteration.session_artifact_id)
+        baseline_build = self.load_docker_build(iteration.baseline_build_id)
+        candidate_build = self.load_docker_build(iteration.candidate_build_id)
+        baseline_measurement = self.load_container_measurement(
+            iteration.baseline_measurement_id
+        )
+        candidate_measurement = self.load_container_measurement(
+            iteration.candidate_measurement_id
+        )
+        baseline_analysis = self.load_analysis(iteration.baseline_analysis_id)
+        candidate_analysis = self.load_analysis(iteration.candidate_analysis_id)
+        profile_comparison = self.load_profile_comparison(iteration.profile_comparison_id)
+        baseline_benchmark = self.load_benchmark(iteration.baseline_benchmark_id)
+        candidate_benchmark = self.load_benchmark(iteration.candidate_benchmark_id)
+        benchmark_comparison = self.load_benchmark_comparison(
+            iteration.benchmark_comparison_id
+        )
+        source_comparison = self.load_container_matched_comparison(
+            iteration.source_container_comparison_id
+        )
+        replayed = compare_docker_optimization_iteration(
+            session=session,
+            baseline_build=baseline_build,
+            candidate_build=candidate_build,
+            baseline_measurement=baseline_measurement,
+            candidate_measurement=candidate_measurement,
+            baseline_analysis=baseline_analysis,
+            candidate_analysis=candidate_analysis,
+            profile_comparison=profile_comparison,
+            baseline_benchmark=baseline_benchmark,
+            candidate_benchmark=candidate_benchmark,
+            benchmark_comparison=benchmark_comparison,
+            source_container_comparison=source_comparison,
+            created_at=datetime.fromisoformat(iteration.created_at),
+        )
+        if replayed != iteration:
+            raise self._identity_error(iteration_id, "docker-optimization-iteration")
+        return iteration
 
     def load_trace_analysis(
         self,

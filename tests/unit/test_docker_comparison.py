@@ -4,6 +4,7 @@ import hashlib
 import statistics
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from tests.support.docker import make_container_resource_context
@@ -39,9 +40,19 @@ from perflens.contracts.docker import (
     ContainerWorkloadSpecArtifact,
     container_environment_fingerprint,
 )
+from perflens.contracts.docker_build import (
+    DockerBuildArtifact,
+    DockerOptimizationBudget,
+    DockerOptimizationSessionArtifact,
+    derive_docker_build_artifact_id,
+    derive_docker_optimization_session_artifact_id,
+)
 from perflens.docker.comparison import (
     build_container_measurement,
     compare_container_measurements,
+)
+from perflens.docker.optimization_comparison import (
+    compare_docker_optimization_iteration,
 )
 from perflens.domain.errors import PerfLensError
 from perflens.mcp.storage import ArtifactStore, PathPolicy
@@ -344,6 +355,150 @@ def _measurement_pair(
     return collections, resources, workload, runs, measurements, analyses
 
 
+def _optimization_build(
+    *,
+    kind: Literal["baseline", "candidate"],
+    round_number: int,
+    image_marker: str,
+    treatment_marker: str,
+) -> DockerBuildArtifact:
+    image_digest = "sha256:" + image_marker * 64
+    started_at = f"2026-08-22T00:00:0{round_number}+00:00"
+    provisional = DockerBuildArtifact(
+        schema_version="1.0",
+        perflens_version=__version__,
+        build_id=derive_docker_build_artifact_id(
+            "6" * 64,
+            kind,
+            round_number,
+            image_digest,
+            started_at,
+        ),
+        build_kind=kind,
+        candidate_round=round_number,
+        started_at=started_at,
+        finished_at=started_at,
+        recipe_id="docker-build-recipe-" + "3" * 20,
+        recipe_content_sha256="4" * 64,
+        context_id="docker-build-context-" + image_marker * 20,
+        context_content_sha256="6" * 64,
+        builder_identity_sha256="7" * 64,
+        network_policy_sha256="8" * 64,
+        final_image_digest=image_digest,
+        platform="linux/amd64",
+        image_size_bytes=4096,
+        iid_file_sha256="9" * 64,
+        metadata_file_sha256="a" * 64,
+        provenance_sha256="b" * 64,
+        immutable_manifest_sha256="c" * 64,
+        treatment_manifest_sha256=treatment_marker * 64,
+        cleanup_eligible=True,
+        content_sha256="0" * 64,
+    )
+    return provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+
+
+def _optimization_session(
+    baseline: DockerBuildArtifact,
+    candidate: DockerBuildArtifact,
+) -> DockerOptimizationSessionArtifact:
+    updated_at = "2026-08-22T00:00:03+00:00"
+    session_id = "docker-optimization-session-" + "1" * 20
+    provisional = DockerOptimizationSessionArtifact(
+        schema_version="1.0",
+        perflens_version=__version__,
+        session_artifact_id=derive_docker_optimization_session_artifact_id(
+            session_id,
+            "active",
+            updated_at,
+            2,
+            2,
+            4096,
+        ),
+        session_id=session_id,
+        created_at="2026-08-22T00:00:00+00:00",
+        updated_at=updated_at,
+        expires_at="2026-08-22T02:00:00+00:00",
+        state="active",
+        project_identity_sha256="1" * 64,
+        client_connection_identity_sha256="2" * 64,
+        project_policy_sha256="3" * 64,
+        preview_id="docker-optimization-preview-" + "1" * 20,
+        preview_content_sha256="2" * 64,
+        build_capability_content_sha256="3" * 64,
+        recipe_id=baseline.recipe_id,
+        recipe_content_sha256=baseline.recipe_content_sha256,
+        authorization_receipt_sha256="5" * 64,
+        allowed_modes=("stat", "record"),
+        budget=DockerOptimizationBudget(
+            max_candidate_rounds=3,
+            max_builds=4,
+            max_workload_runs=10,
+            max_recoverable_retries=1,
+            max_build_seconds=900,
+            max_total_build_seconds=3600,
+            max_workload_active_seconds=1800,
+            hard_expiry_seconds=7200,
+            max_evidence_bytes=1 << 30,
+            max_temporary_image_bytes=10 << 30,
+            record_max_duration_seconds=30,
+            record_frequency_hz=99,
+            trace_max_duration_seconds=10,
+        ),
+        builds_used=2,
+        candidate_rounds_used=1,
+        workload_runs_used=2,
+        recoverable_retries_used=0,
+        build_seconds_used=2,
+        workload_active_seconds_used=2,
+        evidence_bytes_used=4096,
+        temporary_image_bytes_used=8192,
+        baseline_build_id=baseline.build_id,
+        latest_candidate_build_id=candidate.build_id,
+        content_sha256="0" * 64,
+    )
+    return provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+
+
+def _bind_measurement_image(
+    measurement: ContainerMeasurementArtifact,
+    image_digest: str,
+) -> ContainerMeasurementArtifact:
+    environment = measurement.environment.model_copy(
+        update={"image_identity_sha256": image_digest.removeprefix("sha256:")}
+    )
+    environment = environment.model_copy(
+        update={
+            "environment_fingerprint_sha256": container_environment_fingerprint(environment)
+        }
+    )
+    provisional = measurement.model_copy(
+        update={"environment": environment, "content_sha256": "0" * 64}
+    )
+    return provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+
+
 def test_managed_measurements_ignore_ephemeral_container_and_pid_identity(tmp_path: Path) -> None:
     _, _, _, _, measurements, _ = _measurement_pair(tmp_path)
 
@@ -413,6 +568,169 @@ def test_verified_improvement_requires_full_matched_evidence(tmp_path: Path) -> 
     assert result.improved_metrics == ("throughput",)
     assert result.baseline_analysis_content_sha256 == analyses[0].content_sha256
     assert result.candidate_benchmark_content_sha256 == contract_content_sha256(benchmarks[1])
+
+
+def test_optimization_allows_verified_build_image_as_treatment(tmp_path: Path) -> None:
+    _, _, _, _, measurements, analyses = _measurement_pair(tmp_path)
+    baseline_build = _optimization_build(
+        kind="baseline",
+        round_number=0,
+        image_marker="d",
+        treatment_marker="1",
+    )
+    candidate_build = _optimization_build(
+        kind="candidate",
+        round_number=1,
+        image_marker="e",
+        treatment_marker="2",
+    )
+    bound_measurements = (
+        _bind_measurement_image(measurements[0], baseline_build.final_image_digest),
+        _bind_measurement_image(measurements[1], candidate_build.final_image_digest),
+    )
+    benchmarks = (
+        _benchmark("benchmark-before", (100, 101, 99), commit="before"),
+        _benchmark("benchmark-after", (120, 121, 119), commit="after"),
+    )
+    profile_comparison = compare_profiles(analyses[0], analyses[1])
+    benchmark_comparison = compare_benchmarks(benchmarks[0], benchmarks[1])
+    source = compare_container_measurements(
+        bound_measurements[0],
+        bound_measurements[1],
+        baseline_analysis=analyses[0],
+        candidate_analysis=analyses[1],
+        profile_comparison=profile_comparison,
+        baseline_benchmark=benchmarks[0],
+        candidate_benchmark=benchmarks[1],
+        benchmark_comparison=benchmark_comparison,
+        created_at=datetime(2026, 8, 22, tzinfo=UTC),
+    )
+
+    result = compare_docker_optimization_iteration(
+        session=_optimization_session(baseline_build, candidate_build),
+        baseline_build=baseline_build,
+        candidate_build=candidate_build,
+        baseline_measurement=bound_measurements[0],
+        candidate_measurement=bound_measurements[1],
+        baseline_analysis=analyses[0],
+        candidate_analysis=analyses[1],
+        profile_comparison=profile_comparison,
+        baseline_benchmark=benchmarks[0],
+        candidate_benchmark=benchmarks[1],
+        benchmark_comparison=benchmark_comparison,
+        source_container_comparison=source,
+        created_at=datetime(2026, 8, 22, 0, 1, tzinfo=UTC),
+    )
+
+    assert source.conclusion == "not_comparable"
+    assert source.environment_differences == {
+        "image_identity_sha256": ("d" * 64, "e" * 64)
+    }
+    assert result.fixed_environment_match
+    assert result.treatment_changed
+    assert result.conclusion == "verified_improvement"
+    assert result.deterministic_replay_passed
+
+
+def test_optimization_rejects_fixed_build_change_and_partial_profile(tmp_path: Path) -> None:
+    _, _, _, _, measurements, analyses = _measurement_pair(tmp_path)
+    baseline_build = _optimization_build(
+        kind="baseline",
+        round_number=0,
+        image_marker="d",
+        treatment_marker="1",
+    )
+    candidate_build = _optimization_build(
+        kind="candidate",
+        round_number=1,
+        image_marker="e",
+        treatment_marker="2",
+    ).model_copy(update={"builder_identity_sha256": "f" * 64})
+    candidate_build = candidate_build.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                candidate_build,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+    bound_measurements = (
+        _bind_measurement_image(measurements[0], baseline_build.final_image_digest),
+        _bind_measurement_image(measurements[1], candidate_build.final_image_digest),
+    )
+    benchmarks = (
+        _benchmark("benchmark-before", (100, 101, 99), commit="before"),
+        _benchmark("benchmark-after", (120, 121, 119), commit="after"),
+    )
+    profile_comparison = compare_profiles(analyses[0], analyses[1])
+    benchmark_comparison = compare_benchmarks(benchmarks[0], benchmarks[1])
+    source = compare_container_measurements(
+        bound_measurements[0],
+        bound_measurements[1],
+        baseline_analysis=analyses[0],
+        candidate_analysis=analyses[1],
+        profile_comparison=profile_comparison,
+        baseline_benchmark=benchmarks[0],
+        candidate_benchmark=benchmarks[1],
+        benchmark_comparison=benchmark_comparison,
+        created_at=datetime(2026, 8, 22, tzinfo=UTC),
+    )
+    result = compare_docker_optimization_iteration(
+        session=_optimization_session(baseline_build, candidate_build),
+        baseline_build=baseline_build,
+        candidate_build=candidate_build,
+        baseline_measurement=bound_measurements[0],
+        candidate_measurement=bound_measurements[1],
+        baseline_analysis=analyses[0],
+        candidate_analysis=analyses[1],
+        profile_comparison=profile_comparison,
+        baseline_benchmark=benchmarks[0],
+        candidate_benchmark=benchmarks[1],
+        benchmark_comparison=benchmark_comparison,
+        source_container_comparison=source,
+    )
+    assert not result.comparable
+    assert result.conclusion == "not_comparable"
+    assert "build.builder_identity_sha256" in result.fixed_environment_differences
+
+    partial_analysis = analyses[1].model_copy(
+        update={
+            "status": "partial",
+            "evidence_quality": analyses[1].evidence_quality.model_copy(
+                update={"quality_status": "partial"}
+            ),
+        }
+    )
+    partial_analysis = partial_analysis.model_copy(
+        update={"content_sha256": compute_analysis_content_sha256(partial_analysis)}
+    )
+    partial_profiles = compare_profiles(analyses[0], partial_analysis)
+    partial_source = compare_container_measurements(
+        bound_measurements[0],
+        bound_measurements[1],
+        baseline_analysis=analyses[0],
+        candidate_analysis=partial_analysis,
+        profile_comparison=partial_profiles,
+        baseline_benchmark=benchmarks[0],
+        candidate_benchmark=benchmarks[1],
+        benchmark_comparison=benchmark_comparison,
+    )
+    partial_result = compare_docker_optimization_iteration(
+        session=_optimization_session(baseline_build, candidate_build),
+        baseline_build=baseline_build,
+        candidate_build=candidate_build,
+        baseline_measurement=bound_measurements[0],
+        candidate_measurement=bound_measurements[1],
+        baseline_analysis=analyses[0],
+        candidate_analysis=partial_analysis,
+        profile_comparison=partial_profiles,
+        baseline_benchmark=benchmarks[0],
+        candidate_benchmark=benchmarks[1],
+        benchmark_comparison=benchmark_comparison,
+        source_container_comparison=partial_source,
+    )
+    assert partial_result.conclusion == "not_comparable"
+    assert any("Partial" in warning for warning in partial_result.warnings)
 
 
 def test_missing_correctness_or_non_container_benchmark_stays_qualified(tmp_path: Path) -> None:

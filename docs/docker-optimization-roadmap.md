@@ -2,9 +2,10 @@
 
 [简体中文](docker-optimization-roadmap.zh-CN.md)
 
-Status: implementation contract for v0.3.2. A section is current only after its code, denial
-tests, and acceptance checks land. Release v0.3.1 fixed-image collection remains supported and
-does not imply that the optimization interfaces below are already available.
+Status: implementation in progress for v0.3.2. Contracts, safe context capture, the typed Build
+Adapter, one-confirmation session tools, Build-bound collection, deterministic A/B comparison, and
+Agent policy are implemented; final package and real rootless/rootful Docker acceptance remain
+release gates. Release v0.3.1 fixed-image collection remains supported.
 
 ## Outcome and boundary
 
@@ -39,7 +40,7 @@ That exception is high risk and must be shown in the authorization preview. An e
 valid for v0.3.1-style diagnosis but cannot authorize automated optimization or produce a Verified
 Improvement.
 
-## Planned typed interfaces
+## Implemented typed interfaces (host acceptance still required)
 
 The stable v0.3.2 implementation must expose these MCP tools:
 

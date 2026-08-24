@@ -102,10 +102,38 @@ def test_setup_enables_docker_policy_and_preserves_user_edits_on_update(
     )
     assert "collect_managed_docker_workload" in codex_skill
 
-    policy.write_text(
-        policy.read_text(encoding="utf-8") + "\n# user reviewed\n",
+    (project / "Dockerfile").write_text(
+        "FROM example.invalid/base@sha256:" + "a" * 64 + "\nCOPY src /app\n",
         encoding="utf-8",
     )
+    (project / "src").mkdir()
+    (project / "src/app.py").write_text("print('ok')\n", encoding="utf-8")
+    configured = (
+        policy.read_text(encoding="utf-8")
+        .replace(
+            'default_workflow = "existing_container"',
+            'default_workflow = "managed_temporary_container"',
+        )
+        .replace(
+            'default_authorization_mode = "per_run"',
+            'default_authorization_mode = "bounded_session"',
+        )
+        .replace(
+            "allow_managed_temporary_containers = false",
+            "allow_managed_temporary_containers = true",
+        )
+        .replace('image_digest = ""', 'image_digest = "sha256:' + "b" * 64 + '"')
+        .replace('entrypoint = ""', 'entrypoint = "/workspace/app"')
+        .replace('container_user = ""', 'container_user = "1000:1000"')
+        .replace("treatment_paths = []", 'treatment_paths = ["src"]')
+        .replace('benchmark_output = ""', 'benchmark_output = "benchmark.json"')
+        .replace("enabled = false", "enabled = true")
+        .replace("context_paths = []", 'context_paths = ["Dockerfile", "src"]')
+        .replace("mutable_paths = []", 'mutable_paths = ["src"]')
+        .replace('dockerfile = ""', 'dockerfile = "Dockerfile"')
+        .replace('base_image_digest = ""', 'base_image_digest = "sha256:' + "a" * 64 + '"')
+    )
+    policy.write_text(configured + "\n# user reviewed\n", encoding="utf-8")
     policy.chmod(0o600)
     updated = run_project_setup(
         project,
@@ -116,7 +144,11 @@ def test_setup_enables_docker_policy_and_preserves_user_edits_on_update(
     )
 
     assert updated.docker_runtime_enabled is True
+    assert updated.docker_optimization_enabled is True
     assert policy.read_text(encoding="utf-8").endswith("# user reviewed\n")
+    assert '"--allow-docker-optimization"' in (project / ".codex/config.toml").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_setup_rejects_docker_runtime_without_automatic_collection(tmp_path: Path) -> None:

@@ -95,6 +95,39 @@ authorization, collection, or lifecycle operation. A request such as “使用 P
 项目的容器负载” selects this workflow when `perflens init --docker` has enabled the project MCP
 policy; the user does not need to provide a host PID or repeat long CLI commands.
 
+When `[optimization].enabled = true`, a request such as “用 PerfLens 优化这个项目” selects the
+v0.3.2 bounded optimization workflow. Call `inspect_docker_optimization_capability`, then
+`preview_docker_optimization_session` with the smallest modes that may be needed. Present the exact
+mutable paths, immutable build recipe, network tier, Benchmark/correctness contract, budgets,
+planned baseline build, evidence choices, candidate rebuilds, A/B validation, and cleanup. End the
+response and wait for one fresh explicit user reply. Only then call
+`authorize_docker_optimization_session` with the exact Preview hashes and fixed authorization
+token. That one PerfLens confirmation covers the bounded baseline/edit/rebuild/A-B loop; a client
+may still show its own independent tool-permission prompt.
+
+Within the authorized optimization session:
+
+- Build the baseline first with `build_docker_optimization_candidate`; a missing result image is
+  never a reason to build before confirmation.
+- Use `collect_docker_optimization_workload` only with a Build ID returned by this session. Start
+  with correctness/Benchmark plus `stat`; select `record`, `sched`, `off_cpu`, or `lock` only when
+  prior evidence calls for it. Do not run every mode merely because the request says “deep.”
+- Modify only `mutable_paths`. Immutable context, Dockerfile/build policy, base digest, Builder,
+  network tier, command, resources, Benchmark contract, client identity, or Collector provenance
+  changes invalidate comparison instead of expanding authorization.
+- Build at most three candidates and call `compare_docker_optimization_iterations` with the bound
+  Build, Measurement, Analysis, and run Benchmark IDs. Different candidate image digests are
+  normal Treatment only when the Build Artifact proves the fixed recipe and immutable context.
+- A security rejection, identity change, or correctness failure is not retried unchanged. The one
+  recoverable retry is for a genuinely corrected build/test failure. Stop at any session budget.
+- Report `Verified Improvement` only from a `verified_improvement` Iteration. Partial evidence,
+  missing Benchmark, resource transfer, event-source mismatch, or fixed-environment differences
+  remain candidate/not-comparable results. Revoke the session when the loop ends. Never commit,
+  push, tag, release, or edit paths outside the authorization.
+
+If optimization is disabled, keep using the v0.3.1 fixed-image workflows below; do not silently
+enable the policy or substitute direct Docker/build commands.
+
 1. Call `inspect_docker_capability`. Stop if the fixed local Docker endpoint, cgroup v2, project
    policy, or Collector cannot support the requested mode. Do not substitute direct Docker CLI or
    Socket access.

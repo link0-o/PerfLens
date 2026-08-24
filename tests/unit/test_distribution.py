@@ -457,6 +457,29 @@ def test_project_clients_enable_docker_only_with_an_in_project_policy(tmp_path: 
     assert f'  "{policy}"' in codex
     assert "--allow-docker-targets" in claude
     assert str(policy) in claude
+    assert "--allow-docker-optimization" not in codex
+    assert "--allow-docker-optimization" not in claude
+
+    optimization_codex = render_codex_config(
+        workspace,
+        automatic_collection=True,
+        allow_docker_targets=True,
+        allow_docker_optimization=True,
+        docker_project_config=policy,
+        mcp_command=Path(sys.executable),
+    )
+    optimization_claude = json.loads(
+        render_claude_config(
+            workspace,
+            automatic_collection=True,
+            allow_docker_targets=True,
+            allow_docker_optimization=True,
+            docker_project_config=policy,
+            mcp_command=Path(sys.executable),
+        )
+    )["mcpServers"]["perflens"]["args"]
+    assert '  "--allow-docker-optimization"' in optimization_codex
+    assert "--allow-docker-optimization" in optimization_claude
 
     with pytest.raises(PerfLensError):
         render_codex_config(
@@ -464,6 +487,13 @@ def test_project_clients_enable_docker_only_with_an_in_project_policy(tmp_path: 
             automatic_collection=True,
             allow_docker_targets=True,
             docker_project_config=tmp_path / "outside.toml",
+            mcp_command=Path(sys.executable),
+        )
+    with pytest.raises(PerfLensError):
+        render_codex_config(
+            workspace,
+            automatic_collection=True,
+            allow_docker_optimization=True,
             mcp_command=Path(sys.executable),
         )
     with pytest.raises(PerfLensError):

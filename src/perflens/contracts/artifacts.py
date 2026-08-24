@@ -1245,6 +1245,8 @@ class RuntimeStatusArtifact(ContractModel):
     skill_status: Literal["missing", "incomplete", "ready"]
     mcp_config_status: Literal["missing", "incomplete", "ready"]
     automatic_collection_requested: bool
+    docker_runtime_enabled: bool = False
+    docker_optimization_enabled: bool = False
     collector_assets_status: Literal["not_requested", "missing", "incomplete", "ready"]
     collector_socket: str
     collector_socket_status: Literal["missing", "invalid", "inaccessible", "ready"]
@@ -1297,6 +1299,7 @@ class SetupArtifact(ContractModel):
     collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon"
     collector_feature_profile: Literal["cpu_only", "full_diagnostics"] = "cpu_only"
     docker_runtime_enabled: bool = False
+    docker_optimization_enabled: bool = False
     container_workload_config_path: str | None = None
     collection_status: Literal["available", "conditional", "blocked"]
     blocked_modes: tuple[str, ...] = ()
@@ -1309,6 +1312,8 @@ class SetupArtifact(ContractModel):
             raise ValueError(
                 "Docker onboarding requires exactly one managed container workload config"
             )
+        if self.docker_optimization_enabled and not self.docker_runtime_enabled:
+            raise ValueError("Docker optimization requires the Docker target runtime")
         return self
 
 

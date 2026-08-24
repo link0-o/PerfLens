@@ -76,6 +76,7 @@ def render_claude_config(
     automatic_max_output_bytes: int = 256 << 20,
     automatic_plan_ttl_seconds: int = 120,
     allow_docker_targets: bool = False,
+    allow_docker_optimization: bool = False,
     docker_project_config: Path | None = None,
     mcp_command: Path | None = None,
 ) -> str:
@@ -95,6 +96,7 @@ def render_claude_config(
         automatic_max_output_bytes=automatic_max_output_bytes,
         automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
         allow_docker_targets=allow_docker_targets,
+        allow_docker_optimization=allow_docker_optimization,
         docker_project_config=docker_project_config,
         mcp_command=mcp_command,
     )

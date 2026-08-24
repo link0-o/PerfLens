@@ -33,6 +33,10 @@ OptimizationSessionArtifactId = Annotated[
     str,
     Field(pattern=r"^docker-optimization-session-state-[a-f0-9]{20}$"),
 ]
+OptimizationIterationId = Annotated[
+    str,
+    Field(pattern=r"^docker-optimization-iteration-[a-f0-9]{20}$"),
+]
 NetworkTier = Literal["local_only", "pinned_pull", "admin_builder_network"]
 OptimizationCollectionMode = Literal["stat", "record", "sched", "off_cpu", "lock"]
 
@@ -136,6 +140,24 @@ def derive_docker_optimization_session_artifact_id(
         str(builds_used),
         str(workload_runs_used),
         str(evidence_bytes_used),
+    )
+
+
+def derive_docker_optimization_iteration_id(
+    session_id: str,
+    baseline_build_id: str,
+    candidate_build_id: str,
+    baseline_measurement_sha256: str,
+    candidate_measurement_sha256: str,
+) -> str:
+    return _derived_id(
+        "docker-optimization-iteration",
+        "perflens-docker-optimization-iteration-v1",
+        session_id,
+        baseline_build_id,
+        candidate_build_id,
+        baseline_measurement_sha256,
+        candidate_measurement_sha256,
     )
 
 
@@ -577,4 +599,95 @@ class DockerOptimizationSessionArtifact(ContractModel):
         )
         if self.session_artifact_id != expected_id:
             raise ValueError("Docker optimization Session Artifact ID is inconsistent")
+        return self
+
+
+class DockerOptimizationIterationArtifact(ContractModel):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    iteration_id: OptimizationIterationId
+    created_at: str
+    session_id: OptimizationSessionId
+    session_artifact_id: OptimizationSessionArtifactId
+    session_artifact_content_sha256: Sha256
+    candidate_round: int = Field(ge=1, le=3)
+    baseline_build_id: BuildArtifactId
+    baseline_build_content_sha256: Sha256
+    candidate_build_id: BuildArtifactId
+    candidate_build_content_sha256: Sha256
+    baseline_measurement_id: str
+    baseline_measurement_content_sha256: Sha256
+    candidate_measurement_id: str
+    candidate_measurement_content_sha256: Sha256
+    baseline_analysis_id: str
+    baseline_analysis_content_sha256: Sha256
+    candidate_analysis_id: str
+    candidate_analysis_content_sha256: Sha256
+    profile_comparison_id: str
+    profile_comparison_content_sha256: Sha256
+    baseline_benchmark_id: str
+    baseline_benchmark_content_sha256: Sha256
+    candidate_benchmark_id: str
+    candidate_benchmark_content_sha256: Sha256
+    benchmark_comparison_id: str
+    benchmark_comparison_content_sha256: Sha256
+    source_container_comparison_id: str
+    source_container_comparison_content_sha256: Sha256
+    fixed_environment_match: bool
+    fixed_environment_differences: dict[str, tuple[str, str]] = Field(default_factory=dict)
+    treatment_changed: bool
+    correctness_status: Literal["passed", "failed", "unavailable"]
+    actual_event_source_match: bool
+    resource_transfer_status: Literal[
+        "no_observed_regression",
+        "regression",
+        "incomplete",
+    ]
+    deterministic_replay_passed: Literal[True] = True
+    comparable: bool
+    conclusion: Literal[
+        "verified_improvement",
+        "candidate_improvement",
+        "candidate_regression",
+        "no_material_change",
+        "not_comparable",
+    ]
+    improved_metrics: tuple[str, ...] = ()
+    regressed_metrics: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    allowed_conclusions: tuple[str, ...]
+    forbidden_conclusions: tuple[str, ...]
+    content_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_iteration(self) -> DockerOptimizationIterationArtifact:
+        _timestamp(self.created_at, "Docker optimization Iteration creation time")
+        if self.fixed_environment_match == bool(self.fixed_environment_differences):
+            raise ValueError("Docker optimization environment match is inconsistent")
+        _unique_sorted(self.improved_metrics, "Docker optimization improved metrics")
+        _unique_sorted(self.regressed_metrics, "Docker optimization regressed metrics")
+        if self.conclusion == "verified_improvement" and (
+            not self.comparable
+            or not self.fixed_environment_match
+            or not self.treatment_changed
+            or self.correctness_status != "passed"
+            or not self.actual_event_source_match
+            or self.resource_transfer_status != "no_observed_regression"
+            or not self.improved_metrics
+            or self.regressed_metrics
+        ):
+            raise ValueError("verified Docker optimization lacks required matched evidence")
+        if (self.conclusion == "not_comparable") == self.comparable:
+            raise ValueError("Docker optimization comparability and conclusion disagree")
+        if not self.allowed_conclusions or not self.forbidden_conclusions:
+            raise ValueError("Docker optimization Iteration must preserve conclusion boundaries")
+        expected_id = derive_docker_optimization_iteration_id(
+            self.session_id,
+            self.baseline_build_id,
+            self.candidate_build_id,
+            self.baseline_measurement_content_sha256,
+            self.candidate_measurement_content_sha256,
+        )
+        if self.iteration_id != expected_id:
+            raise ValueError("Docker optimization Iteration ID differs from its evidence")
         return self

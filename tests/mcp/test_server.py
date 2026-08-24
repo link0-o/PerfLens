@@ -367,6 +367,7 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "compare_profiles",
                 "compare_benchmarks",
                 "compare_container_measurements",
+                "compare_docker_optimization_iterations",
                 "collect_profile",
                 "inspect_collection_capabilities",
                 "inspect_docker_capability",
@@ -382,6 +383,7 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "revoke_docker_session",
                 "collect_docker_target",
                 "collect_managed_docker_workload",
+                "collect_docker_optimization_workload",
                 "plan_automatic_collection",
                 "execute_collection_plan",
                 "collect_project_workload",
@@ -449,7 +451,13 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["collect_managed_docker_workload"].meta == {
                 "perflens/permission": "DOCKER_COLLECTION"
             }
+            assert tools["collect_docker_optimization_workload"].meta == {
+                "perflens/permission": "DOCKER_OPTIMIZATION_COLLECTION"
+            }
             assert tools["compare_container_measurements"].meta == {
+                "perflens/permission": "WRITES_ARTIFACTS"
+            }
+            assert tools["compare_docker_optimization_iterations"].meta == {
                 "perflens/permission": "WRITES_ARTIFACTS"
             }
             docker_authorization = tools["authorize_docker_session"].input_schema["properties"][
@@ -497,6 +505,30 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "docker_options",
                 "treatment_paths",
             }.intersection(managed_collection)
+            optimization_collection = tools[
+                "collect_docker_optimization_workload"
+            ].input_schema["properties"]
+            assert not {
+                "image",
+                "entrypoint",
+                "arguments",
+                "mounts",
+                "network",
+                "docker_options",
+                "source_path",
+            }.intersection(optimization_collection)
+            optimization_comparison = tools[
+                "compare_docker_optimization_iterations"
+            ].input_schema["properties"]
+            assert not {
+                "image",
+                "dockerfile",
+                "context",
+                "build_args",
+                "network",
+                "docker_options",
+                "source_path",
+            }.intersection(optimization_comparison)
             assert tools["collect_project_workload"].meta == {
                 "perflens/permission": "PROJECT_EXECUTION"
             }

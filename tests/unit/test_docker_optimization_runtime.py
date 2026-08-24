@@ -303,6 +303,24 @@ def test_runtime_rejects_changed_immutable_context_and_revokes(tmp_path: Path) -
     assert runtime.snapshot(session.session_id).state == "revoked"
 
 
+def test_runtime_rejects_collection_after_workspace_moves_past_build(tmp_path: Path) -> None:
+    runtime, project, _ = make_optimization_runtime(tmp_path)
+    _, session = _authorize(runtime)
+    baseline = runtime.build(session.session_id, build_kind="baseline", candidate_round=0)
+    (project / "src/app").write_bytes(b"not-the-baseline")
+
+    with pytest.raises(PerfLensError, match="no longer matches the selected Build"):
+        runtime.begin_workload(
+            session.session_id,
+            build_id=baseline.build.build_id,
+            mode="stat",
+            reserve_active_seconds=30,
+            reserve_evidence_bytes=1 << 20,
+        )
+
+    assert runtime.snapshot(session.session_id).state == "active"
+
+
 def test_runtime_rejects_stale_or_replayed_preview(tmp_path: Path) -> None:
     runtime, _, _ = make_optimization_runtime(tmp_path)
     preview, _ = _authorize(runtime)

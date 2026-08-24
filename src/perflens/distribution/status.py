@@ -95,6 +95,12 @@ def inspect_runtime_status(
         if health.artifact is not None
         else requested_feature_profile
     )
+    docker_runtime_enabled = bool(
+        setup_artifact is not None and setup_artifact.docker_runtime_enabled
+    )
+    docker_optimization_enabled = bool(
+        setup_artifact is not None and setup_artifact.docker_optimization_enabled
+    )
     trace_modes_ready = health.artifact is not None and {
         "sched",
         "off_cpu",
@@ -153,6 +159,8 @@ def inspect_runtime_status(
             skill_status,
             mcp_status,
             str(automatic_requested),
+            str(docker_runtime_enabled),
+            str(docker_optimization_enabled),
             assets_status,
             socket_status,
             group_status,
@@ -178,6 +186,8 @@ def inspect_runtime_status(
         skill_status=skill_status,
         mcp_config_status=mcp_status,
         automatic_collection_requested=automatic_requested,
+        docker_runtime_enabled=docker_runtime_enabled,
+        docker_optimization_enabled=docker_optimization_enabled,
         collector_assets_status=assets_status,
         collector_socket=str(collector_socket),
         collector_socket_status=socket_status,

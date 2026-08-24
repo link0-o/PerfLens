@@ -314,3 +314,66 @@ def test_existing_runtime_prunes_inactive_private_access_before_reuse(
         explicit_authorization=EXPLICIT_DOCKER_SESSION_AUTHORIZATION,
     )
     assert second.session_id != first.session_id
+
+
+def test_runtime_authorizes_only_a_verified_optimization_build(
+    tmp_path: Path,
+) -> None:
+    from tests.unit.test_docker_optimization_runtime import (
+        make_optimization_runtime,
+    )
+
+    optimization, project, _ = make_optimization_runtime(tmp_path)
+    preview = optimization.preview(allowed_modes=("stat", "record"))
+    optimization_session = optimization.authorize(
+        preview_id=preview.preview.preview_id,
+        preview_content_sha256=preview.preview.content_sha256,
+        authorization_summary_sha256=preview.preview.authorization_summary_sha256,
+        explicit_authorization=(
+            "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
+        ),
+    )
+    baseline = optimization.build(
+        optimization_session.session_id,
+        build_kind="baseline",
+        candidate_round=0,
+    ).build
+    gate = tmp_path / "perflens-container-gate"
+    write_self_contained_test_elf(gate)
+    runtime_root = tmp_path / "managed-runtime"
+    runtime_root.mkdir(mode=0o700)
+    policy = load_docker_project_policy(
+        project / "container-workload.toml",
+        allowed_roots=(project,),
+    )
+    runtime = ExistingDockerRuntime(
+        project=inspect_managed_project_root(project),
+        project_policy=policy,
+        allowed_roots=(project,),
+        collection_policy=AutomaticCollectionPolicy(
+            enabled=True,
+            allowed_modes=("record", "stat"),
+        ),
+        client_connection_identity_sha256="a" * 64,
+        adapter_factory=lambda: cast(DockerCommandAdapter, object()),
+        managed_runtime_root=runtime_root,
+        container_gate_path=gate,
+        trusted_gate_owner_uids=(os.geteuid(),),
+    )
+
+    internal = runtime.authorize_optimization_build(
+        baseline,
+        optimization.build_recipe(optimization_session.session_id),
+        allowed_modes=("stat",),
+    )
+    assert internal.target_kind == "managed_temporary_container"
+    assert internal.allowed_modes == ("stat",)
+    assert internal.max_workload_runs == 1
+
+    with pytest.raises(PerfLensError) as captured:
+        runtime.authorize_optimization_build(
+            baseline.model_copy(update={"content_sha256": "0" * 64}),
+            optimization.build_recipe(optimization_session.session_id),
+            allowed_modes=("stat",),
+        )
+    assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION

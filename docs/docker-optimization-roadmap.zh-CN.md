@@ -2,8 +2,9 @@
 
 [English](docker-optimization-roadmap.md)
 
-状态：v0.3.2 实施合同。只有对应代码、安全拒绝测试和验收均已提交的章节才属于当前可用
-能力。v0.3.1 固定镜像采集继续兼容，但不表示下述优化接口已经全部可用。
+状态：v0.3.2 正在实施。合同、安全上下文快照、类型化 Build Adapter、一次确认会话工具、
+Build 绑定采集、确定性 A/B 比较及 Agent 策略已经实现；最终打包与真实 rootless/rootful
+Docker 验收仍是发布门禁。v0.3.1 固定镜像采集继续兼容。
 
 ## 目标与边界
 
@@ -33,7 +34,7 @@ Dockerfile 和依赖锁文件默认不可变；只有显式列入 `mutable_paths
 标为高风险。空 Benchmark 对 v0.3.1 式诊断仍合法，但不能授权自动优化，也不能输出
 Verified Improvement。
 
-## 计划中的类型化接口
+## 已实现的类型化接口（仍需真实主机验收）
 
 稳定 v0.3.2 必须提供以下 MCP 工具：
 

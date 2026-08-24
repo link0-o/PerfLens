@@ -1,0 +1,300 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "actual_event_source_match": {
+      "title": "Actual Event Source Match",
+      "type": "boolean"
+    },
+    "allowed_conclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Conclusions",
+      "type": "array"
+    },
+    "baseline_analysis_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Baseline Analysis Content Sha256",
+      "type": "string"
+    },
+    "baseline_analysis_id": {
+      "title": "Baseline Analysis Id",
+      "type": "string"
+    },
+    "baseline_benchmark_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Baseline Benchmark Content Sha256",
+      "type": "string"
+    },
+    "baseline_benchmark_id": {
+      "title": "Baseline Benchmark Id",
+      "type": "string"
+    },
+    "baseline_build_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Baseline Build Content Sha256",
+      "type": "string"
+    },
+    "baseline_build_id": {
+      "pattern": "^docker-build-[a-f0-9]{20}$",
+      "title": "Baseline Build Id",
+      "type": "string"
+    },
+    "baseline_measurement_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Baseline Measurement Content Sha256",
+      "type": "string"
+    },
+    "baseline_measurement_id": {
+      "title": "Baseline Measurement Id",
+      "type": "string"
+    },
+    "benchmark_comparison_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Benchmark Comparison Content Sha256",
+      "type": "string"
+    },
+    "benchmark_comparison_id": {
+      "title": "Benchmark Comparison Id",
+      "type": "string"
+    },
+    "candidate_analysis_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Candidate Analysis Content Sha256",
+      "type": "string"
+    },
+    "candidate_analysis_id": {
+      "title": "Candidate Analysis Id",
+      "type": "string"
+    },
+    "candidate_benchmark_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Candidate Benchmark Content Sha256",
+      "type": "string"
+    },
+    "candidate_benchmark_id": {
+      "title": "Candidate Benchmark Id",
+      "type": "string"
+    },
+    "candidate_build_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Candidate Build Content Sha256",
+      "type": "string"
+    },
+    "candidate_build_id": {
+      "pattern": "^docker-build-[a-f0-9]{20}$",
+      "title": "Candidate Build Id",
+      "type": "string"
+    },
+    "candidate_measurement_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Candidate Measurement Content Sha256",
+      "type": "string"
+    },
+    "candidate_measurement_id": {
+      "title": "Candidate Measurement Id",
+      "type": "string"
+    },
+    "candidate_round": {
+      "maximum": 3,
+      "minimum": 1,
+      "title": "Candidate Round",
+      "type": "integer"
+    },
+    "comparable": {
+      "title": "Comparable",
+      "type": "boolean"
+    },
+    "conclusion": {
+      "enum": [
+        "verified_improvement",
+        "candidate_improvement",
+        "candidate_regression",
+        "no_material_change",
+        "not_comparable"
+      ],
+      "title": "Conclusion",
+      "type": "string"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "correctness_status": {
+      "enum": [
+        "passed",
+        "failed",
+        "unavailable"
+      ],
+      "title": "Correctness Status",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "deterministic_replay_passed": {
+      "const": true,
+      "default": true,
+      "title": "Deterministic Replay Passed",
+      "type": "boolean"
+    },
+    "fixed_environment_differences": {
+      "additionalProperties": {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "type": "array"
+      },
+      "title": "Fixed Environment Differences",
+      "type": "object"
+    },
+    "fixed_environment_match": {
+      "title": "Fixed Environment Match",
+      "type": "boolean"
+    },
+    "forbidden_conclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Forbidden Conclusions",
+      "type": "array"
+    },
+    "improved_metrics": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Improved Metrics",
+      "type": "array"
+    },
+    "iteration_id": {
+      "pattern": "^docker-optimization-iteration-[a-f0-9]{20}$",
+      "title": "Iteration Id",
+      "type": "string"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "profile_comparison_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Profile Comparison Content Sha256",
+      "type": "string"
+    },
+    "profile_comparison_id": {
+      "title": "Profile Comparison Id",
+      "type": "string"
+    },
+    "regressed_metrics": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Regressed Metrics",
+      "type": "array"
+    },
+    "resource_transfer_status": {
+      "enum": [
+        "no_observed_regression",
+        "regression",
+        "incomplete"
+      ],
+      "title": "Resource Transfer Status",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "session_artifact_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Session Artifact Content Sha256",
+      "type": "string"
+    },
+    "session_artifact_id": {
+      "pattern": "^docker-optimization-session-state-[a-f0-9]{20}$",
+      "title": "Session Artifact Id",
+      "type": "string"
+    },
+    "session_id": {
+      "pattern": "^docker-optimization-session-[a-f0-9]{20}$",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "source_container_comparison_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Source Container Comparison Content Sha256",
+      "type": "string"
+    },
+    "source_container_comparison_id": {
+      "title": "Source Container Comparison Id",
+      "type": "string"
+    },
+    "treatment_changed": {
+      "title": "Treatment Changed",
+      "type": "boolean"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "iteration_id",
+    "created_at",
+    "session_id",
+    "session_artifact_id",
+    "session_artifact_content_sha256",
+    "candidate_round",
+    "baseline_build_id",
+    "baseline_build_content_sha256",
+    "candidate_build_id",
+    "candidate_build_content_sha256",
+    "baseline_measurement_id",
+    "baseline_measurement_content_sha256",
+    "candidate_measurement_id",
+    "candidate_measurement_content_sha256",
+    "baseline_analysis_id",
+    "baseline_analysis_content_sha256",
+    "candidate_analysis_id",
+    "candidate_analysis_content_sha256",
+    "profile_comparison_id",
+    "profile_comparison_content_sha256",
+    "baseline_benchmark_id",
+    "baseline_benchmark_content_sha256",
+    "candidate_benchmark_id",
+    "candidate_benchmark_content_sha256",
+    "benchmark_comparison_id",
+    "benchmark_comparison_content_sha256",
+    "source_container_comparison_id",
+    "source_container_comparison_content_sha256",
+    "fixed_environment_match",
+    "treatment_changed",
+    "correctness_status",
+    "actual_event_source_match",
+    "resource_transfer_status",
+    "comparable",
+    "conclusion",
+    "allowed_conclusions",
+    "forbidden_conclusions",
+    "content_sha256"
+  ],
+  "title": "DockerOptimizationIterationArtifact",
+  "type": "object"
+}

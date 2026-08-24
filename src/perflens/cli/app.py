@@ -466,6 +466,11 @@ def init_command(
     typer.echo(f"Collector 权限模式: {artifact.collector_privilege_mode}")
     typer.echo(f"Collector 功能配置: {artifact.collector_feature_profile}")
     typer.echo(f"Docker 目标运行时: {'已启用' if artifact.docker_runtime_enabled else '未启用'}")
+    if artifact.docker_runtime_enabled:
+        typer.echo(
+            "Docker 单次授权自动优化: "
+            f"{'已启用' if artifact.docker_optimization_enabled else '未启用'}"
+        )
     if artifact.container_workload_config_path is not None:
         typer.echo(f"Docker 项目策略: {artifact.container_workload_config_path}")
     typer.echo(f"自动采集: {'已启用 (仍需每次工作负载授权)' if automatic_collection else '未启用'}")
@@ -2003,6 +2008,11 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
         typer.echo(f"Collector 固定产物目录: {artifact.collector_spool_root}")
     typer.echo(f"本机 perf 权限: {host_labels[artifact.host_collection_status]}")
     typer.echo(f"自动采集: {automatic_labels[artifact.automatic_collection_status]}")
+    if artifact.docker_runtime_enabled:
+        typer.echo(
+            "Docker 单次授权自动优化: "
+            f"{'已启用' if artifact.docker_optimization_enabled else '未启用'}"
+        )
     issues = artifact.issues
     if issues:
         typer.echo("问题与提示:")

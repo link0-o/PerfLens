@@ -80,6 +80,7 @@ from perflens.contracts.docker_build import (
     DockerBuildCapabilityArtifact,
     DockerBuildContextArtifact,
     DockerBuildRecipeArtifact,
+    DockerOptimizationIterationArtifact,
     DockerOptimizationPreviewArtifact,
     DockerOptimizationSessionArtifact,
 )
@@ -174,6 +175,7 @@ MODELS = {
     "docker-build-recipe.schema.json": DockerBuildRecipeArtifact,
     "docker-build-context.schema.json": DockerBuildContextArtifact,
     "docker-build.schema.json": DockerBuildArtifact,
+    "docker-optimization-iteration.schema.json": DockerOptimizationIterationArtifact,
     "docker-optimization-preview.schema.json": DockerOptimizationPreviewArtifact,
     "docker-optimization-session.schema.json": DockerOptimizationSessionArtifact,
     "container-target.schema.json": ContainerTargetArtifact,

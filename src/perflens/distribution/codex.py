@@ -313,6 +313,7 @@ def render_codex_config(
     automatic_max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
     automatic_plan_ttl_seconds: int = DEFAULT_AUTOMATIC_PLAN_TTL_SECONDS,
     allow_docker_targets: bool = False,
+    allow_docker_optimization: bool = False,
     docker_project_config: Path | None = None,
     mcp_command: Path | None = None,
 ) -> str:
@@ -332,10 +333,12 @@ def render_codex_config(
         automatic_max_output_bytes=automatic_max_output_bytes,
         automatic_plan_ttl_seconds=automatic_plan_ttl_seconds,
         allow_docker_targets=allow_docker_targets,
+        allow_docker_optimization=allow_docker_optimization,
         docker_project_config=docker_project_config,
         mcp_command=mcp_command,
     )
     formatted_arguments = ",\n".join(f"  {_toml_string(value)}" for value in launch.arguments)
+    tool_timeout_seconds = 1000 if allow_docker_optimization else 300
     return (
         "[mcp_servers.perflens]\n"
         f"command = {_toml_string(str(launch.command))}\n"
@@ -344,7 +347,7 @@ def render_codex_config(
         "]\n"
         "required = true\n"
         'default_tools_approval_mode = "writes"\n'
-        "tool_timeout_sec = 300\n"
+        f"tool_timeout_sec = {tool_timeout_seconds}\n"
     )
 
 
@@ -364,6 +367,7 @@ def build_mcp_launch_configuration(
     automatic_max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
     automatic_plan_ttl_seconds: int = DEFAULT_AUTOMATIC_PLAN_TTL_SECONDS,
     allow_docker_targets: bool = False,
+    allow_docker_optimization: bool = False,
     docker_project_config: Path | None = None,
     mcp_command: Path | None = None,
 ) -> McpLaunchConfiguration:
@@ -394,6 +398,12 @@ def build_mcp_launch_configuration(
             ErrorCode.INVALID_INPUT,
             "codex_config",
             "Docker target support requires exactly one project policy path",
+        )
+    if allow_docker_optimization and not allow_docker_targets:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "codex_config",
+            "Docker optimization requires Docker target support",
         )
     arguments = [
         "--allowed-root",
@@ -467,6 +477,8 @@ def build_mcp_launch_configuration(
             arguments.extend(
                 ("--allow-docker-targets", "--docker-project-config", str(safe_docker_config))
             )
+            if allow_docker_optimization:
+                arguments.append("--allow-docker-optimization")
     return McpLaunchConfiguration(safe_command, tuple(arguments))
 
 

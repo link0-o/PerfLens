@@ -7,8 +7,10 @@ import secrets
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
+from perflens.application.evidence import contract_content_sha256
 from perflens.collection.planning import AutomaticCollectionPolicy
 from perflens.contracts.docker import (
     AuthorizationMode,
@@ -18,11 +20,13 @@ from perflens.contracts.docker import (
     ContainerTargetArtifact,
     ContainerWorkloadSpecArtifact,
 )
+from perflens.contracts.docker_build import DockerBuildArtifact, DockerBuildRecipeArtifact
 from perflens.docker.adapter import DockerCommandAdapter
 from perflens.docker.benchmark import (
     benchmark_output_contract_sha256,
     workload_command_contract_sha256,
 )
+from perflens.docker.build_context import build_docker_build_recipe
 from perflens.docker.capability import open_local_docker_adapter
 from perflens.docker.existing import discover_existing_container_processes
 from perflens.docker.identity import (
@@ -40,6 +44,7 @@ from perflens.docker.project_config import (
 )
 from perflens.docker.runtime_root import prepare_default_managed_runtime_root
 from perflens.docker.session import (
+    EXPLICIT_DOCKER_SESSION_AUTHORIZATION,
     DockerRunLease,
     DockerSessionAuthority,
     SessionAccess,
@@ -353,6 +358,97 @@ class ExistingDockerRuntime:
             session_id = authorized.artifact.session_id
             self._access[session_id] = authorized.access
             self._managed_workloads[session_id] = workload
+            return authorized.artifact
+
+    def authorize_optimization_build(
+        self,
+        build: DockerBuildArtifact,
+        recipe: DockerBuildRecipeArtifact,
+        *,
+        allowed_modes: tuple[CollectionMode, ...],
+    ) -> ContainerOptimizationSessionArtifact:
+        """Create one private compatibility session for an already-authorized Build."""
+        self._assert_context_current()
+        modes = self._authorized_modes(allowed_modes)
+        if not self._project_policy.optimization.enabled:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "docker_authorization",
+                "Docker optimization is disabled by project policy",
+            )
+        expected_recipe = build_docker_build_recipe(
+            self._project_policy,
+            project_identity_sha256=self._project.identity_sha256,
+            created_at=datetime.fromisoformat(recipe.created_at),
+        )
+        if (
+            recipe != expected_recipe
+            or recipe.content_sha256
+            != contract_content_sha256(recipe, exclude={"content_sha256"})
+            or build.content_sha256
+            != contract_content_sha256(build, exclude={"content_sha256"})
+            or build.recipe_id != recipe.recipe_id
+            or build.recipe_content_sha256 != recipe.content_sha256
+            or build.status != "verified"
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "docker_authorization",
+                "Docker optimization Build is not bound to the current project Recipe",
+            )
+        self._managed_root()
+        gate = self._inspect_gate()
+        managed = self._project_policy.managed
+        benchmark_contract = benchmark_output_contract_sha256(
+            managed.benchmark_output,
+            managed.benchmark_format,
+            managed.benchmark_name,
+        )
+        workload = build_container_workload_spec(
+            project=self._project,
+            gate=gate,
+            image_digest=build.final_image_digest,
+            entrypoint=managed.entrypoint,
+            arguments=managed.arguments,
+            working_directory=managed.working_directory,
+            container_user=managed.container_user,
+            cpus=managed.cpus,
+            memory_bytes=managed.memory_bytes,
+            pids=managed.pids,
+            allowed_modes=modes,
+            authorization_mode="bounded_session",
+            max_workload_runs=1,
+            max_active_seconds=min(
+                1200,
+                self._project_policy.optimization.max_workload_active_seconds,
+            ),
+            hard_expiry_seconds=self._project_policy.optimization.hard_expiry_seconds,
+            trace_max_duration_seconds=self._project_policy.optimization.trace_max_duration_seconds,
+            correctness_command_sha256=workload_command_contract_sha256(
+                managed.entrypoint,
+                managed.arguments,
+            ),
+            benchmark_output_contract_sha256=benchmark_contract,
+            treatment_paths=managed.treatment_paths,
+        )
+        with self._session_lock:
+            self._prune_access_locked()
+            if len(self._access) >= _MAX_SESSION_ACCESS:
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "docker_authorization",
+                    "Docker MCP session access capacity is exhausted",
+                    recoverable=True,
+                )
+            authorized = self._authority.authorize_managed_workload(
+                workload,
+                client_connection_identity_sha256=self._client_identity,
+                policy_identity_sha256=self._project_policy.sha256,
+                explicit_authorization=EXPLICIT_DOCKER_SESSION_AUTHORIZATION,
+                max_evidence_bytes=self._project_policy.optimization.max_evidence_bytes,
+            )
+            self._access[authorized.artifact.session_id] = authorized.access
+            self._managed_workloads[authorized.artifact.session_id] = workload
             return authorized.artifact
 
     def prepare_managed_run(

@@ -139,6 +139,16 @@
       "default": null,
       "title": "Collector Spool Root"
     },
+    "docker_optimization_enabled": {
+      "default": false,
+      "title": "Docker Optimization Enabled",
+      "type": "boolean"
+    },
+    "docker_runtime_enabled": {
+      "default": false,
+      "title": "Docker Runtime Enabled",
+      "type": "boolean"
+    },
     "feature_profile": {
       "default": "cpu_only",
       "enum": [

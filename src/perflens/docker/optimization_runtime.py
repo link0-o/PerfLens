@@ -428,6 +428,11 @@ class DockerOptimizationRuntime:
                 raise _authorization_error("Docker Build is outside this optimization session")
             return result
 
+    def build_recipe(self, session_id: str) -> DockerBuildRecipeArtifact:
+        with self._lock:
+            runtime_session = self._require_runtime_session_locked(session_id)
+            return runtime_session.preview.result.recipe
+
     def begin_workload(
         self,
         session_id: str,
@@ -439,8 +444,35 @@ class DockerOptimizationRuntime:
     ) -> DockerOptimizationWorkloadLease:
         with self._lock:
             runtime_session = self._require_runtime_session_locked(session_id)
-            self.build_result(session_id, build_id)
+            self._assert_project_current()
+            build = self.build_result(session_id, build_id).artifact
             pending = runtime_session.preview
+            current = capture_docker_build_context(
+                self._policy,
+                pending.result.recipe,
+                project_root=self._project.path,
+                private_directory=pending.private_directory,
+                invoking_uid=self._project.owner_uid,
+                created_at=self._wall_now(),
+            )
+            try:
+                if (
+                    current.artifact.immutable_manifest_sha256
+                    != build.immutable_manifest_sha256
+                ):
+                    self._authority.revoke(runtime_session.access)
+                    raise _authorization_error(
+                        "Docker optimization immutable context changed before collection"
+                    )
+                if (
+                    current.artifact.mutable_manifest_sha256
+                    != build.treatment_manifest_sha256
+                ):
+                    raise _authorization_error(
+                        "Docker optimization workspace no longer matches the selected Build"
+                    )
+            finally:
+                _discard_snapshot(current)
             return self._authority.begin_workload(
                 runtime_session.access,
                 project_identity_sha256=self._project.identity_sha256,

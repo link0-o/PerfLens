@@ -73,6 +73,32 @@ workload must write one supported JSON format there. PerfLens reads it after the
 before cleanup, binds its content digest to the Run and Measurement, and returns its benchmark ID.
 An independently analyzed benchmark cannot be substituted into the matched-container verifier.
 
+## v0.3.2 bounded optimization session
+
+An enabled schema-1.1 `[optimization]` contract authorizes a recipe, not an arbitrary Docker
+command. Preview is read-only and may capture a private context snapshot, but it never builds or
+pulls. After the user confirms that exact Preview once, the session may build one baseline and up
+to three candidates, run at most ten fixed workloads, collect only authorized evidence modes, and
+edit only `mutable_paths`. The fixed ceilings are four builds, one recoverable retry, 7200 seconds
+hard expiry, 1 GiB evidence, and 10 GiB temporary images; reaching a ceiling ends the loop.
+
+Always begin with correctness/Benchmark and low-cost `stat`. Escalate to `record` for on-CPU call
+paths, `sched` for runnable delay or migration, `off_cpu` for low-CPU wall-time gaps, or `lock` for
+a concrete contention candidate. These are evidence choices inside the one session, not five
+mandatory checklist steps. Every collection accepts only a session-produced Build ID. The Agent
+never receives an image, Dockerfile, build argument, mount, network, or Docker option field.
+
+The baseline and candidate must share the exact Recipe, base digest, Builder/network identity,
+immutable context, platform, command/resources, Benchmark contract, Collector/kernel/perf
+provenance, and actual event source. Mutable-context and verified final-image changes are the
+Treatment. Call `compare_docker_optimization_iterations`; only its `verified_improvement` result
+permits that claim. Partial analysis, absent Benchmark, correctness failure, resource regression,
+or fixed-environment mismatch cannot be upgraded by Agent reasoning.
+
+The session grants neither source paths outside `mutable_paths` nor commit, push, tag, release,
+Docker-daemon administration, Builder creation, or system changes. Client tool approval remains a
+separate UI boundary from the single PerfLens optimization confirmation.
+
 ## Evidence and reporting
 
 For each result report target runtime, container and image identity digests, container PID, actual
@@ -96,7 +122,7 @@ mostly waiting managed workload produces no samples, a longer or more CPU-intens
 new workload specification and requires a new summary and explicit authorization. An explicit
 `software_only` retry likewise requires its own disclosed collection request.
 
-For matched A/B, require the same image digest and workload spec in v0.3.1. Source edits mounted
+For v0.3.1 fixed-image matched A/B, require the same image digest and workload spec. Source edits mounted
 read-only under `/workspace` may change build artifacts, but record their digest; an image rebuild
 changes the authorized image digest and requires a new session. Compare only equal resource limits,
 workload parameters, collection mode, and actual event source, followed by correctness tests.

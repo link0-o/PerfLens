@@ -79,6 +79,7 @@ from perflens.contracts.docker import (
 )
 from perflens.contracts.docker_build import (
     DockerBuildCapabilityArtifact,
+    DockerOptimizationIterationArtifact,
     DockerOptimizationPreviewArtifact,
     DockerOptimizationSessionArtifact,
     OptimizationCollectionMode,
@@ -109,6 +110,9 @@ from perflens.docker.identity import (
     namespace_attestation_from_target,
 )
 from perflens.docker.managed import build_container_run_artifact
+from perflens.docker.optimization_comparison import (
+    compare_docker_optimization_iteration,
+)
 from perflens.docker.optimization_runtime import DockerOptimizationRuntime
 from perflens.docker.project_config import (
     assert_docker_project_policy_current,
@@ -1201,6 +1205,146 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             raise
 
     @server.tool(
+        name="collect_docker_optimization_workload",
+        description=(
+            "Run and collect only a verified image Build produced by this one-confirmation "
+            "optimization session. The caller selects bounded evidence, never an image, command, "
+            "mount, network, Docker option, or host path."
+        ),
+        annotations=EXECUTES_TARGET,
+        meta={"perflens/permission": "DOCKER_OPTIMIZATION_COLLECTION"},
+        structured_output=True,
+    )
+    async def collect_docker_optimization_workload(
+        session_id: str,
+        build_id: str,
+        mode: Literal["record", "stat", "sched", "lock", "off_cpu"] = "stat",
+        duration_seconds: float = 2.0,
+        workload_timeout_seconds: int = 60,
+        frequency_hz: int = 99,
+        call_graph: Literal["fp", "dwarf", "lbr"] = "dwarf",
+        events: tuple[str, ...] = HARDWARE_STAT_EVENTS,
+        event_source: Literal["auto", "hardware_required", "software_only"] = "auto",
+        max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
+    ) -> ArtifactReference:
+        _require_automatic_collection(config, require_existing_pid_attach=False)
+        _require_docker_optimization(config)
+        assert docker_runtime is not None
+        assert docker_policy is not None
+        optimization_runtime = get_docker_optimization_runtime()
+        recipe = optimization_runtime.build_recipe(session_id)
+        budget = recipe.budget
+        if (
+            (mode == "record" and duration_seconds > budget.record_max_duration_seconds)
+            or (mode == "record" and frequency_hz > budget.record_frequency_hz)
+            or (
+                mode in {"sched", "off_cpu", "lock"}
+                and duration_seconds > budget.trace_max_duration_seconds
+            )
+        ):
+            raise PerfLensError(
+                ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                "docker_optimization_collection",
+                "Docker optimization collection exceeds its mode-specific budget",
+                recoverable=True,
+            )
+        _preflight_managed_collection(
+            config,
+            mode=mode,
+            duration_seconds=duration_seconds,
+            workload_timeout_seconds=workload_timeout_seconds,
+            frequency_hz=frequency_hz,
+            max_output_bytes=max_output_bytes,
+            trace_max_duration_seconds=budget.trace_max_duration_seconds,
+        )
+        build = optimization_runtime.build_result(session_id, build_id).artifact
+        lease = optimization_runtime.begin_workload(
+            session_id,
+            build_id=build_id,
+            mode=mode,
+            reserve_active_seconds=workload_timeout_seconds,
+            reserve_evidence_bytes=max_output_bytes,
+        )
+        started = time.monotonic()
+        internal_session: ContainerOptimizationSessionArtifact | None = None
+        try:
+            internal_session = docker_runtime.authorize_optimization_build(
+                build,
+                recipe,
+                allowed_modes=(mode,),
+            )
+            collected = await collect_managed_docker_workload(
+                session_id=internal_session.session_id,
+                mode=mode,
+                duration_seconds=duration_seconds,
+                workload_timeout_seconds=workload_timeout_seconds,
+                frequency_hz=frequency_hz,
+                call_graph=call_graph,
+                events=events,
+                event_source=event_source,
+                max_output_bytes=max_output_bytes,
+            )
+            evidence_bytes_value = collected.summary.get("output_bytes", 0)
+            evidence_bytes = (
+                evidence_bytes_value
+                if isinstance(evidence_bytes_value, int)
+                and not isinstance(evidence_bytes_value, bool)
+                else 0
+            )
+            session = optimization_runtime.finish_workload(
+                session_id,
+                lease,
+                actual_active_seconds=min(
+                    workload_timeout_seconds,
+                    max(0, time.monotonic() - started),
+                ),
+                actual_evidence_bytes=evidence_bytes,
+            )
+        except BaseException:
+            failed_session: DockerOptimizationSessionArtifact | None = None
+            with suppress(PerfLensError):
+                failed_session = optimization_runtime.finish_workload(
+                    session_id,
+                    lease,
+                    actual_active_seconds=min(
+                        workload_timeout_seconds,
+                        max(0, time.monotonic() - started),
+                    ),
+                    actual_evidence_bytes=0,
+                )
+            if failed_session is not None:
+                with suppress(PerfLensError):
+                    store.save(
+                        failed_session,
+                        failed_session.session_artifact_id,
+                        "docker-optimization-session",
+                    )
+            raise
+        finally:
+            if internal_session is not None:
+                with suppress(PerfLensError):
+                    docker_runtime.revoke(internal_session.session_id)
+        store.save(
+            session,
+            session.session_artifact_id,
+            "docker-optimization-session",
+        )
+        return ArtifactReference.model_validate(
+            {
+                **collected.model_dump(mode="json"),
+                "summary": {
+                    **collected.summary,
+                    "docker_optimization_session_id": session.session_id,
+                    "docker_optimization_session_artifact_id": session.session_artifact_id,
+                    "docker_optimization_build_id": build.build_id,
+                    "docker_optimization_build_content_sha256": build.content_sha256,
+                    "docker_optimization_candidate_round": build.candidate_round,
+                    "docker_optimization_workload_runs_used": session.workload_runs_used,
+                },
+            }
+        )
+
+    @server.tool(
         name="plan_automatic_collection",
         description=(
             "Create a short-lived PID-bound collection plan. This does not sample or attach."
@@ -2060,6 +2204,112 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "improved_metrics": "; ".join(comparison.improved_metrics),
                 "regressed_metrics": "; ".join(comparison.regressed_metrics),
                 "warnings": "; ".join(comparison.warnings),
+            },
+        )
+
+    @server.tool(
+        name="compare_docker_optimization_iterations",
+        description=(
+            "Deterministically compare one authorized baseline/candidate Build pair using "
+            "bound container measurements, profiles, Benchmark correctness, resource deltas, "
+            "and fixed-environment invariants. Different final image digests are accepted only "
+            "as session-bound Treatment evidence."
+        ),
+        annotations=WRITES_ARTIFACTS,
+        meta={"perflens/permission": "WRITES_ARTIFACTS"},
+        structured_output=True,
+    )
+    async def compare_docker_optimization_iterations(
+        session_id: str,
+        baseline_build_id: str,
+        candidate_build_id: str,
+        baseline_measurement_id: str,
+        candidate_measurement_id: str,
+        baseline_analysis_id: str,
+        candidate_analysis_id: str,
+        baseline_benchmark_id: str,
+        candidate_benchmark_id: str,
+        minimum_delta_percent: float = 1.0,
+        minimum_practical_impact_percent: float = 1.0,
+    ) -> ArtifactReference:
+        runtime = get_docker_optimization_runtime()
+        session = runtime.snapshot(session_id)
+        baseline_build = runtime.build_result(session_id, baseline_build_id).artifact
+        candidate_build = runtime.build_result(session_id, candidate_build_id).artifact
+        baseline_measurement = store.load_container_measurement(baseline_measurement_id)
+        candidate_measurement = store.load_container_measurement(candidate_measurement_id)
+        baseline_analysis = store.load_analysis(baseline_analysis_id)
+        candidate_analysis = store.load_analysis(candidate_analysis_id)
+        baseline_benchmark = store.load_benchmark(baseline_benchmark_id)
+        candidate_benchmark = store.load_benchmark(candidate_benchmark_id)
+        profile_comparison = compare_profile_artifacts(
+            baseline_analysis,
+            candidate_analysis,
+            minimum_delta_percent=minimum_delta_percent,
+        )
+        benchmark_comparison = compare_benchmark_artifacts(
+            baseline_benchmark,
+            candidate_benchmark,
+            minimum_practical_impact_percent=minimum_practical_impact_percent,
+        )
+        source_comparison = compare_container_measurements(
+            baseline_measurement,
+            candidate_measurement,
+            baseline_analysis=baseline_analysis,
+            candidate_analysis=candidate_analysis,
+            profile_comparison=profile_comparison,
+            baseline_benchmark=baseline_benchmark,
+            candidate_benchmark=candidate_benchmark,
+            benchmark_comparison=benchmark_comparison,
+        )
+        iteration: DockerOptimizationIterationArtifact = (
+            compare_docker_optimization_iteration(
+                session=session,
+                baseline_build=baseline_build,
+                candidate_build=candidate_build,
+                baseline_measurement=baseline_measurement,
+                candidate_measurement=candidate_measurement,
+                baseline_analysis=baseline_analysis,
+                candidate_analysis=candidate_analysis,
+                profile_comparison=profile_comparison,
+                baseline_benchmark=baseline_benchmark,
+                candidate_benchmark=candidate_benchmark,
+                benchmark_comparison=benchmark_comparison,
+                source_container_comparison=source_comparison,
+            )
+        )
+        store.save(profile_comparison, profile_comparison.comparison_id, "profile-comparison")
+        store.save(
+            benchmark_comparison,
+            benchmark_comparison.comparison_id,
+            "benchmark-comparison",
+        )
+        store.save(
+            source_comparison,
+            source_comparison.comparison_id,
+            "container-matched-comparison",
+        )
+        store.save(
+            iteration,
+            iteration.iteration_id,
+            "docker-optimization-iteration",
+        )
+        return ArtifactReference(
+            artifact_id=iteration.iteration_id,
+            artifact_type="docker-optimization-iteration",
+            uri=store.uri(iteration.iteration_id, "docker-optimization-iteration"),
+            summary={
+                "session_id": iteration.session_id,
+                "candidate_round": iteration.candidate_round,
+                "comparable": iteration.comparable,
+                "fixed_environment_match": iteration.fixed_environment_match,
+                "treatment_changed": iteration.treatment_changed,
+                "correctness_status": iteration.correctness_status,
+                "resource_transfer_status": iteration.resource_transfer_status,
+                "conclusion": iteration.conclusion,
+                "improved_metrics": "; ".join(iteration.improved_metrics),
+                "regressed_metrics": "; ".join(iteration.regressed_metrics),
+                "warnings": "; ".join(iteration.warnings),
             },
         )
 
