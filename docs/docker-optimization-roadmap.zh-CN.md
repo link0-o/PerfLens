@@ -2,9 +2,10 @@
 
 [English](docker-optimization-roadmap.md)
 
-状态：v0.3.2 正在实施。合同、安全上下文快照、类型化 Build Adapter、一次确认会话工具、
-Build 绑定采集、确定性 A/B 比较及 Agent 策略已经实现；最终打包与真实 rootless/rootful
-Docker 验收仍是发布门禁。v0.3.1 固定镜像采集继续兼容。
+状态：v0.3.2 源码实现与本地包门禁已经完成。合同、安全上下文快照、类型化 Build Adapter、
+一次确认会话工具、Build 绑定采集、确定性 A/B 比较及 Agent 策略均已实现。真实
+rootless/rootful Docker 与已安装主机验收仍是发布门禁，因此本文不宣称未经测试的主机已经
+就绪。v0.3.1 固定镜像采集继续兼容。
 
 ## 目标与边界
 
@@ -36,7 +37,7 @@ Verified Improvement。
 
 ## 已实现的类型化接口（仍需真实主机验收）
 
-稳定 v0.3.2 必须提供以下 MCP 工具：
+v0.3.2 实现提供以下 MCP 工具：
 
 - `inspect_docker_optimization_capability`；
 - `preview_docker_optimization_session`；
@@ -46,7 +47,7 @@ Verified Improvement。
 - `compare_docker_optimization_iterations`；
 - `revoke_docker_optimization_session`。
 
-必须持久化版本化 `DockerBuildCapabilityArtifact`、`DockerBuildRecipeArtifact`、
+实现会持久化版本化 `DockerBuildCapabilityArtifact`、`DockerBuildRecipeArtifact`、
 `DockerBuildContextArtifact`、`DockerBuildArtifact`、`DockerOptimizationSessionArtifact` 与
 `DockerOptimizationIterationArtifact`。确认 token 只留在 MCP 内存；公开产物只保存 receipt
 摘要、预算、状态、身份和证据哈希，不保存 token、凭据、宿主绝对路径、Docker 端点路径或
@@ -110,6 +111,7 @@ Verified Improvement。partial、缺失 Benchmark、正确性失败或任一不�
 A/B 与 Agent 集成；最终包、宿主机与 Docker 验收。每阶段必须先通过正常、拒绝、边界、lint、
 类型、Schema 及相关 Python/Rust 协议测试，才能进入下一阶段。
 
-稳定发布还要求 Python 3.12/3.13、覆盖率至少 85%、可复现 wheel/sdist、两个 DEB、不自动启用
-的安装/升级/回滚/卸载 smoke、v0.3.1 宿主机与固定 Docker 回归，以及真实 rootless/rootful
-Docker 验收。优化会话和本实施合同都不会创建 v0.3.2 Tag。
+本地候选已经通过 Python 3.12/3.13、85% 覆盖率门禁、可复现 wheel/sdist 与 DEB、包冒烟、
+Schema/协议，以及 Rust fmt、Clippy、测试、audit、deny 门禁。稳定发布仍要求已安装主机的
+不自动激活/升级/回滚/卸载验收、v0.3.1 宿主机与固定 Docker 回归，以及真实
+rootless/rootful Docker 验收。优化会话和本实施合同都不会创建 v0.3.2 Tag。

@@ -109,6 +109,11 @@ root Rust Helper；该模式不会自动启用，必须由管理员确认受限 
 不支持任意 Docker 参数、远程 Engine、Compose/Kubernetes、自动 build/pull 或整容器 perf
 聚合。已经提交的 Runtime Lock 公共合同只是前置骨架，不代表 Adapter 已可用。详见
 [《v0.3.1 Docker 进程采集与分析指南》](docs/docker-container-roadmap.zh-CN.md)。
+发布版 `v0.3.2` 另行提供默认关闭、必须绑定 Benchmark 的
+`bounded_optimization_session`：用户审阅并确认一次后，Agent 可在硬预算和
+`mutable_paths` 边界内构建基线、按证据选择采集模式、最多重建三个候选并完成确定性匹配
+A/B。preview 不执行构建，会话不授予任意 Docker 访问，也不授权 commit、push、Tag 或
+Release。详见[《v0.3.2 Docker 自动优化指南》](docs/docker-optimization-roadmap.zh-CN.md)。
 
 随时可以运行只读状态检查，不需要记住多条排错命令：
 

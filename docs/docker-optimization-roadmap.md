@@ -2,10 +2,11 @@
 
 [简体中文](docker-optimization-roadmap.zh-CN.md)
 
-Status: implementation in progress for v0.3.2. Contracts, safe context capture, the typed Build
-Adapter, one-confirmation session tools, Build-bound collection, deterministic A/B comparison, and
-Agent policy are implemented; final package and real rootless/rootful Docker acceptance remain
-release gates. Release v0.3.1 fixed-image collection remains supported.
+Status: the v0.3.2 source implementation and local package gates are complete. Contracts, safe
+context capture, the typed Build Adapter, one-confirmation session tools, Build-bound collection,
+deterministic A/B comparison, and Agent policy are implemented. Real rootless/rootful Docker and
+installed-host acceptance remain release gates, so this document does not claim that an untested
+host is ready. Release v0.3.1 fixed-image collection remains supported.
 
 ## Outcome and boundary
 
@@ -42,7 +43,7 @@ Improvement.
 
 ## Implemented typed interfaces (host acceptance still required)
 
-The stable v0.3.2 implementation must expose these MCP tools:
+The v0.3.2 implementation exposes these MCP tools:
 
 - `inspect_docker_optimization_capability`;
 - `preview_docker_optimization_session`;
@@ -52,7 +53,7 @@ The stable v0.3.2 implementation must expose these MCP tools:
 - `compare_docker_optimization_iterations`;
 - `revoke_docker_optimization_session`.
 
-It must persist versioned `DockerBuildCapabilityArtifact`, `DockerBuildRecipeArtifact`,
+It persists versioned `DockerBuildCapabilityArtifact`, `DockerBuildRecipeArtifact`,
 `DockerBuildContextArtifact`, `DockerBuildArtifact`, `DockerOptimizationSessionArtifact`, and
 `DockerOptimizationIterationArtifact` values. Confirmation tokens remain only in MCP memory;
 public artifacts retain a receipt digest, budgets, state, identities, and evidence hashes, never a
@@ -131,7 +132,8 @@ artifacts and snapshot; Build Adapter; session/MCP; matched A/B plus Agent integ
 package/host/Docker acceptance. Each stage needs normal, denial, boundary, lint, type, schema, and
 relevant Python/Rust protocol tests before the next begins.
 
-Stable release additionally requires Python 3.12/3.13, at least 85% coverage, reproducible wheel
-and sdist, both DEBs, non-activation install/upgrade/rollback/removal smoke, v0.3.1 host and fixed
-Docker regression tests, and real rootless/rootful Docker acceptance. PerfLens does not create the
-v0.3.2 tag as part of the optimization session or this implementation contract.
+The local candidate has passed Python 3.12/3.13, the 85% coverage gate, reproducible wheel/sdist
+and DEB builds, package smoke, schema/protocol checks, and the Rust format, Clippy, test, audit, and
+deny gates. Stable release still requires installed-host non-activation/upgrade/rollback/removal,
+v0.3.1 host and fixed-Docker regression, and real rootless/rootful Docker acceptance. PerfLens does
+not create the v0.3.2 tag as part of the optimization session or this implementation contract.

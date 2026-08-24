@@ -51,6 +51,9 @@ The current release formally supports Milestones 0 through 9:
 - v0.3.1 project-scoped discovery and authorized collection for one process in a local Linux
   Docker Engine, including cgroup v2 context, bounded container symbol mapping, managed temporary
   test containers, and evidence-matched A/B comparison.
+- v0.3.2 opt-in `bounded_optimization_session`: one reviewed confirmation can cover a fixed
+  baseline build, evidence-guided collection, edits restricted to `mutable_paths`, up to three
+  candidate rebuilds, and deterministic matched A/B validation under hard budgets.
 
 It does **not** include an AI/LLM API, Web UI, source-code patch tool, benchmark
 runner, or custom agent framework.
@@ -127,6 +130,10 @@ process, and fixed project policy; it excludes arbitrary Docker arguments, remot
 Compose/Kubernetes, image build/pull, and whole-container perf aggregation. Checked-in Runtime
 Lock public contracts are groundwork, not available adapters. See the
 [v0.3.1 Docker process guide](docs/docker-container-roadmap.md).
+Release v0.3.2 adds the separately opt-in, benchmark-required bounded Docker optimization session.
+It does not build during preview, does not grant arbitrary Docker access, and never authorizes
+commit, push, tags, or releases. See the
+[v0.3.2 Docker optimization guide](docs/docker-optimization-roadmap.md).
 
 Run a read-only readiness summary at any time:
 
