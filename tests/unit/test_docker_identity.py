@@ -57,6 +57,7 @@ class _FakeAdapter:
             kind=cast(Any, self.endpoint_kind),
             device=3,
             inode=4,
+            ctime_ns=5,
             owner_uid=os.geteuid(),
             owner_gid=os.getegid(),
             mode=0o600,

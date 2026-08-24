@@ -37,6 +37,7 @@ class DockerEndpointSnapshot:
     kind: Literal["local_rootful", "local_rootless"]
     device: int
     inode: int
+    ctime_ns: int
     owner_uid: int
     owner_gid: int
     mode: int
@@ -610,6 +611,7 @@ def inspect_docker_endpoint(
         kind=kind,
         device=metadata.st_dev,
         inode=metadata.st_ino,
+        ctime_ns=metadata.st_ctime_ns,
         owner_uid=metadata.st_uid,
         owner_gid=metadata.st_gid,
         mode=stat.S_IMODE(metadata.st_mode),

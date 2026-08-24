@@ -17,6 +17,7 @@ import pytest
 from perflens.application.evidence import contract_content_sha256
 from perflens.docker.adapter import (
     DockerCommandAdapter,
+    DockerEndpointSnapshot,
     ManagedDockerCreateRequest,
     inspect_docker_cli,
 )
@@ -413,6 +414,28 @@ def test_adapter_detects_endpoint_replacement() -> None:
             assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
         finally:
             replacement.close()
+
+
+def test_adapter_detects_reused_endpoint_inode_by_change_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _docker_sandbox() as sandbox:
+        adapter = _adapter(sandbox)
+        original = adapter.endpoint_identity
+
+        def changed_endpoint(
+            *_args: object,
+            **_kwargs: object,
+        ) -> DockerEndpointSnapshot:
+            return replace(original, ctime_ns=original.ctime_ns + 1)
+
+        monkeypatch.setattr(
+            "perflens.docker.adapter.inspect_docker_endpoint",
+            changed_endpoint,
+        )
+        with pytest.raises(PerfLensError) as captured:
+            adapter.version_info()
+        assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 
 def test_adapter_rejects_unsafe_cli_config_and_endpoint() -> None:

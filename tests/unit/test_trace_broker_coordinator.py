@@ -199,6 +199,7 @@ def _coordinator(
     plan: CollectionPlanArtifact,
     *,
     allow_rootful_container_targets: bool = False,
+    allowed_uid: int | None = None,
 ) -> TraceCollectionCoordinator:
     tmp_path.mkdir(parents=True, exist_ok=True)
     private_spool = tmp_path / "private"
@@ -208,7 +209,10 @@ def _coordinator(
     policy = TracePolicy(
         path=tmp_path / "trace.toml",
         policy_sha256="a" * 64,
-        allowed_uid=os.geteuid(),
+        # The Broker service UID and its one authorized client UID are separate in production.
+        # Keeping them independently configurable also prevents stable UID-1000 protocol fixtures
+        # from depending on a CI runner's numeric UID.
+        allowed_uid=os.geteuid() if allowed_uid is None else allowed_uid,
         allowed_modes=("sched", "off_cpu", "lock"),
         max_duration_seconds=10,
         max_output_bytes=64 << 20,
@@ -284,7 +288,10 @@ def test_trace_coordinator_binds_docker_identity_for_every_trace_mode(
         "perflens.collector_broker.trace.assert_plan_current",
         accept_current_plan,
     )
-    receipt = _coordinator(tmp_path, plan).collect(os.geteuid(), plan)
+    receipt = _coordinator(tmp_path, plan, allowed_uid=plan.target_uid).collect(
+        plan.target_uid,
+        plan,
+    )
     evidence = _verify_trace_evidence_receipt(
         receipt,
         plan,
@@ -380,7 +387,10 @@ def test_trace_client_rejects_different_container_identity(
         "perflens.collector_broker.trace.assert_plan_current",
         accept_current_plan,
     )
-    receipt = _coordinator(tmp_path, plan).collect(os.geteuid(), plan)
+    receipt = _coordinator(tmp_path, plan, allowed_uid=plan.target_uid).collect(
+        plan.target_uid,
+        plan,
+    )
     assert plan.container_target is not None
     different_target = plan.container_target.model_copy(
         update={"identity_fingerprint": "9" * 64}
