@@ -12,6 +12,7 @@ from perflens.contracts.docker_build import (
     DockerOptimizationBudget,
     DockerOptimizationPreviewArtifact,
     DockerOptimizationSessionArtifact,
+    OptimizationCollectionMode,
     derive_docker_build_artifact_id,
     derive_docker_optimization_preview_id,
 )
@@ -21,6 +22,7 @@ from perflens.docker.optimization_session import (
     DockerOptimizationBuildLease,
     DockerOptimizationSessionAccess,
     DockerOptimizationSessionAuthority,
+    DockerOptimizationWorkloadLease,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 
@@ -71,6 +73,13 @@ def _budget(**updates: int) -> DockerOptimizationBudget:
 def _preview(
     *,
     budget: DockerOptimizationBudget | None = None,
+    allowed_modes: tuple[OptimizationCollectionMode, ...] = (
+        "stat",
+        "record",
+        "sched",
+        "off_cpu",
+        "lock",
+    ),
 ) -> DockerOptimizationPreviewArtifact:
     created_at = NOW.isoformat()
     data = {
@@ -94,7 +103,7 @@ def _preview(
         "recipe_content_sha256": RECIPE,
         "baseline_context_id": "docker-build-context-" + "4" * 20,
         "baseline_context_content_sha256": CONTEXT,
-        "allowed_modes": ("stat", "record", "sched", "off_cpu", "lock"),
+        "allowed_modes": allowed_modes,
         "network_tier": "local_only",
         "base_image_present": True,
         "baseline_build_required": True,
@@ -154,13 +163,14 @@ def _begin_build(
     kind: Literal["baseline", "candidate"] = "baseline",
     round_number: int = 0,
     context_sha256: str = CONTEXT,
+    preview_content_sha256: str | None = None,
 ) -> DockerOptimizationBuildLease:
     return authority.begin_build(
         access,
         project_identity_sha256=PROJECT,
         client_connection_identity_sha256=CLIENT,
         project_policy_sha256=POLICY,
-        preview_content_sha256=_preview().content_sha256,
+        preview_content_sha256=preview_content_sha256 or _preview().content_sha256,
         recipe_content_sha256=RECIPE,
         context_content_sha256=context_sha256,
         build_kind=kind,
@@ -223,7 +233,11 @@ def _finish_baseline(
     authority: DockerOptimizationSessionAuthority,
     authorized: AuthorizedDockerOptimizationSession,
 ) -> tuple[DockerOptimizationBuildLease, DockerOptimizationSessionArtifact]:
-    lease = _begin_build(authority, authorized.access)
+    lease = _begin_build(
+        authority,
+        authorized.access,
+        preview_content_sha256=authorized.artifact.preview_content_sha256,
+    )
     session = authority.finish_build(
         authorized.access,
         lease,
@@ -421,3 +435,306 @@ def test_expiry_revoke_capacity_and_forged_access_fail_closed() -> None:
     replacement = _authorize(authority)
     clock.advance(7200)
     assert authority.snapshot(replacement.access).state == "expired"
+
+
+@pytest.mark.parametrize("capacity", (0, 33))
+def test_authority_rejects_capacity_outside_fixed_bound(capacity: int) -> None:
+    with pytest.raises(ValueError, match="capacity is outside"):
+        DockerOptimizationSessionAuthority(max_sessions=capacity)
+
+
+def test_authorization_rejects_expired_preview_and_tampered_content() -> None:
+    authority, clock = _authority()
+    clock.advance(601)
+    with pytest.raises(PerfLensError, match="Preview expired"):
+        _authorize(authority)
+
+    authority, _ = _authority()
+    tampered = _preview().model_copy(update={"warnings": ("forged",)})
+    with pytest.raises(PerfLensError, match="content digest"):
+        _authorize(authority, tampered)
+
+
+def test_build_rejects_parallel_operation_kind_mismatch_and_invalid_context() -> None:
+    authority, _ = _authority()
+    authorized = _authorize(authority)
+    _begin_build(authority, authorized.access)
+    with pytest.raises(PerfLensError, match="active operation"):
+        _begin_build(authority, authorized.access)
+
+    authority, _ = _authority()
+    authorized = _authorize(authority)
+    with pytest.raises(PerfLensError, match="kind and round differ"):
+        _begin_build(authority, authorized.access, kind="candidate", round_number=0)
+    with pytest.raises(PerfLensError, match="SHA-256"):
+        _begin_build(authority, authorized.access, context_sha256="bad")
+
+
+def test_build_budget_and_total_time_budget_fail_closed() -> None:
+    authority, _ = _authority()
+    authorized = _authorize(
+        authority,
+        _preview(budget=_budget(max_builds=2, max_candidate_rounds=1)),
+    )
+    first = _begin_build(
+        authority,
+        authorized.access,
+        preview_content_sha256=authorized.artifact.preview_content_sha256,
+    )
+    authority.fail_build(
+        authorized.access,
+        first,
+        actual_build_seconds=1,
+        recoverable=True,
+        reason="retryable",
+    )
+    retry = _begin_build(
+        authority,
+        authorized.access,
+        preview_content_sha256=authorized.artifact.preview_content_sha256,
+    )
+    baseline = authority.finish_build(
+        authorized.access,
+        retry,
+        _build_artifact(),
+        actual_build_seconds=1,
+    )
+    with pytest.raises(PerfLensError, match="build budget is exhausted"):
+        _begin_build(
+            authority,
+            authorized.access,
+            kind="candidate",
+            round_number=1,
+            context_sha256="1" * 64,
+            preview_content_sha256=authorized.artifact.preview_content_sha256,
+        )
+    assert authority.snapshot(authorized.access).state == "exhausted"
+    assert baseline.baseline_build_id is not None
+
+    authority, _ = _authority()
+    authorized = _authorize(
+        authority,
+        _preview(budget=_budget(max_build_seconds=900, max_total_build_seconds=900)),
+    )
+    lease = _begin_build(
+        authority,
+        authorized.access,
+        preview_content_sha256=authorized.artifact.preview_content_sha256,
+    )
+    authority.fail_build(
+        authorized.access,
+        lease,
+        actual_build_seconds=1,
+        recoverable=True,
+        reason="retryable",
+    )
+    with pytest.raises(PerfLensError, match="total build-time budget"):
+        _begin_build(
+            authority,
+            authorized.access,
+            preview_content_sha256=authorized.artifact.preview_content_sha256,
+        )
+
+
+@pytest.mark.parametrize("failure", ("binding", "duration", "image"))
+def test_finish_build_rejects_mismatched_or_over_budget_result(failure: str) -> None:
+    budget = _budget(max_temporary_image_bytes=4096)
+    authority, _ = _authority()
+    authorized = _authorize(authority, _preview(budget=budget))
+    lease = _begin_build(
+        authority,
+        authorized.access,
+        preview_content_sha256=authorized.artifact.preview_content_sha256,
+    )
+    build = _build_artifact(image_bytes=4096)
+    seconds = 1.0
+    if failure == "binding":
+        build = _build_artifact(context_sha256="1" * 64)
+    elif failure == "duration":
+        seconds = 901.0
+    else:
+        build = _build_artifact(image_bytes=4097)
+
+    with pytest.raises(PerfLensError):
+        authority.finish_build(
+            authorized.access,
+            lease,
+            build,
+            actual_build_seconds=seconds,
+        )
+    assert authority.snapshot(authorized.access).state in {"failed", "exhausted"}
+
+
+def _begin_test_workload(
+    authority: DockerOptimizationSessionAuthority,
+    authorized: AuthorizedDockerOptimizationSession,
+    build_id: str,
+    *,
+    mode: OptimizationCollectionMode = "stat",
+    seconds: int = 1,
+    evidence: int = 1,
+) -> DockerOptimizationWorkloadLease:
+    return authority.begin_workload(
+        authorized.access,
+        project_identity_sha256=PROJECT,
+        client_connection_identity_sha256=CLIENT,
+        project_policy_sha256=POLICY,
+        preview_content_sha256=authorized.artifact.preview_content_sha256,
+        recipe_content_sha256=RECIPE,
+        build_id=build_id,
+        mode=mode,
+        reserve_active_seconds=seconds,
+        reserve_evidence_bytes=evidence,
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "match"),
+    (
+        ("build", "did not select"),
+        ("mode", "outside session authorization"),
+        ("seconds", "time reservation is invalid"),
+        ("evidence", "evidence reservation is invalid"),
+    ),
+)
+def test_workload_rejects_unbound_or_invalid_reservations(field: str, match: str) -> None:
+    authority, _ = _authority()
+    authorized = _authorize(authority, _preview(allowed_modes=("stat",)))
+    _, session = _finish_baseline(authority, authorized)
+    assert session.baseline_build_id is not None
+    build_id = session.baseline_build_id
+    mode: OptimizationCollectionMode = "stat"
+    seconds = 1
+    evidence = 1
+    if field == "build":
+        build_id = "docker-build-" + "0" * 20
+    elif field == "mode":
+        mode = "record"
+    elif field == "seconds":
+        seconds = 0
+    else:
+        evidence = 0
+    with pytest.raises(PerfLensError, match=match):
+        _begin_test_workload(
+            authority,
+            authorized,
+            build_id,
+            mode=mode,
+            seconds=seconds,
+            evidence=evidence,
+        )
+
+
+def test_workload_parallel_and_budget_failures_are_terminal() -> None:
+    authority, _ = _authority()
+    authorized = _authorize(authority)
+    _, session = _finish_baseline(authority, authorized)
+    assert session.baseline_build_id is not None
+    _begin_test_workload(authority, authorized, session.baseline_build_id)
+    with pytest.raises(PerfLensError, match="active operation"):
+        _begin_test_workload(authority, authorized, session.baseline_build_id)
+
+    authority, _ = _authority()
+    authorized = _authorize(
+        authority,
+        _preview(budget=_budget(max_workload_runs=1, max_workload_active_seconds=2)),
+    )
+    _, session = _finish_baseline(authority, authorized)
+    assert session.baseline_build_id is not None
+    lease = _begin_test_workload(authority, authorized, session.baseline_build_id)
+    authority.finish_workload(
+        authorized.access,
+        lease,
+        actual_active_seconds=1,
+        actual_evidence_bytes=1,
+    )
+    with pytest.raises(PerfLensError, match="workload budget is exhausted"):
+        _begin_test_workload(authority, authorized, session.baseline_build_id)
+
+    authority, _ = _authority()
+    authorized = _authorize(
+        authority,
+        _preview(budget=_budget(max_workload_runs=2, max_workload_active_seconds=2)),
+    )
+    _, session = _finish_baseline(authority, authorized)
+    assert session.baseline_build_id is not None
+    lease = _begin_test_workload(
+        authority,
+        authorized,
+        session.baseline_build_id,
+        seconds=1,
+    )
+    authority.finish_workload(
+        authorized.access,
+        lease,
+        actual_active_seconds=1,
+        actual_evidence_bytes=1,
+    )
+    with pytest.raises(PerfLensError, match="reservation exceeds"):
+        _begin_test_workload(
+            authority,
+            authorized,
+            session.baseline_build_id,
+            seconds=2,
+        )
+
+
+@pytest.mark.parametrize(
+    ("actual_seconds", "actual_evidence"),
+    ((2.0, 1), (1.0, 2), (1.0, -1)),
+)
+def test_finish_workload_rejects_usage_outside_reservation(
+    actual_seconds: float,
+    actual_evidence: int,
+) -> None:
+    authority, _ = _authority()
+    authorized = _authorize(authority)
+    _, session = _finish_baseline(authority, authorized)
+    assert session.baseline_build_id is not None
+    lease = _begin_test_workload(authority, authorized, session.baseline_build_id)
+    with pytest.raises(PerfLensError):
+        authority.finish_workload(
+            authorized.access,
+            lease,
+            actual_active_seconds=actual_seconds,
+            actual_evidence_bytes=actual_evidence,
+        )
+
+
+def test_session_and_operation_lease_expiry_are_rejected() -> None:
+    authority, clock = _authority()
+    authorized = _authorize(authority)
+    clock.advance(7200)
+    with pytest.raises(PerfLensError, match="no longer active"):
+        _begin_build(authority, authorized.access)
+
+    authority, clock = _authority()
+    authorized = _authorize(authority)
+    lease = _begin_build(authority, authorized.access)
+    clock.advance(1021)
+    with pytest.raises(PerfLensError, match="operation lease expired"):
+        authority.finish_build(
+            authorized.access,
+            lease,
+            _build_artifact(),
+            actual_build_seconds=1,
+        )
+
+
+def test_authority_rejects_naive_clock_and_invalid_durations() -> None:
+    authority = DockerOptimizationSessionAuthority(
+        wall_clock=lambda: datetime(2026, 8, 24),
+    )
+    with pytest.raises(ValueError, match="timezone"):
+        _authorize(authority)
+
+    authority, _ = _authority()
+    authorized = _authorize(authority)
+    lease = _begin_build(authority, authorized.access)
+    with pytest.raises(PerfLensError, match="actual duration is invalid"):
+        authority.finish_build(
+            authorized.access,
+            lease,
+            _build_artifact(),
+            actual_build_seconds=float("nan"),
+        )

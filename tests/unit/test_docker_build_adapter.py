@@ -431,6 +431,21 @@ def test_local_only_build_is_content_bound_and_cleanup_removes_only_session_tag(
         f"FROM registry.example/base@{BASE_DIGEST}\nRUN --device=/dev/kvm echo x\n",
         f"FROM registry.example/base@{BASE_DIGEST}\nCOPY --from=other/image /a /a\n",
         f"FROM registry.example/base@{BASE_DIGEST}\nONBUILD ADD https://x/a /a\n",
+        f"FROM --network=host registry.example/base@{BASE_DIGEST}\n",
+        f"FROM --platform=$TARGETPLATFORM registry.example/base@{BASE_DIGEST}\n",
+        "FROM scratch\n",
+        f"FROM registry.example/base@{BASE_DIGEST} AS bad/name\n",
+        (
+            f"FROM registry.example/base@{BASE_DIGEST} AS repeated\n"
+            "FROM scratch AS repeated\n"
+        ),
+        f"FROM registry.example/base@{BASE_DIGEST}\nRUN --mount=type=bind,from=external echo x\n",
+        f"FROM registry.example/base@{BASE_DIGEST}\nONBUILD ONBUILD RUN echo x\n",
+        f"FROM registry.example/base@{BASE_DIGEST}\nADD [\"only-source\"]\n",
+        f"FROM registry.example/base@{BASE_DIGEST}\nADD {{\"source\":\"x\"}}\n",
+        f"FROM \"registry.example/base@{BASE_DIGEST}\n",
+        f"FROM registry.example/base@{BASE_DIGEST} \\\n",
+        f"FROM registry.example/base@{BASE_DIGEST}\nMALFORMED\n",
     ),
 )
 def test_build_rejects_unpinned_or_exfiltrating_dockerfile(
@@ -452,6 +467,30 @@ def test_build_rejects_unpinned_or_exfiltrating_dockerfile(
             )
         assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
         assert not any(command[:2] == ["buildx", "build"] for command in _commands(sandbox))
+
+
+def test_multistage_dockerfile_allows_only_captured_local_sources(tmp_path: Path) -> None:
+    dockerfile = f"""
+# an ordinary comment is inert
+FROM --platform=linux/amd64 registry.example/base@{BASE_DIGEST} AS build
+ADD ["src/app", "/work/app"]
+RUN --mount=type=bind,from=build echo local
+FROM scratch AS final
+COPY --from=build /work/app /app
+"""
+    _, private, policy, snapshot = _project(tmp_path, dockerfile=dockerfile)
+    with _build_sandbox() as sandbox:
+        adapter = _adapter(sandbox)
+        result = adapter.build(
+            capability=_capability(adapter, policy),
+            policy=policy,
+            snapshot=snapshot,
+            private_directory=private,
+            session_identity_sha256=SESSION_SHA256,
+            build_kind="baseline",
+            candidate_round=0,
+        )
+    assert result.artifact.status == "verified"
 
 
 def test_pinned_pull_uses_only_administrator_reference_then_builds_offline(

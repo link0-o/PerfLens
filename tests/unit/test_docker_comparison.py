@@ -33,6 +33,7 @@ from perflens.contracts.artifacts import (
 )
 from perflens.contracts.docker import (
     ContainerEnvironmentFingerprint,
+    ContainerMatchedComparisonArtifact,
     ContainerMeasurementArtifact,
     ContainerResourceContextArtifact,
     ContainerResourceLimits,
@@ -1065,3 +1066,99 @@ def test_store_replays_matched_comparison_and_rejects_qualified_claim_rewrite(
     path.chmod(0o600)
     with pytest.raises(PerfLensError, match="Agent-visible content"):
         store.load_container_matched_comparison(comparison.comparison_id)
+
+
+def test_store_replays_complete_docker_optimization_iteration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, _, _, measurements, analyses = _measurement_pair(tmp_path)
+    baseline_build = _optimization_build(
+        kind="baseline",
+        round_number=0,
+        image_marker="d",
+        treatment_marker="1",
+    )
+    candidate_build = _optimization_build(
+        kind="candidate",
+        round_number=1,
+        image_marker="e",
+        treatment_marker="2",
+    )
+    session = _optimization_session(baseline_build, candidate_build)
+    bound_measurements = (
+        _bind_measurement_image(measurements[0], baseline_build.final_image_digest),
+        _bind_measurement_image(measurements[1], candidate_build.final_image_digest),
+    )
+    benchmarks = (
+        _benchmark("benchmark-before", (100, 101, 99), commit="before"),
+        _benchmark("benchmark-after", (120, 121, 119), commit="after"),
+    )
+    profile_comparison = compare_profiles(analyses[0], analyses[1])
+    benchmark_comparison = compare_benchmarks(benchmarks[0], benchmarks[1])
+    source = compare_container_measurements(
+        bound_measurements[0],
+        bound_measurements[1],
+        baseline_analysis=analyses[0],
+        candidate_analysis=analyses[1],
+        profile_comparison=profile_comparison,
+        baseline_benchmark=benchmarks[0],
+        candidate_benchmark=benchmarks[1],
+        benchmark_comparison=benchmark_comparison,
+        created_at=datetime(2026, 8, 22, tzinfo=UTC),
+    )
+    iteration = compare_docker_optimization_iteration(
+        session=session,
+        baseline_build=baseline_build,
+        candidate_build=candidate_build,
+        baseline_measurement=bound_measurements[0],
+        candidate_measurement=bound_measurements[1],
+        baseline_analysis=analyses[0],
+        candidate_analysis=analyses[1],
+        profile_comparison=profile_comparison,
+        baseline_benchmark=benchmarks[0],
+        candidate_benchmark=benchmarks[1],
+        benchmark_comparison=benchmark_comparison,
+        source_container_comparison=source,
+        created_at=datetime(2026, 8, 22, 0, 1, tzinfo=UTC),
+    )
+    store = ArtifactStore(
+        tmp_path / "stored-artifacts",
+        PathPolicy((tmp_path,)),
+        allow_writes=True,
+    )
+    store.save(session, session.session_artifact_id, "docker-optimization-session")
+    store.save(baseline_build, baseline_build.build_id, "docker-build")
+    store.save(candidate_build, candidate_build.build_id, "docker-build")
+    store.save(iteration, iteration.iteration_id, "docker-optimization-iteration")
+
+    def load_measurement(artifact_id: str) -> ContainerMeasurementArtifact:
+        if artifact_id == bound_measurements[0].measurement_id:
+            return bound_measurements[0]
+        return bound_measurements[1]
+
+    def load_analysis(artifact_id: str) -> AnalysisArtifact:
+        return analyses[0] if artifact_id == analyses[0].analysis_id else analyses[1]
+
+    def load_profile(_artifact_id: str) -> ProfileComparison:
+        return profile_comparison
+
+    def load_benchmark(artifact_id: str) -> BenchmarkArtifact:
+        return benchmarks[0] if artifact_id == benchmarks[0].benchmark_id else benchmarks[1]
+
+    def load_benchmark_comparison(_artifact_id: str) -> BenchmarkComparison:
+        return benchmark_comparison
+
+    def load_source(_artifact_id: str) -> ContainerMatchedComparisonArtifact:
+        return source
+
+    monkeypatch.setattr(store, "load_container_measurement", load_measurement)
+    monkeypatch.setattr(store, "load_analysis", load_analysis)
+    monkeypatch.setattr(store, "load_profile_comparison", load_profile)
+    monkeypatch.setattr(store, "load_benchmark", load_benchmark)
+    monkeypatch.setattr(store, "load_benchmark_comparison", load_benchmark_comparison)
+    monkeypatch.setattr(store, "load_container_matched_comparison", load_source)
+
+    assert store.load_docker_build(baseline_build.build_id) == baseline_build
+    assert store.load_docker_optimization_session(session.session_artifact_id) == session
+    assert store.load_docker_optimization_iteration(iteration.iteration_id) == iteration

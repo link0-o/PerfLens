@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
@@ -43,6 +44,9 @@ class _FakeBuildAdapter:
     def __init__(self, *, base_present: bool = True) -> None:
         self.base_present = base_present
         self.cleaned: list[str] = []
+        self.build_error: BaseException | None = None
+        self.cleanup_error: PerfLensError | None = None
+        self.base_image_error: PerfLensError | None = None
         self.docker_tool_projection = DockerBuildToolProjection(
             tool="docker",
             version="29.7.2",
@@ -62,6 +66,8 @@ class _FakeBuildAdapter:
 
     def base_image_present(self, image_digest: str) -> bool:
         assert image_digest == BASE_DIGEST
+        if self.base_image_error is not None:
+            raise self.base_image_error
         return self.base_present
 
     def build(
@@ -77,6 +83,8 @@ class _FakeBuildAdapter:
         started_at: datetime | None = None,
     ) -> DockerBuildExecutionResult:
         del capability, private_directory, session_identity_sha256
+        if self.build_error is not None:
+            raise self.build_error
         assert build_kind in {"baseline", "candidate"}
         assert started_at is not None
         context = snapshot.artifact
@@ -134,6 +142,8 @@ class _FakeBuildAdapter:
         )
 
     def cleanup_build(self, result: DockerBuildExecutionResult, **_: object) -> None:
+        if self.cleanup_error is not None:
+            raise self.cleanup_error
         self.cleaned.append(result.artifact.build_id)
 
 
@@ -202,6 +212,10 @@ def make_optimization_runtime(
         "off_cpu",
         "lock",
     ),
+    base_present: bool = True,
+    collector_available: bool = True,
+    wall_clock: Callable[[], datetime] | None = None,
+    monotonic_clock: Callable[[], float] | None = None,
 ) -> tuple[DockerOptimizationRuntime, Path, _FakeBuildAdapter]:
     project = tmp_path / "project"
     project.mkdir(mode=0o700)
@@ -219,7 +233,7 @@ def make_optimization_runtime(
     private.mkdir(mode=0o700)
     policy = load_docker_project_policy(policy_path, allowed_roots=(project,))
     identity = inspect_managed_project_root(project, invoking_uid=os.geteuid())
-    adapter = _FakeBuildAdapter()
+    adapter = _FakeBuildAdapter(base_present=base_present)
     runtime = DockerOptimizationRuntime(
         project=identity,
         project_policy=policy,
@@ -227,11 +241,11 @@ def make_optimization_runtime(
         private_root=private,
         runtime_capability_factory=_runtime_capability,
         build_adapter_factory=lambda: cast(TypedDockerBuildAdapter, adapter),
-        collector_available=lambda: True,
+        collector_available=lambda: collector_available,
         collector_modes=collector_modes,
         client_connection_identity_sha256="f" * 64,
-        wall_clock=lambda: NOW,
-        monotonic_clock=lambda: 100.0,
+        wall_clock=wall_clock or (lambda: NOW),
+        monotonic_clock=monotonic_clock or (lambda: 100.0),
     )
     return runtime, project, adapter
 
@@ -344,3 +358,197 @@ def test_runtime_rejects_unavailable_collector_modes(tmp_path: Path) -> None:
         runtime.preview(allowed_modes=("lock",))
 
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_runtime_capability_reports_tools_and_qualifies_adapter_failure(tmp_path: Path) -> None:
+    runtime, _, adapter = make_optimization_runtime(tmp_path)
+
+    available = runtime.inspect_capability()
+    assert available.status == "available"
+    assert available.base_image_present is True
+    assert available.docker_tool is not None
+
+    adapter.base_image_error = PerfLensError(
+        ErrorCode.PATH_SAFETY_VIOLATION,
+        "test",
+        "replacement",
+        recoverable=False,
+    )
+    unavailable = runtime.inspect_capability()
+    assert unavailable.status == "partial"
+    assert unavailable.docker_tool is None
+    assert unavailable.available_network_tiers == ()
+
+
+@pytest.mark.parametrize(
+    ("base_present", "collector_available"),
+    ((False, True), (True, False)),
+)
+def test_runtime_preview_rejects_incomplete_capability(
+    tmp_path: Path,
+    base_present: bool,
+    collector_available: bool,
+) -> None:
+    runtime, _, _ = make_optimization_runtime(
+        tmp_path,
+        base_present=base_present,
+        collector_available=collector_available,
+    )
+
+    with pytest.raises(PerfLensError, match="capability is incomplete"):
+        runtime.preview(allowed_modes=("stat",))
+
+
+def test_runtime_preview_cleanup_and_capacity_are_bounded(tmp_path: Path) -> None:
+    runtime, project, _ = make_optimization_runtime(tmp_path)
+    app = project / "src/app"
+    app.unlink()
+    os.mkfifo(app)
+    try:
+        with pytest.raises(PerfLensError):
+            runtime.preview(allowed_modes=("stat",))
+    finally:
+        app.unlink()
+        app.write_bytes(b"baseline")
+
+    for index in range(16):
+        app.write_bytes(f"baseline-{index}".encode())
+        runtime.preview(allowed_modes=("stat",))
+    app.write_bytes(b"capacity-overflow")
+    with pytest.raises(PerfLensError) as captured:
+        runtime.preview(allowed_modes=("stat",))
+    assert captured.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+
+
+def test_runtime_rejects_candidate_without_treatment_and_unknown_build(tmp_path: Path) -> None:
+    runtime, _, _ = make_optimization_runtime(tmp_path)
+    _, session = _authorize(runtime)
+    runtime.build(session.session_id, build_kind="baseline", candidate_round=0)
+
+    with pytest.raises(PerfLensError, match="no new authorized Treatment"):
+        runtime.build(session.session_id, build_kind="candidate", candidate_round=1)
+    with pytest.raises(PerfLensError, match="outside this optimization session"):
+        runtime.build_result(session.session_id, "docker-build-" + "f" * 20)
+
+
+@pytest.mark.parametrize(
+    "error",
+    (
+        PerfLensError(
+            ErrorCode.EXTERNAL_TOOL_FAILED,
+            "test",
+            "recoverable build failure",
+            recoverable=True,
+        ),
+        RuntimeError("unexpected build failure"),
+    ),
+)
+def test_runtime_accounts_for_build_failure_and_discards_candidate_snapshot(
+    tmp_path: Path,
+    error: BaseException,
+) -> None:
+    runtime, project, adapter = make_optimization_runtime(tmp_path)
+    _, session = _authorize(runtime)
+    runtime.build(session.session_id, build_kind="baseline", candidate_round=0)
+    (project / "src/app").write_bytes(b"candidate")
+    adapter.build_error = error
+
+    with pytest.raises(type(error)):
+        runtime.build(session.session_id, build_kind="candidate", candidate_round=1)
+
+    snapshot = runtime.snapshot(session.session_id)
+    assert snapshot.state == ("active" if isinstance(error, PerfLensError) else "failed")
+    assert snapshot.builds_used == 2
+
+
+def test_runtime_collection_rejects_immutable_drift_and_revokes(tmp_path: Path) -> None:
+    runtime, project, _ = make_optimization_runtime(tmp_path)
+    _, session = _authorize(runtime)
+    baseline = runtime.build(session.session_id, build_kind="baseline", candidate_round=0)
+    (project / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+
+    with pytest.raises(PerfLensError, match="immutable context changed"):
+        runtime.begin_workload(
+            session.session_id,
+            build_id=baseline.build.build_id,
+            mode="stat",
+            reserve_active_seconds=1,
+            reserve_evidence_bytes=1,
+        )
+    assert runtime.snapshot(session.session_id).state == "revoked"
+    with pytest.raises(PerfLensError, match="no longer active"):
+        runtime.build_recipe(session.session_id)
+
+
+def test_runtime_revoke_is_idempotent_and_ignores_conservative_cleanup_failure(
+    tmp_path: Path,
+) -> None:
+    runtime, _, adapter = make_optimization_runtime(tmp_path)
+    _, session = _authorize(runtime)
+    runtime.build(session.session_id, build_kind="baseline", candidate_round=0)
+    adapter.cleanup_error = PerfLensError(
+        ErrorCode.PATH_SAFETY_VIOLATION,
+        "test",
+        "identity mismatch",
+        recoverable=False,
+    )
+
+    assert runtime.revoke(session.session_id).state == "revoked"
+    assert runtime.revoke(session.session_id).state == "revoked"
+    with pytest.raises(PerfLensError, match="unknown to this MCP"):
+        runtime.snapshot("docker-optimization-session-" + "0" * 20)
+
+
+@pytest.mark.parametrize(
+    "modes",
+    (
+        (),
+        ("stat", "stat"),
+        ("record", "stat"),
+        cast(tuple[OptimizationCollectionMode, ...], ("bad",)),
+    ),
+)
+def test_runtime_rejects_noncanonical_modes(
+    tmp_path: Path,
+    modes: tuple[OptimizationCollectionMode, ...],
+) -> None:
+    runtime, _, _ = make_optimization_runtime(tmp_path)
+    with pytest.raises(PerfLensError):
+        runtime.preview(allowed_modes=modes)
+
+
+def test_runtime_rejects_naive_clock_and_unsafe_private_root(tmp_path: Path) -> None:
+    naive_root = tmp_path / "naive"
+    naive_root.mkdir()
+    with pytest.raises(ValueError, match="timezone-aware"):
+        runtime, _, _ = make_optimization_runtime(
+            naive_root,
+            wall_clock=lambda: datetime(2026, 8, 24),
+        )
+        runtime.inspect_capability()
+
+    project_root = tmp_path / "unsafe-project"
+    project_root.mkdir()
+    runtime, _, _ = make_optimization_runtime(project_root)
+    del runtime
+    private = project_root / "private"
+    private.chmod(0o755)
+    policy = load_docker_project_policy(
+        project_root / "project/container-workload.toml",
+        allowed_roots=(project_root / "project",),
+    )
+    identity = inspect_managed_project_root(
+        project_root / "project",
+        invoking_uid=os.geteuid(),
+    )
+    with pytest.raises(PerfLensError, match="private root owner or mode is unsafe"):
+        DockerOptimizationRuntime(
+            project=identity,
+            project_policy=policy,
+            allowed_roots=(project_root / "project",),
+            private_root=private,
+            runtime_capability_factory=_runtime_capability,
+            build_adapter_factory=lambda: cast(TypedDockerBuildAdapter, _FakeBuildAdapter()),
+            collector_available=lambda: True,
+            collector_modes=("stat",),
+        )
