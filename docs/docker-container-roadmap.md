@@ -2,6 +2,9 @@
 
 [Implementation audit contract](v0.3.1-execution-contract.md)
 
+The bounded build-and-optimize extension is specified separately in the
+[v0.3.2 Docker optimization contract](docker-optimization-roadmap.md).
+
 [简体中文](docker-container-roadmap.zh-CN.md) | English
 
 Status: **implemented release candidate; automated gates passed, real-host Docker acceptance pending**

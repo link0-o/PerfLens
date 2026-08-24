@@ -25,7 +25,7 @@ PerfLens 的正式发布版由不可变的 Python 安装包和独立 Skill 压�
 源码版本文件的准确版本号。
 
 ```bash
-perflens_release_version=0.3.1
+perflens_release_version=0.3.2
 perflens_release_tag="v${perflens_release_version}"
 uv sync --all-groups --frozen
 uv run ruff check .
@@ -88,7 +88,7 @@ Python 3.13；构建器会固定权限和时间戳，CI 会提取包并执行命
 只有发布提交已经进入 `main` 后，才创建并推送带注释的版本标签：
 
 ```bash
-perflens_release_tag=v0.3.1
+perflens_release_tag=v0.3.2
 git tag -a "$perflens_release_tag" -m "PerfLens ${perflens_release_tag}"
 git push origin "$perflens_release_tag"
 ```
@@ -116,7 +116,7 @@ git push origin "$perflens_release_tag"
 GitHub Release。发布完成后至少抽查一个资产：
 
 ```bash
-perflens_release_version=0.3.1
+perflens_release_version=0.3.2
 gh attestation verify "./dist/perflens-${perflens_release_version}-py3-none-any.whl" \
   --repo link0-o/PerfLens \
   --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
@@ -130,7 +130,7 @@ gh attestation verify "./dist/perflens-${perflens_release_version}-py3-none-any.
 自动发布前，需要在 GitHub 配置受保护的 `pypi` Environment，并在 PyPI 配置 Trusted Publisher。只发布 Python wheel 和源码包，不要把 Skill 压缩包或 SBOM 上传到 PyPI：
 
 ```bash
-perflens_release_version=0.3.1
+perflens_release_version=0.3.2
 uv publish \
   "dist/perflens-${perflens_release_version}-py3-none-any.whl" \
   "dist/perflens-${perflens_release_version}.tar.gz"

@@ -134,7 +134,7 @@ Agent 客户端的 MCP 权限弹窗、持久工具允许列表或自动批准模
 ```bash
 sudo python3 -m venv /opt/perflens
 sudo /opt/perflens/bin/python -m pip install \
-  ./dist/perflens-0.3.1-py3-none-any.whl
+  ./dist/perflens-0.3.2-py3-none-any.whl
 ```
 
 这里的版本号只是示例，应替换为实际构建版本。正式离线部署应同时提供 wheelhouse 或完整系统包，不应在安装脚本中隐式访问网络。

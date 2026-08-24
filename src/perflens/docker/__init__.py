@@ -8,6 +8,7 @@ from perflens.docker.cgroup import (
 from perflens.docker.existing import discover_existing_container_processes
 from perflens.docker.identity import resolve_existing_container_target
 from perflens.docker.project_config import (
+    DockerOptimizationProjectPolicy,
     DockerProjectPolicy,
     load_docker_project_policy,
     render_default_docker_project_policy,
@@ -17,6 +18,7 @@ from perflens.docker.workload import build_container_workload_spec
 
 __all__ = [
     "CgroupV2ResourceReader",
+    "DockerOptimizationProjectPolicy",
     "DockerProjectPolicy",
     "DockerSessionAuthority",
     "build_container_resource_context",

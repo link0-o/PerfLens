@@ -16,7 +16,12 @@ from perflens.domain.errors import ErrorCode, PerfLensError
 _MAX_POLICY_BYTES = 256 << 10
 _IMAGE_DIGEST = re.compile(r"^(?:|sha256:[a-f0-9]{64})$")
 _CONTAINER_USER = re.compile(r"^(?:|[0-9]{1,10}(?::[0-9]{1,10})?)$")
-_TOP_LEVEL_KEYS = {
+_BUILD_ARGUMENT_NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
+_SENSITIVE_BUILD_ARGUMENT = re.compile(
+    r"(?:^|_)(?:CREDENTIAL|PASSWORD|PRIVATE|SECRET|TOKEN)(?:_|$)"
+)
+_BUILDER_POLICY_ID = re.compile(r"^(?:|[a-z0-9][a-z0-9._-]{0,127})$")
+_TOP_LEVEL_KEYS_V1 = {
     "schema_version",
     "target_runtime",
     "default_workflow",
@@ -29,6 +34,7 @@ _TOP_LEVEL_KEYS = {
     "trace_max_duration_seconds",
     "managed",
 }
+_TOP_LEVEL_KEYS_V1_1 = _TOP_LEVEL_KEYS_V1 | {"optimization"}
 _MANAGED_KEYS = {
     "image_digest",
     "entrypoint",
@@ -42,6 +48,31 @@ _MANAGED_KEYS = {
     "benchmark_output",
     "benchmark_format",
     "benchmark_name",
+}
+_OPTIMIZATION_KEYS = {
+    "enabled",
+    "context_paths",
+    "mutable_paths",
+    "dockerfile",
+    "target",
+    "platform",
+    "build_args",
+    "base_image_digest",
+    "network_tier",
+    "builder_policy_id",
+    "max_candidate_rounds",
+    "max_builds",
+    "max_workload_runs",
+    "max_recoverable_retries",
+    "max_build_seconds",
+    "max_total_build_seconds",
+    "max_workload_active_seconds",
+    "hard_expiry_seconds",
+    "max_evidence_bytes",
+    "max_temporary_image_bytes",
+    "record_max_duration_seconds",
+    "record_frequency_hz",
+    "trace_max_duration_seconds",
 }
 
 
@@ -62,7 +93,35 @@ class ManagedDockerProjectPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class DockerOptimizationProjectPolicy:
+    enabled: bool
+    context_paths: tuple[str, ...]
+    mutable_paths: tuple[str, ...]
+    dockerfile: str
+    target: str | None
+    platform: str
+    build_args: tuple[tuple[str, str], ...]
+    base_image_digest: str
+    network_tier: Literal["local_only", "pinned_pull", "admin_builder_network"]
+    builder_policy_id: str | None
+    max_candidate_rounds: int
+    max_builds: int
+    max_workload_runs: int
+    max_recoverable_retries: int
+    max_build_seconds: int
+    max_total_build_seconds: int
+    max_workload_active_seconds: int
+    hard_expiry_seconds: int
+    max_evidence_bytes: int
+    max_temporary_image_bytes: int
+    record_max_duration_seconds: int
+    record_frequency_hz: int
+    trace_max_duration_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
 class DockerProjectPolicy:
+    schema_version: Literal["1.0", "1.1"]
     path: Path
     device: int
     inode: int
@@ -79,9 +138,11 @@ class DockerProjectPolicy:
     max_evidence_bytes: int
     trace_max_duration_seconds: int
     managed: ManagedDockerProjectPolicy
+    optimization: DockerOptimizationProjectPolicy
 
 
 class _ValidatedPolicy(TypedDict):
+    schema_version: Literal["1.0", "1.1"]
     default_workflow: Literal["existing_container", "managed_temporary_container"]
     default_authorization_mode: Literal["per_run", "bounded_session"]
     allow_managed_temporary_containers: bool
@@ -91,18 +152,19 @@ class _ValidatedPolicy(TypedDict):
     max_evidence_bytes: int
     trace_max_duration_seconds: int
     managed: ManagedDockerProjectPolicy
+    optimization: DockerOptimizationProjectPolicy
 
 
 def render_default_docker_project_policy() -> str:
     """Return the bilingual, inactive-by-default managed-container policy."""
-    return """# PerfLens v0.3.1 local Docker target policy.
-# PerfLens v0.3.1 本地 Docker 目标策略。
+    return """# PerfLens v0.3.2 local Docker target and optimization policy.
+# PerfLens v0.3.2 本地 Docker 目标与优化策略。
 # This file grants no target by itself. The Agent must still request per-run or bounded-session
 # authorization, and every container/PID is independently rebound by the Broker and Helper.
 # 本文件本身不授权任何目标; Agent 仍须请求单次或本轮对话授权,
 # 且 Broker/Helper 会独立复核容器与 PID。
 
-schema_version = "1.0"
+schema_version = "1.1"
 target_runtime = "docker"
 default_workflow = "existing_container"
 default_authorization_mode = "per_run"
@@ -141,6 +203,38 @@ treatment_paths = []
 benchmark_output = ""
 benchmark_format = "auto"
 benchmark_name = ""
+
+[optimization]
+# A v0.3.2 optimization session remains disabled until every field below is reviewed. Enabling it
+# permits one explicitly confirmed, bounded session to build a baseline, edit only mutable_paths,
+# build candidates, collect evidence, and run matched A/B checks. It never grants commit or push.
+# v0.3.2 优化会话默认关闭。审查下列全部字段后显式开启, 才允许一次确认覆盖基线构建、
+# 仅修改 mutable_paths、候选构建、证据采集与匹配 A/B; 它永远不授权 commit 或 push。
+enabled = false
+context_paths = []
+mutable_paths = []
+dockerfile = ""
+target = ""
+platform = "linux/amd64"
+# Fixed NAME=value entries only. Secrets and environment expansion are not supported.
+# 只允许固定 NAME=value; 不支持凭据或环境变量展开。
+build_args = []
+base_image_digest = ""
+network_tier = "local_only"
+builder_policy_id = ""
+max_candidate_rounds = 3
+max_builds = 4
+max_workload_runs = 10
+max_recoverable_retries = 1
+max_build_seconds = 900
+max_total_build_seconds = 3600
+max_workload_active_seconds = 1800
+hard_expiry_seconds = 7200
+max_evidence_bytes = 1073741824
+max_temporary_image_bytes = 10737418240
+record_max_duration_seconds = 30
+record_frequency_hz = 99
+trace_max_duration_seconds = 10
 """
 
 
@@ -222,10 +316,12 @@ def assert_docker_project_policy_current(
 
 
 def _validate_policy_values(parsed: dict[str, object]) -> _ValidatedPolicy:
-    if set(parsed) != _TOP_LEVEL_KEYS:
-        raise _policy_error("Docker project policy has missing or unknown top-level fields")
-    if parsed["schema_version"] != "1.0" or parsed["target_runtime"] != "docker":
+    schema_version = parsed.get("schema_version")
+    if schema_version not in {"1.0", "1.1"} or parsed.get("target_runtime") != "docker":
         raise _policy_error("Docker project policy version or runtime is unsupported")
+    expected_keys = _TOP_LEVEL_KEYS_V1 if schema_version == "1.0" else _TOP_LEVEL_KEYS_V1_1
+    if set(parsed) != expected_keys:
+        raise _policy_error("Docker project policy has missing or unknown top-level fields")
     workflow = parsed["default_workflow"]
     authorization = parsed["default_authorization_mode"]
     if workflow not in {"existing_container", "managed_temporary_container"}:
@@ -242,14 +338,35 @@ def _validate_policy_values(parsed: dict[str, object]) -> _ValidatedPolicy:
         raise _policy_error("Docker session hard expiry cannot be shorter than active time")
     if workflow == "managed_temporary_container" and not allow_managed:
         raise _policy_error("Docker default managed workflow is disabled by project policy")
+    optimization = _disabled_optimization_policy()
+    if schema_version == "1.1":
+        raw_optimization = parsed["optimization"]
+        if not isinstance(raw_optimization, dict):
+            raise _policy_error("Docker optimization policy must be a table")
+        typed_optimization = cast(dict[str, object], raw_optimization)
+        if set(typed_optimization) != _OPTIMIZATION_KEYS:
+            raise _policy_error("Docker optimization policy has missing or unknown fields")
+        optimization = _validate_optimization(typed_optimization)
     managed = parsed["managed"]
     if not isinstance(managed, dict):
         raise _policy_error("Docker managed policy must be a table")
     typed_managed = cast(dict[str, object], managed)
     if set(typed_managed) != _MANAGED_KEYS:
         raise _policy_error("Docker managed policy has missing or unknown fields")
-    validated_managed = _validate_managed(typed_managed, enabled=allow_managed)
+    validated_managed = _validate_managed(
+        typed_managed,
+        enabled=allow_managed,
+        image_required=not optimization.enabled,
+    )
+    if optimization.enabled:
+        if not allow_managed:
+            raise _policy_error("Docker optimization requires managed temporary containers")
+        if workflow != "managed_temporary_container":
+            raise _policy_error("Docker optimization requires the managed default workflow")
+        if not validated_managed.benchmark_output:
+            raise _policy_error("Docker optimization requires a benchmark output contract")
     return {
+        "schema_version": cast(Literal["1.0", "1.1"], schema_version),
         "default_workflow": cast(
             Literal["existing_container", "managed_temporary_container"], workflow
         ),
@@ -261,6 +378,7 @@ def _validate_policy_values(parsed: dict[str, object]) -> _ValidatedPolicy:
         "max_evidence_bytes": max_evidence,
         "trace_max_duration_seconds": trace_duration,
         "managed": validated_managed,
+        "optimization": optimization,
     }
 
 
@@ -268,6 +386,7 @@ def _validate_managed(
     values: dict[str, object],
     *,
     enabled: bool,
+    image_required: bool,
 ) -> ManagedDockerProjectPolicy:
     image = values["image_digest"]
     entrypoint = values["entrypoint"]
@@ -336,14 +455,16 @@ def _validate_managed(
         not isinstance(benchmark_name_value, str)
         or len(benchmark_name_value.encode()) > 256
         or any(
-            ord(character) < 0x20 or ord(character) == 0x7F
-            for character in benchmark_name_value
+            ord(character) < 0x20 or ord(character) == 0x7F for character in benchmark_name_value
         )
         or (benchmark_name_value and not benchmark_output)
     ):
         raise _policy_error("Docker managed benchmark name is invalid or has no output")
-    if enabled and (not image or not entrypoint or not user):
-        raise _policy_error("Enabled managed Docker workflow requires image, entrypoint, and user")
+    if enabled and ((image_required and not image) or not entrypoint or not user):
+        raise _policy_error(
+            "Enabled managed Docker workflow requires its image when not building, entrypoint, "
+            "and user"
+        )
     return ManagedDockerProjectPolicy(
         image_digest=image,
         entrypoint=entrypoint,
@@ -361,6 +482,178 @@ def _validate_managed(
         ),
         benchmark_name=benchmark_name_value or None,
     )
+
+
+def _disabled_optimization_policy() -> DockerOptimizationProjectPolicy:
+    return DockerOptimizationProjectPolicy(
+        enabled=False,
+        context_paths=(),
+        mutable_paths=(),
+        dockerfile="",
+        target=None,
+        platform="linux/amd64",
+        build_args=(),
+        base_image_digest="",
+        network_tier="local_only",
+        builder_policy_id=None,
+        max_candidate_rounds=3,
+        max_builds=4,
+        max_workload_runs=10,
+        max_recoverable_retries=1,
+        max_build_seconds=900,
+        max_total_build_seconds=3600,
+        max_workload_active_seconds=1800,
+        hard_expiry_seconds=7200,
+        max_evidence_bytes=1 << 30,
+        max_temporary_image_bytes=10 << 30,
+        record_max_duration_seconds=30,
+        record_frequency_hz=99,
+        trace_max_duration_seconds=10,
+    )
+
+
+def _validate_optimization(values: dict[str, object]) -> DockerOptimizationProjectPolicy:
+    enabled = _boolean(values["enabled"], "optimization switch")
+    context_paths = _relative_path_list(values["context_paths"], "optimization context", 128)
+    mutable_paths = _relative_path_list(values["mutable_paths"], "optimization mutable", 128)
+    for mutable in mutable_paths:
+        if not any(_path_is_within(mutable, context) for context in context_paths):
+            raise _policy_error("Docker optimization mutable paths must be inside context paths")
+    dockerfile_value = values["dockerfile"]
+    if not isinstance(dockerfile_value, str):
+        raise _policy_error("Docker optimization Dockerfile must be a string")
+    dockerfile = (
+        _project_relative_path(dockerfile_value, "optimization Dockerfile")
+        if dockerfile_value
+        else ""
+    )
+    if dockerfile and not any(_path_is_within(dockerfile, path) for path in context_paths):
+        raise _policy_error("Docker optimization Dockerfile must be inside context paths")
+    target = values["target"]
+    platform = values["platform"]
+    if (
+        not isinstance(target, str)
+        or len(target.encode("utf-8")) > 128
+        or any(ord(character) < 0x21 or ord(character) == 0x7F for character in target)
+        or not isinstance(platform, str)
+        or not re.fullmatch(r"linux/[a-z0-9_]+(?:/[a-z0-9_.-]+)?", platform)
+    ):
+        raise _policy_error("Docker optimization target or Linux platform is invalid")
+    raw_build_args = values["build_args"]
+    if not isinstance(raw_build_args, list):
+        raise _policy_error("Docker optimization build arguments are invalid or unbounded")
+    typed_build_args = cast(list[object], raw_build_args)
+    if len(typed_build_args) > 64:
+        raise _policy_error("Docker optimization build arguments are invalid or unbounded")
+    build_args: list[tuple[str, str]] = []
+    for raw in typed_build_args:
+        if not isinstance(raw, str) or "=" not in raw or len(raw.encode("utf-8")) > 4096:
+            raise _policy_error("Docker optimization build arguments must be fixed NAME=value")
+        name, value = raw.split("=", 1)
+        if (
+            not _BUILD_ARGUMENT_NAME.fullmatch(name)
+            or _SENSITIVE_BUILD_ARGUMENT.search(name)
+            or "\x00" in value
+        ):
+            raise _policy_error("Docker optimization build argument is unsafe")
+        build_args.append((name, value))
+    if len({name for name, _ in build_args}) != len(build_args):
+        raise _policy_error("Docker optimization build argument names must be unique")
+    base_digest = values["base_image_digest"]
+    network_tier = values["network_tier"]
+    builder_policy_id = values["builder_policy_id"]
+    if not isinstance(base_digest, str) or not _IMAGE_DIGEST.fullmatch(base_digest):
+        raise _policy_error("Docker optimization base image must be a fixed sha256 digest")
+    if network_tier not in {"local_only", "pinned_pull", "admin_builder_network"}:
+        raise _policy_error("Docker optimization network tier is unsupported")
+    if not isinstance(builder_policy_id, str) or not _BUILDER_POLICY_ID.fullmatch(
+        builder_policy_id
+    ):
+        raise _policy_error("Docker optimization Builder policy ID is invalid")
+    if network_tier == "local_only" and builder_policy_id:
+        raise _policy_error("Local-only Docker optimization cannot select a Builder policy")
+    if network_tier != "local_only" and not builder_policy_id:
+        raise _policy_error("Networked Docker optimization requires an administrator policy ID")
+    max_candidates = _integer(values["max_candidate_rounds"], "candidate rounds", 1, 3)
+    max_builds = _integer(values["max_builds"], "optimization builds", 2, 4)
+    if max_builds < max_candidates + 1:
+        raise _policy_error("Docker optimization build budget cannot cover every candidate")
+    max_build_seconds = _integer(values["max_build_seconds"], "build seconds", 1, 900)
+    total_build_seconds = _integer(
+        values["max_total_build_seconds"], "total build seconds", 1, 3600
+    )
+    if total_build_seconds < max_build_seconds:
+        raise _policy_error("Docker optimization total build time is too small")
+    hard_expiry = _integer(values["hard_expiry_seconds"], "optimization expiry", 1, 7200)
+    workload_active = _integer(
+        values["max_workload_active_seconds"], "optimization workload time", 1, 1800
+    )
+    if hard_expiry < max(total_build_seconds, workload_active):
+        raise _policy_error("Docker optimization expiry cannot cover its bounded operations")
+    if enabled and (not context_paths or not mutable_paths or not dockerfile or not base_digest):
+        raise _policy_error(
+            "Enabled Docker optimization requires context, mutable paths, Dockerfile, and base "
+            "image digest"
+        )
+    return DockerOptimizationProjectPolicy(
+        enabled=enabled,
+        context_paths=context_paths,
+        mutable_paths=mutable_paths,
+        dockerfile=dockerfile,
+        target=target or None,
+        platform=platform,
+        build_args=tuple(sorted(build_args)),
+        base_image_digest=base_digest,
+        network_tier=cast(
+            Literal["local_only", "pinned_pull", "admin_builder_network"], network_tier
+        ),
+        builder_policy_id=builder_policy_id or None,
+        max_candidate_rounds=max_candidates,
+        max_builds=max_builds,
+        max_workload_runs=_integer(
+            values["max_workload_runs"], "optimization workload runs", 1, 10
+        ),
+        max_recoverable_retries=_integer(
+            values["max_recoverable_retries"], "optimization retries", 0, 1
+        ),
+        max_build_seconds=max_build_seconds,
+        max_total_build_seconds=total_build_seconds,
+        max_workload_active_seconds=workload_active,
+        hard_expiry_seconds=hard_expiry,
+        max_evidence_bytes=_integer(
+            values["max_evidence_bytes"], "optimization evidence bytes", 1, 1 << 30
+        ),
+        max_temporary_image_bytes=_integer(
+            values["max_temporary_image_bytes"], "temporary image bytes", 1, 10 << 30
+        ),
+        record_max_duration_seconds=_integer(
+            values["record_max_duration_seconds"], "optimization record duration", 1, 30
+        ),
+        record_frequency_hz=_integer(
+            values["record_frequency_hz"], "optimization record frequency", 1, 99
+        ),
+        trace_max_duration_seconds=_integer(
+            values["trace_max_duration_seconds"], "optimization trace duration", 1, 10
+        ),
+    )
+
+
+def _relative_path_list(value: object, label: str, maximum: int) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise _policy_error(f"Docker {label} paths are invalid or unbounded")
+    items = cast(list[object], value)
+    if len(items) > maximum or any(not isinstance(item, str) for item in items):
+        raise _policy_error(f"Docker {label} paths are invalid or unbounded")
+    paths = tuple(_project_relative_path(cast(str, item), label) for item in items)
+    if len(set(paths)) != len(paths):
+        raise _policy_error(f"Docker {label} paths must be unique")
+    return tuple(sorted(paths))
+
+
+def _path_is_within(candidate: str, parent: str) -> bool:
+    candidate_path = PurePosixPath(candidate)
+    parent_path = PurePosixPath(parent)
+    return candidate_path == parent_path or candidate_path.is_relative_to(parent_path)
 
 
 def _container_path(value: str, label: str) -> None:

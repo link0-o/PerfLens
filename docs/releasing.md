@@ -29,7 +29,7 @@ The commands below use the planned next version as an example. Set
 files before running them.
 
 ```bash
-perflens_release_version=0.3.1
+perflens_release_version=0.3.2
 perflens_release_tag="v${perflens_release_version}"
 uv sync --all-groups --frozen
 uv run ruff check .
@@ -95,7 +95,7 @@ Create and push an annotated version tag only after the release commit is on
 `main`:
 
 ```bash
-perflens_release_tag=v0.3.1
+perflens_release_tag=v0.3.2
 git tag -a "$perflens_release_tag" -m "PerfLens ${perflens_release_tag}"
 git push origin "$perflens_release_tag"
 ```
@@ -130,7 +130,7 @@ publisher runs only after attestation succeeds. After publication, spot-check
 at least one asset:
 
 ```bash
-perflens_release_version=0.3.1
+perflens_release_version=0.3.2
 gh attestation verify "./dist/perflens-${perflens_release_version}-py3-none-any.whl" \
   --repo link0-o/PerfLens \
   --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
@@ -144,7 +144,7 @@ before enabling automated publication. Publish only the Python distributions,
 not the Skill archive or SBOM:
 
 ```bash
-perflens_release_version=0.3.1
+perflens_release_version=0.3.2
 uv publish \
   "dist/perflens-${perflens_release_version}-py3-none-any.whl" \
   "dist/perflens-${perflens_release_version}.tar.gz"

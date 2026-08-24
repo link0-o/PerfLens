@@ -100,10 +100,10 @@ uv run pytest --cov=perflens --cov-fail-under=85
 ```bash
 uv build --no-sources
 uv run --isolated --no-project \
-  --with dist/perflens-0.3.1-py3-none-any.whl \
+  --with dist/perflens-0.3.2-py3-none-any.whl \
   tests/package_smoke.py
 uv run --isolated --no-project \
-  --with dist/perflens-0.3.1.tar.gz \
+  --with dist/perflens-0.3.2.tar.gz \
   tests/package_smoke.py
 ```
 

@@ -18,6 +18,8 @@
 [《Collector 与用户态锁能力路线图》](docs/collector-capability-roadmap.zh-CN.md)。发布版
 `v0.3.1` 的本地 Docker 单进程能力见
 [《Docker 进程采集与分析指南》](docs/docker-container-roadmap.zh-CN.md)。
+`v0.3.2` 的一次授权构建与自动优化合同见
+[《Docker 自动优化指南》](docs/docker-optimization-roadmap.zh-CN.md)。
 perf 原始证据如何转换、校验并带着质量边界交给 Agent，见
 [《Perf 原始证据到 Agent 数据的可信链路》](docs/evidence-pipeline.zh-CN.md)。
 
@@ -52,9 +54,9 @@ PerfLens 不包含 LLM API、Web UI、自动修改源码功能、Benchmark 执�
 从 GitHub Releases 下载 wheel 后，推荐作为独立工具安装：
 
 ```bash
-pipx install ./perflens-0.3.1-py3-none-any.whl
+pipx install ./perflens-0.3.2-py3-none-any.whl
 # 或者
-uv tool install ./perflens-0.3.1-py3-none-any.whl
+uv tool install ./perflens-0.3.2-py3-none-any.whl
 ```
 
 不要手工提取 wheel。安装成功后进入要分析的项目，首次运行：

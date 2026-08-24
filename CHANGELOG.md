@@ -4,6 +4,13 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- v0.3.2 project policy schema 1.1 defines a default-off, strictly bounded Docker optimization
+  contract while preserving strict schema 1.0 fixed-image compatibility. The bilingual design
+  contract fixes context/mutation boundaries, build/network tiers, budgets, planned typed MCP
+  tools, evidence artifacts, and matched A/B gates before executable build authority is added.
+
 ### Fixed
 
 - Verified Docker `record` analysis now disables ambiguous inline expansion, requests full source

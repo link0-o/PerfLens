@@ -18,6 +18,8 @@ switching, rollback, and project resynchronization.
 See the [Collector and user-space-lock roadmap](docs/collector-capability-roadmap.md) for the
 current maturity boundary and phased extension plan. Release v0.3.1 local-Docker single-process
 support is specified separately in the [Docker process guide](docs/docker-container-roadmap.md).
+The v0.3.2 bounded build-and-optimize contract is tracked in the
+[Docker optimization guide](docs/docker-optimization-roadmap.md).
 See the [trustworthy perf evidence pipeline](docs/evidence-pipeline.md) for raw-input binding,
 conversion provenance, quality gates, and Agent-facing verification.
 
@@ -60,9 +62,9 @@ PerfLens requires Python 3.12 or newer.
 For a GitHub release, download the wheel and install it as an isolated tool:
 
 ```bash
-pipx install ./perflens-0.3.1-py3-none-any.whl
+pipx install ./perflens-0.3.2-py3-none-any.whl
 # or
-uv tool install ./perflens-0.3.1-py3-none-any.whl
+uv tool install ./perflens-0.3.2-py3-none-any.whl
 ```
 
 Then opt one project in. Other projects do not see the Skill or MCP server:

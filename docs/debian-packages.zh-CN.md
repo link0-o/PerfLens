@@ -17,7 +17,7 @@ PerfLens 为 Debian 13 `amd64` 提供两个职责分离的原生安装包：
 只分析已有 Profile、不需要自动采集时，只安装主包：
 
 ```bash
-sudo apt install ./perflens_0.3.1-12_amd64.deb
+sudo apt install ./perflens_0.3.2-1_amd64.deb
 cd /绝对路径/你的项目
 perflens init
 ```
@@ -26,8 +26,8 @@ perflens init
 
 ```bash
 sudo apt install \
-  ./perflens_0.3.1-12_amd64.deb \
-  ./perflens-collector_0.3.1-12_amd64.deb
+  ./perflens_0.3.2-1_amd64.deb \
+  ./perflens-collector_0.3.2-1_amd64.deb
 
 perflens setup \
   --project /绝对路径/你的项目 \
@@ -65,9 +65,8 @@ perflens init --prepare-collector \
 固定 Rust Helper unit 获得收窄后的 capability bounding set。
 
 上一条 `0.2.0` 修复线保持上游版本不变，仅把 Debian 修订号从 `1` 增加到 `2`，因此已经安装
-`0.2.0-1` 的主机可以用 APT 升级到 `0.2.0-2`，CLI 仍显示 `0.2.0`。当前 `0.3.1`
-候选使用 Debian 修订号 `7`；APT 会把它识别为早期本地 `0.3.1-1` 至 `0.3.1-6` 候选的
-更新版本，而所有 PerfLens 命令仍显示 `0.3.1`。文件名只是示例，
+当前 `0.3.2` 开发包把 Debian 修订号重置为 `1`；APT 会先比较上游版本 `0.3.2`，因此
+它仍高于所有 `0.3.1-*` 安装包，而所有 PerfLens 命令显示 `0.3.2`。文件名只是示例，
 应以实际下载文件为准。安装包不会自动启动服务、写入
 `/etc/perflens`、修改 sysctl/capability 或授予用户权限。检查引导生成的双语
 `collector.toml` 后，由管理员明确执行：

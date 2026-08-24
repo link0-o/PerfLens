@@ -2,6 +2,9 @@
 
 [实施审计合同](v0.3.1-execution-contract.zh-CN.md)
 
+一次授权的构建与优化扩展另见
+[《v0.3.2 Docker 自动优化合同》](docker-optimization-roadmap.zh-CN.md)。
+
 简体中文 | [English](docker-container-roadmap.md)
 
 状态：**发布候选已实现；自动门禁通过，等待真实主机 Docker 验收**
