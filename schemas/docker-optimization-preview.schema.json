@@ -165,6 +165,13 @@
       "title": "Content Sha256",
       "type": "string"
     },
+    "context_paths": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Context Paths",
+      "type": "array"
+    },
     "created_at": {
       "title": "Created At",
       "type": "string"
@@ -180,6 +187,13 @@
     "mutable_dockerfile": {
       "title": "Mutable Dockerfile",
       "type": "boolean"
+    },
+    "mutable_paths": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Mutable Paths",
+      "type": "array"
     },
     "network_tier": {
       "enum": [
@@ -264,6 +278,8 @@
     "allowed_modes",
     "network_tier",
     "base_image_present",
+    "context_paths",
+    "mutable_paths",
     "mutable_dockerfile",
     "mutable_dependency_lock",
     "budget",

@@ -1,8 +1,10 @@
 """Versioned public contracts for bounded Docker build evidence.
 
-These models deliberately expose hashes and bounded metadata only. Source names,
-source bytes, authorization tokens, credentials, Docker endpoint paths, and
-private archive paths remain inside the typed build adapter.
+Build evidence deliberately exposes hashes and bounded metadata only. The
+authorization Preview additionally exposes the exact reviewed project-relative
+context and mutable path scopes required for informed consent. Source bytes,
+authorization tokens, credentials, Docker endpoint paths, absolute host paths,
+and private archive paths remain inside the typed build adapter.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
+from pathlib import PurePosixPath
 from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
@@ -54,6 +57,24 @@ def _timestamp(value: str, label: str) -> datetime:
 def _unique_sorted(values: tuple[str, ...], label: str) -> None:
     if len(set(values)) != len(values) or tuple(sorted(values)) != values:
         raise ValueError(f"{label} must be unique and sorted")
+
+
+def _project_relative_paths(values: tuple[str, ...], label: str) -> None:
+    if not values or len(values) > 128:
+        raise ValueError(f"{label} must be non-empty and bounded")
+    _unique_sorted(values, label)
+    for value in values:
+        path = PurePosixPath(value)
+        if (
+            not value
+            or value.startswith("/")
+            or "\x00" in value
+            or len(value.encode("utf-8")) > 4096
+            or str(path) != value
+            or value in {".", ".."}
+            or ".." in path.parts
+        ):
+            raise ValueError(f"{label} must contain normalized project-relative paths")
 
 
 def _derived_id(prefix: str, domain: str, *values: str) -> str:
@@ -485,6 +506,8 @@ class DockerOptimizationPreviewArtifact(ContractModel):
     network_tier: NetworkTier
     base_image_present: bool
     baseline_build_required: Literal[True] = True
+    context_paths: tuple[str, ...]
+    mutable_paths: tuple[str, ...]
     mutable_dockerfile: bool
     mutable_dependency_lock: bool
     budget: DockerOptimizationBudget
@@ -508,6 +531,17 @@ class DockerOptimizationPreviewArtifact(ContractModel):
             raise ValueError("Docker optimization Preview modes must be non-empty and canonical")
         if not self.planned_actions or len(self.planned_actions) > 32:
             raise ValueError("Docker optimization Preview requires bounded planned actions")
+        _project_relative_paths(self.context_paths, "Docker optimization context paths")
+        _project_relative_paths(self.mutable_paths, "Docker optimization mutable paths")
+        if any(
+            not any(
+                PurePosixPath(mutable) == PurePosixPath(context)
+                or PurePosixPath(mutable).is_relative_to(PurePosixPath(context))
+                for context in self.context_paths
+            )
+            for mutable in self.mutable_paths
+        ):
+            raise ValueError("Docker optimization mutable paths must be inside context paths")
         expected_id = derive_docker_optimization_preview_id(
             self.project_identity_sha256,
             self.recipe_content_sha256,

@@ -22,6 +22,7 @@ from perflens.collection.planning import (
     CollectionPlanRequest,
 )
 from perflens.contracts.artifacts import (
+    ArtifactReference,
     BenchmarkArtifact,
     BenchmarkComparison,
     BenchmarkEnvironment,
@@ -47,7 +48,12 @@ from perflens.contracts.docker import (
 from perflens.docker.capability import discover_docker_capability
 from perflens.docker.project_config import render_default_docker_project_policy
 from perflens.domain.errors import ErrorCode, PerfLensError
-from perflens.mcp.server import ServerConfig, create_server
+from perflens.mcp.server import (
+    ServerConfig,
+    _finish_optimization_workload_with_evidence,  # pyright: ignore[reportPrivateUsage]
+    _managed_evidence_bytes,  # pyright: ignore[reportPrivateUsage]
+    create_server,
+)
 from perflens.mcp.storage import ArtifactStore, PathPolicy
 
 
@@ -844,6 +850,8 @@ def test_docker_optimization_preview_authorize_build_and_revoke_are_bound(
             )
             assert not preview_result.is_error
             preview = _structured(preview_result)
+            assert preview["context_paths"] == ["Dockerfile", "src"]
+            assert preview["mutable_paths"] == ["src"]
             invalid = await client.call_tool(
                 "authorize_docker_optimization_session",
                 {
@@ -1661,6 +1669,7 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
                 collection.collection_id
             )
             assert reference["summary"]["container_measurement_quality"] == "verified"
+            assert reference["summary"]["evidence_bytes"] == collection.output_bytes
             measurement_id = reference["summary"]["container_measurement_id"]
             assert isinstance(measurement_id, str)
             assert operations == [
@@ -1889,6 +1898,75 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             ]
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("value", (None, 0, -1, True, "120"))
+def test_managed_evidence_bytes_rejects_missing_or_invalid_projection(value: object) -> None:
+    reference = ArtifactReference(
+        artifact_id="container-run-test",
+        artifact_type="container-run",
+        uri="perflens://container-run/test",
+        summary={} if value is None else {"evidence_bytes": cast(Any, value)},
+    )
+
+    with pytest.raises(PerfLensError, match="valid evidence byte count"):
+        _managed_evidence_bytes(reference)
+
+
+def test_managed_evidence_bytes_accepts_verified_positive_projection() -> None:
+    reference = ArtifactReference(
+        artifact_id="container-run-test",
+        artifact_type="container-run",
+        uri="perflens://container-run/test",
+        summary={"evidence_bytes": 120},
+    )
+
+    assert _managed_evidence_bytes(reference) == 120
+
+
+def test_optimization_workload_charges_managed_evidence_bytes(tmp_path: Path) -> None:
+    from tests.unit.test_docker_optimization_runtime import make_optimization_runtime
+
+    runtime, _, _ = make_optimization_runtime(tmp_path)
+    preview = runtime.preview(allowed_modes=("stat",))
+    authorized = runtime.authorize(
+        preview_id=preview.preview.preview_id,
+        preview_content_sha256=preview.preview.content_sha256,
+        authorization_summary_sha256=preview.preview.authorization_summary_sha256,
+        explicit_authorization=(
+            "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
+        ),
+    )
+    baseline = runtime.build(
+        authorized.session_id,
+        build_kind="baseline",
+        candidate_round=0,
+    )
+    lease = runtime.begin_workload(
+        authorized.session_id,
+        build_id=baseline.build.build_id,
+        mode="stat",
+        reserve_active_seconds=30,
+        reserve_evidence_bytes=1 << 20,
+    )
+    reference = ArtifactReference(
+        artifact_id="container-run-test",
+        artifact_type="container-run",
+        uri="perflens://container-run/test",
+        summary={"evidence_bytes": 323_784},
+    )
+
+    completed = _finish_optimization_workload_with_evidence(
+        runtime,
+        authorized.session_id,
+        lease,
+        actual_active_seconds=1.25,
+        collected=reference,
+    )
+
+    assert completed.workload_runs_used == 1
+    assert completed.workload_active_seconds_used == 2
+    assert completed.evidence_bytes_used == 323_784
 
 
 def test_trace_evidence_is_analyzed_verified_and_paged_without_a_raw_path(

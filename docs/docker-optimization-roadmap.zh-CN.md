@@ -70,8 +70,11 @@ perf Helper 都不能直接得到 Docker Socket，也不能传入任意 Docker �
 也被快照捕获时才允许。immutable 内容变化终止会话；mutable 内容变化成为候选 Treatment。
 
 Adapter 通过私有 IID 与 metadata 文件取得结果，再独立验证最终 digest、platform、镜像大小、
-会话标签、Recipe/Context 摘要和 provenance。清理仅删除能证明由本会话创建、且未被既有 Tag
-或其他容器引用的对象；禁止全局镜像或缓存 prune。
+会话标签、Recipe/Context 摘要和 provenance。Exporter 身份既接受 Buildx 官方的 config
+digest/descriptor 投影，也接受旧版仅提供 image digest 的投影；所有已提供 digest 都必须格式
+正确，互相矛盾的 config 或 manifest 声明会被拒绝。失败时只保留有界 digest 投影，不保留原始
+metadata。清理仅删除能证明由本会话创建、且未被既有 Tag 或其他容器引用的对象；禁止全局镜像
+或缓存 prune。
 
 ## 网络层级
 
@@ -81,15 +84,23 @@ Adapter 通过私有 IID 与 metadata 文件取得结果，再独立验证最终
    `docker-container` BuildKit Builder。其镜像、网络、proxy/CNI、registry 范围和 Buildx
    source policy 均由管理员提供；PerfLens 不创建或修改 Builder。
 
+在 `local_only` 中，配置的 digest 可能是本地 image ID，而不是 registry `RepoDigest`；BuildKit
+不得因此去 registry 解析它。类型化 Adapter 会为已经验证的本地镜像创建不可预测的会话私有
+Tag，只在未链接的派生 Context 中替换已验证的外部 `FROM` 引用，授权 Dockerfile 与原 Context
+快照保持不变。Adapter 会再次验证 Tag 身份，要求 Buildx provenance materials 绑定配置 digest，
+并且只删除能证明由本次操作创建的 Tag；预先存在、被替换或身份不明确的 Tag 绝不覆盖或删除。
+
 永久拒绝 remote Docker Context、host network、insecure/device entitlement、secret/SSH
 mount、额外 build context、任意 cache 导入导出、宿主挂载、tag-only 基础镜像、远程 `ADD`
 和远程自定义 frontend。联网 A/B 必须绑定相同 Builder、网络策略和解析后的 provenance。
 
 ## 授权、预算与 Agent 判断
 
-preview 绑定当前 Recipe、Context、Benchmark、Collector 策略、Builder 策略和全部限制的哈希。
-如果结果镜像不存在，只说明确认后需要构建；preview 阶段不得 build 或 pull。authorize 要求
-完全匹配 preview 摘要和固定确认 token，创建绑定客户端连接的内存 lease，并拒绝重放。
+preview 会直接公开规范化的项目相对 `context_paths` 和 `mutable_paths`，并将它们与当前 Recipe、
+Context、Benchmark、Collector 策略、Builder 策略和全部限制一起绑定哈希。这是知情授权界面；
+Agent 不得用“没有可修改路径”等自行推断替换工具返回的路径清单。如果结果镜像不存在，只说明
+确认后需要构建；preview 阶段不得 build 或 pull。authorize 要求完全匹配 preview 摘要和固定
+确认 token，创建绑定客户端连接的内存 lease，并拒绝重放。
 
 Agent 不机械执行全部模式：先运行最低成本的正确性/Benchmark 和 `stat`，再根据观测选择
 `record`、`sched`、`off_cpu` 或 `lock`。安全拒绝、身份变化或正确性失败不得原样重试；可恢复
@@ -98,6 +109,8 @@ Agent 不机械执行全部模式：先运行最低成本的正确性/Benchmark 
 固定上限为三个候选、四次构建、十次 workload、单次构建 900 秒、累计构建 3600 秒、
 workload 活动 1800 秒、硬过期 7200 秒、证据 1 GiB、临时镜像 10 GiB，所有并发均为 1。
 record 最长 30 秒、99 Hz；Trace 单次最长 10 秒。任一预算耗尽即停止，不能静默新建会话。
+每次成功的 stat、record 或 Trace 都必须把 Broker 已验证的原始证据字节数带入优化会话，用
+实际正数字节替换预留上限，不能把已经产生的证据静默记为 0。
 
 ## 匹配 A/B 与 Verified Improvement
 

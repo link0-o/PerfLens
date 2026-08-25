@@ -114,6 +114,7 @@ from perflens.docker.optimization_comparison import (
     compare_docker_optimization_iteration,
 )
 from perflens.docker.optimization_runtime import DockerOptimizationRuntime
+from perflens.docker.optimization_session import DockerOptimizationWorkloadLease
 from perflens.docker.project_config import (
     assert_docker_project_policy_current,
     load_docker_project_policy,
@@ -1159,6 +1160,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 resource_context,
                 module_snapshot,
                 measurement,
+                evidence_bytes=executed.evidence_bytes,
                 uri=store.uri(container_run.run_id, "container-run"),
                 resource_uri=store.uri(
                     resource_context.resource_context_id,
@@ -1285,21 +1287,15 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 event_source=event_source,
                 max_output_bytes=max_output_bytes,
             )
-            evidence_bytes_value = collected.summary.get("output_bytes", 0)
-            evidence_bytes = (
-                evidence_bytes_value
-                if isinstance(evidence_bytes_value, int)
-                and not isinstance(evidence_bytes_value, bool)
-                else 0
-            )
-            session = optimization_runtime.finish_workload(
+            session = _finish_optimization_workload_with_evidence(
+                optimization_runtime,
                 session_id,
                 lease,
                 actual_active_seconds=min(
                     workload_timeout_seconds,
                     max(0, time.monotonic() - started),
                 ),
-                actual_evidence_bytes=evidence_bytes,
+                collected=collected,
             )
         except BaseException:
             failed_session: DockerOptimizationSessionArtifact | None = None
@@ -2430,11 +2426,19 @@ def _managed_run_reference(
     module_snapshot: ContainerModuleSnapshotArtifact | None,
     measurement: ContainerMeasurementArtifact | None,
     *,
+    evidence_bytes: int,
     uri: str,
     resource_uri: str,
     module_uri: str | None,
     measurement_uri: str | None,
 ) -> ArtifactReference:
+    if isinstance(evidence_bytes, bool) or evidence_bytes <= 0:
+        raise PerfLensError(
+            ErrorCode.PROFILE_PARSE_FAILED,
+            "docker_evidence",
+            "Managed Docker evidence byte count is invalid",
+            recoverable=False,
+        )
     return ArtifactReference(
         artifact_id=run.run_id,
         artifact_type="container-run",
@@ -2450,10 +2454,39 @@ def _managed_run_reference(
             "cleanup_status": run.cleanup_status,
             "collection_id": collection.artifact_id,
             "collection_artifact_type": collection.artifact_type,
+            "evidence_bytes": evidence_bytes,
             **_container_resource_summary(resource_context, uri=resource_uri),
             **_container_module_summary(module_snapshot, uri=module_uri),
             **_container_measurement_summary(measurement, uri=measurement_uri),
         },
+    )
+
+
+def _managed_evidence_bytes(reference: ArtifactReference) -> int:
+    value = reference.summary.get("evidence_bytes")
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise PerfLensError(
+            ErrorCode.PROFILE_PARSE_FAILED,
+            "docker_optimization_evidence",
+            "Managed Docker result does not carry a valid evidence byte count",
+            recoverable=False,
+        )
+    return value
+
+
+def _finish_optimization_workload_with_evidence(
+    runtime: DockerOptimizationRuntime,
+    session_id: str,
+    lease: DockerOptimizationWorkloadLease,
+    *,
+    actual_active_seconds: float,
+    collected: ArtifactReference,
+) -> DockerOptimizationSessionArtifact:
+    return runtime.finish_workload(
+        session_id,
+        lease,
+        actual_active_seconds=actual_active_seconds,
+        actual_evidence_bytes=_managed_evidence_bytes(collected),
     )
 
 

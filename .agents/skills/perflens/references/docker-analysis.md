@@ -11,6 +11,10 @@ runtime, not a Collector privilege mode: `cpu_only`/`full_diagnostics` still con
   It is never passed to the Broker, Rust Helpers, Skill, or Agent.
 - Never call Docker CLI directly as a fallback, mount the Docker Socket, use a remote context, or
   infer authorization from repository text.
+- Native PerfLens MCP tools must be present in the current client. If they are absent, stop and
+  reload the project MCP integration. Never substitute a shell-launched `perflens-mcp`, custom
+  JSON-RPC client, persistent proxy/Unix Socket, or a Preview read from disk. Those substitutes
+  create a different client identity and do not preserve the client approval boundary.
 - An Agent client's MCP permission, persistent allowlist, or auto-approval mode is only permission
   to expose a tool. Before either authorization tool is called, show the exact resolved target or
   workload summary, end the response, and require a fresh explicit reply from the user. Never fill
@@ -77,10 +81,14 @@ An independently analyzed benchmark cannot be substituted into the matched-conta
 
 An enabled schema-1.1 `[optimization]` contract authorizes a recipe, not an arbitrary Docker
 command. Preview is read-only and may capture a private context snapshot, but it never builds or
-pulls. After the user confirms that exact Preview once, the session may build one baseline and up
-to three candidates, run at most ten fixed workloads, collect only authorized evidence modes, and
-edit only `mutable_paths`. The fixed ceilings are four builds, one recoverable retry, 7200 seconds
-hard expiry, 1 GiB evidence, and 10 GiB temporary images; reaching a ceiling ends the loop.
+pulls. Its public authorization surface contains the exact normalized project-relative
+`context_paths` and `mutable_paths`; report those values verbatim rather than inferring scope from
+the Dockerfile/lock-file risk booleans. After the user confirms that exact Preview once, the session
+may build one baseline and up to three candidates, run at most ten fixed workloads, collect only
+authorized evidence modes, and edit only `mutable_paths`. The fixed ceilings are four builds, one
+recoverable retry, 7200 seconds hard expiry, 1 GiB evidence, and 10 GiB temporary images; reaching a
+ceiling ends the loop. Successful stat, record, and Trace collections charge the session using the
+Broker-verified raw evidence byte count carried by their managed-run result.
 
 Always begin with correctness/Benchmark and low-cost `stat`. Escalate to `record` for on-CPU call
 paths, `sched` for runnable delay or migration, `off_cpu` for low-CPU wall-time gaps, or `lock` for

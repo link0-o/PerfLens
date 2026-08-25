@@ -172,6 +172,14 @@ PerfLens 保留其他 `mcpServers`，但拒绝覆盖名称相同且内容不同�
 [Skill 文档](https://code.claude.com/docs/en/slash-commands)和
 [MCP 项目级配置文档](https://code.claude.com/docs/en/mcp)。
 
+如果 Skill 已加载但客户端没有注入 PerfLens 原生 MCP 工具，应停止任务，并从已经完成
+初始化的项目中重启或重新加载客户端。不得让 Agent 通过 Shell 启动 `perflens-mcp`，也
+不得自建 JSON-RPC/Unix Socket 桥接器。Docker 优化会话绑定同一个原生客户端连接，只有
+该连接实时返回的 Preview 才能展示给用户确认。
+该 Preview 会直接返回规范化的项目相对 `context_paths` 与 `mutable_paths`；Agent 必须在
+一次确认前原样展示两份清单。成功的托管 stat、record 和 Trace 结果也会返回 Broker 已验证
+的 `evidence_bytes`，并计入优化会话预算，不能从后续分析投影中猜测。
+
 ## 分析 perf.data 时的配置
 
 `perf.data` 是二进制格式，PerfLens 不直接解析它，而是安全地调用系统 `perf script` 转换。MCP 需要额外的进程执行权限：

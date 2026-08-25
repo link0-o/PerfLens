@@ -169,6 +169,15 @@ started, restart once, then invoke `/perflens`.
 See the official Claude Code [Skills](https://code.claude.com/docs/en/slash-commands)
 and [MCP](https://code.claude.com/docs/en/mcp) documentation for client behavior.
 
+If the Skill loads but the native PerfLens MCP tools are absent, stop the task and restart or
+reload the client from the initialized project. Do not let an Agent launch `perflens-mcp` through
+the shell or create a custom JSON-RPC/Unix-socket bridge. Docker optimization sessions are bound
+to one native client connection, and only a Preview returned by that connection can be confirmed.
+That Preview directly returns the normalized project-relative `context_paths` and `mutable_paths`;
+the Agent must show both exact lists before the one confirmation. Successful managed stat, record,
+and Trace results also return their Broker-verified `evidence_bytes`, which is charged to the
+optimization session rather than inferred from a later analysis projection.
+
 ## Use the Skill
 
 The repository Skill is at `.agents/skills/perflens`. In Codex, invoke it explicitly when desired:

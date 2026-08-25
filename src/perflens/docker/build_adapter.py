@@ -12,7 +12,9 @@ import shutil
 import stat
 import tarfile
 import tempfile
-from contextlib import suppress
+from collections.abc import Generator
+from contextlib import contextmanager, suppress
+from copy import copy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,6 +57,7 @@ _BUILDER_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 _IMAGE_DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _TEMPORARY_TAG = re.compile(r"^perflens-opt-[a-f0-9]{20}:(?:baseline-0|candidate-[1-3])$")
+_TEMPORARY_BASE_TAG = re.compile(r"^perflens-opt-base-[a-f0-9]{20}:source$")
 _MAX_JSON_BYTES = 8 << 20
 _MAX_BUILD_OUTPUT_BYTES = 8 << 20
 _MAX_DOCKERFILE_BYTES = 1 << 20
@@ -245,7 +248,6 @@ class TypedDockerBuildAdapter:
             base_image_digest=policy.optimization.base_image_digest,
             administrator_policy=self._administrator_policy,
         )
-        del dockerfile
         if policy.optimization.network_tier == "pinned_pull":
             self._pull_pinned_base(policy)
         elif policy.optimization.network_tier == "local_only" and not self.base_image_present(
@@ -264,7 +266,17 @@ class TypedDockerBuildAdapter:
         private_root = _safe_private_directory(private_directory, uid=self._invoking_uid)
         iid_path = _unused_private_path(private_root, suffix=".iid")
         metadata_path = _unused_private_path(private_root, suffix=".metadata.json")
+        temporary_base_tag: str | None = None
+        owns_temporary_base_tag = False
+        build_completed = False
         try:
+            if policy.optimization.network_tier == "local_only":
+                temporary_base_tag = _temporary_base_tag(session_identity_sha256)
+                self._create_local_base_tag(
+                    policy.optimization.base_image_digest,
+                    temporary_base_tag,
+                )
+                owns_temporary_base_tag = True
             arguments = self._build_arguments(
                 policy=policy,
                 snapshot=snapshot,
@@ -275,7 +287,20 @@ class TypedDockerBuildAdapter:
                 iid_path=iid_path,
                 metadata_path=metadata_path,
             )
-            with open_docker_build_context_snapshot(snapshot) as context_stream:
+            context_manager = (
+                _open_local_base_context(
+                    snapshot,
+                    dockerfile=policy.optimization.dockerfile,
+                    dockerfile_content=dockerfile,
+                    base_image_digest=policy.optimization.base_image_digest,
+                    temporary_base_tag=temporary_base_tag,
+                    private_directory=private_root,
+                    invoking_uid=self._invoking_uid,
+                )
+                if temporary_base_tag is not None
+                else open_docker_build_context_snapshot(snapshot)
+            )
+            with context_manager as context_stream:
                 output = io.BytesIO()
                 result = self._run(
                     arguments,
@@ -304,6 +329,11 @@ class TypedDockerBuildAdapter:
                 context_content_sha256=snapshot.artifact.content_sha256,
                 build_kind=build_kind,
                 candidate_round=candidate_round,
+                required_base_digest=(
+                    policy.optimization.base_image_digest
+                    if policy.optimization.network_tier == "local_only"
+                    else None
+                ),
             )
             image_size = _bounded_image_size(image, policy.optimization.max_temporary_image_bytes)
             network_policy_sha256 = (
@@ -367,6 +397,7 @@ class TypedDockerBuildAdapter:
                 }
             )
             self._assert_environment_current()
+            build_completed = True
             return DockerBuildExecutionResult(artifact=artifact, temporary_tag=temporary_tag)
         except Exception:
             with suppress(PerfLensError):
@@ -376,6 +407,17 @@ class TypedDockerBuildAdapter:
                 )
             raise
         finally:
+            if owns_temporary_base_tag and temporary_base_tag is not None:
+                try:
+                    cleanup_status = self._cleanup_verified_base_tag_if_present(
+                        temporary_base_tag,
+                        expected_digest=policy.optimization.base_image_digest,
+                    )
+                    if build_completed and cleanup_status != "removed":
+                        raise _build_error("Docker temporary base tag could not be removed safely")
+                except PerfLensError:
+                    if build_completed:
+                        raise
             for output_path in (iid_path, metadata_path):
                 with suppress(OSError):
                     output_path.unlink(missing_ok=True)
@@ -547,15 +589,22 @@ class TypedDockerBuildAdapter:
         context_content_sha256: str,
         build_kind: str,
         candidate_round: int,
+        required_base_digest: str | None,
     ) -> dict[str, Any]:
         image = self._inspect_image_optional(temporary_tag)
         if image is None or image.get("Id") != iid:
             raise _build_error("Docker build output tag or image digest is unavailable")
-        if metadata.get("containerimage.config.digest") != iid:
-            raise _build_error("Docker Buildx metadata does not bind the final image digest")
+        _require_metadata_image_binding(metadata, iid=iid)
         provenance = metadata.get("buildx.build.provenance")
         if not isinstance(provenance, dict):
             raise _build_error("Docker Buildx metadata omits bounded provenance")
+        if required_base_digest is not None and not _provenance_contains_digest(
+            cast(dict[str, object], provenance),
+            required_base_digest,
+        ):
+            raise _build_error(
+                "Docker Buildx provenance does not bind the authorized local base digest"
+            )
         expected_platform = _platform_from_image(image)
         if expected_platform != policy.optimization.platform:
             raise _build_error("Docker final image platform differs from the Recipe")
@@ -577,6 +626,47 @@ class TypedDockerBuildAdapter:
         if not isinstance(repo_tags, list) or temporary_tag not in repo_tags:
             raise _build_error("Docker final image does not retain the private session tag")
         return image
+
+    def _create_local_base_tag(self, digest: str, temporary_tag: str) -> None:
+        if not _TEMPORARY_BASE_TAG.fullmatch(temporary_tag):
+            raise _build_error("Docker optimization temporary base tag is invalid")
+        source = self._inspect_image_optional(digest)
+        if source is None or source.get("Id") != digest:
+            raise _build_error("The exact local-only base image digest is unavailable")
+        if self._inspect_image_optional(temporary_tag) is not None:
+            raise _build_error("Docker optimization temporary base tag already exists")
+        output = io.BytesIO()
+        self._run(
+            ("image", "tag", digest, temporary_tag),
+            output,
+            timeout_seconds=30,
+            max_stdout_bytes=64 << 10,
+        )
+        tagged = self._inspect_image_optional(temporary_tag)
+        if tagged is None or tagged.get("Id") != digest:
+            raise _build_error("Docker temporary base tag does not bind the authorized digest")
+
+    def _cleanup_verified_base_tag_if_present(
+        self,
+        temporary_tag: str,
+        *,
+        expected_digest: str,
+    ) -> Literal["removed", "retained", "missing"]:
+        if not _TEMPORARY_BASE_TAG.fullmatch(temporary_tag):
+            return "retained"
+        image = self._inspect_image_optional(temporary_tag)
+        if image is None:
+            return "missing"
+        if image.get("Id") != expected_digest:
+            return "retained"
+        output = io.BytesIO()
+        self._run(
+            ("image", "rm", temporary_tag),
+            output,
+            timeout_seconds=30,
+            max_stdout_bytes=64 << 10,
+        )
+        return "removed" if self._inspect_image_optional(temporary_tag) is None else "retained"
 
     def _cleanup_verified_tag_if_present(
         self,
@@ -628,7 +718,11 @@ class TypedDockerBuildAdapter:
         return "removed" if self._inspect_image_optional(temporary_tag) is None else "retained"
 
     def _inspect_image_optional(self, reference: str) -> dict[str, Any] | None:
-        if not (_IMAGE_DIGEST.fullmatch(reference) or _TEMPORARY_TAG.fullmatch(reference)):
+        if not (
+            _IMAGE_DIGEST.fullmatch(reference)
+            or _TEMPORARY_TAG.fullmatch(reference)
+            or _TEMPORARY_BASE_TAG.fullmatch(reference)
+        ):
             raise _build_error("Docker image inspection reference is invalid")
         try:
             return self._run_json(
@@ -837,8 +931,7 @@ def open_local_docker_build_adapter(
         (
             directory / "docker-buildx"
             for directory in _SYSTEM_BUILDX_PLUGIN_DIRECTORIES
-            if (directory / "docker-buildx").exists()
-            or (directory / "docker-buildx").is_symlink()
+            if (directory / "docker-buildx").exists() or (directory / "docker-buildx").is_symlink()
         ),
         None,
     )
@@ -960,6 +1053,100 @@ def _read_and_validate_dockerfile(
     return content
 
 
+@contextmanager
+def _open_local_base_context(
+    snapshot: DockerBuildContextSnapshot,
+    *,
+    dockerfile: str,
+    dockerfile_content: str,
+    base_image_digest: str,
+    temporary_base_tag: str,
+    private_directory: Path,
+    invoking_uid: int,
+) -> Generator[BinaryIO]:
+    """Derive an unlinked build Context that resolves the verified local image by tag."""
+    if not _TEMPORARY_BASE_TAG.fullmatch(temporary_base_tag):
+        raise _build_error("Docker optimization temporary base tag is invalid")
+    private_root = _safe_private_directory(private_directory, uid=invoking_uid)
+    rewritten = _rewrite_local_base_dockerfile(
+        dockerfile_content,
+        base_image_digest=base_image_digest,
+        temporary_base_tag=temporary_base_tag,
+    ).encode("utf-8")
+    if len(rewritten) > _MAX_DOCKERFILE_BYTES:
+        raise _build_error("Derived Dockerfile exceeds its fixed limit")
+    try:
+        with (
+            open_docker_build_context_snapshot(snapshot) as source_stream,
+            tarfile.open(fileobj=source_stream, mode="r") as source,
+            tempfile.TemporaryFile(dir=private_root) as derived_stream,
+            tarfile.open(fileobj=derived_stream, mode="w") as derived,
+        ):
+            replaced = 0
+            for member in source.getmembers():
+                cloned = copy(member)
+                if member.name == dockerfile:
+                    if not member.isreg():
+                        raise _build_error("Authorized Dockerfile is not a regular file")
+                    cloned.size = len(rewritten)
+                    derived.addfile(cloned, io.BytesIO(rewritten))
+                    replaced += 1
+                    continue
+                payload = source.extractfile(member) if member.isreg() else None
+                try:
+                    derived.addfile(cloned, payload)
+                finally:
+                    if payload is not None:
+                        payload.close()
+            if replaced != 1:
+                raise _build_error("Authorized Dockerfile is absent or duplicated")
+            derived.close()
+            derived_stream.flush()
+            os.fsync(derived_stream.fileno())
+            derived_stream.seek(0)
+            yield derived_stream
+    except (OSError, tarfile.TarError) as exc:
+        raise _build_error("Private local-only Docker build Context cannot be derived") from exc
+
+
+def _rewrite_local_base_dockerfile(
+    content: str,
+    *,
+    base_image_digest: str,
+    temporary_base_tag: str,
+) -> str:
+    """Replace validated external FROM references with a private local daemon tag."""
+    _validate_image_digest(base_image_digest)
+    if not _TEMPORARY_BASE_TAG.fullmatch(temporary_base_tag):
+        raise _build_error("Docker optimization temporary base tag is invalid")
+    aliases: set[str] = set()
+    rewritten: list[str] = []
+    replacements = 0
+    for operation, argument in _dockerfile_instructions(content):
+        if operation != "FROM":
+            rewritten.append(f"{operation} {argument}")
+            continue
+        tokens = _split_dockerfile_instruction(argument)
+        image_index = 0
+        while image_index < len(tokens) and tokens[image_index].startswith("--"):
+            image_index += 1
+        if image_index >= len(tokens):
+            raise _build_error("Dockerfile FROM must use a fixed image reference")
+        image = tokens[image_index]
+        normalized_image = image.lower()
+        if image != "scratch" and normalized_image not in aliases and not image.isdigit():
+            if "@" not in image or image.rsplit("@", 1)[1] != base_image_digest:
+                raise _build_error("Derived Dockerfile base differs from the authorized digest")
+            tokens[image_index] = temporary_base_tag
+            replacements += 1
+        if len(tokens) >= 3 and tokens[-2].upper() == "AS":
+            aliases.add(tokens[-1].lower())
+        rewritten.append(f"FROM {shlex.join(tokens)}")
+    if replacements == 0:
+        raise _build_error("Derived Dockerfile did not replace an authorized base image")
+    return "\n".join(rewritten) + "\n"
+
+
 def _dockerfile_instructions(content: str) -> tuple[tuple[str, str], ...]:
     logical: list[str] = []
     pending = ""
@@ -995,7 +1182,11 @@ def _expand_onbuild_instructions(
             expanded.append((operation, argument))
             continue
         nested_operation, separator, nested_argument = argument.partition(" ")
-        if not separator or not nested_operation.isalpha() or nested_operation.upper() == "ONBUILD":
+        if (
+            not separator
+            or not nested_operation.isalpha()
+            or nested_operation.upper() in {"FROM", "ONBUILD"}
+        ):
             raise _build_error("Dockerfile ONBUILD instruction is malformed or nested")
         expanded.append((nested_operation.upper(), nested_argument.strip()))
     return tuple(expanded)
@@ -1112,6 +1303,34 @@ def _temporary_tag(
     return value
 
 
+def _temporary_base_tag(session_identity_sha256: str) -> str:
+    value = f"perflens-opt-base-{session_identity_sha256[:20]}:source"
+    if not _SHA256.fullmatch(session_identity_sha256) or not _TEMPORARY_BASE_TAG.fullmatch(value):
+        raise _build_error("Docker optimization temporary base tag is invalid")
+    return value
+
+
+def _provenance_contains_digest(value: object, required_digest: str) -> bool:
+    """Require the authorized local base digest in SLSA provenance materials."""
+    _validate_image_digest(required_digest)
+    required_hex = required_digest.removeprefix("sha256:")
+    if not isinstance(value, dict):
+        return False
+    materials = cast(dict[str, object], value).get("materials")
+    if not isinstance(materials, list):
+        return False
+    for material in cast(list[object], materials):
+        if not isinstance(material, dict):
+            continue
+        digest = cast(dict[str, object], material).get("digest")
+        if (
+            isinstance(digest, dict)
+            and cast(dict[str, object], digest).get("sha256") == required_hex
+        ):
+            return True
+    return False
+
+
 def _unused_private_path(private_root: Path, *, suffix: str) -> Path:
     descriptor, name = tempfile.mkstemp(prefix="perflens-build-", suffix=suffix, dir=private_root)
     os.close(descriptor)
@@ -1184,11 +1403,7 @@ def _select_builder_from_json_lines(raw: bytes, builder_name: str) -> dict[str, 
 
 
 def _stable_builder_entry(value: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: item
-        for key, item in value.items()
-        if key not in {"Current", "LastActivity"}
-    }
+    return {key: item for key, item in value.items() if key not in {"Current", "LastActivity"}}
 
 
 def _directory_file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
@@ -1223,12 +1438,109 @@ def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
-def _build_error(message: str) -> PerfLensError:
+def _metadata_digest(
+    value: object,
+    *,
+    field: str,
+    required: bool = False,
+) -> str | None:
+    if value is None and not required:
+        return None
+    if not isinstance(value, str) or not _IMAGE_DIGEST.fullmatch(value):
+        raise _build_error(
+            "Docker Buildx metadata contains an invalid image digest",
+            details={
+                "field": field,
+                "value_present": value is not None,
+                "value_type": type(value).__name__,
+                "value_length": len(value) if isinstance(value, str) else None,
+            },
+        )
+    return value
+
+
+def _require_metadata_image_binding(metadata: dict[str, Any], *, iid: str) -> None:
+    """Bind exporter metadata to the independently inspected image identity.
+
+    Current Buildx exporters normally expose a config digest and an OCI descriptor. Older
+    Docker exporters can expose only ``containerimage.digest`` and use the image ID for that
+    field. Accept both documented projections, but reject every contradictory digest.
+    """
+    config_digest = _metadata_digest(
+        metadata.get("containerimage.config.digest"),
+        field="containerimage.config.digest",
+    )
+    image_digest = _metadata_digest(
+        metadata.get("containerimage.digest"),
+        field="containerimage.digest",
+    )
+    descriptor_value = metadata.get("containerimage.descriptor")
+    if descriptor_value is not None and not isinstance(descriptor_value, dict):
+        raise _build_error(
+            "Docker Buildx metadata contains an invalid image descriptor",
+            details={"field": "containerimage.descriptor"},
+        )
+    descriptor = cast(dict[str, object], descriptor_value) if descriptor_value is not None else {}
+    descriptor_digest = _metadata_digest(
+        descriptor.get("digest"),
+        field="containerimage.descriptor.digest",
+    )
+    annotations_value = descriptor.get("annotations")
+    if annotations_value is not None and not isinstance(annotations_value, dict):
+        raise _build_error(
+            "Docker Buildx metadata contains invalid descriptor annotations",
+            details={"field": "containerimage.descriptor.annotations"},
+        )
+    annotations = (
+        cast(dict[str, object], annotations_value) if annotations_value is not None else {}
+    )
+    descriptor_config_digest = _metadata_digest(
+        annotations.get("config.digest"),
+        field="containerimage.descriptor.annotations.config.digest",
+    )
+    projection: dict[str, object] = {
+        "iid": iid,
+        "config_digest": config_digest,
+        "descriptor_config_digest": descriptor_config_digest,
+        "image_digest": image_digest,
+        "descriptor_digest": descriptor_digest,
+    }
+    config_claims = tuple(
+        value for value in (config_digest, descriptor_config_digest) if value is not None
+    )
+    if any(value != iid for value in config_claims):
+        raise _build_error(
+            "Docker Buildx metadata contradicts the final image config digest",
+            details=projection,
+        )
+    if (
+        image_digest is not None
+        and descriptor_digest is not None
+        and image_digest != descriptor_digest
+    ):
+        raise _build_error(
+            "Docker Buildx metadata contains contradictory manifest digests",
+            details=projection,
+        )
+    if config_claims or image_digest == iid:
+        return
+    raise _build_error(
+        "Docker Buildx metadata does not bind the final image digest",
+        details=projection,
+    )
+
+
+def _build_error(
+    message: str,
+    *,
+    details: dict[str, object] | None = None,
+) -> PerfLensError:
     return PerfLensError(
         ErrorCode.PATH_SAFETY_VIOLATION,
         "docker_build_adapter",
         message,
         recoverable=True,
+        details={} if details is None else details,
     )
 
 

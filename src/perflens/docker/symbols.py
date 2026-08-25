@@ -908,18 +908,20 @@ def project_container_analysis(
             )
         return value
 
-    hotspots = tuple(
+    projected_hotspots = tuple(
         hotspot.model_copy(
             update={
                 "symbol": public_symbol(hotspot.symbol),
                 "dso": public_dso(hotspot.dso),
                 "symbol_variants": tuple(
-                    public_symbol_variant(
-                        item,
-                        normalized_symbol=hotspot.symbol,
-                        projected_symbol=public_symbol(hotspot.symbol),
+                    sorted(
+                        public_symbol_variant(
+                            item,
+                            normalized_symbol=hotspot.symbol,
+                            projected_symbol=public_symbol(hotspot.symbol),
+                        )
+                        for item in hotspot.symbol_variants
                     )
-                    for item in hotspot.symbol_variants
                 ),
                 "source_locations": tuple(
                     sorted(
@@ -936,7 +938,22 @@ def project_container_analysis(
         )
         for hotspot in analysis.hotspots
     )
-    call_paths = tuple(
+    hotspots = tuple(
+        hotspot.model_copy(update={"hotspot_id": f"H-{index:03d}"})
+        for index, hotspot in enumerate(
+            sorted(
+                projected_hotspots,
+                key=lambda item: (
+                    -item.self_weight,
+                    -item.inclusive_weight,
+                    item.symbol,
+                    item.dso,
+                ),
+            ),
+            start=1,
+        )
+    )
+    projected_call_paths = tuple(
         path.model_copy(
             update={
                 "frames": tuple(
@@ -951,6 +968,19 @@ def project_container_analysis(
             }
         )
         for path in analysis.call_paths
+    )
+    call_paths = tuple(
+        path.model_copy(update={"path_id": f"P-{index:03d}"})
+        for index, path in enumerate(
+            sorted(
+                projected_call_paths,
+                key=lambda item: (
+                    -item.weight,
+                    tuple((frame.symbol, frame.dso) for frame in item.frames),
+                ),
+            ),
+            start=1,
+        )
     )
     conversion = analysis.metadata.conversion.model_copy(
         update={

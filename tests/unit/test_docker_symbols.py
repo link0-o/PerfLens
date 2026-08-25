@@ -214,6 +214,26 @@ def _fake_perf(path: Path) -> Path:
     return path
 
 
+def _fake_perf_with_dsos(path: Path, dsos: tuple[str, str]) -> Path:
+    path.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        f"dsos = {dsos!r}\n"
+        "args = sys.argv[1:]\n"
+        "if args == ['--version']:\n"
+        "    print('perf version docker-symbol-order-test')\n"
+        "elif args and args[0] == 'script':\n"
+        "    for index, dso in enumerate(dsos, start=1):\n"
+        "        print(f'app 1234/1234 [000] {index}.0: 11 cpu-clock: ')\n"
+        "        print(f'        4000{index:02x} work ({dso}) /workspace/src/main.c:7')\n"
+        "else:\n"
+        "    raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
+
+
 def _fake_empty_perf(path: Path) -> Path:
     path.write_text(
         f"#!{sys.executable}\n"
@@ -392,6 +412,79 @@ def test_container_module_snapshot_and_source_mapping_are_identity_bound(
     assert projected_context.source_analysis_content_sha256 == projected.content_sha256
 
 
+def test_public_projection_recanonicalizes_redacted_hotspots_and_call_paths(
+    fixture_root: Path,
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    binding = _binding(identity)
+    candidates = tuple(f"/private/module-{index}" for index in range(16))
+    dsos = next(
+        (left, right)
+        for left in candidates
+        for right in candidates
+        if left < right
+        and docker_symbols._private_path_digest(  # pyright: ignore[reportPrivateUsage]
+            binding.container_identity_sha256,
+            left,
+            domain="module",
+        )
+        > docker_symbols._private_path_digest(  # pyright: ignore[reportPrivateUsage]
+            binding.container_identity_sha256,
+            right,
+            domain="module",
+        )
+    )
+    proc_root = tmp_path / "proc"
+    module = proc_root / str(identity.host_pid) / "root" / "opt" / "app"
+    build_id = _compile_module(module, fixture_root / "symbols" / "sample.c")
+    profile = tmp_path / "profile.data"
+    profile.write_bytes(b"PERFILE2")
+    collection = _collection(profile, binding)
+    snapshot = capture_container_module_snapshot(
+        collection,
+        proc_root=proc_root,
+        reader=cast(LinuxContainerIdentityReader, _Reader(identity)),
+        build_id_reader=lambda _path: _module_result(build_id),
+    )
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "src" / "main.c").write_text("\n" * 8, encoding="utf-8")
+    analysis = analyze_perf_data(
+        profile,
+        perf_path=_fake_perf_with_dsos(tmp_path / "perf", dsos),
+        collection=build_collection_evidence_provenance(collection),
+    )
+    assert tuple(path.frames[0].dso for path in analysis.call_paths) == dsos
+    context = build_container_symbol_context(
+        analysis,
+        snapshot,
+        workspace_root=workspace,
+    )
+
+    projected, _projected_context = project_container_analysis(analysis, context)
+
+    assert tuple(path.path_id for path in projected.call_paths) == ("P-001", "P-002")
+    assert list(projected.call_paths) == sorted(
+        projected.call_paths,
+        key=lambda item: (
+            -item.weight,
+            tuple((frame.symbol, frame.dso) for frame in item.frames),
+        ),
+    )
+    assert tuple(hotspot.hotspot_id for hotspot in projected.hotspots) == ("H-001", "H-002")
+    assert list(projected.hotspots) == sorted(
+        projected.hotspots,
+        key=lambda item: (
+            -item.self_weight,
+            -item.inclusive_weight,
+            item.symbol,
+            item.dso,
+        ),
+    )
+    verify_analysis_artifact(projected, verify_source=False)
+
+
 def test_pinned_container_root_survives_short_lived_proc_entry(
     fixture_root: Path,
     tmp_path: Path,
@@ -490,11 +583,7 @@ def test_pinned_container_root_rejects_a_different_collection_binding(
     profile = tmp_path / "profile.data"
     profile.write_bytes(b"PERFILE2")
     collection = _collection(profile, binding).model_copy(
-        update={
-            "container_target": binding.model_copy(
-                update={"target_content_sha256": "f" * 64}
-            )
-        }
+        update={"container_target": binding.model_copy(update={"target_content_sha256": "f" * 64})}
     )
     pinned = pin_container_process_root(
         binding,

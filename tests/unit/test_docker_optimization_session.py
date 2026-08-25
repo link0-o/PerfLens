@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import pytest
+from pydantic import ValidationError
 
 from perflens.application.evidence import contract_content_sha256
 from perflens.contracts.docker_build import (
@@ -107,6 +108,8 @@ def _preview(
         "network_tier": "local_only",
         "base_image_present": True,
         "baseline_build_required": True,
+        "context_paths": ("Dockerfile", "src"),
+        "mutable_paths": ("src",),
         "mutable_dockerfile": False,
         "mutable_dependency_lock": False,
         "budget": budget or _budget(),
@@ -128,6 +131,29 @@ def _preview(
             ),
         }
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("context_paths", ()),
+        ("mutable_paths", ()),
+        ("context_paths", ("src", "Dockerfile")),
+        ("mutable_paths", ("src", "src")),
+        ("mutable_paths", ("/etc",)),
+        ("mutable_paths", ("../outside",)),
+        ("mutable_paths", ("outside",)),
+    ),
+)
+def test_preview_rejects_invalid_or_unbound_path_scope(
+    field: str,
+    value: tuple[str, ...],
+) -> None:
+    payload = _preview().model_dump(mode="json")
+    payload[field] = value
+
+    with pytest.raises(ValidationError):
+        DockerOptimizationPreviewArtifact.model_validate(payload)
 
 
 def _authority(

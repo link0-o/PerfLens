@@ -296,6 +296,8 @@ def test_runtime_requires_preview_before_build_and_allows_one_consent_flow(
     )
 
     assert preview.preview.baseline_build_required is True
+    assert preview.preview.context_paths == ("Dockerfile", "src")
+    assert preview.preview.mutable_paths == ("src",)
     assert baseline.session.baseline_build_id == baseline.build.build_id
     assert candidate.session.candidate_rounds_used == 1
     assert final.workload_runs_used == 1

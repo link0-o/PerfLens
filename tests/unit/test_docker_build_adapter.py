@@ -40,9 +40,11 @@ SESSION_SHA256 = "e" * 64
 
 _FAKE_DOCKER = r"""#!/usr/bin/python3
 import hashlib
+import io
 import json
 import pathlib
 import sys
+import tarfile
 
 state_path = pathlib.Path(STATE_PATH)
 log_path = pathlib.Path(LOG_PATH)
@@ -93,8 +95,22 @@ elif command[:2] == ["image", "pull"]:
     state["base_present"] = True
     save()
     sys.stdout.write(command[-1] + "\n")
+elif command[:2] == ["image", "tag"]:
+    source = image(command[2])
+    if source is None:
+        sys.stderr.write("Error: No such image\n")
+        raise SystemExit(1)
+    tagged = dict(source)
+    tagged["RepoTags"] = [command[3]]
+    state.setdefault("images", {})[command[3]] = tagged
+    save()
 elif command[:2] == ["buildx", "build"]:
     context = sys.stdin.buffer.read()
+    with tarfile.open(fileobj=io.BytesIO(context), mode="r") as archive:
+        dockerfile_stream = archive.extractfile("Dockerfile")
+        if dockerfile_stream is None:
+            raise SystemExit(65)
+        state["last_dockerfile"] = dockerfile_stream.read().decode("utf-8")
     tag = command[command.index("--tag") + 1]
     iid_path = pathlib.Path(command[command.index("--iidfile") + 1])
     metadata_path = pathlib.Path(command[command.index("--metadata-file") + 1])
@@ -107,16 +123,48 @@ elif command[:2] == ["buildx", "build"]:
     if state.get("wrong_label"):
         labels["io.perflens.optimization-session-sha256"] = "f" * 64
     iid_path.write_text(digest + "\n", encoding="ascii")
+    manifest_digest = "sha256:" + hashlib.sha256(("manifest\0" + digest).encode()).hexdigest()
     metadata = {
         "containerimage.config.digest": digest,
-        "containerimage.digest": digest,
+        "containerimage.digest": manifest_digest,
+        "containerimage.descriptor": {
+            "annotations": {"config.digest": digest},
+            "digest": manifest_digest,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "size": 512,
+        },
         "buildx.build.provenance": {
             "builder": "fixed",
             "context_sha256": hashlib.sha256(context).hexdigest(),
+            "materials": [{
+                "uri": "pkg:docker/perflens-local-base",
+                "digest": {"sha256": BASE_DIGEST.removeprefix("sha256:")},
+            }],
         },
     }
     if state.get("missing_provenance"):
         metadata.pop("buildx.build.provenance")
+    if state.get("missing_base_material"):
+        metadata["buildx.build.provenance"]["materials"] = []
+    metadata_identity_mode = state.get("metadata_identity_mode", "complete")
+    if metadata_identity_mode == "legacy_image_digest":
+        metadata.pop("containerimage.config.digest")
+        metadata.pop("containerimage.descriptor")
+        metadata["containerimage.digest"] = digest
+    elif metadata_identity_mode == "descriptor_config":
+        metadata.pop("containerimage.config.digest")
+    elif metadata_identity_mode == "conflicting_config":
+        metadata["containerimage.config.digest"] = BASE_DIGEST
+    elif metadata_identity_mode == "conflicting_descriptor_config":
+        metadata["containerimage.descriptor"]["annotations"]["config.digest"] = BASE_DIGEST
+    elif metadata_identity_mode == "conflicting_manifest":
+        metadata["containerimage.descriptor"]["digest"] = BASE_DIGEST
+    elif metadata_identity_mode == "missing_binding":
+        metadata.pop("containerimage.config.digest")
+        metadata.pop("containerimage.digest")
+        metadata.pop("containerimage.descriptor")
+    elif metadata_identity_mode == "invalid_descriptor":
+        metadata["containerimage.descriptor"] = []
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     state.setdefault("images", {})[tag] = {
         "Id": digest,
@@ -176,6 +224,8 @@ def _build_sandbox(
                 "occupied": False,
                 "wrong_label": False,
                 "missing_provenance": False,
+                "missing_base_material": False,
+                "metadata_identity_mode": "complete",
                 "image_size": 4096,
             }
         ),
@@ -460,7 +510,7 @@ def test_local_only_build_is_content_bound_and_cleanup_removes_only_session_tag(
     tmp_path: Path,
 ) -> None:
     project, private, policy, snapshot = _project(tmp_path)
-    del project
+    original_dockerfile = (project / "Dockerfile").read_text(encoding="utf-8")
     with _build_sandbox() as sandbox:
         adapter = _adapter(sandbox)
         result = adapter.build(
@@ -490,8 +540,77 @@ def test_local_only_build_is_content_bound_and_cleanup_removes_only_session_tag(
         assert build[build.index("--pull=false")] == "--pull=false"
         forbidden = {"--secret", "--ssh", "--privileged", "--cache-from", "--cache-to"}
         assert forbidden.isdisjoint(build)
+        temporary_base = "perflens-opt-base-" + SESSION_SHA256[:20] + ":source"
+        commands = _commands(sandbox)
+        assert ["image", "tag", BASE_DIGEST, temporary_base] in commands
+        assert ["image", "rm", temporary_base] in commands
+        state = json.loads(sandbox.state.read_text(encoding="utf-8"))
+        assert state["last_dockerfile"].startswith(f"FROM {temporary_base}\n")
+        assert f"registry.example/base@{BASE_DIGEST}" not in state["last_dockerfile"]
+        assert temporary_base not in state["images"]
+        assert (project / "Dockerfile").read_text(encoding="utf-8") == original_dockerfile
         assert adapter.cleanup_build(result, session_identity_sha256=SESSION_SHA256) == "removed"
         assert adapter.cleanup_build(result, session_identity_sha256=SESSION_SHA256) == "missing"
+
+
+@pytest.mark.parametrize("metadata_identity_mode", ("legacy_image_digest", "descriptor_config"))
+def test_build_accepts_documented_buildx_metadata_identity_variants(
+    tmp_path: Path,
+    metadata_identity_mode: str,
+) -> None:
+    _, private, policy, snapshot = _project(tmp_path)
+    with _build_sandbox() as sandbox:
+        state = json.loads(sandbox.state.read_text(encoding="utf-8"))
+        state["metadata_identity_mode"] = metadata_identity_mode
+        sandbox.state.write_text(json.dumps(state), encoding="utf-8")
+        adapter = _adapter(sandbox)
+        result = adapter.build(
+            capability=_capability(adapter, policy),
+            policy=policy,
+            snapshot=snapshot,
+            private_directory=private,
+            session_identity_sha256=SESSION_SHA256,
+            build_kind="baseline",
+            candidate_round=0,
+        )
+        assert result.artifact.status == "verified"
+        assert adapter.cleanup_build(result, session_identity_sha256=SESSION_SHA256) == "removed"
+
+
+@pytest.mark.parametrize(
+    "metadata_identity_mode",
+    (
+        "conflicting_config",
+        "conflicting_descriptor_config",
+        "conflicting_manifest",
+        "missing_binding",
+        "invalid_descriptor",
+    ),
+)
+def test_build_rejects_missing_or_contradictory_buildx_metadata_identity(
+    tmp_path: Path,
+    metadata_identity_mode: str,
+) -> None:
+    _, private, policy, snapshot = _project(tmp_path)
+    with _build_sandbox() as sandbox:
+        state = json.loads(sandbox.state.read_text(encoding="utf-8"))
+        state["metadata_identity_mode"] = metadata_identity_mode
+        sandbox.state.write_text(json.dumps(state), encoding="utf-8")
+        adapter = _adapter(sandbox)
+        with pytest.raises(PerfLensError) as captured:
+            adapter.build(
+                capability=_capability(adapter, policy),
+                policy=policy,
+                snapshot=snapshot,
+                private_directory=private,
+                session_identity_sha256=SESSION_SHA256,
+                build_kind="baseline",
+                candidate_round=0,
+            )
+        assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+        assert "metadata" in captured.value.message.lower()
+        if metadata_identity_mode != "invalid_descriptor":
+            assert str(captured.value.details.get("iid", "")).startswith("sha256:")
 
 
 @pytest.mark.parametrize(
@@ -510,15 +629,13 @@ def test_local_only_build_is_content_bound_and_cleanup_removes_only_session_tag(
         f"FROM --platform=$TARGETPLATFORM registry.example/base@{BASE_DIGEST}\n",
         "FROM scratch\n",
         f"FROM registry.example/base@{BASE_DIGEST} AS bad/name\n",
-        (
-            f"FROM registry.example/base@{BASE_DIGEST} AS repeated\n"
-            "FROM scratch AS repeated\n"
-        ),
+        (f"FROM registry.example/base@{BASE_DIGEST} AS repeated\nFROM scratch AS repeated\n"),
         f"FROM registry.example/base@{BASE_DIGEST}\nRUN --mount=type=bind,from=external echo x\n",
         f"FROM registry.example/base@{BASE_DIGEST}\nONBUILD ONBUILD RUN echo x\n",
-        f"FROM registry.example/base@{BASE_DIGEST}\nADD [\"only-source\"]\n",
-        f"FROM registry.example/base@{BASE_DIGEST}\nADD {{\"source\":\"x\"}}\n",
-        f"FROM \"registry.example/base@{BASE_DIGEST}\n",
+        f"FROM registry.example/base@{BASE_DIGEST}\nONBUILD FROM scratch\n",
+        f'FROM registry.example/base@{BASE_DIGEST}\nADD ["only-source"]\n',
+        f'FROM registry.example/base@{BASE_DIGEST}\nADD {{"source":"x"}}\n',
+        f'FROM "registry.example/base@{BASE_DIGEST}\n',
         f"FROM registry.example/base@{BASE_DIGEST} \\\n",
         f"FROM registry.example/base@{BASE_DIGEST}\nMALFORMED\n",
     ),
@@ -565,7 +682,133 @@ COPY --from=build /work/app /app
             build_kind="baseline",
             candidate_round=0,
         )
+        state = json.loads(sandbox.state.read_text(encoding="utf-8"))
+        derived = state["last_dockerfile"]
+        assert derived.count("perflens-opt-base-") == 1
+        assert "FROM scratch AS final" in derived
+        assert "COPY --from=build /work/app /app" in derived
     assert result.artifact.status == "verified"
+
+
+@pytest.mark.parametrize(
+    ("content", "temporary_tag", "message"),
+    (
+        (
+            f"FROM registry.example/base@{BASE_DIGEST}\n",
+            "not-a-private-tag",
+            "temporary base tag is invalid",
+        ),
+        ("RUN echo no-base\n", "perflens-opt-base-" + "e" * 20 + ":source", "did not replace"),
+        (
+            "FROM --platform=linux/amd64\n",
+            "perflens-opt-base-" + "e" * 20 + ":source",
+            "fixed image reference",
+        ),
+        (
+            "FROM registry.example/base@sha256:" + "f" * 64 + "\n",
+            "perflens-opt-base-" + "e" * 20 + ":source",
+            "differs from the authorized digest",
+        ),
+    ),
+)
+def test_local_base_dockerfile_rewrite_rejects_unbound_input(
+    content: str,
+    temporary_tag: str,
+    message: str,
+) -> None:
+    with pytest.raises(PerfLensError, match=message):
+        build_adapter._rewrite_local_base_dockerfile(  # pyright: ignore[reportPrivateUsage]
+            content,
+            base_image_digest=BASE_DIGEST,
+            temporary_base_tag=temporary_tag,
+        )
+
+
+@pytest.mark.parametrize(
+    ("provenance", "expected"),
+    (
+        ("not-an-object", False),
+        ({}, False),
+        ({"materials": "not-an-array"}, False),
+        ({"materials": ["not-an-object", {"digest": "not-an-object"}]}, False),
+        ({"materials": [{"digest": {"sha256": "f" * 64}}]}, False),
+        ({"materials": [{"digest": {"sha256": "d" * 64}}]}, True),
+    ),
+)
+def test_local_base_provenance_requires_exact_material_digest(
+    provenance: object,
+    expected: bool,
+) -> None:
+    assert (
+        build_adapter._provenance_contains_digest(  # pyright: ignore[reportPrivateUsage]
+            provenance,
+            BASE_DIGEST,
+        )
+        is expected
+    )
+
+
+def test_temporary_base_tag_rejects_invalid_session_identity() -> None:
+    with pytest.raises(PerfLensError, match="temporary base tag is invalid"):
+        build_adapter._temporary_base_tag("short")  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.parametrize("existing_digest", (BASE_DIGEST, "sha256:" + "f" * 64))
+def test_local_only_build_rejects_preexisting_private_base_tag(
+    tmp_path: Path,
+    existing_digest: str,
+) -> None:
+    _, private, policy, snapshot = _project(tmp_path)
+    temporary_base = "perflens-opt-base-" + SESSION_SHA256[:20] + ":source"
+    with _build_sandbox() as sandbox:
+        state = json.loads(sandbox.state.read_text(encoding="utf-8"))
+        state["images"][temporary_base] = {
+            "Id": existing_digest,
+            "RepoTags": [temporary_base],
+            "RepoDigests": [],
+            "Os": "linux",
+            "Architecture": "amd64",
+            "Size": 1024,
+            "Config": {"Labels": {}},
+        }
+        sandbox.state.write_text(json.dumps(state), encoding="utf-8")
+        adapter = _adapter(sandbox)
+        with pytest.raises(PerfLensError, match="temporary base tag already exists"):
+            adapter.build(
+                capability=_capability(adapter, policy),
+                policy=policy,
+                snapshot=snapshot,
+                private_directory=private,
+                session_identity_sha256=SESSION_SHA256,
+                build_kind="baseline",
+                candidate_round=0,
+            )
+        state = json.loads(sandbox.state.read_text(encoding="utf-8"))
+        assert state["images"][temporary_base]["Id"] == existing_digest
+        assert not any(command[:2] == ["buildx", "build"] for command in _commands(sandbox))
+
+
+def test_local_base_cleanup_retains_replaced_tag() -> None:
+    temporary_base = "perflens-opt-base-" + SESSION_SHA256[:20] + ":source"
+    with _build_sandbox() as sandbox:
+        state = json.loads(sandbox.state.read_text(encoding="utf-8"))
+        state["images"][temporary_base] = {
+            "Id": "sha256:" + "f" * 64,
+            "RepoTags": [temporary_base],
+            "RepoDigests": [],
+            "Os": "linux",
+            "Architecture": "amd64",
+            "Size": 1024,
+            "Config": {"Labels": {}},
+        }
+        sandbox.state.write_text(json.dumps(state), encoding="utf-8")
+        adapter = _adapter(sandbox)
+        result = adapter._cleanup_verified_base_tag_if_present(  # pyright: ignore[reportPrivateUsage]
+            temporary_base,
+            expected_digest=BASE_DIGEST,
+        )
+        assert result == "retained"
+        assert not any(command[:2] == ["image", "rm"] for command in _commands(sandbox))
 
 
 def test_pinned_pull_uses_only_administrator_reference_then_builds_offline(
@@ -700,7 +943,10 @@ def test_cleanup_retains_image_with_different_session_label(tmp_path: Path) -> N
         assert adapter.cleanup_build(result, session_identity_sha256=SESSION_SHA256) == "retained"
 
 
-@pytest.mark.parametrize("failure", ("missing_provenance", "wrong_label", "oversize"))
+@pytest.mark.parametrize(
+    "failure",
+    ("missing_provenance", "missing_base_material", "wrong_label", "oversize"),
+)
 def test_build_rejects_unbound_metadata_labels_and_image_budget(
     tmp_path: Path,
     failure: str,

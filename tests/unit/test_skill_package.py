@@ -36,6 +36,8 @@ def test_performance_skill_has_valid_minimal_frontmatter_and_resources() -> None
     assert "collect_docker_target" in body
     assert "compare_container_measurements" in body
     assert "build/pull images" in body
+    assert "Do not launch `perflens-mcp` through a shell" in body
+    assert "custom JSON-RPC client" in body
 
 
 def test_skill_declares_mcp_dependency_and_explicit_invocation_prompt() -> None:

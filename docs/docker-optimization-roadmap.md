@@ -81,7 +81,10 @@ session; changes to mutable entries become the candidate Treatment.
 
 The adapter obtains the result through private IID and metadata files, then independently verifies
 the final digest, platform, image size, session labels, Recipe digest, Context digest, and build
-provenance. Cleanup removes only identities proven to have been created by this session and not
+provenance. Exporter identity accepts Buildx's documented config-digest/descriptor projection and
+its legacy image-digest-only projection; every present digest must be well formed and contradictory
+config or manifest claims are rejected. Failures retain only a bounded digest projection, never raw
+metadata. Cleanup removes only identities proven to have been created by this session and not
 referenced by pre-existing tags or other containers. Global image or cache pruning is forbidden.
 
 ## Network tiers
@@ -94,6 +97,14 @@ referenced by pre-existing tags or other containers. Global image or cache pruni
    `docker-container` BuildKit Builder. Its image, network, proxy/CNI settings, registry scope, and
    Buildx source policy are administrator inputs; PerfLens never creates or mutates the Builder.
 
+For `local_only`, the configured digest may be a local image ID rather than a registry
+`RepoDigest`. BuildKit must not resolve that value through a registry. The typed adapter therefore
+creates an unpredictable session-private tag for the already verified local image, replaces only
+the validated external `FROM` references in an unlinked derived Context, and leaves the authorized
+Dockerfile and Context snapshot unchanged. It revalidates the tag identity, requires Buildx
+provenance materials to bind the configured digest, and removes only the tag it proved it created.
+A pre-existing, replaced, or otherwise ambiguous tag is never overwritten or removed.
+
 Remote Docker contexts, host networking, insecure/device entitlements, secret or SSH mounts,
 extra build contexts, arbitrary cache import/export, host mounts, tag-only base images, remote
 `ADD`, and remote custom frontends are always rejected. A/B runs with network access must bind the
@@ -101,10 +112,13 @@ same Builder/network policy and resolved provenance.
 
 ## Authorization, budgets, and Agent choices
 
-The preview hashes the current Recipe, Context, Benchmark, Collector policy, Builder policy, and
-all limits. If no result image exists, it says that a baseline build will occur after confirmation;
-no build or pull happens during preview. Authorization requires the exact preview digest and fixed
-confirmation token, creates an in-memory lease bound to the client connection, and prevents replay.
+The preview exposes the exact normalized project-relative `context_paths` and `mutable_paths`, and
+hashes them with the current Recipe, Context, Benchmark, Collector policy, Builder policy, and all
+limits. This is the informed-consent surface: the Agent must not replace the returned path lists
+with an inference such as “no mutable paths.” If no result image exists, the preview says that a
+baseline build will occur after confirmation; no build or pull happens during preview.
+Authorization requires the exact preview digest and fixed confirmation token, creates an in-memory
+lease bound to the client connection, and prevents replay.
 
 The Agent selects evidence instead of running every mode mechanically: begin with the cheapest
 correctness/Benchmark and `stat` evidence, then use `record`, `sched`, `off_cpu`, or `lock` only when
@@ -115,7 +129,9 @@ Fixed ceilings are three candidates, four builds, ten workloads, 900 seconds per
 seconds total build time, 1800 seconds workload activity, a 7200-second hard expiry, 1 GiB evidence,
 10 GiB temporary images, and concurrency one. Record is limited to 30 seconds at 99 Hz; each Trace
 observation is limited to 10 seconds. Reaching any limit ends useful work and cannot silently create
-a new session.
+a new session. Every successful stat, record, or Trace result carries the Broker-verified raw
+evidence byte count into the optimization session; the reserved maximum is replaced by that actual
+positive count instead of being silently released to zero.
 
 ## Matched A/B and Verified Improvement
 

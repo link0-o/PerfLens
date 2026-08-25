@@ -95,12 +95,20 @@ authorization, collection, or lifecycle operation. A request such as “使用 P
 项目的容器负载” selects this workflow when `perflens init --docker` has enabled the project MCP
 policy; the user does not need to provide a host PID or repeat long CLI commands.
 
+This workflow requires the native PerfLens MCP tools to be injected into the current Agent client.
+If those tools are missing, stop and ask the user to reload or restart the trusted project MCP
+connection. Do not launch `perflens-mcp` through a shell, construct a custom JSON-RPC client or
+Unix-socket bridge, reconstruct a Preview from stored artifacts, or reuse a Preview/session from a
+different MCP process. Only a Preview returned by the current native MCP connection may be shown
+for authorization, and the Agent must then end its response and wait for a fresh explicit reply.
+
 When `[optimization].enabled = true`, a request such as “用 PerfLens 优化这个项目” selects the
 v0.3.2 bounded optimization workflow. Call `inspect_docker_optimization_capability`, then
 `preview_docker_optimization_session` with the smallest modes that may be needed. Present the exact
-mutable paths, immutable build recipe, network tier, Benchmark/correctness contract, budgets,
-planned baseline build, evidence choices, candidate rebuilds, A/B validation, and cleanup. End the
-response and wait for one fresh explicit user reply. Only then call
+`context_paths` and `mutable_paths` returned by that Preview, immutable build recipe, network tier,
+Benchmark/correctness contract, budgets, planned baseline build, evidence choices, candidate
+rebuilds, A/B validation, and cleanup. Never infer or paraphrase away a non-empty returned path
+list. End the response and wait for one fresh explicit user reply. Only then call
 `authorize_docker_optimization_session` with the exact Preview hashes and fixed authorization
 token. That one PerfLens confirmation covers the bounded baseline/edit/rebuild/A-B loop; a client
 may still show its own independent tool-permission prompt.
