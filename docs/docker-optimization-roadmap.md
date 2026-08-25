@@ -41,6 +41,12 @@ That exception is high risk and must be shown in the authorization preview. An e
 valid for v0.3.1-style diagnosis but cannot authorize automated optimization or produce a Verified
 Improvement.
 
+The package supplies a root-owned, read-only, empty Docker configuration as its trust anchor.
+Because Buildx must persist Builder-selection state, every Preview creates an empty runtime
+configuration below a randomized, user-private `0700` directory. It never copies the user's Docker
+configuration, credentials, or Context, is removed with the private snapshot on expiry, failure,
+or revocation, and has its inode, owner, and mode revalidated before every command.
+
 ## Implemented typed interfaces (host acceptance still required)
 
 The v0.3.2 implementation exposes these MCP tools:

@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import stat
 import tarfile
 import tempfile
@@ -94,6 +95,7 @@ class TypedDockerBuildAdapter:
         endpoint_path: Path,
         endpoint_kind: Literal["local_rootful", "local_rootless"],
         config_directory: Path,
+        runtime_directory: Path | None = None,
         builder_name: str = "default",
         administrator_policy: DockerAdministratorBuilderPolicy | None = None,
         buildx_plugin_directories: tuple[Path, ...] = _SYSTEM_BUILDX_PLUGIN_DIRECTORIES,
@@ -120,29 +122,45 @@ class TypedDockerBuildAdapter:
             kind=endpoint_kind,
             invoking_uid=self._invoking_uid,
         )
-        self._config = inspect_empty_docker_config_directory(
+        self._trusted_empty_config = inspect_empty_docker_config_directory(
             config_directory,
             trusted_owner_uids=trusted_tool_owner_uids,
         )
+        self._config = (
+            _prepare_private_docker_config(runtime_directory, uid=self._invoking_uid)
+            if runtime_directory is not None
+            else self._trusted_empty_config
+        )
+        self._private_config_identity = (
+            _directory_file_identity(self._config.lstat())
+            if runtime_directory is not None
+            else None
+        )
         self._runner = CommandRunner({self._docker.path})
         self._administrator_policy = administrator_policy
-        if administrator_policy is not None:
-            assert_docker_administrator_builder_policy_current(
-                administrator_policy,
-                trusted_owner_uids=trusted_policy_owner_uids,
-            )
-            if administrator_policy.builder_name != builder_name:
-                raise _build_error("Docker Builder name differs from administrator policy")
-        self._builder = self._inspect_builder_raw(builder_name)
-        if administrator_policy is None and self._builder.driver != "docker":
-            raise _build_error("Local-only Docker optimization requires the fixed Docker driver")
-        if administrator_policy is not None and (
-            self._builder.driver != administrator_policy.driver
-            or self._builder.identity_sha256 != administrator_policy.builder_identity_sha256
-        ):
-            raise _build_error("Docker Builder identity differs from administrator policy")
-        self._docker_version = self._inspect_docker_version()
-        self._buildx_version = self._inspect_buildx_version()
+        try:
+            if administrator_policy is not None:
+                assert_docker_administrator_builder_policy_current(
+                    administrator_policy,
+                    trusted_owner_uids=trusted_policy_owner_uids,
+                )
+                if administrator_policy.builder_name != builder_name:
+                    raise _build_error("Docker Builder name differs from administrator policy")
+            self._builder = self._inspect_builder_raw(builder_name)
+            if administrator_policy is None and self._builder.driver != "docker":
+                raise _build_error(
+                    "Local-only Docker optimization requires the fixed Docker driver"
+                )
+            if administrator_policy is not None and (
+                self._builder.driver != administrator_policy.driver
+                or self._builder.identity_sha256 != administrator_policy.builder_identity_sha256
+            ):
+                raise _build_error("Docker Builder identity differs from administrator policy")
+            self._docker_version = self._inspect_docker_version()
+            self._buildx_version = self._inspect_buildx_version()
+        except BaseException:
+            self.close()
+            raise
 
     @property
     def docker_tool_projection(self) -> DockerBuildToolProjection:
@@ -376,6 +394,19 @@ class TypedDockerBuildAdapter:
             session_identity_sha256=session_identity_sha256,
             expected_digest=result.artifact.final_image_digest,
         )
+
+    def close(self) -> None:
+        """Remove only the private Buildx state created below the session directory."""
+        identity = self._private_config_identity
+        if identity is None or not shutil.rmtree.avoids_symlink_attacks:
+            return
+        try:
+            if _directory_file_identity(self._config.lstat()) != identity:
+                return
+            shutil.rmtree(self._config)
+        except OSError:
+            return
+        self._private_config_identity = None
 
     def _validate_build_request(
         self,
@@ -639,15 +670,20 @@ class TypedDockerBuildAdapter:
         return value
 
     def _inspect_builder_raw(self, builder_name: str) -> DockerBuilderIdentity:
-        data = self._run_json(
-            ("buildx", "inspect", "--builder", builder_name, "--format", "{{json .}}"),
+        output = io.BytesIO()
+        self._run(
+            ("buildx", "ls", "--format", "{{json .}}"),
+            output,
+            timeout_seconds=30,
+            max_stdout_bytes=_MAX_JSON_BYTES,
             check_builder=False,
         )
+        data = _select_builder_from_json_lines(output.getvalue(), builder_name)
         name = data.get("Name")
         driver = data.get("Driver")
         if name != builder_name or driver not in {"docker", "docker-container"}:
             raise _build_error("Docker Buildx returned a different Builder identity")
-        raw_sha256 = _canonical_sha256(data)
+        raw_sha256 = _canonical_sha256(_stable_builder_entry(data))
         stable = {
             "Name": name,
             "Driver": driver,
@@ -727,6 +763,7 @@ class TypedDockerBuildAdapter:
         assert_docker_cli_current(self._buildx)
         self._assert_buildx_resolution_current()
         assert_docker_endpoint_current(self._endpoint, invoking_uid=self._invoking_uid)
+        self._assert_private_config_current()
         if self._administrator_policy is not None:
             assert_docker_administrator_builder_policy_current(
                 self._administrator_policy,
@@ -756,9 +793,21 @@ class TypedDockerBuildAdapter:
         assert_docker_cli_current(self._buildx)
         self._assert_buildx_resolution_current()
         assert_docker_endpoint_current(self._endpoint, invoking_uid=self._invoking_uid)
+        self._assert_private_config_current()
         if check_builder and self._inspect_builder_raw(self._builder.name) != self._builder:
             raise _build_error("Docker Builder identity changed after operation")
         return result
+
+    def _assert_private_config_current(self) -> None:
+        identity = self._private_config_identity
+        if identity is None:
+            return
+        try:
+            current = self._config.lstat()
+        except OSError as exc:
+            raise _build_error("Docker private Buildx configuration is unavailable") from exc
+        if _directory_file_identity(current) != identity:
+            raise _build_error("Docker private Buildx configuration identity changed")
 
 
 def open_local_docker_build_adapter(
@@ -766,6 +815,7 @@ def open_local_docker_build_adapter(
     administrator_policy: DockerAdministratorBuilderPolicy | None = None,
     docker_path: Path = Path("/usr/bin/docker"),
     config_directory: Path = Path("/usr/share/perflens/docker-empty-config"),
+    runtime_directory: Path | None = None,
     rootful_socket: Path = Path("/run/docker.sock"),
     rootless_socket: Path | None = None,
     invoking_uid: int | None = None,
@@ -800,6 +850,7 @@ def open_local_docker_build_adapter(
         endpoint_path=endpoint,
         endpoint_kind=endpoint_kind,
         config_directory=config_directory,
+        runtime_directory=runtime_directory,
         builder_name=(administrator_policy.builder_name if administrator_policy else "default"),
         administrator_policy=administrator_policy,
         trusted_tool_owner_uids=trusted_tool_owner_uids,
@@ -1085,6 +1136,71 @@ def _safe_private_directory(path: Path, *, uid: int) -> Path:
     ):
         raise _build_error("Docker build private directory owner or mode is unsafe")
     return resolved
+
+
+def _prepare_private_docker_config(runtime_directory: Path, *, uid: int) -> Path:
+    root = _safe_private_directory(runtime_directory, uid=uid)
+    config = root / "docker-config"
+    try:
+        config.mkdir(mode=0o700)
+        metadata = config.lstat()
+    except OSError as exc:
+        raise _build_error("Docker private Buildx configuration cannot be created") from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != uid
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+        or any(config.iterdir())
+    ):
+        raise _build_error("Docker private Buildx configuration is unsafe")
+    return config
+
+
+def _select_builder_from_json_lines(raw: bytes, builder_name: str) -> dict[str, Any]:
+    if len(raw) > _MAX_JSON_BYTES:
+        raise _resource_error("Docker Buildx Builder output exceeds its fixed limit")
+    try:
+        text = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise _build_error("Docker Buildx Builder output is not valid UTF-8") from exc
+    matching: dict[str, dict[str, Any]] = {}
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise _build_error("Docker Buildx Builder output is malformed") from exc
+        if not isinstance(value, dict):
+            raise _build_error("Docker Buildx Builder output has an unexpected shape")
+        item = cast(dict[str, Any], value)
+        if item.get("Name") != builder_name:
+            continue
+        digest = _canonical_sha256(_stable_builder_entry(item))
+        matching.setdefault(digest, item)
+    if len(matching) != 1:
+        raise _build_error("Docker Buildx did not return one unambiguous Builder identity")
+    return next(iter(matching.values()))
+
+
+def _stable_builder_entry(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: item
+        for key, item in value.items()
+        if key not in {"Current", "LastActivity"}
+    }
+
+
+def _directory_file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise _build_error("Docker private Buildx configuration is not a directory")
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_uid,
+        metadata.st_gid,
+        stat.S_IMODE(metadata.st_mode),
+    )
 
 
 def _validate_image_digest(value: str) -> None:

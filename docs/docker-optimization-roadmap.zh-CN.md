@@ -35,6 +35,11 @@ Dockerfile 和依赖锁文件默认不可变；只有显式列入 `mutable_paths
 标为高风险。空 Benchmark 对 v0.3.1 式诊断仍合法，但不能授权自动优化，也不能输出
 Verified Improvement。
 
+系统包提供 root-owned、只读且为空的 Docker 配置信任锚点。由于 Buildx 必须保存 Builder
+选择状态，每个 Preview 会在随机的用户私有 `0700` 目录中创建一个空的运行时配置。它不会
+复制用户 Docker 配置、凭据或 Context，并在 Preview 过期、失败或会话撤销时随私有快照一起
+清理；每次命令都会重新核对该目录的 inode、owner 和 mode。
+
 ## 已实现的类型化接口（仍需真实主机验收）
 
 v0.3.2 实现提供以下 MCP 工具：

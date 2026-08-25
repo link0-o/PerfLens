@@ -106,7 +106,7 @@ class DockerOptimizationRuntime:
         allowed_roots: tuple[Path, ...],
         private_root: Path,
         runtime_capability_factory: Callable[[], DockerRuntimeCapabilityArtifact],
-        build_adapter_factory: Callable[[], TypedDockerBuildAdapter],
+        build_adapter_factory: Callable[[Path], TypedDockerBuildAdapter],
         collector_available: Callable[[], bool],
         collector_modes: tuple[OptimizationCollectionMode, ...],
         client_connection_identity_sha256: str | None = None,
@@ -140,8 +140,11 @@ class DockerOptimizationRuntime:
         self._assert_project_current()
         runtime = self._runtime_capability_factory()
         _verify_content(runtime)
+        private_directory: Path | None = None
+        adapter: TypedDockerBuildAdapter | None = None
         try:
-            adapter = self._build_adapter_factory()
+            private_directory = _new_private_directory(self._private_root)
+            adapter = self._build_adapter_factory(private_directory)
             docker_tool = adapter.docker_tool_projection
             buildx_tool = adapter.buildx_tool_projection
             builder = adapter.builder_projection
@@ -155,6 +158,11 @@ class DockerOptimizationRuntime:
             builder = None
             tiers = ()
             base_present = False
+        finally:
+            if adapter is not None:
+                adapter.close()
+            if private_directory is not None:
+                _remove_private_directory(private_directory)
         return project_docker_build_capability(
             runtime=runtime,
             policy=self._policy,
@@ -180,29 +188,6 @@ class DockerOptimizationRuntime:
         self._assert_project_current()
         runtime = self._runtime_capability_factory()
         _verify_content(runtime)
-        adapter = self._build_adapter_factory()
-        capability = project_docker_build_capability(
-            runtime=runtime,
-            policy=self._policy,
-            docker_tool=adapter.docker_tool_projection,
-            buildx_tool=adapter.buildx_tool_projection,
-            builder=adapter.builder_projection,
-            available_network_tiers=adapter.available_network_tiers,
-            base_image_present=adapter.base_image_present(
-                self._policy.optimization.base_image_digest
-            ),
-            collector_available=self._collector_available(),
-            checked_at=self._wall_now(),
-        )
-        if capability.status != "available" or not capability.build_supported:
-            raise _authorization_error(
-                "Docker optimization capability is incomplete; inspect its limitations"
-            )
-        recipe = build_docker_build_recipe(
-            self._policy,
-            project_identity_sha256=self._project.identity_sha256,
-            created_at=self._wall_now(),
-        )
         with self._lock:
             self._prune_pending_locked()
             if (
@@ -211,7 +196,31 @@ class DockerOptimizationRuntime:
             ):
                 raise _resource_error("Docker optimization Preview capacity is exhausted")
             private_directory = _new_private_directory(self._private_root)
+            adapter: TypedDockerBuildAdapter | None = None
             try:
+                adapter = self._build_adapter_factory(private_directory)
+                capability = project_docker_build_capability(
+                    runtime=runtime,
+                    policy=self._policy,
+                    docker_tool=adapter.docker_tool_projection,
+                    buildx_tool=adapter.buildx_tool_projection,
+                    builder=adapter.builder_projection,
+                    available_network_tiers=adapter.available_network_tiers,
+                    base_image_present=adapter.base_image_present(
+                        self._policy.optimization.base_image_digest
+                    ),
+                    collector_available=self._collector_available(),
+                    checked_at=self._wall_now(),
+                )
+                if capability.status != "available" or not capability.build_supported:
+                    raise _authorization_error(
+                        "Docker optimization capability is incomplete; inspect its limitations"
+                    )
+                recipe = build_docker_build_recipe(
+                    self._policy,
+                    project_identity_sha256=self._project.identity_sha256,
+                    created_at=self._wall_now(),
+                )
                 snapshot = capture_docker_build_context(
                     self._policy,
                     recipe,
@@ -239,6 +248,8 @@ class DockerOptimizationRuntime:
                 self._pending[result.preview.preview_id] = pending
                 return result
             except BaseException:
+                if adapter is not None:
+                    adapter.close()
                 _remove_private_directory(private_directory)
                 raise
 
@@ -405,6 +416,7 @@ class DockerOptimizationRuntime:
                     )
                 except PerfLensError:
                     continue
+            runtime_session.preview.adapter.close()
             _remove_private_directory(runtime_session.preview.private_directory)
             return artifact
 
@@ -628,6 +640,7 @@ class DockerOptimizationRuntime:
         ]
         for preview_id in expired:
             pending = self._pending.pop(preview_id)
+            pending.adapter.close()
             _remove_private_directory(pending.private_directory)
 
     def _prune_sessions_locked(self) -> None:
@@ -645,6 +658,7 @@ class DockerOptimizationRuntime:
                         build,
                         session_identity_sha256=_session_identity_sha256(session_id),
                     )
+            runtime_session.preview.adapter.close()
             self._pending.pop(runtime_session.preview.result.preview.preview_id, None)
             _remove_private_directory(runtime_session.preview.private_directory)
 

@@ -315,8 +315,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             allowed_roots=config.allowed_roots,
             private_root=runtime_root,
             runtime_capability_factory=discover_docker_capability,
-            build_adapter_factory=lambda: open_local_docker_build_adapter(
+            build_adapter_factory=lambda private_directory: open_local_docker_build_adapter(
                 administrator_policy=administrator_policy,
+                runtime_directory=private_directory,
             ),
             collector_available=lambda: (
                 config.collector_socket is not None and config.collector_socket.exists()

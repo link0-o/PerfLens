@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import socket
+import stat
 import tempfile
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -13,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+import perflens.docker.build_adapter as build_adapter
 from perflens.application.evidence import contract_content_sha256
 from perflens.contracts.docker import DockerRuntimeCapabilityArtifact
 from perflens.docker.build_adapter import TypedDockerBuildAdapter
@@ -70,9 +72,9 @@ if command[:1] == ["version"]:
     json.dump({"Version": "29.7.2"}, sys.stdout)
 elif command[:2] == ["buildx", "version"]:
     sys.stdout.write("github.com/docker/buildx v0.30.1\n")
-elif command[:2] == ["buildx", "inspect"]:
+elif command[:2] == ["buildx", "ls"]:
     json.dump({
-        "Name": command[command.index("--builder") + 1],
+        "Name": "default",
         "Driver": state.get("driver", "docker"),
         "Nodes": [{
             "Name": "node0",
@@ -80,6 +82,7 @@ elif command[:2] == ["buildx", "inspect"]:
             "Generation": state.get("generation", 1),
         }],
     }, sys.stdout)
+    sys.stdout.write("\n")
 elif command[:2] == ["image", "inspect"]:
     found = image(command[-1])
     if found is None:
@@ -305,6 +308,7 @@ def _adapter(
     sandbox: _BuildSandbox,
     *,
     administrator_policy: DockerAdministratorBuilderPolicy | None = None,
+    runtime_directory: Path | None = None,
 ) -> TypedDockerBuildAdapter:
     return TypedDockerBuildAdapter(
         docker_path=sandbox.docker,
@@ -312,12 +316,83 @@ def _adapter(
         endpoint_path=sandbox.endpoint,
         endpoint_kind="local_rootless",
         config_directory=sandbox.config,
+        runtime_directory=runtime_directory,
         administrator_policy=administrator_policy,
         buildx_plugin_directories=(sandbox.root,),
         trusted_tool_owner_uids=_trusted_uids(),
         trusted_policy_owner_uids=_trusted_uids(),
         invoking_uid=os.geteuid(),
     )
+
+
+def test_adapter_uses_and_cleans_private_buildx_state(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    with _build_sandbox() as sandbox:
+        adapter = _adapter(sandbox, runtime_directory=runtime)
+        private_config = runtime / "docker-config"
+        assert private_config.is_dir()
+        assert stat.S_IMODE(private_config.stat().st_mode) == 0o700
+        adapter.close()
+        assert not private_config.exists()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    (
+        b"not-json\n",
+        b"\xff\n",
+        b"[]\n",
+        b'{"Name":"other","Driver":"docker","Nodes":[]}\n',
+        (
+            b'{"Name":"default","Driver":"docker","Nodes":[]}\n'
+            b'{"Name":"default","Driver":"docker-container","Nodes":[]}\n'
+        ),
+    ),
+)
+def test_builder_list_rejects_malformed_or_ambiguous_identity(raw: bytes) -> None:
+    with pytest.raises(PerfLensError, match=r"Builder output|unambiguous Builder"):
+        build_adapter._select_builder_from_json_lines(  # pyright: ignore[reportPrivateUsage]
+            raw,
+            "default",
+        )
+
+
+def test_builder_list_accepts_duplicate_entries_with_only_volatile_changes() -> None:
+    selected = build_adapter._select_builder_from_json_lines(  # pyright: ignore[reportPrivateUsage]
+        (
+            b'{"Name":"default","Driver":"docker","Nodes":[],"Current":true,'
+            b'"LastActivity":"2026-08-25T01:00:00Z"}\n'
+            b'{"Name":"default","Driver":"docker","Nodes":[],"Current":false,'
+            b'"LastActivity":"2026-08-25T02:00:00Z"}\n'
+        ),
+        "default",
+    )
+
+    assert selected["Name"] == "default"
+
+
+def test_builder_list_rejects_output_over_fixed_limit() -> None:
+    with pytest.raises(PerfLensError, match="exceeds its fixed limit") as captured:
+        build_adapter._select_builder_from_json_lines(  # pyright: ignore[reportPrivateUsage]
+            b"x" * ((8 << 20) + 1),
+            "default",
+        )
+
+    assert captured.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+
+
+def test_adapter_rejects_private_buildx_directory_identity_change(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    with _build_sandbox() as sandbox:
+        adapter = _adapter(sandbox, runtime_directory=runtime)
+        private_config = runtime / "docker-config"
+        private_config.chmod(0o755)
+        with pytest.raises(PerfLensError, match="identity changed"):
+            adapter.base_image_present(BASE_DIGEST)
+        private_config.chmod(0o700)
+        adapter.close()
 
 
 def _capability(

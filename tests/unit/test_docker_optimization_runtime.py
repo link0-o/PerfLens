@@ -146,6 +146,9 @@ class _FakeBuildAdapter:
             raise self.cleanup_error
         self.cleaned.append(result.artifact.build_id)
 
+    def close(self) -> None:
+        return None
+
 
 def _policy_text() -> str:
     return (
@@ -240,7 +243,7 @@ def make_optimization_runtime(
         allowed_roots=(project,),
         private_root=private,
         runtime_capability_factory=_runtime_capability,
-        build_adapter_factory=lambda: cast(TypedDockerBuildAdapter, adapter),
+        build_adapter_factory=lambda _private: cast(TypedDockerBuildAdapter, adapter),
         collector_available=lambda: collector_available,
         collector_modes=collector_modes,
         client_connection_identity_sha256="f" * 64,
@@ -548,7 +551,9 @@ def test_runtime_rejects_naive_clock_and_unsafe_private_root(tmp_path: Path) -> 
             allowed_roots=(project_root / "project",),
             private_root=private,
             runtime_capability_factory=_runtime_capability,
-            build_adapter_factory=lambda: cast(TypedDockerBuildAdapter, _FakeBuildAdapter()),
+            build_adapter_factory=lambda _private: cast(
+                TypedDockerBuildAdapter, _FakeBuildAdapter()
+            ),
             collector_available=lambda: True,
             collector_modes=("stat",),
         )
