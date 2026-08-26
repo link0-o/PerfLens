@@ -514,3 +514,4 @@ uv run pip-audit
 - [发布流程](docs/releasing.zh-CN.md)
 - [已知问题与临时处理](docs/known-issues.zh-CN.md)
 - [故障排查](docs/troubleshooting.zh-CN.md)
+- [v0.3.2 Docker 优化链路防回归手册](docs/v0.3.2-regression-playbook.zh-CN.md)

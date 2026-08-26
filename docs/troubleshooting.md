@@ -5,6 +5,8 @@
 For failures limited to a published version, first check
 [known issues, fixes, and bounded workarounds](known-issues.md), including the `v0.1.2`
 group-writable Collector policy generated under `umask 0002`.
+Changes to the v0.3.2 Docker optimization collection path must also preserve the sequence and run
+the gates in the [regression playbook](v0.3.2-regression-playbook.md).
 
 ## Start with one read-only status command
 

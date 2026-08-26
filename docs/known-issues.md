@@ -5,6 +5,10 @@
 This document records reproduced issues and their bounded workarounds, including
 resolved issues. Do not weaken deployment safety checks to work around them.
 
+Maintainers changing Collector, Helper, Gate, or Docker optimization state must also follow the
+[v0.3.2 Docker optimization regression playbook](v0.3.2-regression-playbook.md). It turns the
+2026-08-26 fixes into permanent ordering, invariants, forbidden shortcuts, and test gates.
+
 ## KI-2026-08-26: the automatic PMU probe could release a fast Docker workload (resolved)
 
 - Affected scope: managed Docker `stat`/`record` with `event_source=auto`, especially an A/B pair

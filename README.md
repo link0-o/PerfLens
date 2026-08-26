@@ -504,7 +504,8 @@ See [release readiness](docs/release-readiness.md),
 [release process](docs/releasing.md),
 [real-world profile acceptance](docs/real-world-acceptance.md), and
 [known issues](docs/known-issues.md), and
-[troubleshooting](docs/troubleshooting.md), and the
+[troubleshooting](docs/troubleshooting.md), the
+[v0.3.2 Docker optimization regression playbook](docs/v0.3.2-regression-playbook.md), and the
 [Collector and user-space-lock roadmap](docs/collector-capability-roadmap.md), the
 [v0.3.1 Docker process roadmap](docs/docker-container-roadmap.md), plus the
 [perf evidence pipeline](docs/evidence-pipeline.md) for final verification evidence,

@@ -5,6 +5,10 @@
 本文记录已经复现、具有明确边界和临时处理方法的问题，包括已经修复的问题。
 不要通过降低部署器安全检查来规避问题；升级前仍可按对应版本的临时方法处理。
 
+维护 Collector、Helper、Gate 或 Docker optimization 状态机时，还必须遵循
+[《v0.3.2 Docker 优化链路防回归手册》](v0.3.2-regression-playbook.zh-CN.md)。该手册把
+2026-08-26 的修复转换成永久时序、不变量、禁止捷径和测试门禁。
+
 ## KI-2026-08-26：自动 PMU 探测可能提前放行快速 Docker workload（已修复）
 
 - 影响范围：托管 Docker `stat`/`record` 使用 `event_source=auto`，尤其是优化候选明显快于

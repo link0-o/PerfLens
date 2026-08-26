@@ -4,6 +4,12 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+### Documentation
+
+- Added a bilingual v0.3.2 Docker optimization regression playbook that preserves the formal
+  perf/Gate ordering, PMU fallback boundary, failed-lease accounting, unevaluated-candidate
+  disposition, evidence-quality rules, focused test map, and real-host acceptance assertions.
+
 ## [0.3.2] - 2026-08-26
 
 ### Added
