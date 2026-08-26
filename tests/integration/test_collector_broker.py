@@ -56,7 +56,7 @@ _FAKE_PERF_CONTROL = (
     "if '--control' in args:\n"
     "    descriptors = args[args.index('--control') + 1].removeprefix('fd:').split(',')\n"
     "    control_fd, ack_fd = map(int, descriptors)\n"
-    "    for expected in (b'ping\\n', b'enable\\n'):\n"
+    "    for expected in (b'disable\\n', b'enable\\n'):\n"
     "        command = b''\n"
     "        while not command.endswith(b'\\n'):\n"
     "            command += os.read(control_fd, 16)\n"

@@ -257,7 +257,7 @@ def test_pid_collection_waits_for_perf_binding_before_identity_revalidation_and_
         "output = pathlib.Path(args[args.index('-o') + 1])\n"
         "descriptors = args[args.index('--control') + 1].removeprefix('fd:').split(',')\n"
         "control_fd, ack_fd = map(int, descriptors)\n"
-        "for expected in ('ping', 'enable'):\n"
+        "for expected in ('disable', 'enable'):\n"
         "    command = b''\n"
         "    while not command.endswith(b'\\n'):\n"
         "        command += os.read(control_fd, 16)\n"
@@ -272,11 +272,11 @@ def test_pid_collection_waits_for_perf_binding_before_identity_revalidation_and_
     lifecycle: list[str] = []
 
     def validate_bound_identity() -> None:
-        assert control_log.read_text(encoding="utf-8") == "ping\n"
+        assert control_log.read_text(encoding="utf-8") == "disable\n"
         lifecycle.append("identity_validated")
 
     def report_ready() -> None:
-        assert control_log.read_text(encoding="utf-8") == "ping\nenable\n"
+        assert control_log.read_text(encoding="utf-8") == "disable\nenable\n"
         lifecycle.append("ready")
 
     artifact = collect_profile(
@@ -320,7 +320,7 @@ def test_pid_collection_waits_for_perf_binding_before_identity_revalidation_and_
             pid_identity_validator=reject_reused_pid,
         )
     assert denied.value.code is ErrorCode.PATH_SAFETY_VIOLATION
-    assert control_log.read_text(encoding="utf-8") == "ping\n"
+    assert control_log.read_text(encoding="utf-8") == "disable\n"
     assert not denied_output.exists()
 
 
@@ -333,7 +333,7 @@ def test_docker_pid_record_requests_kernel_mmap_build_ids(tmp_path: Path) -> Non
         "output = pathlib.Path(args[args.index('-o') + 1])\n"
         "descriptors = args[args.index('--control') + 1].removeprefix('fd:').split(',')\n"
         "control_fd, ack_fd = map(int, descriptors)\n"
-        "for expected in ('ping', 'enable'):\n"
+        "for expected in ('disable', 'enable'):\n"
         "    command = b''\n"
         "    while not command.endswith(b'\\n'):\n"
         "        command += os.read(control_fd, 16)\n"

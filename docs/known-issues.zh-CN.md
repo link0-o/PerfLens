@@ -5,6 +5,27 @@
 本文记录已经复现、具有明确边界和临时处理方法的问题，包括已经修复的问题。
 不要通过降低部署器安全检查来规避问题；升级前仍可按对应版本的临时方法处理。
 
+## KI-2026-08-26：不受支持的 perf control ping 阻断 PID 采集（已修复）
+
+- 影响范围：当已安装 perf 不实现未公开的 `ping` 控制命令时，经 Python `cap_perfmon`
+  Collector 或高权限 Rust Helper 执行的 PID `stat`、`record` 采集；
+- 现象：Docker optimization 可以完成 baseline 构建，但第一次采集会在 Gate 放行负载前
+  失败；高权限路径返回
+  `Privileged perf did not complete its disabled-event binding handshake`，且不发布 Collection
+  证据；
+- 根因：当前 perf 对 `stat --control` 和 `record --control` 都公开支持 `enable`、`disable`，
+  PerfLens 却把 `ping` 当作初始非启用屏障；测试替身也错误接受该命令，因而没有暴露真实
+  工具兼容性问题；
+- 修复：perf 仍以 `-D -1` 让事件保持禁用，PerfLens 随后发送幂等 `disable` 并要求有界 ACK；
+  只有屏障完成后才重新核验 PID/UID/启动时间和容器身份，再发送 `enable` 并放行负载。
+  ACK 非法、超时、身份变化和额外帧仍会安全拒绝；
+- 回归覆盖：Python 与 Rust 测试替身现在只接受公开的 `disable → enable` 顺序，同时覆盖
+  Linux perf 的 NUL 分隔 ACK 帧，以及身份变化必须在 enable 前拒绝。
+
+这是 perf 控制命令兼容性缺陷，不是 Docker 授权、镜像、Benchmark、
+`perf_event_paranoid` 或 PMU 降级故障。应安装相互匹配的修复后主包与 Collector 包并重启
+托管服务，不要绕过 Broker 或降低主机安全策略。
+
 ## KI-2026-08-15：高级 trace 原始入口容易被误认为稳定分析能力（待解决）
 
 - 范围：公共模式类型与 `cap_perfmon` Python Broker 可以构造 `sched`、`lock`、`off_cpu`
@@ -100,9 +121,10 @@ EvidenceQuality 中同时暴露，Agent 不得宣称位置列表完整。
   同等的附加后复核；
 - 原问题二：项目启动器提交计划后固定等待 200ms 就放行程序。这只是时间猜测，慢机器可能
   尚未附加，极短程序也可能在采集真正开始前结束；
-- 修复：两条路径都用 perf control fd 以 `-D -1` 禁用事件启动，收到有界 `ping` ACK 后
-  再次核验计划绑定的 PID/UID/启动时间，随后才 `enable`。身份变化、ACK 异常、超时和多余
-  帧全部安全拒绝，不会发布半成品；
+- 修复：两条路径都用 perf control fd 以 `-D -1` 禁用事件启动，收到有界控制 ACK 后再次
+  核验计划绑定的 PID/UID/启动时间，随后才 `enable`。最初修复使用 `ping`；当前代码在
+  KI-2026-08-26 后改用公开支持的幂等 `disable`。身份变化、ACK 异常、超时和多余帧全部
+  安全拒绝，不会发布半成品；
 - 项目握手：公共 Broker 协议升级为 `1.1`，Python/Rust 私有 Helper 协议升级为 `1.2`。
   回执同时绑定 `request_id`、`plan_id` 和目标 PID；普通用户启动器只有在验证回执后才
   `exec` 已确认的项目程序；
@@ -228,8 +250,9 @@ perflens accept-collector --authorize-host-acceptance
   大小写出 `ack\n\0`。旧 Helper 第一次按行读取后把 NUL 留在缓冲区，导致下一次响应被
   读成 `\0ack\n` 并安全拒绝；只写 `ack\n` 的测试替身没有覆盖真实帧；
 - 修复：重新发布的 `v0.2.0` 对 ACK 使用最多 16 字节的严格二进制解析，只允许响应前
-  存在实现产生的 NUL，其他内容和超长响应仍拒绝；启动屏障改用 perf 支持的非变更
-  `ping`，因此仍会在重新校验 PID 所有者和启动时间之后、启用事件之前完成绑定确认；
+  存在实现产生的 NUL，其他内容和超长响应仍拒绝；当时的修复仍使用 `ping`，当前代码在
+  KI-2026-08-26 后改用带 ACK 的幂等 `disable`，并继续在启用事件前重新校验 PID 所有者和
+  启动时间；
 - 回归测试：测试替身现在逐次发送真实的 `ack\n\0`，并覆盖连续响应跨帧时遗留 NUL 的
   情况。
 

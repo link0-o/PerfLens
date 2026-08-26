@@ -510,7 +510,10 @@ class _PerfControl:
 
     def after_start(self) -> None:
         self._close_child_ends()
-        self._send("ping")
+        # perf's documented control protocol has no generic ping command. Because `-D -1`
+        # already opened the events disabled, an acknowledged idempotent `disable` is the
+        # non-enabling barrier that proves perf has finished binding the target.
+        self._send("disable")
         self._validator()
         self._send("enable")
         if self._ready_callback is not None:

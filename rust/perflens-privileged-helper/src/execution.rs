@@ -1278,12 +1278,12 @@ where
         .map_err(|_error| perf_control_error("Privileged perf could not be started"))?;
     drop(control_reader);
     drop(ack_writer);
-    // `-D -1` makes perf open its target events disabled. `ping` is a non-mutating control command
-    // which perf processes only after completing that binding. Revalidating the original
-    // owner/start-time identity after this barrier ensures a recycled numeric PID is rejected
-    // before any event can be enabled; the kernel event descriptors then remain bound to the task
-    // perf actually opened.
-    if send_perf_control(&mut control_writer, &mut acknowledgements, "ping").is_err() {
+    // `-D -1` makes perf open its target events disabled. perf has no documented generic ping
+    // command, so an acknowledged idempotent `disable` is the non-enabling binding barrier.
+    // Revalidating the original owner/start-time identity after this barrier ensures a recycled
+    // numeric PID is rejected before any event can be enabled; the kernel event descriptors then
+    // remain bound to the task perf actually opened.
+    if send_perf_control(&mut control_writer, &mut acknowledgements, "disable").is_err() {
         terminate_perf(&mut child, Signal::SIGKILL);
         return Err(perf_control_error(
             "Privileged perf did not complete its disabled-event binding handshake",
@@ -1895,7 +1895,7 @@ finish() {
 }
 trap finish INT TERM
 eval "IFS= read -r operation <&${ctl_fd}"
-[ "$operation" = 'ping' ]
+[ "$operation" = 'disable' ]
 eval "printf 'ack\n\0' >&${ack_fd}"
 eval "IFS= read -r operation <&${ctl_fd}"
 [ "$operation" = 'enable' ]
@@ -1946,7 +1946,7 @@ finish() {
 }
 trap finish INT TERM
 eval "IFS= read -r operation <&${ctl_fd}"
-[ "$operation" = 'ping' ]
+[ "$operation" = 'disable' ]
 eval "printf 'ack\n\0' >&${ack_fd}"
 eval "IFS= read -r operation <&${ctl_fd}"
 [ "$operation" = 'enable' ]
@@ -2000,7 +2000,7 @@ finish() {
 }
 trap finish INT TERM
 eval "IFS= read -r operation <&${ctl_fd}"
-[ "$operation" = 'ping' ]
+[ "$operation" = 'disable' ]
 eval "printf 'ack\n\0' >&${ack_fd}"
 eval "IFS= read -r operation <&${ctl_fd}"
 [ "$operation" = 'enable' ]
@@ -2040,7 +2040,7 @@ descriptors=${control#fd:}
 ctl_fd=${descriptors%,*}
 ack_fd=${descriptors#*,}
 eval "IFS= read -r operation <&${ctl_fd}"
-[ "$operation" = 'ping' ]
+[ "$operation" = 'disable' ]
 eval "printf 'ack\n\0' >&${ack_fd}"
 eval "IFS= read -r operation <&${ctl_fd}"
 [ "$operation" = 'enable' ]

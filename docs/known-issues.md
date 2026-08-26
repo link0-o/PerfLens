@@ -5,6 +5,31 @@
 This document records reproduced issues and their bounded workarounds, including
 resolved issues. Do not weaken deployment safety checks to work around them.
 
+## KI-2026-08-26: unsupported perf control ping blocked PID collection (resolved)
+
+- Affected scope: PID `stat` and `record` collection through either the Python `cap_perfmon`
+  Collector or the privileged Rust Helper when the installed perf does not implement an
+  undocumented `ping` control command.
+- Symptom: Docker optimization can build its baseline, but its first collection fails before the
+  Gate releases the workload. The privileged path reports
+  `Privileged perf did not complete its disabled-event binding handshake`; no Collection evidence
+  is published.
+- Cause: current perf documents `enable` and `disable` for both `stat --control` and
+  `record --control`, but PerfLens sent `ping` as its initial non-enabling barrier. Test doubles
+  incorrectly accepted that unsupported command, hiding the real-tool incompatibility.
+- Fix: perf still starts with `-D -1`, then PerfLens sends an idempotent `disable` and requires its
+  bounded ACK. Only after that barrier does it revalidate the PID/UID/start time and container
+  identity, send `enable`, and release the workload. Invalid ACKs, timeouts, identity changes, and
+  extra frames continue to fail closed.
+- Regression coverage: Python and Rust test doubles now accept only the documented
+  `disable → enable` sequence, including Linux perf's NUL-delimited ACK framing and the
+  identity-change rejection before enable.
+
+This was a perf control-command compatibility defect, not a Docker authorization, image,
+Benchmark, `perf_event_paranoid`, or PMU fallback failure. Deploy matching repaired main and
+Collector packages and restart the managed services; do not bypass the Broker or weaken host
+policy.
+
 ## KI-2026-08-15: advanced trace entry points were easy to mistake for stable analyzers (open)
 
 - Scope: public mode types and the `cap_perfmon` Python Broker can construct raw `sched`, `lock`,
@@ -112,9 +137,10 @@ or event provenance therefore fails closed before Agent use; valid but incomplet
   disabled-event barrier, but the default mode did not have an equivalent post-bind check.
 - Original gap 2: the project launcher released the workload after a fixed 200ms delay. That was a
   timing guess: attachment could be slower, while a short program could finish before collection.
-- Fix: both paths start PID perf events disabled with `-D -1`, wait for a bounded control `ping`
-  ACK, revalidate the plan-bound PID/UID/start time, and only then enable events. Identity changes,
-  invalid ACKs, timeouts, and extra frames fail closed without publishing partial evidence.
+- Fix: both paths start PID perf events disabled with `-D -1`, wait for a bounded control ACK,
+  revalidate the plan-bound PID/UID/start time, and only then enable events. The initial repair used
+  `ping`; current code uses the documented idempotent `disable` after KI-2026-08-26. Identity
+  changes, invalid ACKs, timeouts, and extra frames fail closed without publishing partial evidence.
 - Project handshake: public Broker protocol `1.1` and private Python/Rust Helper protocol `1.2`
   stream a request/plan/PID-bound readiness frame. The ordinary-user bootstrap execs the approved
   project program only after authenticating that frame.
@@ -261,8 +287,9 @@ capability-neutral name because the acknowledged boundary now includes both `CAP
   Test doubles emitted only `ack\n`, so they did not reproduce the real framing.
 - Fix: the replacement `v0.2.0` uses a strict, 16-byte-bounded binary ACK parser. It permits only
   implementation-produced leading NUL bytes before the documented ACK and rejects every other or
-  oversized response. The startup barrier now uses perf's non-mutating `ping` command, preserving
-  PID owner/start-time revalidation before events are enabled.
+  oversized response. That repair still used `ping`; current code uses an acknowledged idempotent
+  `disable` after KI-2026-08-26, preserving PID owner/start-time revalidation before events are
+  enabled.
 - Regression coverage: perf test doubles now emit the real `ack\n\0` response for every command,
   including the NUL carried into the following frame.
 

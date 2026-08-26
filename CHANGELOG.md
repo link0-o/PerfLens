@@ -13,6 +13,11 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
+- The Python Collector and privileged Rust Helper now use perf's documented, idempotent
+  `disable/ack` command as their disabled-event binding barrier. The previous `ping` command is not
+  supported by current `perf stat` or `perf record`, so real PID collection could time out before
+  the Gate released a managed workload even though test doubles accepted it. PID/container
+  identity is still revalidated after binding and before the separate `enable` command.
 - Verified Docker `record` analysis now disables ambiguous inline expansion, requests full source
   paths only inside the private verified symfs, and classifies perf sample privilege context. User
   frames map back to the authorized workspace while unresolved restricted kernel frames remain an
@@ -171,8 +176,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   during `--dry-run`, then refuse to modify the unit without the same explicit acknowledgement.
   The default Collector, Python Broker, MCP server, Skill, and Agent remain unprivileged.
 - The privileged Helper now parses Linux perf's actual NUL-terminated control ACK framing within
-  a strict 16-byte bound. Its disabled-event startup barrier uses the non-mutating `ping` command,
-  so PID identity is still revalidated after perf binds the target and before events are enabled.
+  a strict 16-byte bound. That release used a non-mutating `ping` startup barrier; the Unreleased
+  fix above replaces the unsupported command with an acknowledged idempotent `disable` while
+  preserving PID revalidation before events are enabled.
 - Automatic `record`/`stat` collection now performs one bounded fixed-software retry when the
   hardware probe succeeds but the subsequent hardware execution fails. Probe and failed-attempt
   time remain inside the original requested window; authorization, PID identity, timeout, spool,
@@ -181,9 +187,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   was safely published, including zero-count PMU evidence, so an unavailable-PMU conclusion still
   links to the exact retained diagnostic artifact.
 - The `cap_perfmon` Broker now starts PID perf events disabled, waits for a bounded control-channel
-  ping, revalidates the authorized owner/start-time identity after perf has bound the target, and
-  only then enables collection. This closes the same numeric-PID reuse window already closed inside
-  the Rust Helper.
+  barrier, revalidates the authorized owner/start-time identity after perf has bound the target,
+  and only then enables collection. That release used `ping`; the Unreleased fix above uses perf's
+  documented idempotent `disable` acknowledgement without reopening the numeric-PID reuse window.
 - Project workload launch no longer guesses Collector attachment with a fixed 200ms sleep. Broker
   protocol `1.1` and private Helper protocol `1.2` stream an authenticated, plan/PID-bound readiness
   frame after the first probe or formal perf stage is enabled; only then does the ordinary-user
