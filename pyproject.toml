@@ -47,7 +47,7 @@ perflens-admin = "perflens.admin.app:main"
 [dependency-groups]
 dev = [
   "build>=1.3,<2",
-  "hypothesis>=6.135,<7",
+  "hypothesis>=6.165.0,<7",
   "pip-audit>=2.9,<3",
   "pyright[nodejs]>=1.1.403,<2",
   "pytest>=9.0.3,<10",
