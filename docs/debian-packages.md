@@ -66,7 +66,7 @@ the complete versioned artifact.
 The previous repaired `0.2.0` line kept its upstream version and incremented only the
 Debian revision from `1` to `2`. APT could therefore upgrade an installed
 `0.2.0-1` package to `0.2.0-2`, while the PerfLens CLI still reported `0.2.0`.
-The current `0.3.2` development package resets the Debian revision to `1`; APT compares the
+The `0.3.2` release package resets the Debian revision to `1`; APT compares the
 upstream `0.3.2` version before that revision, so it remains newer than every `0.3.1-*` package
 while every PerfLens command reports `0.3.2`.
 

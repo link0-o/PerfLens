@@ -213,7 +213,8 @@ reload the client from the initialized project. Do not let an Agent launch `perf
 the shell or create a custom JSON-RPC/Unix-socket bridge. Docker optimization sessions are bound
 to one native client connection, and only a Preview returned by that connection can be confirmed.
 That Preview directly returns the normalized project-relative `context_paths` and `mutable_paths`;
-the Agent must show both exact lists before the one confirmation. Successful managed stat, record,
+the former is admitted build context and only the latter subset is editable. The Agent must show
+both exact lists before the one confirmation. Successful managed stat, record,
 and Trace results also return their Broker-verified `evidence_bytes`, which is charged to the
 optimization session rather than inferred from a later analysis projection.
 
@@ -231,6 +232,14 @@ bytes. `finalize_docker_optimization_candidate` verifies the selected mutable ma
 resources. It never changes the Iteration verdict. The single initial authorization still covers
 all builds and measurements; this later prompt chooses source disposition only and grants no new
 execution scope. Reports default to chat, not project files outside `mutable_paths`.
+
+A failed optimization collection after workload-lease issuance consumes one run, is returned as
+non-retryable, and blocks further build/collection operations in that Session. A validation
+rejection before lease issuance is not charged but must not be repeated unchanged. The Agent must
+not spend the build/test retry or switch evidence mode. If a candidate exists without an Iteration,
+the finalizer instead
+accepts its Build ID plus a typed stop reason and stores a `not_evaluated` Disposition after the
+same explicit retain/restore choice; a Build ID is never accepted as an Iteration ID.
 
 ## Use the Skill
 

@@ -125,7 +125,8 @@ alone is never treated as a healthy service.
 
 Project workloads use the streamed readiness frame in Broker protocol `1.1`
 instead of a fixed delay. The ordinary-user bootstrap keeps the same PID
-waiting while the first hardware-probe or formal perf stage starts with events
+waiting throughout any `auto` hardware probe, which emits no readiness and may conservatively
+select software on zero/unusable counts. The selected formal perf stage starts with events
 disabled. After the control channel confirms binding, the Collector revalidates
 PID/UID/start time, enables events, and returns `collection_ready` bound to the
 request, plan, and PID. Only then does the authenticated client let the

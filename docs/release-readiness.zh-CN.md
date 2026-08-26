@@ -2,11 +2,11 @@
 
 简体中文 | [English](release-readiness.md)
 
-本文是 2026-08-26 对 v0.3.2 发布候选的本地验证记录，不代替 Tag 工作流，也不代替每台
+本文是 2026-08-26 对发布版 v0.3.2 的验证记录，不代替远程 Tag 工作流，也不代替每台
 部署主机的真实验收。每次发布都必须重新执行[《发布流程》](releasing.zh-CN.md)；远程工作流
 已经配置不等于对应运行已经通过。
 
-## 候选范围
+## 发布范围
 
 v0.3.0 的 Linux 宿主机 `stat/record/sched/off_cpu/lock` 与 v0.3.1 固定镜像 Docker 路径
 继续受支持。v0.3.2 新增默认关闭的 `bounded_optimization_session`：
@@ -36,20 +36,20 @@ v0.3.0 的 Linux 宿主机 `stat/record/sched/off_cpu/lock` 与 v0.3.1 固定镜
 
 ## 自动化本地门禁
 
-| 门禁 | 2026-08-26 候选结果 |
+| 门禁 | 2026-08-26 发布结果 |
 |---|---|
 | Ruff | 通过 |
 | Pyright 严格模式 | 0 错误、0 警告 |
-| Python 3.12 | 1303 通过；覆盖率 85.06% |
-| Python 3.13 | 1303 通过；覆盖率 85.06% |
+| Python 3.12 | 1324 通过；覆盖率 85.19% |
+| Python 3.13 | 1324 通过；覆盖率 85.19% |
 | Rust 格式/Clippy/测试 | 通过 |
 | Rust 依赖 | 使用官方本地 advisory DB 干净克隆运行 `cargo audit` 无发现；`cargo deny check` 通过 |
 | 协议/Schema | 生成文件无差异；Python/Rust 有效与无效 golden 通过 |
 | Python 包 | wheel 与 sdist 可复现构建，并通过隔离安装冒烟 |
 | Debian 包 | 两个可复现 `0.3.2-1` amd64 DEB 通过提取/包冒烟；不激活服务或 Docker |
-| Python 依赖 | `pip-audit --strict` 未发现已知漏洞；已生成 CycloneDX 1.5 SBOM |
+| Python 依赖 | 锁定运行时导出通过 `pip-audit --no-deps --disable-pip --strict`；已生成 CycloneDX 1.5 SBOM |
 
-具体数量只描述本次候选检出，测试增加后会变化。覆盖率门槛保持 85%，不得为了发布降低。
+具体数量只描述本次 Tag 检出，测试增加后会变化。覆盖率门槛保持 85%，不得为了发布降低。
 
 ## 安全与解释门禁
 
@@ -71,15 +71,20 @@ v0.3.0 的 Linux 宿主机 `stat/record/sched/off_cpu/lock` 与 v0.3.1 固定镜
 - `Verified Improvement` 要求处理变量确实变化、环境指纹相同、容器绑定的正确性与
   Benchmark 成功、绝对指标改善、确定性重放通过且未观察到资源转移。
 
-## 剩余真实主机发布门
+## 真实主机验收与剩余兼容边界
 
-自动化测试使用真实 Unix Socket 和有界 Docker/perf Test Double。2026-08-25 已在一台安装后
-rootful Docker 主机上，以非 root workload 完成一次 v0.3.2 baseline 构建与
-`software_only` stat：Gate 成功放行、正确性和 Benchmark 通过、Collection 报告
-`actual_event_source=software`，清理状态为 `removed`。这只证明该主机和该 workload。
-发布前仍需补齐包不自动激活、升级/回滚/卸载、rootless/rootful Docker、v0.3.1 固定镜像
-回归、baseline/candidate 匹配 A/B、Trace 选择和宿主 Collector 回归的完整矩阵。rootful
-UID 0 还要求专用管理员风险确认。
+自动化测试使用真实 Unix Socket 和有界 Docker/perf Test Double。2026-08-26 已在一台安装后
+rootful Docker 主机上，以非 root workload 完成 v0.3.2 有界优化全链路：Preview 与一次
+授权、baseline/candidate 构建、正确性和 7 次 Benchmark、两侧软件事件 `stat`/`record`、
+确定性比较，以及经过身份复核的容器清理。Benchmark 与绝对 CPU 时间明显分离，固定环境和
+实际事件来源一致，确定性重放通过；但两侧 Profile 的未解析符号质量为 partial，短生命周期
+容器的 cgroup 资源差值也只是下界，因此 Iteration 正确保持为 `not_comparable`。这是预期的
+保守门禁，不是 Verified Improvement 声明。
 
-在真实验收、干净工作区检查和远程 CI 全部通过前，不要创建或推送 `v0.3.2`。已有
-`v0.3.0` 与 `v0.3.1` Tag 保持不可变。
+该验收只证明所测试的 rootful daemon、非 root workload、内核、perf、Builder 与项目合同。
+rootless Docker、管理员显式开放的 UID 0、其他 Builder 和主机组合仍需分别验收。包不自动
+激活及升级/回滚/卸载已有包和事务测试覆盖，管理员仍应在自己的部署主机上复核。
+
+只应从干净且通过验证的发布提交创建本地 annotated Tag；该提交进入 `origin/main` 且分支 CI
+通过后才能推送 Tag，随后由 Tag 触发的 Release 工作流再次执行全部门禁。已有 `v0.3.0` 与
+`v0.3.1` Tag 保持不可变。

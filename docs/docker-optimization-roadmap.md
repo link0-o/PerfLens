@@ -2,11 +2,12 @@
 
 [简体中文](docker-optimization-roadmap.zh-CN.md)
 
-Status: the v0.3.2 release-candidate interfaces are implemented, but the open security and
-multi-client findings in [Known issues](known-issues.md) prevent a release-ready claim. Contracts,
-context capture, the typed Build Adapter, one-confirmation session tools, Build-bound collection,
-deterministic A/B comparison, and Agent policy exist. Full rootless/rootful Docker and installed-host
-acceptance also remain release gates. Release v0.3.1 fixed-image collection remains supported.
+Status: released in v0.3.2. Contracts, context capture, the typed Build Adapter, one-confirmation
+session tools, Build-bound collection, deterministic A/B comparison, human candidate disposition,
+and Agent policy are implemented. The 2026-08-26 audit findings are recorded as resolved in
+[Known issues](known-issues.md). Release v0.3.1 fixed-image collection remains supported; every
+deployment still requires its own host acceptance, and untested runtime/host combinations are not
+implied by one successful acceptance machine.
 
 ## Outcome and boundary
 
@@ -52,7 +53,7 @@ Preview/session state is reclaimed by a bounded timer and by any later interacti
 shutdown revokes active authority and performs the same identity-verified cleanup. A process crash
 may still leave proven session objects for manual review; global Docker pruning remains forbidden.
 
-## Implemented typed interfaces (host acceptance still required)
+## Implemented typed interfaces
 
 The v0.3.2 implementation exposes these MCP tools:
 
@@ -132,7 +133,12 @@ lease bound to the client connection, and prevents replay.
 The Agent selects evidence instead of running every mode mechanically: begin with the cheapest
 correctness/Benchmark and `stat` evidence, then use `record`, `sched`, `off_cpu`, or `lock` only when
 the observed problem warrants it. A security rejection, identity change, or correctness failure is
-not retried unchanged. A recoverable build or test failure may consume the session's single retry.
+not retried unchanged. Each candidate likewise starts with correctness/Benchmark and `stat`; a
+matched profile or Trace is added only when the hypothesis requires it. Once a workload lease is
+issued, a failed collection is charged once, releases unused reservations, and blocks further
+build/collection work in that Session; switching mode is not a retry path. A validation rejection
+before lease issuance is not charged but is still not retried unchanged. The single recoverable
+retry applies only after a genuinely corrected build or test failure.
 
 Before the first edit, the baseline must be capable of resolving the expected gain: retain raw
 repeated values, compare the predicted effect with observed spread, and require hotspots, call
@@ -155,7 +161,9 @@ seconds total build time, 1800 seconds workload activity, a 7200-second hard exp
 observation is limited to 10 seconds. Reaching any limit ends useful work and cannot silently create
 a new session. Every successful stat, record, or Trace result carries the Broker-verified raw
 evidence byte count into the optimization session; the reserved maximum is replaced by that actual
-positive count instead of being silently released to zero.
+positive count instead of being silently released to zero. A failed call still consumes one run
+slot even when Gate never releases the workload, while unused evidence/time reservations are
+reconciled to actual use.
 
 ## Matched A/B and Verified Improvement
 
@@ -187,6 +195,11 @@ pre-candidate bytes. The finalizer verifies the selected mutable manifest, revok
 cleans verified temporary resources. It never edits source itself and never turns a human choice
 into Verified Improvement.
 
+If a candidate Build exists but collection or correctness stops before an Iteration can be
+created, the status is `not_evaluated`, not `not_comparable`. The same explicit retain/restore
+choice binds the latest candidate Build and a typed stop reason. Its Disposition contains no
+Iteration ID and cannot be interpreted as an A/B verdict.
+
 When a short-lived container exits before the last cgroup read, the last verified periodic
 snapshot is retained as a partial lower bound. This cannot prove absence of CPU, memory, I/O, or
 throttling transfer and therefore cannot be weakened merely to obtain a verified verdict. Reports
@@ -199,9 +212,12 @@ artifacts and snapshot; Build Adapter; session/MCP; matched A/B plus Agent integ
 package/host/Docker acceptance. Each stage needs normal, denial, boundary, lint, type, schema, and
 relevant Python/Rust protocol tests before the next begins.
 
-The local candidate has passed Python 3.12/3.13, the 85% coverage gate, reproducible wheel/sdist
-and DEB builds, package smoke, schema/protocol checks, and the Rust format, Clippy, test, audit, and
-deny gates. The 2026-08-26 source audit findings are resolved with denial-path regression tests.
-Stable release still requires installed-host non-activation/upgrade/rollback/removal, v0.3.1 host
-and fixed-Docker regression, and real rootless/rootful Docker acceptance. PerfLens does not create
-the v0.3.2 tag as part of the optimization session or this implementation contract.
+The release passed the 85% coverage gate, reproducible wheel/sdist and DEB builds, package smoke,
+schema/protocol checks, and the Rust format, Clippy, test, audit, and deny gates. The 2026-08-26
+source-audit findings have denial-path regression tests. An installed rootful-Docker host also
+completed baseline/candidate builds, correctness/Benchmark, software-event stat/record, cleanup,
+and deterministic A/B construction. That run correctly remained `not_comparable` because both
+profiles and the tail cgroup resource deltas were partial; it demonstrates the evidence gate rather
+than a Verified Improvement. Rootless, UID-0 opt-in, and other host combinations remain explicit
+compatibility/acceptance work, not an implicit release claim. An optimization Session itself never
+creates a Tag or grants release authority.

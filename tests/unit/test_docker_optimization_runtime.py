@@ -40,6 +40,7 @@ from perflens.docker.project_config import (
 )
 from perflens.docker.workload import inspect_managed_project_root
 from perflens.domain.errors import ErrorCode, PerfLensError
+from perflens.mcp.storage import ArtifactStore, PathPolicy
 
 NOW = datetime(2026, 8, 24, tzinfo=UTC)
 BASE_DIGEST = "sha256:" + "d" * 64
@@ -385,6 +386,10 @@ def test_runtime_requires_preview_before_build_and_allows_one_consent_flow(
     assert preview.preview.baseline_build_required is True
     assert preview.preview.context_paths == ("Dockerfile", "src")
     assert preview.preview.mutable_paths == ("src",)
+    assert any(
+        "3 candidate round(s) within 4 total build(s)" in action
+        for action in preview.preview.planned_actions
+    )
     assert baseline.session.baseline_build_id == baseline.build.build_id
     assert candidate.session.candidate_rounds_used == 1
     assert final.workload_runs_used == 1
@@ -393,6 +398,191 @@ def test_runtime_requires_preview_before_build_and_allows_one_consent_flow(
     revoked = runtime.revoke(session.session_id)
     assert revoked.state == "revoked"
     assert adapter.cleaned == [baseline.build.build_id, candidate.build.build_id]
+
+
+def test_failed_workload_is_charged_and_blocks_unchanged_session_retries(
+    tmp_path: Path,
+) -> None:
+    runtime, project, adapter = make_optimization_runtime(tmp_path)
+    _, authorized = _authorize(runtime)
+    baseline = runtime.build(
+        authorized.session_id,
+        build_kind="baseline",
+        candidate_round=0,
+    )
+    lease = runtime.begin_workload(
+        authorized.session_id,
+        build_id=baseline.build.build_id,
+        mode="stat",
+        reserve_active_seconds=30,
+        reserve_evidence_bytes=1 << 20,
+    )
+
+    failed = runtime.fail_workload(
+        authorized.session_id,
+        lease,
+        actual_active_seconds=2.1,
+        reason="perf control binding failed",
+    )
+
+    assert failed.state == "active"
+    assert failed.workload_runs_used == 1
+    assert failed.workload_active_seconds_used == 3
+    assert failed.evidence_bytes_used == 0
+    with pytest.raises(PerfLensError, match="stopped after a failed attempt") as retry:
+        runtime.begin_workload(
+            authorized.session_id,
+            build_id=baseline.build.build_id,
+            mode="record",
+            reserve_active_seconds=30,
+            reserve_evidence_bytes=1 << 20,
+        )
+    assert retry.value.recoverable is False
+    assert retry.value.retryable is False
+    assert retry.value.details["automatic_retry_allowed"] is False
+
+    (project / "src/app").write_bytes(b"candidate-after-failure")
+    with pytest.raises(PerfLensError, match="stopped after a failed attempt"):
+        runtime.build(
+            authorized.session_id,
+            build_kind="candidate",
+            candidate_round=1,
+        )
+
+    revoked = runtime.revoke(authorized.session_id)
+    assert revoked.state == "revoked"
+    assert adapter.cleaned == [baseline.build.build_id]
+
+
+def test_runtime_finalizes_unevaluated_candidate_after_collection_failure(
+    tmp_path: Path,
+) -> None:
+    runtime, project, adapter = make_optimization_runtime(tmp_path)
+    _, authorized = _authorize(runtime)
+    baseline = runtime.build(
+        authorized.session_id,
+        build_kind="baseline",
+        candidate_round=0,
+    )
+    (project / "src/app").write_bytes(b"candidate")
+    candidate = runtime.build(
+        authorized.session_id,
+        build_kind="candidate",
+        candidate_round=1,
+    )
+    lease = runtime.begin_workload(
+        authorized.session_id,
+        build_id=candidate.build.build_id,
+        mode="record",
+        reserve_active_seconds=30,
+        reserve_evidence_bytes=1 << 20,
+    )
+    failed_session = runtime.fail_workload(
+        authorized.session_id,
+        lease,
+        actual_active_seconds=1,
+        reason="perf control binding failed",
+    )
+
+    with pytest.raises(PerfLensError, match="requires fresh explicit consent"):
+        runtime.finalize_candidate(
+            authorized.session_id,
+            candidate_build_id=candidate.build.build_id,
+            evaluation_reason="collection_failed",
+            disposition="retain_candidate",
+        )
+
+    result = runtime.finalize_candidate(
+        authorized.session_id,
+        candidate_build_id=candidate.build.build_id,
+        evaluation_reason="collection_failed",
+        disposition="retain_candidate",
+        explicit_unverified_acceptance=(
+            EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE
+        ),
+    )
+
+    assert failed_session.workload_runs_used == 1
+    assert result.session.state == "revoked"
+    assert result.disposition.iteration_id is None
+    assert result.disposition.iteration_content_sha256 is None
+    assert result.disposition.iteration_conclusion == "not_evaluated"
+    assert result.disposition.evaluation_reason == "collection_failed"
+    assert result.disposition.selected_build_id == candidate.build.build_id
+    assert result.disposition.explicit_unverified_acceptance is True
+    assert result.disposition.authorization_receipt_sha256 is not None
+    assert "No A/B Iteration was created" in result.disposition.allowed_conclusions[1]
+    assert (project / "src/app").read_bytes() == b"candidate"
+    assert adapter.cleaned == [baseline.build.build_id, candidate.build.build_id]
+    payload = result.disposition.model_dump(mode="json")
+    for update in (
+        {"evaluation_reason": None},
+        {"iteration_conclusion": "not_comparable"},
+        {"iteration_id": "docker-optimization-iteration-" + "0" * 20},
+    ):
+        with pytest.raises(ValidationError):
+            result.disposition.__class__.model_validate({**payload, **update})
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    store = ArtifactStore(
+        artifact_root,
+        PathPolicy((tmp_path,)),
+        allow_writes=True,
+    )
+    store.save(
+        failed_session,
+        failed_session.session_artifact_id,
+        "docker-optimization-session",
+    )
+    store.save(
+        result.session,
+        result.session.session_artifact_id,
+        "docker-optimization-session",
+    )
+    store.save(baseline.build, baseline.build.build_id, "docker-build")
+    store.save(candidate.build, candidate.build.build_id, "docker-build")
+    store.save(
+        result.disposition,
+        result.disposition.disposition_id,
+        "docker-optimization-disposition",
+    )
+    assert (
+        store.load_docker_optimization_disposition(result.disposition.disposition_id)
+        == result.disposition
+    )
+
+
+def test_runtime_restores_unevaluated_candidate_without_acceptance(
+    tmp_path: Path,
+) -> None:
+    runtime, project, _ = make_optimization_runtime(tmp_path)
+    _, authorized = _authorize(runtime)
+    baseline = runtime.build(
+        authorized.session_id,
+        build_kind="baseline",
+        candidate_round=0,
+    )
+    (project / "src/app").write_bytes(b"candidate")
+    candidate = runtime.build(
+        authorized.session_id,
+        build_kind="candidate",
+        candidate_round=1,
+    )
+    (project / "src/app").write_bytes(b"baseline")
+
+    result = runtime.finalize_candidate(
+        authorized.session_id,
+        candidate_build_id=candidate.build.build_id,
+        evaluation_reason="user_stopped",
+        disposition="restore_baseline",
+    )
+
+    assert result.session.state == "revoked"
+    assert result.disposition.iteration_conclusion == "not_evaluated"
+    assert result.disposition.evaluation_reason == "user_stopped"
+    assert result.disposition.selected_build_id == baseline.build.build_id
+    assert result.disposition.explicit_unverified_acceptance is False
+    assert result.disposition.authorization_receipt_sha256 is None
 
 
 @pytest.mark.parametrize(

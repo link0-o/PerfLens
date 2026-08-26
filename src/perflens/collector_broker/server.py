@@ -434,7 +434,6 @@ class CollectorBrokerServer:
             use_hardware, fallback_reason, probe_seconds = self._probe_hardware_pmu(
                 plan,
                 pid_identity_validator=assert_current_target,
-                ready_callback=effective_ready_callback,
             )
             duration_seconds -= probe_seconds
             if not use_hardware:
@@ -521,7 +520,6 @@ class CollectorBrokerServer:
         plan: CollectionPlanArtifact,
         *,
         pid_identity_validator: Callable[[], None] | None = None,
-        ready_callback: Callable[[], None] | None = None,
     ) -> tuple[bool, str | None, float]:
         if plan.duration_seconds < _HARDWARE_PROBE_MINIMUM_PLAN_SECONDS:
             return False, "hardware_probe_skipped_for_short_collection", 0.0
@@ -551,7 +549,10 @@ class CollectorBrokerServer:
                         if pid_identity_validator is not None
                         else lambda: assert_plan_current(plan)
                     ),
-                    ready_callback=ready_callback,
+                    # A managed-container Gate must remain blocked while this availability
+                    # probe runs. Releasing it here lets a fast workload exit before the
+                    # selected hardware/software profile can bind to the target.
+                    ready_callback=None,
                 )
             except PerfLensError as exc:
                 if exc.stage == "perf_control" or exc.code not in {
@@ -569,6 +570,10 @@ class CollectorBrokerServer:
                 metric.status == "measured"
                 and metric.value is not None
                 and metric.value > 0
+                and metric.run_time_ns is not None
+                and metric.run_time_ns > 0
+                and metric.running_percent is not None
+                and metric.running_percent > 0
                 and canonical_perf_event(metric.event) in _HARDWARE_PROBE_EVENTS
                 for metric in artifact.metrics
             )

@@ -136,6 +136,14 @@ revokes the Session, and cleans verified temporary resources. Never use destruct
 or overwrite an independently changed path; if safe restoration cannot be established, leave the
 ambiguity visible and ask the user.
 
+If collection or correctness stops after a candidate Build but before an Iteration exists, report
+`not_evaluated`, not `not_comparable`. Once its workload lease exists, a failed collection consumes
+one workload attempt and must not be retried unchanged or replaced with another evidence mode in
+the same Session. A validation rejection before lease issuance is not charged, but is still not a
+reason to repeat unchanged. Ask whether to retain or restore, then finalize with the latest
+`candidate_build_id` and a typed stop reason; never pass a Build ID as `iteration_id`. The resulting
+Disposition records workspace choice only.
+
 The session accepts no build Treatment outside `mutable_paths` and grants no commit, push, tag,
 release, Docker-daemon administration, Builder creation, or system changes. Client tool approval
 and filesystem sandboxing remain separate boundaries from the single PerfLens confirmation.

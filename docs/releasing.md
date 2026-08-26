@@ -24,7 +24,7 @@ archive. A release contains:
 
 ## Validate locally
 
-The commands below use the planned next version as an example. Set
+The commands below use v0.3.2 as a concrete example. For any later release, set
 `perflens_release_version` to the exact version already written in both source
 files before running them.
 

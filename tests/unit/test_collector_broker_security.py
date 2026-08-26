@@ -54,6 +54,7 @@ from perflens.contracts.artifacts import (
     ContainerCollectionCgroupBinding,
     ContainerCollectionNamespaceBinding,
     ContainerCollectionTargetBinding,
+    PerfStatMetric,
 )
 from perflens.docker.identity import NamespaceIdentity
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -404,6 +405,118 @@ def test_cap_perfmon_managed_collection_changes_identity_phase_only_after_ready(
     assert artifact.container_target == managed_target
     assert released == ["released"]
     assert observed_phases == [False, False, True]
+
+
+def test_cap_perfmon_auto_probe_keeps_managed_gate_blocked_until_formal_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing = _docker_plan(
+        target_uid=os.geteuid(),
+        uid_mapping="rootless_same_uid",
+        rootful_risk_authorized=False,
+    )
+    assert existing.container_target is not None
+    managed_target = existing.container_target.model_copy(
+        update={
+            "target_kind": "managed_temporary_container",
+            "adapter_recipe_id": "local-docker-managed-v1",
+        }
+    )
+    plan = existing.model_copy(
+        update={
+            "mode": "stat",
+            "frequency_hz": None,
+            "call_graph": None,
+            "events": ("cycles", "instructions"),
+            "requested_event_source": "auto",
+            "fallback_allowed": True,
+            "fallback_events": SOFTWARE_STAT_EVENTS,
+            "record_event": None,
+            "container_target": managed_target,
+        }
+    )
+    policy = replace(_policy(tmp_path), allow_software_fallback=True)
+    observed_phases: list[bool] = []
+    calls: list[str] = []
+    released: list[str] = []
+
+    def capture_current(
+        _plan: CollectionPlanArtifact,
+        *,
+        allow_managed_exec_transition: bool = False,
+        **_kwargs: object,
+    ) -> None:
+        observed_phases.append(allow_managed_exec_transition)
+
+    def fake_collect_profile(
+        request: object,
+        *,
+        pid_identity_validator: Callable[[], None] | None = None,
+        ready_callback: Callable[[], None] | None = None,
+        record_build_id_mmap: bool = False,
+    ) -> CollectionArtifact:
+        assert not record_build_id_mmap
+        assert pid_identity_validator is not None
+        typed_request = cast(Any, request)
+        is_probe = typed_request.output_path.name.startswith(".perflens-pmu-probe-")
+        calls.append("probe" if is_probe else "formal")
+        pid_identity_validator()
+        if is_probe:
+            assert ready_callback is None
+            values = (10, 20)
+        else:
+            assert ready_callback is not None
+            ready_callback()
+            pid_identity_validator()
+            values = (30, 40)
+        metrics = tuple(
+            PerfStatMetric(
+                event=event,
+                value=value,
+                unit="",
+                run_time_ns=1,
+                running_percent=100,
+                status="measured",
+            )
+            for event, value in zip(("cycles", "instructions"), values, strict=True)
+        )
+        payload = b"0;;cycles;1;100.0;;\n0;;instructions;1;100.0;;\n"
+        typed_request.output_path.write_bytes(payload)
+        return CollectionArtifact(
+            collection_id=f"collection-{'probe' if is_probe else 'formal'}",
+            mode="stat",
+            target_type="pid",
+            target_argument_count=0,
+            target_pid=plan.target_pid,
+            output_path=str(typed_request.output_path),
+            output_sha256=hashlib.sha256(payload).hexdigest(),
+            output_bytes=len(payload),
+            output_format="perf_stat_delimited",
+            perf_executable=str(policy.perf_path),
+            started_at="2026-08-23T00:00:00+00:00",
+            finished_at="2026-08-23T00:00:01+00:00",
+            duration_seconds=typed_request.target.duration_seconds,
+            events=("cycles", "instructions"),
+            requested_event_source=typed_request.requested_event_source,
+            actual_event_source="hardware",
+            metrics=metrics,
+        )
+
+    monkeypatch.setattr(broker_server, "assert_plan_current", capture_current)
+    monkeypatch.setattr(broker_server, "collect_profile", fake_collect_profile)
+    broker = _broker_with_policy(policy)
+    broker._socket_path = policy.spool_root / "collector.sock"
+    artifact = broker._collect_with_cap_perfmon(
+        plan,
+        ready_callback=lambda: released.append("released"),
+    )
+
+    assert calls == ["probe", "formal"]
+    assert released == ["released"]
+    assert observed_phases == [False, False, False, True]
+    assert artifact.actual_event_source == "hardware"
+    assert artifact.fallback_used is False
 
 
 def test_cap_perfmon_does_not_misclassify_control_failure_as_pmu_fallback(

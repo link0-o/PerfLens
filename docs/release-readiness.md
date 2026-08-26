@@ -2,12 +2,12 @@
 
 [简体中文](release-readiness.zh-CN.md) | English
 
-This is the 2026-08-26 local validation record for the v0.3.2 release candidate. It is not a
-substitute for the tag workflow or for acceptance on each deployed host. Every release reruns the
+This is the 2026-08-26 validation record for release v0.3.2. It is not a substitute for the remote
+tag workflow or for acceptance on each deployed host. Every release reruns the
 [release procedure](releasing.md), and a configured workflow is not evidence that its remote run
 passed.
 
-## Candidate scope
+## Release scope
 
 The v0.3.0 Linux-host `stat/record/sched/off_cpu/lock` path and v0.3.1 fixed-image Docker path
 remain supported. v0.3.2 adds the opt-in `bounded_optimization_session`:
@@ -41,20 +41,20 @@ typed local Build Adapter and one of its three explicit network tiers.
 
 ## Automated local gates
 
-| Gate | 2026-08-26 candidate result |
+| Gate | 2026-08-26 release result |
 |---|---|
 | Ruff | passed |
 | Pyright strict mode | 0 errors, 0 warnings |
-| Python 3.12 | 1303 passed; 85.06% coverage |
-| Python 3.13 | 1303 passed; 85.06% coverage |
+| Python 3.12 | 1324 passed; 85.19% coverage |
+| Python 3.13 | 1324 passed; 85.19% coverage |
 | Rust format/Clippy/tests | passed |
 | Rust dependencies | `cargo audit` clean with the official local advisory DB clone; `cargo deny check` passed |
 | Protocol/Schema | generated files clean; Python/Rust valid and invalid goldens passed |
 | Python packages | wheel and sdist built reproducibly and passed isolated smoke tests |
 | Debian packages | two reproducible `0.3.2-1` amd64 DEBs passed extract/package smoke; no service or Docker activation |
-| Python dependencies | `pip-audit --strict` found no known vulnerabilities; CycloneDX 1.5 SBOM generated |
+| Python dependencies | locked runtime export passed `pip-audit --no-deps --disable-pip --strict`; CycloneDX 1.5 SBOM generated |
 
-Exact counts describe this candidate checkout and will change as tests grow. The coverage gate
+Exact counts describe the tagged checkout and will change as tests grow. The coverage gate
 remains 85% and must not be lowered for a release.
 
 ## Security and interpretation gates
@@ -78,16 +78,24 @@ remains 85% and must not be lowered for a release.
   container-bound successful correctness/Benchmark evidence, absolute improvement, deterministic
   replay, and no observed resource transfer.
 
-## Remaining real-host release gate
+## Real-host acceptance and remaining compatibility boundary
 
-Automation uses real Unix sockets plus bounded Docker/perf test doubles. On 2026-08-25 one installed
-rootful-Docker, non-root workload completed a v0.3.2 baseline build and `software_only` stat run:
-the Gate released the workload, correctness and Benchmark passed, the Collection reported
-`actual_event_source=software`, and cleanup was `removed`. This proves only that host and workload.
-The candidate still needs the complete release matrix covering package non-activation,
-upgrade/rollback/removal, rootless and rootful Docker, v0.3.1 fixed-image regression,
-baseline/candidate matched A/B, Trace selection, and host Collector regression. Rootful UID 0
-additionally needs the dedicated administrator risk acknowledgement.
+Automation uses real Unix sockets plus bounded Docker/perf test doubles. On 2026-08-26 one installed
+rootful-Docker host ran a non-root v0.3.2 bounded optimization session end to end: Preview and one
+authorization, baseline/candidate builds, correctness plus seven-sample Benchmark, software-event
+`stat` and `record` on both sides, deterministic comparison, and identity-verified container
+cleanup. The Benchmark and absolute CPU time strongly separated, the fixed environment and event
+source matched, and deterministic replay passed. The Iteration nevertheless remained
+`not_comparable` because both profiles had partial unresolved-symbol quality and the short-lived
+containers exposed only lower-bound cgroup resource deltas. This is the intended conservative
+gate; it is not a `Verified Improvement` claim.
 
-Do not create or push `v0.3.2` until this acceptance, the clean-worktree check, and remote CI all
-pass. Existing `v0.3.0` and `v0.3.1` tags remain immutable.
+That acceptance proves only the tested rootful daemon, non-root workload, kernel, perf, Builder,
+and project contract. Rootless Docker, administrator-enabled UID 0 targets, different Builders,
+and other host combinations still require independent acceptance. Package non-activation and
+upgrade/rollback/removal remain covered by package/transaction tests and should also be checked by
+administrators on their deployment host.
+
+Create the local annotated tag only from the clean, validated release commit. Do not push it until
+that commit is on `origin/main` and branch CI is green; the tag-triggered release workflow then
+repeats all release gates before publication. Existing `v0.3.0` and `v0.3.1` tags remain immutable.

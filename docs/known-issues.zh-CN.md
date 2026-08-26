@@ -5,6 +5,27 @@
 本文记录已经复现、具有明确边界和临时处理方法的问题，包括已经修复的问题。
 不要通过降低部署器安全检查来规避问题；升级前仍可按对应版本的临时方法处理。
 
+## KI-2026-08-26：自动 PMU 探测可能提前放行快速 Docker workload（已修复）
+
+- 影响范围：托管 Docker `stat`/`record` 使用 `event_source=auto`，尤其是优化候选明显快于
+  baseline 的 A/B；
+- 现象：较慢 baseline 可以成功采集，而较快 candidate 会在正式 profile 的事件禁用绑定握手
+  处重复失败。失败调用仍会消耗 workload run 预算，因为 lease 在启动容器前已经预留；
+- 根因：短时硬件可用性 probe 与正式 profile 共用了 Gate-ready 回调，导致 PID 1 在 probe
+  阶段就被放行。慢 baseline 尚未结束时正式软件降级还能附加；快速 candidate 则可能先退出；
+- 修复：两种 Collector 实现都在整个 PMU probe 期间保持 package Gate 阻塞，只有最终选中的
+  正式硬件/软件 profile 可以报告就绪。由于阻塞中的 Gate 合法地没有用户工作，即使 perf
+  报告了调度运行时间，零计数也不能证明虚拟 PMU 会为真实负载产生有用证据；`auto` 因此保守
+  降级，需要硬件证据时仍可显式使用 `hardware_required`；
+- 失败语义：workload lease 签发后的 optimization 采集失败会精确计费一次、退还未使用的
+  时间/证据预留，并阻止该 Session 后续 build/collection；lease 签发前的校验拒绝不计费，
+  但仍不能原样重复。两者都不得占用 build/test 重试，也不得换模式继续尝试。
+  如果 candidate 已存在但尚未生成 A/B Iteration，typed finalizer 会记录 `not_evaluated` 的
+  保留/恢复 Disposition，而不会把 Build ID 当成 Iteration ID；
+- 回归覆盖：Python/Rust 均证明 probe 不发送 ready、已调度的零计数仍不足以证明可用、正式
+  profile 只放行 Gate 一次；同时覆盖失败计费、拒绝原样重试，以及未评估 candidate 只有在
+  新鲜明确同意后才能保留。
+
 ## KI-2026-08-26：控制命令修复后 perf 就绪仍可能偶发失败（已修复）
 
 - 影响范围：两种 Collector 权限模式下的 PID `stat`、`record` 就绪链路。Rust Helper 原来
@@ -191,9 +212,10 @@ EvidenceQuality 中同时暴露，Agent 不得宣称位置列表完整。
 - 项目握手：公共 Broker 协议升级为 `1.1`，Python/Rust 私有 Helper 协议升级为 `1.2`。
   回执同时绑定 `request_id`、`plan_id` 和目标 PID；普通用户启动器只有在验证回执后才
   `exec` 已确认的项目程序；
-- `event_source=auto` 的第一阶段可能是硬件探测，也可能是正式采集。Collector 在第一阶段
-  已绑定并启用后立即发送一次就绪回执，避免对仍暂停的引导进程探测而把正常 PMU 误判为
-  零计数；探测仍计入原授权时长，最多 250ms。
+- `event_source=auto` 时，硬件可用性 probe 会让 bootstrap/Gate 继续暂停，且绝不发送 ready；
+  零计数、unsupported、not-counted 都会保守选择软件事件，需要硬件证据时应显式使用
+  `hardware_required`。只有最终选中的正式 profile 会发送就绪回执；探测仍计入原授权时长，
+  最多 250ms。
 - MCP 现在把会阻塞的项目运行器注册为同步工具，由 SDK 在线程中执行，不再堵塞异步会话；
   启动器会给已经完成的短程序一个有界自然退出/回收窗口，集成测试也改为核对 bootstrap
   命令身份，不再依赖固定 sleep。该修复消除了 CI 负载下偶发的 10 秒超时，没有提高全局

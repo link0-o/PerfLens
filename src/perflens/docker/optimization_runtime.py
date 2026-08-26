@@ -32,8 +32,10 @@ from perflens.contracts.docker_build import (
     DockerOptimizationPreviewArtifact,
     DockerOptimizationSessionArtifact,
     OptimizationCollectionMode,
+    OptimizationEvaluationReason,
     derive_docker_optimization_disposition_id,
     derive_docker_optimization_preview_id,
+    derive_docker_optimization_unevaluated_disposition_id,
 )
 from perflens.docker.build_adapter import (
     DockerBuildExecutionResult,
@@ -106,6 +108,8 @@ class _OptimizationRuntimeSession:
     preview: _PendingPreview = field(repr=False)
     builds: dict[str, DockerBuildExecutionResult] = field(default_factory=lambda: {})
     latest_treatment_manifest_sha256: str | None = None
+    workload_collection_blocked: bool = False
+    workload_failure_reason: str | None = None
     resources_released: bool = False
 
 
@@ -329,6 +333,7 @@ class DockerOptimizationRuntime:
     ) -> DockerOptimizationBuildResult:
         with self._lock:
             runtime_session = self._require_runtime_session_locked(session_id)
+            self._assert_workload_collection_not_blocked(runtime_session)
             pending = runtime_session.preview
             self._assert_project_current()
             if build_kind == "baseline":
@@ -451,7 +456,9 @@ class DockerOptimizationRuntime:
         self,
         session_id: str,
         *,
-        iteration: DockerOptimizationIterationArtifact,
+        iteration: DockerOptimizationIterationArtifact | None = None,
+        candidate_build_id: str | None = None,
+        evaluation_reason: OptimizationEvaluationReason | None = None,
         disposition: Literal["retain_candidate", "restore_baseline"],
         explicit_unverified_acceptance: str | None = None,
     ) -> DockerOptimizationDispositionResult:
@@ -460,30 +467,56 @@ class DockerOptimizationRuntime:
             runtime_session = self._require_runtime_session_locked(session_id)
             self._assert_project_current()
             source_session = self._authority.snapshot(runtime_session.access)
-            _verify_contract_content(iteration, "Docker optimization Iteration")
-            if (
-                iteration.session_id != session_id
-                or iteration.session_artifact_id != source_session.session_artifact_id
-                or iteration.session_artifact_content_sha256 != source_session.content_sha256
-                or iteration.baseline_build_id != source_session.baseline_build_id
-                or iteration.candidate_build_id != source_session.latest_candidate_build_id
-            ):
-                raise _authorization_error(
-                    "Docker optimization disposition differs from the current Session"
+            if iteration is None:
+                if candidate_build_id is None or evaluation_reason is None:
+                    raise _authorization_error(
+                        "A stopped Docker optimization requires a candidate Build and reason"
+                    )
+                if (
+                    source_session.baseline_build_id is None
+                    or source_session.latest_candidate_build_id is None
+                    or candidate_build_id != source_session.latest_candidate_build_id
+                ):
+                    raise _authorization_error(
+                        "Docker optimization disposition differs from the current Session"
+                    )
+                baseline = self._bound_session_build(
+                    runtime_session,
+                    source_session.baseline_build_id,
                 )
-            baseline = self._bound_iteration_build(
-                runtime_session,
-                iteration.baseline_build_id,
-                iteration.baseline_build_content_sha256,
-            )
-            candidate = self._bound_iteration_build(
-                runtime_session,
-                iteration.candidate_build_id,
-                iteration.candidate_build_content_sha256,
-            )
+                candidate = self._bound_session_build(runtime_session, candidate_build_id)
+                iteration_conclusion = "not_evaluated"
+            else:
+                if candidate_build_id is not None or evaluation_reason is not None:
+                    raise _authorization_error(
+                        "An evaluated Docker disposition cannot include a stop-only binding"
+                    )
+                _verify_contract_content(iteration, "Docker optimization Iteration")
+                if (
+                    iteration.session_id != session_id
+                    or iteration.session_artifact_id != source_session.session_artifact_id
+                    or iteration.session_artifact_content_sha256 != source_session.content_sha256
+                    or iteration.baseline_build_id != source_session.baseline_build_id
+                    or iteration.candidate_build_id
+                    != source_session.latest_candidate_build_id
+                ):
+                    raise _authorization_error(
+                        "Docker optimization disposition differs from the current Session"
+                    )
+                baseline = self._bound_iteration_build(
+                    runtime_session,
+                    iteration.baseline_build_id,
+                    iteration.baseline_build_content_sha256,
+                )
+                candidate = self._bound_iteration_build(
+                    runtime_session,
+                    iteration.candidate_build_id,
+                    iteration.candidate_build_content_sha256,
+                )
+                iteration_conclusion = iteration.conclusion
             retaining = disposition == "retain_candidate"
             requires_acceptance = (
-                retaining and iteration.conclusion != "verified_improvement"
+                retaining and iteration_conclusion != "verified_improvement"
             )
             if requires_acceptance:
                 if explicit_unverified_acceptance is None or not hmac.compare_digest(
@@ -534,6 +567,7 @@ class DockerOptimizationRuntime:
                 _candidate_acceptance_receipt(
                     source_session=source_session,
                     iteration=iteration,
+                    evaluation_reason=evaluation_reason,
                     selected_build=selected,
                 )
                 if requires_acceptance
@@ -546,6 +580,7 @@ class DockerOptimizationRuntime:
                     source_session=source_session,
                     final_session=final_session,
                     iteration=iteration,
+                    evaluation_reason=evaluation_reason,
                     baseline=baseline,
                     candidate=candidate,
                     selected=selected,
@@ -599,6 +634,19 @@ class DockerOptimizationRuntime:
         _verify_contract_content(result.artifact, "Docker Build")
         return result.artifact
 
+    @staticmethod
+    def _bound_session_build(
+        runtime_session: _OptimizationRuntimeSession,
+        build_id: str,
+    ) -> DockerBuildArtifact:
+        result = runtime_session.builds.get(build_id)
+        if result is None:
+            raise _authorization_error(
+                "Docker optimization Build is outside the current Session"
+            )
+        _verify_contract_content(result.artifact, "Docker Build")
+        return result.artifact
+
     def build_recipe(self, session_id: str) -> DockerBuildRecipeArtifact:
         with self._lock:
             runtime_session = self._require_runtime_session_locked(session_id)
@@ -615,6 +663,7 @@ class DockerOptimizationRuntime:
     ) -> DockerOptimizationWorkloadLease:
         with self._lock:
             runtime_session = self._require_runtime_session_locked(session_id)
+            self._assert_workload_collection_not_blocked(runtime_session)
             self._assert_project_current()
             build = self.build_result(session_id, build_id).artifact
             pending = runtime_session.preview
@@ -680,6 +729,50 @@ class DockerOptimizationRuntime:
                 self._schedule_cleanup_locked()
             return artifact
 
+    def fail_workload(
+        self,
+        session_id: str,
+        lease: DockerOptimizationWorkloadLease,
+        *,
+        actual_active_seconds: float,
+        reason: str,
+    ) -> DockerOptimizationSessionArtifact:
+        """Charge one failed attempt, release its reservation, and stop collection in-session."""
+        with self._lock:
+            runtime_session = self._require_runtime_session_locked(session_id)
+            artifact = self._authority.finish_workload(
+                runtime_session.access,
+                lease,
+                actual_active_seconds=actual_active_seconds,
+                actual_evidence_bytes=0,
+            )
+            runtime_session.workload_collection_blocked = True
+            runtime_session.workload_failure_reason = reason.strip()[:512] or (
+                "Docker optimization collection failed."
+            )
+            return artifact
+
+    @staticmethod
+    def _assert_workload_collection_not_blocked(
+        runtime_session: _OptimizationRuntimeSession,
+    ) -> None:
+        if runtime_session.workload_collection_blocked:
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_FAILED,
+                "docker_optimization_collection",
+                "Docker optimization collection stopped after a failed attempt",
+                recoverable=False,
+                retryable=False,
+                details={
+                    "automatic_retry_allowed": False,
+                    "failure_reason": runtime_session.workload_failure_reason,
+                },
+                suggested_actions=(
+                    "Finalize or revoke this Session without another collection attempt.",
+                    "Correct the collection infrastructure, then authorize a new Session.",
+                ),
+            )
+
     def close(self) -> None:
         """Revoke active authority and conservatively release this connection's resources."""
         with self._lock:
@@ -714,7 +807,11 @@ class DockerOptimizationRuntime:
             "Build a fresh baseline from the captured authorized context after consent.",
             "Run correctness and Benchmark checks before accepting performance evidence.",
             "Let the Agent select bounded stat, record, or necessary Trace evidence.",
-            "Modify only mutable paths, build at most three candidates, and run matched A/B.",
+            (
+                f"Modify only mutable paths, build at most "
+                f"{recipe.budget.max_candidate_rounds} candidate round(s) within "
+                f"{recipe.budget.max_builds} total build(s), and run matched A/B."
+            ),
             "If evidence is not verified, ask once whether to retain the candidate or restore "
             "the baseline without changing the evidence verdict.",
             "Conservatively remove only verified session containers and temporary image tags.",
@@ -1011,16 +1108,22 @@ def _verify_contract_content(artifact: BaseModel, label: str) -> None:
 def _candidate_acceptance_receipt(
     *,
     source_session: DockerOptimizationSessionArtifact,
-    iteration: DockerOptimizationIterationArtifact,
+    iteration: DockerOptimizationIterationArtifact | None,
+    evaluation_reason: OptimizationEvaluationReason | None,
     selected_build: DockerBuildArtifact,
 ) -> str:
+    evidence_binding = (
+        iteration.content_sha256
+        if iteration is not None
+        else f"not-evaluated:{evaluation_reason or 'missing'}"
+    )
     return hashlib.sha256(
         b"\0".join(
             (
                 b"perflens-unverified-docker-candidate-acceptance-v1",
                 secrets.token_bytes(32),
                 source_session.authorization_receipt_sha256.encode("ascii"),
-                iteration.content_sha256.encode("ascii"),
+                evidence_binding.encode("ascii"),
                 selected_build.content_sha256.encode("ascii"),
             )
         )
@@ -1032,7 +1135,8 @@ def _build_disposition_artifact(
     created_at: datetime,
     source_session: DockerOptimizationSessionArtifact,
     final_session: DockerOptimizationSessionArtifact,
-    iteration: DockerOptimizationIterationArtifact,
+    iteration: DockerOptimizationIterationArtifact | None,
+    evaluation_reason: OptimizationEvaluationReason | None,
     baseline: DockerBuildArtifact,
     candidate: DockerBuildArtifact,
     selected: DockerBuildArtifact,
@@ -1046,7 +1150,7 @@ def _build_disposition_artifact(
     warnings: list[str] = []
     if explicit_unverified_acceptance:
         warnings.append(
-            "The user retained an unverified candidate; the original Iteration conclusion "
+            "The user retained an unverified candidate; available deterministic evidence "
             "remains authoritative."
         )
     elif disposition == "restore_baseline":
@@ -1056,12 +1160,22 @@ def _build_disposition_artifact(
     data: dict[str, object] = {
         "schema_version": "1.0",
         "perflens_version": __version__,
-        "disposition_id": derive_docker_optimization_disposition_id(
-            source_session.session_id,
-            iteration.content_sha256,
-            disposition,
-            selected.content_sha256,
-            final_session.content_sha256,
+        "disposition_id": (
+            derive_docker_optimization_disposition_id(
+                source_session.session_id,
+                iteration.content_sha256,
+                disposition,
+                selected.content_sha256,
+                final_session.content_sha256,
+            )
+            if iteration is not None
+            else derive_docker_optimization_unevaluated_disposition_id(
+                source_session.session_id,
+                evaluation_reason or "",
+                disposition,
+                selected.content_sha256,
+                final_session.content_sha256,
+            )
         ),
         "created_at": created_at.isoformat(),
         "session_id": source_session.session_id,
@@ -1070,9 +1184,14 @@ def _build_disposition_artifact(
         "final_session_artifact_id": final_session.session_artifact_id,
         "final_session_artifact_content_sha256": final_session.content_sha256,
         "final_session_state": "revoked",
-        "iteration_id": iteration.iteration_id,
-        "iteration_content_sha256": iteration.content_sha256,
-        "iteration_conclusion": iteration.conclusion,
+        "iteration_id": iteration.iteration_id if iteration is not None else None,
+        "iteration_content_sha256": (
+            iteration.content_sha256 if iteration is not None else None
+        ),
+        "iteration_conclusion": (
+            iteration.conclusion if iteration is not None else "not_evaluated"
+        ),
+        "evaluation_reason": evaluation_reason,
         "disposition": disposition,
         "baseline_build_id": baseline.build_id,
         "baseline_build_content_sha256": baseline.content_sha256,
@@ -1088,11 +1207,15 @@ def _build_disposition_artifact(
         "warnings": tuple(warnings),
         "allowed_conclusions": (
             "This Artifact records only the final workspace choice and Session cleanup.",
-            "The bound Iteration remains the authoritative performance verdict.",
+            (
+                "The bound Iteration remains the authoritative performance verdict."
+                if iteration is not None
+                else "No A/B Iteration was created; the candidate remains unevaluated."
+            ),
         ),
         "forbidden_conclusions": (
             "Human acceptance must not be presented as Verified Improvement.",
-            "Retaining or restoring source bytes does not alter the A/B evidence quality.",
+            "Retaining or restoring source bytes does not create or alter A/B evidence quality.",
         ),
         "content_sha256": "0" * 64,
     }

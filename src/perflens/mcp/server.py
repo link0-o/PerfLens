@@ -83,6 +83,7 @@ from perflens.contracts.docker_build import (
     DockerOptimizationPreviewArtifact,
     DockerOptimizationSessionArtifact,
     OptimizationCollectionMode,
+    OptimizationEvaluationReason,
 )
 from perflens.contracts.trace import (
     LockAnalysisArtifact,
@@ -1222,7 +1223,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         description=(
             "Run and collect only a verified image Build produced by this one-confirmation "
             "optimization session. The caller selects bounded evidence, never an image, command, "
-            "mount, network, Docker option, or host path."
+            "mount, network, Docker option, or host path. A failed attempt after workload-lease "
+            "issuance is charged and stops further build/collection operations in that Session; "
+            "it must not be retried unchanged."
         ),
         annotations=EXECUTES_TARGET,
         meta={"perflens/permission": "DOCKER_OPTIMIZATION_COLLECTION"},
@@ -1307,17 +1310,21 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 ),
                 collected=collected,
             )
-        except BaseException:
+        except BaseException as exc:
             failed_session: DockerOptimizationSessionArtifact | None = None
             with suppress(PerfLensError):
-                failed_session = optimization_runtime.finish_workload(
+                failed_session = optimization_runtime.fail_workload(
                     session_id,
                     lease,
                     actual_active_seconds=min(
                         workload_timeout_seconds,
                         max(0, time.monotonic() - started),
                     ),
-                    actual_evidence_bytes=0,
+                    reason=(
+                        exc.message
+                        if isinstance(exc, PerfLensError)
+                        else "Docker optimization collection failed."
+                    ),
                 )
             if failed_session is not None:
                 with suppress(PerfLensError):
@@ -1326,6 +1333,33 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                         failed_session.session_artifact_id,
                         "docker-optimization-session",
                     )
+            if isinstance(exc, PerfLensError):
+                details = dict(exc.details)
+                details.update(
+                    {
+                        "docker_optimization_session_id": session_id,
+                        "docker_optimization_workload_attempt_charged": True,
+                        "docker_optimization_automatic_retry_allowed": False,
+                        "docker_optimization_workload_runs_used": (
+                            failed_session.workload_runs_used
+                            if failed_session is not None
+                            else None
+                        ),
+                    }
+                )
+                raise PerfLensError(
+                    exc.code,
+                    exc.stage,
+                    exc.message,
+                    recoverable=False,
+                    retryable=False,
+                    details=details,
+                    suggested_actions=(
+                        "Do not retry or switch evidence mode in this Session.",
+                        "Finalize or revoke the Session, correct the infrastructure, then "
+                        "authorize a new Session.",
+                    ),
+                ) from exc
             raise
         finally:
             if internal_session is not None:
@@ -2325,11 +2359,11 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     @server.tool(
         name="finalize_docker_optimization_candidate",
         description=(
-            "Finalize the source-workspace choice for one replay-verified Iteration Artifact, "
-            "revoke the "
-            "bounded optimization Session, and clean only verified session resources. "
+            "Finalize the source-workspace choice for either one replay-verified Iteration or "
+            "a stopped Session whose latest candidate could not be evaluated, revoke the bounded "
+            "optimization Session, and clean only verified session resources. "
             "Retaining a non-verified candidate requires a fresh explicit user decision and "
-            "never upgrades the original Iteration conclusion."
+            "never creates or upgrades an A/B conclusion."
         ),
         annotations=REVOKES_DOCKER,
         meta={"perflens/permission": "DOCKER_OPTIMIZATION_DISPOSITION"},
@@ -2337,17 +2371,25 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     )
     async def finalize_docker_optimization_candidate(
         session_id: str,
-        iteration_id: str,
         disposition: Literal["retain_candidate", "restore_baseline"],
+        iteration_id: str | None = None,
+        candidate_build_id: str | None = None,
+        evaluation_reason: OptimizationEvaluationReason | None = None,
         authorization: Literal[
             "I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE"
         ]
         | None = None,
     ) -> ArtifactReference:
-        iteration = store.load_docker_optimization_iteration(iteration_id)
+        iteration = (
+            store.load_docker_optimization_iteration(iteration_id)
+            if iteration_id is not None
+            else None
+        )
         result = get_docker_optimization_runtime().finalize_candidate(
             session_id,
             iteration=iteration,
+            candidate_build_id=candidate_build_id,
+            evaluation_reason=evaluation_reason,
             disposition=disposition,
             explicit_unverified_acceptance=authorization,
         )
@@ -2372,6 +2414,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "session_id": result.disposition.session_id,
                 "iteration_id": result.disposition.iteration_id,
                 "iteration_conclusion": result.disposition.iteration_conclusion,
+                "evaluation_reason": result.disposition.evaluation_reason,
                 "disposition": result.disposition.disposition,
                 "selected_build_id": result.disposition.selected_build_id,
                 "workspace_matches_selected_build": (

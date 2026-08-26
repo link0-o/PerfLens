@@ -1045,6 +1045,231 @@ def test_docker_optimization_preview_authorize_build_and_revoke_are_bound(
     assert len(tuple(artifact_root.glob("*.docker-optimization-disposition.json"))) == 1
 
 
+def test_docker_optimization_can_finalize_candidate_without_an_iteration(
+    tmp_path: Path,
+) -> None:
+    from tests.unit.test_docker_optimization_runtime import make_optimization_runtime
+
+    runtime, project, adapter = make_optimization_runtime(tmp_path)
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    server = create_server(
+        ServerConfig(
+            (tmp_path,),
+            artifact_root,
+            allow_writes=True,
+            allow_process_execution=True,
+            allow_active_collection=True,
+            allow_automatic_collection=True,
+            allow_docker_targets=True,
+            allow_docker_optimization=True,
+            docker_project_config=project / "container-workload.toml",
+            collector_socket=tmp_path / "collector.sock",
+            automatic_collection_policy=AutomaticCollectionPolicy(
+                enabled=True,
+                allowed_modes=("stat", "record"),
+            ),
+            docker_optimization_runtime_factory=lambda: runtime,
+        )
+    )
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            preview = _structured(
+                await client.call_tool(
+                    "preview_docker_optimization_session",
+                    {"allowed_modes": ["stat", "record"]},
+                )
+            )
+            session = _structured(
+                await client.call_tool(
+                    "authorize_docker_optimization_session",
+                    {
+                        "preview_id": preview["preview_id"],
+                        "preview_content_sha256": preview["content_sha256"],
+                        "authorization_summary_sha256": preview[
+                            "authorization_summary_sha256"
+                        ],
+                        "authorization": (
+                            "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
+                        ),
+                    },
+                )
+            )
+            baseline = await client.call_tool(
+                "build_docker_optimization_candidate",
+                {
+                    "session_id": session["session_id"],
+                    "build_kind": "baseline",
+                    "candidate_round": 0,
+                },
+            )
+            assert not baseline.is_error
+            (project / "src/app").write_bytes(b"candidate")
+            candidate = _structured(
+                await client.call_tool(
+                    "build_docker_optimization_candidate",
+                    {
+                        "session_id": session["session_id"],
+                        "build_kind": "candidate",
+                        "candidate_round": 1,
+                    },
+                )
+            )
+            finalized_result = await client.call_tool(
+                "finalize_docker_optimization_candidate",
+                {
+                    "session_id": session["session_id"],
+                    "candidate_build_id": candidate["artifact_id"],
+                    "evaluation_reason": "user_stopped",
+                    "disposition": "retain_candidate",
+                    "authorization": (
+                        "I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE"
+                    ),
+                },
+            )
+            assert not finalized_result.is_error
+            finalized = _structured(finalized_result)
+            assert finalized["summary"]["iteration_id"] is None
+            assert finalized["summary"]["iteration_conclusion"] == "not_evaluated"
+            assert finalized["summary"]["evaluation_reason"] == "user_stopped"
+            assert finalized["summary"]["final_session_state"] == "revoked"
+
+    asyncio.run(exercise())
+    assert len(adapter.cleaned) == 2
+    assert len(tuple(artifact_root.glob("*.docker-optimization-disposition.json"))) == 1
+
+
+def test_docker_optimization_collection_failure_is_charged_and_stops_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.unit.test_docker_optimization_runtime import make_optimization_runtime
+
+    runtime, project, adapter = make_optimization_runtime(tmp_path)
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+
+    def reject_internal_session(*_args: object, **_kwargs: object) -> None:
+        raise PerfLensError(
+            ErrorCode.EXTERNAL_TOOL_FAILED,
+            "perf_control",
+            "Privileged perf binding failed",
+            recoverable=True,
+            retryable=True,
+        )
+
+    monkeypatch.setattr(
+        "perflens.mcp.server.ExistingDockerRuntime.authorize_optimization_build",
+        reject_internal_session,
+    )
+    server = create_server(
+        ServerConfig(
+            (tmp_path,),
+            artifact_root,
+            allow_writes=True,
+            allow_process_execution=True,
+            allow_active_collection=True,
+            allow_automatic_collection=True,
+            allow_docker_targets=True,
+            allow_docker_optimization=True,
+            docker_project_config=project / "container-workload.toml",
+            collector_socket=tmp_path / "collector.sock",
+            automatic_collection_policy=AutomaticCollectionPolicy(
+                enabled=True,
+                allowed_modes=("stat", "record"),
+            ),
+            docker_optimization_runtime_factory=lambda: runtime,
+        )
+    )
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            preview = _structured(
+                await client.call_tool(
+                    "preview_docker_optimization_session",
+                    {"allowed_modes": ["stat", "record"]},
+                )
+            )
+            session = _structured(
+                await client.call_tool(
+                    "authorize_docker_optimization_session",
+                    {
+                        "preview_id": preview["preview_id"],
+                        "preview_content_sha256": preview["content_sha256"],
+                        "authorization_summary_sha256": preview[
+                            "authorization_summary_sha256"
+                        ],
+                        "authorization": (
+                            "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
+                        ),
+                    },
+                )
+            )
+            baseline = _structured(
+                await client.call_tool(
+                    "build_docker_optimization_candidate",
+                    {
+                        "session_id": session["session_id"],
+                        "build_kind": "baseline",
+                        "candidate_round": 0,
+                    },
+                )
+            )
+            failed = await client.call_tool(
+                "collect_docker_optimization_workload",
+                {
+                    "session_id": session["session_id"],
+                    "build_id": baseline["artifact_id"],
+                    "mode": "stat",
+                    "duration_seconds": 1,
+                    "workload_timeout_seconds": 5,
+                    "max_output_bytes": 1 << 20,
+                },
+            )
+            assert failed.is_error
+            assert "Privileged perf binding failed" in str(failed.content)
+            current = runtime.snapshot(cast(str, session["session_id"]))
+            assert current.workload_runs_used == 1
+            assert current.evidence_bytes_used == 0
+
+            unchanged_retry = await client.call_tool(
+                "collect_docker_optimization_workload",
+                {
+                    "session_id": session["session_id"],
+                    "build_id": baseline["artifact_id"],
+                    "mode": "record",
+                    "duration_seconds": 1,
+                    "workload_timeout_seconds": 5,
+                    "max_output_bytes": 1 << 20,
+                },
+            )
+            assert unchanged_retry.is_error
+            assert "stopped after a failed attempt" in str(unchanged_retry.content)
+            assert runtime.snapshot(cast(str, session["session_id"])).workload_runs_used == 1
+
+            (project / "src/app").write_bytes(b"candidate-after-collection-failure")
+            blocked_build = await client.call_tool(
+                "build_docker_optimization_candidate",
+                {
+                    "session_id": session["session_id"],
+                    "build_kind": "candidate",
+                    "candidate_round": 1,
+                },
+            )
+            assert blocked_build.is_error
+            assert "stopped after a failed attempt" in str(blocked_build.content)
+
+            revoked = await client.call_tool(
+                "revoke_docker_optimization_session",
+                {"session_id": session["session_id"]},
+            )
+            assert not revoked.is_error
+
+    asyncio.run(exercise())
+    assert len(adapter.cleaned) == 1
+
+
 def test_docker_target_resolution_authorization_and_revocation_are_typed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

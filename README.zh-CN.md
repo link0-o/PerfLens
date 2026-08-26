@@ -45,7 +45,9 @@ PerfLens Core + CLI（真正执行确定性分析）
 - 想让 Codex 或 Claude Code 自动调用并解释结果：在目标项目运行一次 `perflens init`。
 - 已经有分析产物，只想按严谨流程解读：也可以只引用 Skill，但同时配置 MCP 效果最好。
 
-PerfLens 不包含 LLM API、Web UI、自动修改源码功能、Benchmark 执行器或自研 Agent 框架。
+PerfLens 不包含 LLM API、Web UI、源码补丁工具、通用 Benchmark 执行器或自研 Agent 框架。
+在明确授权的优化会话中，外部 Agent 只能编辑已审阅的 mutable 路径，固定 workload 合同负责
+产出正确性和 Benchmark 证据。
 
 ## 安装
 
@@ -118,7 +120,7 @@ root Rust Helper；该模式不会自动启用，必须由管理员确认受限 
 不支持任意 Docker 参数、远程 Engine、Compose/Kubernetes、自动 build/pull 或整容器 perf
 聚合。已经提交的 Runtime Lock 公共合同只是前置骨架，不代表 Adapter 已可用。详见
 [《v0.3.1 Docker 进程采集与分析指南》](docs/docker-container-roadmap.zh-CN.md)。
-当前 `v0.3.2` 发布候选另行提供默认关闭、必须绑定 Benchmark 的
+发布版 `v0.3.2` 另行提供默认关闭、必须绑定 Benchmark 的
 `bounded_optimization_session`：用户审阅并确认一次后，Agent 可在硬预算和
 仅允许 `mutable_paths` 变化进入构建快照，按证据选择采集模式、最多重建三个候选并完成
 确定性匹配 A/B。实际文件写权限由 Agent 客户端沙箱而非 PerfLens 强制执行。preview 不执行

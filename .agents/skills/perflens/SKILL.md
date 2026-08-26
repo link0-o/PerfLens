@@ -105,7 +105,9 @@ for authorization, and the Agent must then end its response and wait for a fresh
 When `[optimization].enabled = true`, a request such as “用 PerfLens 优化这个项目” selects the
 v0.3.2 bounded optimization workflow. Call `inspect_docker_optimization_capability`, then
 `preview_docker_optimization_session` with the smallest modes that may be needed. Present the exact
-`context_paths` and `mutable_paths` returned by that Preview, immutable build recipe, network tier,
+`context_paths` and `mutable_paths` returned by that Preview. `context_paths` is the admitted build
+context; only its `mutable_paths` subset is editable, while the remainder is immutable. Present the
+immutable build recipe, network tier,
 Benchmark/correctness contract, budgets, planned baseline build, evidence choices, candidate
 rebuilds, A/B validation, and cleanup. Never infer or paraphrase away a non-empty returned path
 list. End the response and wait for one fresh explicit user reply. Only then call
@@ -125,10 +127,14 @@ Within the authorized optimization session:
 - Use `collect_docker_optimization_workload` only with a Build ID returned by this session. Start
   with correctness/Benchmark plus `stat`; select `record`, `sched`, `off_cpu`, or `lock` only when
   prior evidence calls for it. Do not run every mode merely because the request says “deep.”
+- Start each candidate with its correctness/Benchmark contract and low-cost `stat`. Add a matched
+  `record` only when the hypothesis or final comparison needs a profile; use Trace only after a
+  positive scheduling, blocking, or lock-contention trigger.
 - Modify only `mutable_paths`. Immutable context, Dockerfile/build policy, base digest, Builder,
   network tier, command, resources, Benchmark contract, client identity, or Collector provenance
   changes invalidate comparison instead of expanding authorization.
-- Build at most three candidates and call `compare_docker_optimization_iterations` with the bound
+- Obey the exact candidate/build ceilings returned by the Preview and call
+  `compare_docker_optimization_iterations` with the bound
   Build, Measurement, Analysis, and run Benchmark IDs. Different candidate image digests are
   normal Treatment only when the Build Artifact proves the fixed recipe and immutable context.
 - The current mutable workspace must exactly match the selected Build before collection because
@@ -139,8 +145,13 @@ Within the authorized optimization session:
   intended work, weakening validation, or specializing only for the measured input. If the
   contract cannot distinguish such a candidate, stop and request representative inputs or a
   stronger invariant instead of claiming an optimization.
-- A security rejection, identity change, or correctness failure is not retried unchanged. The one
-  recoverable retry is for a genuinely corrected build/test failure. Stop at any session budget.
+- A security rejection, identity change, correctness failure, or collection failure is not retried
+  unchanged. Once a workload lease has been issued, a failed collection attempt is charged even
+  when Gate never releases the workload; do not switch mode or make another collection/build call
+  in that Session. Validation rejected before a lease is issued is not charged, but still must not
+  be retried unchanged. Finalize or revoke the Session, correct the infrastructure, then obtain a
+  fresh Preview and authorization. The recoverable retry budget applies only to a genuinely
+  corrected build/test failure. Stop at any session budget.
 - Report `Verified Improvement` only from a `verified_improvement` Iteration. Partial evidence,
   missing Benchmark, resource transfer, event-source mismatch, or fixed-environment differences
   remain candidate/not-comparable results. Never commit, push, tag, release, or edit paths outside
@@ -161,6 +172,12 @@ Within the authorized optimization session:
   call the finalizer with `restore_baseline` and no token. The finalizer must verify that the current
   mutable manifest matches the selected Build. Never use a destructive Git reset, overwrite a path
   that changed independently, or claim that human acceptance upgraded the Iteration verdict.
+  If a candidate exists but collection/correctness stopped before any Iteration was created, do not
+  invent `not_comparable` and never pass a Build ID as an Iteration ID. Present the state as
+  `not_evaluated`, ask the same retain/restore question, and call the finalizer with the latest
+  `candidate_build_id` plus the exact `evaluation_reason`. Retaining still requires the fixed fresh
+  acceptance token; restoration still requires exact baseline bytes. The resulting Disposition
+  records that no A/B Iteration exists and cannot support a performance verdict.
 
 If optimization is disabled, keep using the v0.3.1 fixed-image workflows below; do not silently
 enable the policy or substitute direct Docker/build commands.
@@ -301,6 +318,8 @@ The legacy `collect_profile` tool remains for manually confirmed command/PID col
 - If `source_locations_truncated` or its EvidenceQuality count is non-zero, treat the returned
   source-location list as a bounded example, not a complete attribution set.
 - Lock waiting and I/O waiting cannot be established from an on-CPU profile alone.
+- An `[unknown]` frame is unresolved weight, not evidence for a particular source function, shell
+  loop, kernel subsystem, or mechanism. Attribute it only after independent symbol/source binding.
 - Do not recommend replacing an allocator without allocation counts, sizes, lifetimes, and caller evidence.
 - Do not recommend disabling synchronization, validation, durability, bounds checks, or error handling by default.
 - Keep unknown symbols, missing debug data, truncated diagnostics, and non-comparable workloads visible in conclusions.

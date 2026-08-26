@@ -563,7 +563,25 @@ class ArtifactStore:
             disposition_id,
             "docker-optimization-disposition",
         )
-        iteration = self.load_docker_optimization_iteration(disposition.iteration_id)
+        iteration_mismatch = False
+        if disposition.iteration_id is not None:
+            iteration = self.load_docker_optimization_iteration(disposition.iteration_id)
+            iteration_mismatch = (
+                iteration.content_sha256 != disposition.iteration_content_sha256
+                or iteration.conclusion != disposition.iteration_conclusion
+                or iteration.session_artifact_id
+                != disposition.source_session_artifact_id
+                or iteration.session_artifact_content_sha256
+                != disposition.source_session_artifact_content_sha256
+                or iteration.baseline_build_id != disposition.baseline_build_id
+                or iteration.candidate_build_id != disposition.candidate_build_id
+            )
+        else:
+            iteration_mismatch = (
+                disposition.iteration_content_sha256 is not None
+                or disposition.iteration_conclusion != "not_evaluated"
+                or disposition.evaluation_reason is None
+            )
         source_session = self.load_docker_optimization_session(
             disposition.source_session_artifact_id
         )
@@ -574,13 +592,7 @@ class ArtifactStore:
         candidate = self.load_docker_build(disposition.candidate_build_id)
         selected = candidate if disposition.disposition == "retain_candidate" else baseline
         if (
-            iteration.content_sha256 != disposition.iteration_content_sha256
-            or iteration.conclusion != disposition.iteration_conclusion
-            or iteration.session_artifact_id != disposition.source_session_artifact_id
-            or iteration.session_artifact_content_sha256
-            != disposition.source_session_artifact_content_sha256
-            or iteration.baseline_build_id != disposition.baseline_build_id
-            or iteration.candidate_build_id != disposition.candidate_build_id
+            iteration_mismatch
             or source_session.session_id != disposition.session_id
             or source_session.state != "active"
             or source_session.content_sha256

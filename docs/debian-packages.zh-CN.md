@@ -65,7 +65,7 @@ perflens init --prepare-collector \
 固定 Rust Helper unit 获得收窄后的 capability bounding set。
 
 上一条 `0.2.0` 修复线保持上游版本不变，仅把 Debian 修订号从 `1` 增加到 `2`，因此已经安装
-当前 `0.3.2` 开发包把 Debian 修订号重置为 `1`；APT 会先比较上游版本 `0.3.2`，因此
+`0.3.2` 发布包把 Debian 修订号重置为 `1`；APT 会先比较上游版本 `0.3.2`，因此
 它仍高于所有 `0.3.1-*` 安装包，而所有 PerfLens 命令显示 `0.3.2`。文件名只是示例，
 应以实际下载文件为准。安装包不会自动启动服务、写入
 `/etc/perflens`、修改 sysctl/capability 或授予用户权限。检查引导生成的双语

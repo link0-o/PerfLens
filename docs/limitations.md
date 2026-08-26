@@ -68,7 +68,7 @@ preserved. See the [v0.3.1 Docker guide](docker-container-roadmap.md). The C/C++
 Go user-space-lock adapters remain planned for v0.4.0; their public contract groundwork does not
 make those adapters available.
 
-The v0.3.2 release candidate adds an opt-in bounded optimization session with typed, recipe-bound
+Release v0.3.2 adds an opt-in bounded optimization session with typed, recipe-bound
 baseline/candidate builds. Preview does not build or pull, the session never accepts arbitrary
 Docker options or source paths, and only an Artifact-verified matched A/B may claim a Verified
 Improvement. Offline tiers accept only `RUN --network=none`; the administrator-network tier admits

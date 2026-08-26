@@ -818,14 +818,8 @@ where
         ready_sent = true;
         Ok(())
     };
-    let (selected_plan, fallback_reason) = select_event_source(
-        plan,
-        perf_path,
-        spool,
-        artifact_gid,
-        target_validator,
-        &mut notify_once,
-    )?;
+    let (selected_plan, fallback_reason) =
+        select_event_source(plan, perf_path, spool, artifact_gid, target_validator)?;
     let suffix = if selected_plan.mode == CollectionMode::Stat {
         ".stat.csv"
     } else {
@@ -911,17 +905,15 @@ fn reserve_temporary_output(path: &Path) -> Result<(), ExecutionError> {
         .map_err(|_error| spool_error())
 }
 
-fn select_event_source<V, R>(
+fn select_event_source<V>(
     plan: &ExecutionPlan,
     perf_path: &Path,
     spool: &Path,
     artifact_gid: u32,
     target_validator: &V,
-    ready_notifier: &mut R,
 ) -> Result<(ExecutionPlan, Option<&'static str>), ExecutionError>
 where
     V: Fn(&HelperTarget) -> Result<(), ExecutionError>,
-    R: FnMut() -> Result<(), ExecutionError>,
 {
     match plan.requested_event_source {
         RequestedEventSource::SoftwareOnly => {
@@ -944,6 +936,13 @@ where
         RequestedEventSource::Auto => {
             let probe_milliseconds =
                 HARDWARE_PROBE_MAX_MILLISECONDS.min(plan.duration_milliseconds.saturating_div(4));
+            // The availability probe binds to the still-blocked package Gate. It must never
+            // report collection readiness: otherwise a fast workload can finish during the
+            // probe, before the selected hardware/software profile is attached. A scheduled zero
+            // may show that the event opened on this sleeping target, but cannot prove that a
+            // virtual PMU will produce useful evidence once the workload runs. Auto mode
+            // therefore conservatively selects software; callers that require hardware evidence
+            // can request hardware_required explicitly.
             let fallback_reason = probe_hardware_pmu(
                 plan,
                 probe_milliseconds,
@@ -951,7 +950,6 @@ where
                 spool,
                 artifact_gid,
                 target_validator,
-                ready_notifier,
             )?;
             let final_milliseconds = plan
                 .duration_milliseconds
@@ -996,18 +994,16 @@ fn software_plan(plan: &ExecutionPlan, duration_milliseconds: u64) -> ExecutionP
     selected
 }
 
-fn probe_hardware_pmu<V, R>(
+fn probe_hardware_pmu<V>(
     plan: &ExecutionPlan,
     duration_milliseconds: u64,
     perf_path: &Path,
     spool: &Path,
     artifact_gid: u32,
     target_validator: &V,
-    ready_notifier: &mut R,
 ) -> Result<Option<&'static str>, ExecutionError>
 where
     V: Fn(&HelperTarget) -> Result<(), ExecutionError>,
-    R: FnMut() -> Result<(), ExecutionError>,
 {
     let temporary = spool.join(format!(".perflens-helper-probe-{}.tmp", plan.plan_id));
     OpenOptions::new()
@@ -1039,7 +1035,7 @@ where
             publish: false,
         },
         target_validator,
-        ready_notifier,
+        &mut || Ok(()),
     );
     let result = match outcome {
         Ok(_result) => hardware_probe_has_usable_counts(&temporary).map(|usable| {
@@ -1069,13 +1065,27 @@ fn hardware_probe_has_usable_counts(path: &Path) -> Result<bool, ExecutionError>
         let Some(event) = fields.next() else {
             return false;
         };
+        let Some(run_time) = fields.next() else {
+            return false;
+        };
+        let Some(running_percent) = fields.next() else {
+            return false;
+        };
         matches!(
             canonical_stat_event(event.trim()),
             "cycles" | "instructions"
         ) && raw_value
             .trim()
             .parse::<f64>()
-            .is_ok_and(|value| value > 0.0)
+            .is_ok_and(|value| value.is_finite() && value > 0.0)
+            && run_time
+                .trim()
+                .parse::<f64>()
+                .is_ok_and(|value| value.is_finite() && value > 0.0)
+            && running_percent
+                .trim()
+                .parse::<f64>()
+                .is_ok_and(|value| value.is_finite() && value > 0.0)
     }))
 }
 
@@ -2185,7 +2195,7 @@ ctl_fd=${descriptors%,*}
 ack_fd=${descriptors#*,}
 finish() {
   if [ "$events" = 'cycles,instructions' ]; then
-    printf '0;;cycles;1;100.00;;\n0;;instructions;1;100.00;;\n' > "$out"
+    printf '<not counted>;;cycles;0;0.00;;\n<not counted>;;instructions;0;0.00;;\n' > "$out"
   else
     printf '1000;;task-clock;1;100.00;;\n1;;context-switches;1;100.00;;\n0;;cpu-migrations;1;100.00;;\n2;;page-faults;1;100.00;;\n' > "$out"
   fi
@@ -2570,6 +2580,12 @@ exit 0
             super::hardware_probe_has_usable_counts(&path)
                 .expect("accept a hybrid-PMU hardware probe")
         );
+        std::fs::write(&path, "0;;cycles;1;100.0;;\n0;;instructions;1;100.0;;\n")
+            .expect("write a scheduled zero-count probe");
+        assert!(
+            !super::hardware_probe_has_usable_counts(&path)
+                .expect("reject a scheduled but unusable zero-count availability probe")
+        );
         let mixed_events = vec!["cycles".to_owned(), "cache-misses".to_owned()];
         std::fs::write(&path, "0;;cycles;1;100.0;;\n0;;cache-misses;1;100.0;;\n")
             .expect("write misleading zero-count stat output");
@@ -2764,7 +2780,9 @@ exit 0
         let identity_validated = AtomicU64::new(0);
         let ready_notifications = AtomicU64::new(0);
         let mut report_ready = || {
-            assert_eq!(identity_validated.load(Ordering::Relaxed), 1);
+            // The probe independently validates the still-blocked target, then the selected
+            // formal software profile validates it again before emitting the only ready frame.
+            assert_eq!(identity_validated.load(Ordering::Relaxed), 2);
             ready_notifications.fetch_add(1, Ordering::Relaxed);
             Ok(())
         };

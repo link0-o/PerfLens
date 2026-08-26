@@ -21,8 +21,8 @@ PerfLens 的正式发布版由不可变的 Python 安装包和独立 Skill 压�
 
 ## 本地验证
 
-下面以计划中的下一版本为例。执行前应把 `perflens_release_version` 设置为已经写入两个
-源码版本文件的准确版本号。
+下面以 v0.3.2 为具体示例；后续版本执行前，应把 `perflens_release_version` 设置为已经
+写入两个源码版本文件的准确版本号。
 
 ```bash
 perflens_release_version=0.3.2

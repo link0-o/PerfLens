@@ -64,6 +64,24 @@
       "title": "Disposition Id",
       "type": "string"
     },
+    "evaluation_reason": {
+      "anyOf": [
+        {
+          "enum": [
+            "collection_failed",
+            "correctness_failed",
+            "comparison_unavailable",
+            "user_stopped"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Evaluation Reason"
+    },
     "explicit_unverified_acceptance": {
       "title": "Explicit Unverified Acceptance",
       "type": "boolean"
@@ -97,20 +115,37 @@
         "candidate_improvement",
         "candidate_regression",
         "no_material_change",
-        "not_comparable"
+        "not_comparable",
+        "not_evaluated"
       ],
       "title": "Iteration Conclusion",
       "type": "string"
     },
     "iteration_content_sha256": {
-      "pattern": "^[a-f0-9]{64}$",
-      "title": "Iteration Content Sha256",
-      "type": "string"
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Iteration Content Sha256"
     },
     "iteration_id": {
-      "pattern": "^docker-optimization-iteration-[a-f0-9]{20}$",
-      "title": "Iteration Id",
-      "type": "string"
+      "anyOf": [
+        {
+          "pattern": "^docker-optimization-iteration-[a-f0-9]{20}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Iteration Id"
     },
     "perflens_version": {
       "title": "Perflens Version",
@@ -181,8 +216,6 @@
     "source_session_artifact_content_sha256",
     "final_session_artifact_id",
     "final_session_artifact_content_sha256",
-    "iteration_id",
-    "iteration_content_sha256",
     "iteration_conclusion",
     "disposition",
     "baseline_build_id",

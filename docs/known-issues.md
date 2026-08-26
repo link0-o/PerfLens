@@ -5,6 +5,34 @@
 This document records reproduced issues and their bounded workarounds, including
 resolved issues. Do not weaken deployment safety checks to work around them.
 
+## KI-2026-08-26: the automatic PMU probe could release a fast Docker workload (resolved)
+
+- Affected scope: managed Docker `stat`/`record` with `event_source=auto`, especially an A/B pair
+  whose optimized candidate exits much faster than its baseline.
+- Symptom: the slower baseline can collect successfully, while the faster candidate repeatedly
+  fails the formal profile's disabled-event binding handshake. The failed calls still consume
+  workload-run budget because the lease is reserved before container startup.
+- Root cause: the short hardware-availability probe received the same Gate-ready callback as the
+  selected formal profile. It therefore released PID 1 during the probe. A slow baseline remained
+  alive long enough for the formal fallback profile to attach; a fast candidate could exit first.
+- Fix: both Collector implementations keep the package Gate blocked throughout the PMU probe.
+  Only the selected formal hardware/software profile may report readiness. Because the blocked
+  Gate legitimately executes no user work, a zero count remains insufficient even when perf
+  reports scheduling runtime: it cannot prove that a virtual PMU will produce useful evidence.
+  `auto` therefore falls back conservatively; explicit `hardware_required` remains available when
+  hardware evidence is mandatory.
+- Failure semantics: any optimization collection failure after workload-lease issuance charges
+  exactly one attempt, releases unused time/evidence reservations, and blocks additional build or
+  collection operations in that Session. A validation rejection before lease issuance is not
+  charged but remains non-repeatable unchanged. Neither case can consume the build/test retry or
+  switch evidence mode. If a candidate
+  already exists but no A/B Iteration could be created, the typed finalizer records a
+  `not_evaluated` retain/restore Disposition instead of accepting a Build ID as an Iteration ID.
+- Regression coverage: Python and Rust prove that the probe produces no ready notification, a
+  scheduled zero probe remains insufficient, the formal profile releases Gate once,
+  failed attempts are charged, unchanged retries are rejected, and an unevaluated candidate can be
+  retained only with fresh explicit consent.
+
 ## KI-2026-08-26: perf readiness could fail intermittently after the control-command fix (resolved)
 
 - Affected scope: PID `stat` and `record` readiness through either Collector privilege mode. The
@@ -217,9 +245,10 @@ or event provenance therefore fails closed before Agent use; valid but incomplet
 - Project handshake: public Broker protocol `1.1` and private Python/Rust Helper protocol `1.2`
   stream a request/plan/PID-bound readiness frame. The ordinary-user bootstrap execs the approved
   project program only after authenticating that frame.
-- With `event_source=auto`, the first stage may be the hardware probe or formal collection. The
-  ready frame is emitted once that first stage is bound and enabled, preventing an idle paused
-  bootstrap from falsely producing a zero-count PMU probe. Probe time remains within the original
+- With `event_source=auto`, the hardware availability probe keeps the bootstrap/Gate paused and
+  never emits the ready frame. Zero, unsupported, and not-counted rows conservatively select
+  software; `hardware_required` is the explicit path when hardware evidence is mandatory. The
+  selected formal profile alone emits readiness. Probe time remains within the original
   authorization and is capped at 250ms.
 - MCP registers the blocking project runner as a synchronous tool so the SDK executes it in a
   worker thread instead of blocking the async session. The launcher now gives already-completed

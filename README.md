@@ -26,7 +26,7 @@ conversion provenance, quality gates, and Agent-facing verification.
 PerfLens is an evidence-driven performance-analysis toolkit for Linux
 applications and coding agents.
 
-The current source tree supports Milestones 0 through 9; v0.3.2 remains a release candidate:
+Release v0.3.2 supports Milestones 0 through 9:
 
 - streaming FlameGraph-compatible folded stack input;
 - deterministic self and inclusive hotspot aggregation;
@@ -58,8 +58,9 @@ The current source tree supports Milestones 0 through 9; v0.3.2 remains a releas
   choice; that choice is recorded without upgrading the evidence verdict. The Agent/client
   sandbox, not PerfLens, enforces filesystem write permission.
 
-It does **not** include an AI/LLM API, Web UI, source-code patch tool, benchmark
-runner, or custom agent framework.
+It does **not** include an AI/LLM API, Web UI, source-code patch tool, general-purpose benchmark
+runner, or custom agent framework. In an authorized optimization session, the external Agent edits
+only reviewed mutable paths and the fixed workload contract supplies correctness/Benchmark output.
 
 ## Install
 
@@ -144,8 +145,7 @@ process, and fixed project policy; it excludes arbitrary Docker arguments, remot
 Compose/Kubernetes, image build/pull, and whole-container perf aggregation. Checked-in Runtime
 Lock public contracts are groundwork, not available adapters. See the
 [v0.3.1 Docker process guide](docs/docker-container-roadmap.md).
-The current v0.3.2 release candidate adds the separately opt-in, benchmark-required bounded Docker
-optimization session.
+Release v0.3.2 adds the separately opt-in, benchmark-required bounded Docker optimization session.
 It does not build during preview, does not grant arbitrary Docker access, and never authorizes
 commit, push, tags, or releases. See the
 [v0.3.2 Docker optimization guide](docs/docker-optimization-roadmap.md).

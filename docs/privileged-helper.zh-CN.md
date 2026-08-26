@@ -87,8 +87,9 @@ PID 所有者和启动时间，只有一致时才发送 `enable`。此后内核�
 启动 `sleep` 或任何其他程序。
 
 项目负载要求就绪回执时，私有协议 `1.2` 只会在上述顺序完成后发送一次绑定请求、计划和
-目标 PID 的 `collection_ready`；如果 `auto` 先做硬件探测，该探测就是第一阶段并负责发送
-回执。Python Broker 认证后再转成公共 Broker `1.1` 回执，普通用户程序在此之前不会执行。
+目标 PID 的 `collection_ready`；`auto` 硬件 probe 会继续阻塞负载且不发送就绪，只有最终
+选中的正式 profile 可以报告 ready。Python Broker 认证后再转成公共 Broker `1.1` 回执，
+普通用户程序在此之前不会执行。
 
 首次部署必须带 `--acknowledge-privileged-helper-risk`。升级时，`--dry-run` 会把新增能力
 写入 `helper_capability_expansion`；正式升级没有同一显式确认时，会在修改托管 unit 前

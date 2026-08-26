@@ -96,9 +96,10 @@ The Helper launches only perf and uses the control channel plus signals for dura
 never a sleep process or workload.
 
 When a project workload requests readiness, private protocol `1.2` emits exactly one
-request/plan/PID-bound `collection_ready` frame only after that sequence. If `auto` starts with a
-hardware probe, the probe is the first stage and reports readiness. The Python Broker authenticates
-and relays it as public Broker protocol `1.1`; the ordinary-user program does not execute earlier.
+request/plan/PID-bound `collection_ready` frame only after that sequence. An `auto` hardware probe
+keeps the workload blocked and emits no readiness; only the selected formal profile may report
+ready. The Python Broker authenticates and relays it as public Broker protocol `1.1`; the
+ordinary-user program does not execute earlier.
 
 Fresh deployment requires `--acknowledge-privileged-helper-risk`. During an
 upgrade, `--dry-run` reports any newly added capability in

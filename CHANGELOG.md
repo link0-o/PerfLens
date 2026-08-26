@@ -4,15 +4,51 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-26
+
 ### Added
 
-- v0.3.2 project policy schema 1.1 defines a default-off, strictly bounded Docker optimization
-  contract while preserving strict schema 1.0 fixed-image compatibility. The bilingual design
-  contract fixes context/mutation boundaries, build/network tiers, budgets, planned typed MCP
-  tools, evidence artifacts, and matched A/B gates before executable build authority is added.
+- Project policy schema 1.1 and the default-off `bounded_optimization_session`, while preserving
+  strict schema 1.0 fixed-image compatibility. One reviewed confirmation can cover a typed
+  baseline build, evidence-guided collection, changes admitted only from `mutable_paths`, bounded
+  candidate rebuilds, correctness/Benchmark execution, and deterministic matched A/B validation.
+- Versioned Docker Build Capability, Recipe, Context, Build, Optimization Session, Iteration, and
+  Disposition artifacts, with MCP tools for preview, authorization, build, collection, comparison,
+  finalization, and revocation.
+- Project-scoped OpenCode, Copilot CLI, and VS Code Copilot Agent integration. `perflens init`
+  continues to select Codex and Claude Code by default; repeatable `--client` options and strict
+  user defaults opt additional clients in without changing unrelated project configuration.
+
+### Changed
+
+- Docker optimization Agents begin each side with correctness/Benchmark plus low-cost `stat`, then
+  select `record` or one Trace mode only when prior evidence requires it. Candidate/build limits
+  come from the content-bound Preview rather than hard-coded workflow assumptions.
+- A non-verified Iteration now ends with a separate human retain/restore disposition. Human choice
+  records workspace state but never upgrades `candidate_improvement`, `not_comparable`, or an
+  unevaluated candidate into `Verified Improvement`.
+
+### Security
+
+- The typed Docker Build Adapter captures private immutable context snapshots, rejects path and
+  symlink escape, special files, credentials, remote endpoints, arbitrary Docker options, and
+  unapproved network/build inputs, and conservatively cleans only identity-verified session
+  objects. Preview never builds or pulls and the session grants no commit, push, Tag, or Release
+  authority.
+- Optimization collection failure after workload-lease issuance is charged exactly once and
+  blocks further build/collection in that Session. It cannot be hidden by an unchanged retry,
+  evidence-mode switch, or misuse of the build/test retry budget.
 
 ### Fixed
 
+- Hardware-PMU availability probes no longer receive the managed-workload Gate-ready callback.
+  Only the selected formal profile may release the workload, preventing a fast optimized candidate
+  from exiting between an unusable PMU probe and the formal software fallback. A scheduled zero
+  count is conservatively insufficient; `hardware_required` remains explicit when hardware
+  evidence is mandatory.
+- A candidate built before collection/correctness failure can now be finalized as `not_evaluated`
+  with a typed stop reason and candidate Build identity. A Build ID can no longer be mistaken for
+  an Iteration ID, and retaining an unevaluated candidate requires fresh explicit acceptance.
 - PID readiness now uses one shared eight-second, child-liveness-aware deadline for the documented
   `disable → identity revalidation → enable` handshake. The Python Collector drains bounded perf
   diagnostics while it waits, and both privilege modes report control timeouts, child exits,

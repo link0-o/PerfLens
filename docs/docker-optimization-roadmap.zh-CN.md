@@ -2,10 +2,10 @@
 
 [English](docker-optimization-roadmap.md)
 
-状态：v0.3.2 发布候选接口已经实现，但[已知问题](known-issues.zh-CN.md)中的安全与多客户端
-发现尚未解决，因此不能宣称已经达到发布就绪。合同、上下文快照、类型化 Build Adapter、
-一次确认会话工具、Build 绑定采集、确定性 A/B 比较及 Agent 策略已经存在；完整的
-rootless/rootful Docker 与已安装主机验收也仍是发布门禁。v0.3.1 固定镜像采集继续兼容。
+状态：已随 v0.3.2 发布。合同、上下文快照、类型化 Build Adapter、一次确认会话工具、
+Build 绑定采集、确定性 A/B 比较、人工候选处置及 Agent 策略均已实现。2026-08-26 审查发现
+已在[已知问题](known-issues.zh-CN.md)中标为解决。v0.3.1 固定镜像采集继续兼容；每台部署
+主机仍需独立验收，一台验收机通过不代表所有运行时和主机组合均已认证。
 
 ## 目标与边界
 
@@ -43,7 +43,7 @@ mode。显式撤销会在能够安全证明归属时立即清理私有运行时�
 授权失效，并由有界定时器或后续任意交互回收。MCP 连接关闭时也会撤销活动授权并执行相同的
 身份核验清理。进程崩溃仍可能留下已证明归属的对象供人工审查；禁止全局 Docker prune。
 
-## 已实现的类型化接口（仍需真实主机验收）
+## 已实现的类型化接口
 
 v0.3.2 实现提供以下 MCP 工具：
 
@@ -111,8 +111,11 @@ Agent 不得用“没有可修改路径”等自行推断替换工具返回的�
 确认 token，创建绑定客户端连接的内存 lease，并拒绝重放。
 
 Agent 不机械执行全部模式：先运行最低成本的正确性/Benchmark 和 `stat`，再根据观测选择
-`record`、`sched`、`off_cpu` 或 `lock`。安全拒绝、身份变化或正确性失败不得原样重试；可恢复
-的编译或测试失败可以消耗整个会话唯一一次重试。
+`record`、`sched`、`off_cpu` 或 `lock`。每个候选同样先做正确性/Benchmark 与 `stat`，只有
+假设确实需要时才追加匹配 profile 或 Trace。安全拒绝、身份变化或正确性失败不得原样重试；
+workload lease 签发后的采集失败会计费一次并退还未使用预留，随后阻止该 Session 继续
+build/collection，也不能通过换模式重试。lease 签发前的校验拒绝不计费，但同样不能原样重复。
+整个会话唯一一次可恢复重试只适用于已经实际修正的编译或测试失败。
 
 第一次修改前必须先检查基线是否足以分辨预期收益：保留重复原始值，将预期效应与实际离散程度
 比较，并要求热点、调用路径、源码或明确的可证伪实验真正指向 `mutable_paths`。如果 partial
@@ -128,7 +131,8 @@ Profile 样本稀疏、主要落在不可变测试框架，而且预期收益小
 workload 活动 1800 秒、硬过期 7200 秒、证据 1 GiB、临时镜像 10 GiB，所有并发均为 1。
 record 最长 30 秒、99 Hz；Trace 单次最长 10 秒。任一预算耗尽即停止，不能静默新建会话。
 每次成功的 stat、record 或 Trace 都必须把 Broker 已验证的原始证据字节数带入优化会话，用
-实际正数字节替换预留上限，不能把已经产生的证据静默记为 0。
+实际正数字节替换预留上限，不能把已经产生的证据静默记为 0。失败调用即使从未放行 Gate 也会
+消耗一个 run 槽，但未使用的证据/时间预留会按实际用量结算。
 
 ## 匹配 A/B 与 Verified Improvement
 
@@ -154,6 +158,10 @@ Comparison ID；单独调用产生的 Comparison 只能作为旁证，不能冒�
 撤销 Session 并清理已验证的临时资源；它自身不修改源码，也不会把人工选择升级为 Verified
 Improvement。
 
+如果 candidate Build 已存在，但采集或正确性在生成 Iteration 前停止，状态必须是
+`not_evaluated`，而不是 `not_comparable`。系统仍允许绑定最新 candidate Build 与 typed 停止
+原因进行保留/恢复选择；该 Disposition 不含 Iteration ID，不能被解释成 A/B 结论。
+
 短生命周期容器如果在最终 cgroup 读取前退出，只能保留最后一次已验证周期快照，并标记为 partial
 下界；这不能证明不存在 CPU、内存、I/O 或节流转移，也不能为了得到 verified 结论而放宽。报告
 默认输出在聊天中；在 `mutable_paths` 之外创建项目报告文件需要另行授权。
@@ -164,8 +172,10 @@ Improvement。
 A/B 与 Agent 集成；最终包、宿主机与 Docker 验收。每阶段必须先通过正常、拒绝、边界、lint、
 类型、Schema 及相关 Python/Rust 协议测试，才能进入下一阶段。
 
-本地候选已经通过 Python 3.12/3.13、85% 覆盖率门禁、可复现 wheel/sdist 与 DEB、包冒烟、
-Schema/协议，以及 Rust fmt、Clippy、测试、audit、deny 门禁。2026-08-26 源码审查发现的
-问题已经修复并补充拒绝路径回归测试。稳定发布仍需完成已安装主机
-的不自动激活/升级/回滚/卸载验收、v0.3.1 宿主机与固定 Docker 回归，以及真实
-rootless/rootful Docker 验收。优化会话和本实施合同都不会创建 v0.3.2 Tag。
+发布版已经通过 85% 覆盖率门禁、可复现 wheel/sdist 与 DEB、包冒烟、Schema/协议，以及
+Rust fmt、Clippy、测试、audit、deny 门禁；2026-08-26 源码审查发现均有拒绝路径回归测试。
+一台已安装的 rootful Docker 主机还完成了 baseline/candidate 构建、正确性/Benchmark、
+软件事件 stat/record、清理及确定性 A/B 构建。由于两侧 Profile 和尾部 cgroup 资源差值均为
+partial，该次结果正确保持为 `not_comparable`，证明的是证据门禁而非 Verified Improvement。
+rootless、UID 0 显式开放和其他主机组合仍属于独立兼容性/验收工作，不是本版本暗含的普遍
+认证。优化 Session 自身永远不会创建 Tag，也不会授予发布权限。

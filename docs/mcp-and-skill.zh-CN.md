@@ -219,7 +219,8 @@ PerfLens 保留其他 `mcpServers`，但拒绝覆盖名称相同且内容不同�
 不得自建 JSON-RPC/Unix Socket 桥接器。Docker 优化会话绑定同一个原生客户端连接，只有
 该连接实时返回的 Preview 才能展示给用户确认。
 该 Preview 会直接返回规范化的项目相对 `context_paths` 与 `mutable_paths`；Agent 必须在
-一次确认前原样展示两份清单。成功的托管 stat、record 和 Trace 结果也会返回 Broker 已验证
+一次确认前原样展示两份清单。前者是允许进入构建的上下文，只有后者这个子集允许编辑。成功的
+托管 stat、record 和 Trace 结果也会返回 Broker 已验证
 的 `evidence_bytes`，并计入优化会话预算，不能从后续分析投影中猜测。
 
 PerfLens 只接受 Treatment 变化位于 `mutable_paths` 的构建快照；它本身不能阻止 Agent
@@ -233,6 +234,12 @@ PerfLens 只接受 Treatment 变化位于 `mutable_paths` 的构建快照；它�
 `DockerOptimizationDispositionArtifact`、撤销 Session 并清理已验证的临时资源，但不会改变
 Iteration 结论。最初的一次授权仍覆盖全部构建与测量；后续提示只决定源码处置，不扩大执行范围。
 报告默认输出在聊天中，不会写入 `mutable_paths` 之外的项目文件。
+
+workload lease 签发后的 optimization 采集失败会消耗一个 run，以不可自动重试错误返回，并
+阻止该 Session 继续 build/collection；lease 签发前的校验拒绝不计费，但仍不得原样重复。
+Agent 不得消耗 build/test 重试或换证据模式继续。如果 candidate 已存在
+但尚无 Iteration，finalizer 会接受 candidate Build ID 与 typed 停止原因，并在相同的人为
+保留/恢复选择后记录 `not_evaluated` Disposition；Build ID 永远不能当作 Iteration ID。
 
 ## 分析 perf.data 时的配置
 
