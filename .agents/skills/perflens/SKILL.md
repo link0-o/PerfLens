@@ -117,6 +117,11 @@ Within the authorized optimization session:
 
 - Build the baseline first with `build_docker_optimization_candidate`; a missing result image is
   never a reason to build before confirmation.
+- Before editing, require a useful baseline: the Benchmark must have enough repetitions and
+  resolution for the expected effect, and the mutable path must be supported by the available
+  hotspot/call-path/source evidence or by a stated falsifiable experiment. If a partial, sparse
+  profile is dominated by the immutable harness and the predicted effect is below Benchmark
+  spread, stop without manufacturing a candidate and report how to strengthen the workload.
 - Use `collect_docker_optimization_workload` only with a Build ID returned by this session. Start
   with correctness/Benchmark plus `stat`; select `record`, `sched`, `off_cpu`, or `lock` only when
   prior evidence calls for it. Do not run every mode merely because the request says “deep.”
@@ -126,12 +131,27 @@ Within the authorized optimization session:
 - Build at most three candidates and call `compare_docker_optimization_iterations` with the bound
   Build, Measurement, Analysis, and run Benchmark IDs. Different candidate image digests are
   normal Treatment only when the Build Artifact proves the fixed recipe and immutable context.
+- The current mutable workspace must exactly match the selected Build before collection because
+  it remains mounted read-only at `/workspace`. Collect any repeated baseline runs needed for
+  noise estimation before the first edit; a later baseline rejection after a candidate edit is a
+  safety boundary, not a transient failure to retry.
+- Do not exploit a weak correctness harness by hard-coding its one expected answer, skipping the
+  intended work, weakening validation, or specializing only for the measured input. If the
+  contract cannot distinguish such a candidate, stop and request representative inputs or a
+  stronger invariant instead of claiming an optimization.
 - A security rejection, identity change, or correctness failure is not retried unchanged. The one
   recoverable retry is for a genuinely corrected build/test failure. Stop at any session budget.
 - Report `Verified Improvement` only from a `verified_improvement` Iteration. Partial evidence,
   missing Benchmark, resource transfer, event-source mismatch, or fixed-environment differences
   remain candidate/not-comparable results. Revoke the session when the loop ends. Never commit,
   push, tag, release, or edit paths outside the authorization.
+- Report the exact Profile, Benchmark, and source-container Comparison IDs bound by the final
+  Iteration; a separately requested comparison is diagnostic evidence, not the Iteration verdict.
+  Keep Agent-authored candidate edits only for `verified_improvement`. For
+  `candidate_improvement`, `candidate_regression`, `no_material_change`, or `not_comparable`,
+  restore the exact pre-candidate bytes before revocation. Never use a destructive Git reset or
+  overwrite a path that changed independently; stop and report when safe restoration cannot be
+  proven.
 
 If optimization is disabled, keep using the v0.3.1 fixed-image workflows below; do not silently
 enable the policy or substitute direct Docker/build commands.

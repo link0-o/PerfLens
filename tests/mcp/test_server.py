@@ -45,11 +45,13 @@ from perflens.contracts.docker import (
     ContainerTargetArtifact,
     ContainerWorkloadSpecArtifact,
 )
+from perflens.contracts.docker_build import DockerOptimizationIterationArtifact
 from perflens.docker.capability import discover_docker_capability
 from perflens.docker.project_config import render_default_docker_project_policy
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.server import (
     ServerConfig,
+    _docker_optimization_iteration_summary,  # pyright: ignore[reportPrivateUsage]
     _finish_optimization_workload_with_evidence,  # pyright: ignore[reportPrivateUsage]
     _managed_evidence_bytes,  # pyright: ignore[reportPrivateUsage]
     create_server,
@@ -347,6 +349,66 @@ def _structured(result: Any) -> dict[str, Any]:
     payload = result.structured_content
     assert isinstance(payload, dict)
     return cast(dict[str, Any], payload)
+
+
+def test_docker_optimization_summary_identifies_its_exact_comparison_chain() -> None:
+    iteration = cast(
+        DockerOptimizationIterationArtifact,
+        SimpleNamespace(
+            session_id="docker-optimization-session-" + "1" * 20,
+            candidate_round=1,
+            comparable=False,
+            baseline_build_id="docker-build-" + "a" * 20,
+            candidate_build_id="docker-build-" + "b" * 20,
+            baseline_measurement_id="container-measurement-" + "c" * 20,
+            candidate_measurement_id="container-measurement-" + "d" * 20,
+            baseline_analysis_id="analysis-" + "e" * 16,
+            candidate_analysis_id="analysis-" + "f" * 16,
+            profile_comparison_id="profile-comparison-" + "2" * 16,
+            baseline_benchmark_id="benchmark-" + "5" * 16,
+            candidate_benchmark_id="benchmark-" + "6" * 16,
+            benchmark_comparison_id="benchmark-comparison-" + "3" * 16,
+            source_container_comparison_id="container-comparison-" + "4" * 20,
+            fixed_environment_match=True,
+            treatment_changed=True,
+            correctness_status="passed",
+            actual_event_source_match=True,
+            resource_transfer_status="incomplete",
+            deterministic_replay_passed=True,
+            conclusion="not_comparable",
+            improved_metrics=(),
+            regressed_metrics=(),
+            warnings=("Profile evidence is partial.",),
+        ),
+    )
+
+    summary = _docker_optimization_iteration_summary(
+        iteration,
+        profile_comparable=False,
+        benchmark_comparable=True,
+        source_environment_match=False,
+    )
+
+    assert summary["profile_comparison_id"] == iteration.profile_comparison_id
+    assert summary["benchmark_comparison_id"] == iteration.benchmark_comparison_id
+    assert summary["baseline_build_id"] == iteration.baseline_build_id
+    assert summary["candidate_build_id"] == iteration.candidate_build_id
+    assert summary["baseline_measurement_id"] == iteration.baseline_measurement_id
+    assert summary["candidate_measurement_id"] == iteration.candidate_measurement_id
+    assert summary["baseline_analysis_id"] == iteration.baseline_analysis_id
+    assert summary["candidate_analysis_id"] == iteration.candidate_analysis_id
+    assert summary["baseline_benchmark_id"] == iteration.baseline_benchmark_id
+    assert summary["candidate_benchmark_id"] == iteration.candidate_benchmark_id
+    assert summary["source_container_comparison_id"] == (
+        iteration.source_container_comparison_id
+    )
+    assert summary["profile_comparable"] is False
+    assert summary["benchmark_comparable"] is True
+    assert summary["source_generic_environment_match"] is False
+    assert summary["source_comparison_includes_authorized_treatment"] is True
+    assert summary["fixed_environment_match"] is True
+    assert summary["actual_event_source_match"] is True
+    assert summary["deterministic_replay_passed"] is True
 
 
 def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) -> None:

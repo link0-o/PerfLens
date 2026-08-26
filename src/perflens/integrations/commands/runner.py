@@ -8,6 +8,7 @@ import selectors
 import signal
 import stat
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Collection, Sequence
 from contextlib import suppress
@@ -72,7 +73,7 @@ class CommandRunner:
         limits: CommandLimits | None = None,
         watched_output: Path | None = None,
         pass_fds: Collection[int] = (),
-        after_start: Callable[[], None] | None = None,
+        after_start: Callable[[subprocess.Popen[bytes]], None] | None = None,
     ) -> CommandResult:
         effective_limits = limits or CommandLimits()
         self._validate_limits(effective_limits)
@@ -86,6 +87,7 @@ class CommandRunner:
         stdout_bytes = 0
         stderr_truncated = False
         selector = selectors.DefaultSelector()
+        after_start_thread: threading.Thread | None = None
         try:
             try:
                 process = subprocess.Popen(  # noqa: S603 - canonicalized and allowlisted
@@ -107,25 +109,14 @@ class CommandRunner:
                     recoverable=True,
                     details={"executable": safe_argv[0]},
                 ) from exc
-            if after_start is not None:
-                after_start()
             assert process.stdout is not None
             assert process.stderr is not None
             selector.register(process.stdout, selectors.EVENT_READ, "stdout")
             selector.register(process.stderr, selectors.EVENT_READ, "stderr")
-            while selector.get_map():
-                self._check_created_file(watched_output, effective_limits, process)
-                if time.monotonic() - started > effective_limits.timeout_seconds:
-                    self._terminate_group(process, effective_limits.terminate_grace_seconds)
-                    raise PerfLensError(
-                        ErrorCode.EXTERNAL_TOOL_TIMEOUT,
-                        "external_tool",
-                        "External tool exceeded its execution timeout",
-                        recoverable=True,
-                        retryable=True,
-                        details={"timeout_seconds": effective_limits.timeout_seconds},
-                    )
-                events = selector.select(timeout=0.05)
+
+            def drain_ready_output(timeout: float) -> None:
+                nonlocal stderr_bytes, stderr_truncated, stdout_bytes
+                events = selector.select(timeout=timeout)
                 for key, _ in events:
                     chunk = os.read(key.fd, 64 << 10)
                     if not chunk:
@@ -134,7 +125,10 @@ class CommandRunner:
                     if key.data == "stdout":
                         stdout_bytes += len(chunk)
                         if stdout_bytes > effective_limits.max_stdout_bytes:
-                            self._terminate_group(process, effective_limits.terminate_grace_seconds)
+                            self._terminate_group(
+                                process,
+                                effective_limits.terminate_grace_seconds,
+                            )
                             raise PerfLensError(
                                 ErrorCode.RESOURCE_LIMIT_EXCEEDED,
                                 "external_tool",
@@ -148,7 +142,10 @@ class CommandRunner:
                         try:
                             stdout.write(chunk)
                         except (OSError, ValueError) as exc:
-                            self._terminate_group(process, effective_limits.terminate_grace_seconds)
+                            self._terminate_group(
+                                process,
+                                effective_limits.terminate_grace_seconds,
+                            )
                             raise PerfLensError(
                                 ErrorCode.OUTPUT_WRITE_FAILED,
                                 "external_tool",
@@ -161,6 +158,51 @@ class CommandRunner:
                             stderr_buffer.extend(chunk[:remaining])
                         if len(chunk) > remaining:
                             stderr_truncated = True
+
+            def enforce_runtime_limits() -> None:
+                self._check_created_file(watched_output, effective_limits, process)
+                if time.monotonic() - started > effective_limits.timeout_seconds:
+                    self._terminate_group(process, effective_limits.terminate_grace_seconds)
+                    raise PerfLensError(
+                        ErrorCode.EXTERNAL_TOOL_TIMEOUT,
+                        "external_tool",
+                        "External tool exceeded its execution timeout",
+                        recoverable=True,
+                        retryable=True,
+                        details={"timeout_seconds": effective_limits.timeout_seconds},
+                    )
+
+            if after_start is not None:
+                callback_done = threading.Event()
+                callback_errors: list[BaseException] = []
+
+                def invoke_after_start() -> None:
+                    try:
+                        after_start(process)
+                    except BaseException as exc:  # propagated on the owner thread below
+                        callback_errors.append(exc)
+                    finally:
+                        callback_done.set()
+
+                # perf can emit enough startup diagnostics to fill a pipe before it begins
+                # processing its control FD. Keep draining both bounded streams while the
+                # PID-binding callback waits for the acknowledged disabled-event barrier.
+                after_start_thread = threading.Thread(
+                    target=invoke_after_start,
+                    name="perflens-after-start",
+                    daemon=True,
+                )
+                after_start_thread.start()
+                while not callback_done.is_set():
+                    enforce_runtime_limits()
+                    drain_ready_output(0.05)
+                after_start_thread.join()
+                if callback_errors:
+                    raise callback_errors[0]
+
+            while selector.get_map():
+                enforce_runtime_limits()
+                drain_ready_output(0.05)
             self._check_created_file(watched_output, effective_limits, process)
             exit_code = process.wait()
             duration = time.monotonic() - started
@@ -191,6 +233,8 @@ class CommandRunner:
         except BaseException:
             if process is not None and process.poll() is None:
                 self._terminate_group(process, effective_limits.terminate_grace_seconds)
+            if after_start_thread is not None and after_start_thread.is_alive():
+                after_start_thread.join(effective_limits.terminate_grace_seconds + 0.5)
             raise
         finally:
             selector.close()

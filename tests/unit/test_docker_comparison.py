@@ -627,10 +627,18 @@ def test_optimization_allows_verified_build_image_as_treatment(tmp_path: Path) -
     assert source.environment_differences == {
         "image_identity_sha256": ("d" * 64, "e" * 64)
     }
+    assert (
+        "Container environment fingerprints differ; attribution is invalid."
+        in source.warnings
+    )
     assert result.fixed_environment_match
     assert result.treatment_changed
     assert result.conclusion == "verified_improvement"
     assert result.deterministic_replay_passed
+    assert (
+        "Container environment fingerprints differ; attribution is invalid."
+        not in result.warnings
+    )
 
 
 def test_optimization_rejects_fixed_build_change_and_partial_profile(tmp_path: Path) -> None:
@@ -693,6 +701,10 @@ def test_optimization_rejects_fixed_build_change_and_partial_profile(tmp_path: P
     assert not result.comparable
     assert result.conclusion == "not_comparable"
     assert "build.builder_identity_sha256" in result.fixed_environment_differences
+    assert (
+        "Fixed Docker optimization environment changed; A/B attribution is invalid."
+        in result.warnings
+    )
 
     partial_analysis = analyses[1].model_copy(
         update={

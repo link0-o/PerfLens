@@ -98,12 +98,33 @@ a concrete contention candidate. These are evidence choices inside the one sessi
 mandatory checklist steps. Every collection accepts only a session-produced Build ID. The Agent
 never receives an image, Dockerfile, build argument, mount, network, or Docker option field.
 
+Before changing a mutable path, confirm that the baseline can resolve the expected effect: retain
+raw repeated values, compare the predicted effect with observed spread, and require evidence that
+actually reaches the mutable code or frames a falsifiable experiment. A sparse partial profile
+dominated by the immutable harness is not a reason to make a token edit. The correctness contract
+must cover representative inputs and invariants; hard-coding its one expected output, bypassing the
+intended work, or specializing only for the measured input is benchmark overfitting, not an
+optimization.
+
+The ordinary project root remains mounted read-only at `/workspace`, so each collection rechecks
+that its mutable manifest still matches the selected Build. Gather any repeated baseline runs
+needed for noise estimation before the first candidate edit. A baseline Build rejected after the
+workspace advances to a candidate is preserving run/build identity and must not be retried
+unchanged.
+
 The baseline and candidate must share the exact Recipe, base digest, Builder/network identity,
 immutable context, platform, command/resources, Benchmark contract, Collector/kernel/perf
 provenance, and actual event source. Mutable-context and verified final-image changes are the
 Treatment. Call `compare_docker_optimization_iterations`; only its `verified_improvement` result
 permits that claim. Partial analysis, absent Benchmark, correctness failure, resource regression,
 or fixed-environment mismatch cannot be upgraded by Agent reasoning.
+
+The final report must name the exact Profile, Benchmark, and generic container Comparison IDs
+bound by the Iteration. Standalone comparisons may be discussed separately but cannot be presented
+as that Iteration's input. Retain Agent-authored candidate edits only when the Iteration concludes
+`verified_improvement`. Otherwise restore the exact pre-candidate bytes before revocation, without
+using destructive Git operations or overwriting an independently changed path; if safe restoration
+cannot be established, leave the ambiguity visible and ask the user.
 
 The session accepts no build Treatment outside `mutable_paths` and grants no commit, push, tag,
 release, Docker-daemon administration, Builder creation, or system changes. Client tool approval

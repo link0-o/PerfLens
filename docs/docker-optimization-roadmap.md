@@ -132,6 +132,21 @@ correctness/Benchmark and `stat` evidence, then use `record`, `sched`, `off_cpu`
 the observed problem warrants it. A security rejection, identity change, or correctness failure is
 not retried unchanged. A recoverable build or test failure may consume the session's single retry.
 
+Before the first edit, the baseline must be capable of resolving the expected gain: retain raw
+repeated values, compare the predicted effect with observed spread, and require hotspots, call
+paths, source evidence, or a stated falsifiable experiment that actually reaches `mutable_paths`.
+If a sparse partial Profile is dominated by the immutable harness and the predicted effect is below
+Benchmark variation, stop without editing and explain how to strengthen the workload. Correctness
+must cover representative inputs and invariants; hard-coding one expected answer, skipping the
+intended work, or specializing only for the measured input is Benchmark overfitting, not an
+optimization.
+
+The ordinary project root remains mounted read-only at `/workspace`, so every collection requires
+the current mutable manifest to match its selected Build. Any repeated baseline measurements needed
+for noise estimation must be collected before the first candidate edit. Once the workspace has
+advanced to a candidate, rejecting an old baseline Build preserves run/build identity and is not a
+transient error to retry unchanged.
+
 Fixed ceilings are three candidates, four builds, ten workloads, 900 seconds per build, 3600
 seconds total build time, 1800 seconds workload activity, a 7200-second hard expiry, 1 GiB evidence,
 10 GiB temporary images, and concurrency one. Record is limited to 30 seconds at 99 Hz; each Trace
@@ -153,6 +168,14 @@ matching environment and event source, the configured metric threshold, evidence
 the hypothesis, no unacceptable CPU/memory/I/O/throttling transfer, and deterministic hash,
 conservation, and replay verification. Partial evidence, a missing Benchmark, correctness failure,
 or any invariant mismatch can produce only a candidate conclusion.
+
+The final report must name the Profile Comparison, Benchmark Comparison, and generic container
+Comparison IDs actually bound by the Iteration. A separately requested Comparison is diagnostic
+evidence and cannot be presented as the final Iteration input. Agent-authored candidate edits are
+retained by default only for `verified_improvement`. For `candidate_improvement`,
+`candidate_regression`, `no_material_change`, or `not_comparable`, restore the exact pre-candidate
+bytes before revocation without destructive Git operations or overwriting an independent user
+change. If safe restoration cannot be proven, stop and ask the user to resolve it.
 
 ## Implementation and release gates
 

@@ -153,9 +153,7 @@ class CollectorBrokerServer:
                     public_spool=self._policy.spool_root,
                     public_artifact_mode=self._policy.artifact_mode,
                     expected_helper_uid=expected_helper_uid,
-                    allow_rootful_container_targets=(
-                        self._policy.allow_rootful_container_targets
-                    ),
+                    allow_rootful_container_targets=(self._policy.allow_rootful_container_targets),
                 )
         elif trace_helper_client is not None or trace_coordinator is not None:
             raise ValueError("Trace clients require an explicit immutable Trace policy")
@@ -368,10 +366,11 @@ class CollectorBrokerServer:
 
     def _assert_execution_plan_current(self, plan: CollectionPlanArtifact) -> None:
         """Recheck locally, deferring unreadable Docker namespaces only to a Rust Helper."""
-        helper_revalidates = (
-            self._policy.privilege_mode == "paranoid3_helper"
-            or plan.mode in {"sched", "off_cpu", "lock"}
-        )
+        helper_revalidates = self._policy.privilege_mode == "paranoid3_helper" or plan.mode in {
+            "sched",
+            "off_cpu",
+            "lock",
+        }
         namespace_attestation = None
         if helper_revalidates and plan.target_runtime == "docker":
             if plan.container_target is None:
@@ -380,9 +379,7 @@ class CollectorBrokerServer:
                     "authorization",
                     "Docker collection plan lost its required target binding",
                 )
-            namespace_attestation = namespace_attestation_from_target(
-                plan.container_target
-            )
+            namespace_attestation = namespace_attestation_from_target(plan.container_target)
         if namespace_attestation is None:
             assert_plan_current(plan)
         else:
@@ -474,9 +471,7 @@ class CollectorBrokerServer:
                 ),
                 pid_identity_validator=assert_current_target,
                 ready_callback=effective_ready_callback,
-                record_build_id_mmap=(
-                    plan.target_runtime == "docker" and plan.mode == "record"
-                ),
+                record_build_id_mmap=(plan.target_runtime == "docker" and plan.mode == "record"),
             )
 
         hardware_started = time.monotonic()
@@ -488,6 +483,7 @@ class CollectorBrokerServer:
                 plan.requested_event_source != "auto"
                 or not plan.fallback_allowed
                 or fallback_used
+                or exc.stage == "perf_control"
                 or exc.code not in {ErrorCode.EXTERNAL_TOOL_FAILED, ErrorCode.PROFILE_PARSE_FAILED}
                 or remaining_seconds < _POST_PROBE_FALLBACK_MINIMUM_SECONDS
             ):
@@ -558,7 +554,10 @@ class CollectorBrokerServer:
                     ready_callback=ready_callback,
                 )
             except PerfLensError as exc:
-                if exc.code not in {ErrorCode.EXTERNAL_TOOL_FAILED, ErrorCode.PROFILE_PARSE_FAILED}:
+                if exc.stage == "perf_control" or exc.code not in {
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    ErrorCode.PROFILE_PARSE_FAILED,
+                }:
                     raise
                 reason = (
                     "hardware_probe_produced_no_usable_counts"
@@ -737,11 +736,7 @@ class CollectorBrokerServer:
                 dict.fromkeys(
                     (
                         *self._policy.allowed_modes,
-                        *(
-                            trace_policy.allowed_modes
-                            if trace_policy is not None
-                            else ()
-                        ),
+                        *(trace_policy.allowed_modes if trace_policy is not None else ()),
                     )
                 )
             ),
@@ -751,9 +746,7 @@ class CollectorBrokerServer:
                 else self._policy.spool_root
             ),
             privilege_mode=self._policy.privilege_mode,
-            feature_profile=(
-                "full_diagnostics" if trace_policy is not None else "cpu_only"
-            ),
+            feature_profile=("full_diagnostics" if trace_policy is not None else "cpu_only"),
         )
 
     def _authorize(self, peer_uid: int, plan: CollectionPlanArtifact) -> None:

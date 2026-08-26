@@ -113,6 +113,16 @@ Agent 不机械执行全部模式：先运行最低成本的正确性/Benchmark 
 `record`、`sched`、`off_cpu` 或 `lock`。安全拒绝、身份变化或正确性失败不得原样重试；可恢复
 的编译或测试失败可以消耗整个会话唯一一次重试。
 
+第一次修改前必须先检查基线是否足以分辨预期收益：保留重复原始值，将预期效应与实际离散程度
+比较，并要求热点、调用路径、源码或明确的可证伪实验真正指向 `mutable_paths`。如果 partial
+Profile 样本稀疏、主要落在不可变测试框架，而且预期收益小于 Benchmark 波动，就应停止改码并
+说明如何加强 workload。正确性合同必须覆盖代表性输入和不变量；硬编码唯一预期答案、跳过目标
+工作或只针对测量输入特化属于 Benchmark 过拟合，不是性能优化。
+
+普通项目根仍会只读挂载到 `/workspace`，所以每次采集都要求当前 mutable manifest 与所选 Build
+完全一致。需要用于噪声判断的重复基线必须在第一次候选编辑前完成；工作区已经推进到候选后，
+旧基线 Build 被拒绝采集是证据身份保护，不能当作瞬时错误原样重试。
+
 固定上限为三个候选、四次构建、十次 workload、单次构建 900 秒、累计构建 3600 秒、
 workload 活动 1800 秒、硬过期 7200 秒、证据 1 GiB、临时镜像 10 GiB，所有并发均为 1。
 record 最长 30 秒、99 Hz；Trace 单次最长 10 秒。任一预算耗尽即停止，不能静默新建会话。
@@ -129,6 +139,13 @@ mutable 路径哈希、可执行文件哈希/Build ID 和候选最终镜像 dige
 只有正确性通过、Benchmark 目标和参数一致、环境与事件来源一致、达到配置阈值、性能证据支持
 假设、没有不可接受的 CPU/内存/I/O/节流转移，并通过哈希、守恒和确定性重放验证，才能输出
 Verified Improvement。partial、缺失 Benchmark、正确性失败或任一不变量不匹配只能给候选结论。
+
+最终报告必须列出 Iteration 实际绑定的 Profile Comparison、Benchmark Comparison 和通用容器
+Comparison ID；单独调用产生的 Comparison 只能作为旁证，不能冒充最终 Iteration 输入。只有
+`verified_improvement` 才默认保留 Agent 写入的候选。`candidate_improvement`、
+`candidate_regression`、`no_material_change` 或 `not_comparable` 必须在撤销会话前恢复 Agent
+本轮写入前的精确字节；不得使用破坏性 Git 操作，也不得覆盖独立发生的用户修改。无法证明安全
+恢复时应停止并明确请求用户处理。
 
 ## 实施与发布门禁
 

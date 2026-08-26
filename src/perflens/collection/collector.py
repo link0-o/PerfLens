@@ -6,7 +6,9 @@ import hashlib
 import os
 import shutil
 import socket
+import subprocess
 import tempfile
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -36,7 +38,8 @@ FALLBACK_REASONS = (
     "hardware_execution_failed_after_probe",
 )
 DEFAULT_MAX_OUTPUT_BYTES = 256 << 20
-_PERF_CONTROL_TIMEOUT_SECONDS = 5.0
+_PERF_CONTROL_TIMEOUT_SECONDS = 8.0
+_PERF_CONTROL_POLL_SECONDS = 0.1
 _PERF_CONTROL_ACK_MAX_BYTES = 16
 CollectionMode = Literal["record", "stat", "sched", "lock", "off_cpu"]
 CallGraphMode = Literal["fp", "dwarf", "lbr"]
@@ -95,9 +98,7 @@ def collect_profile(
             "Collection readiness requires a PID identity validator",
         )
     if record_build_id_mmap and (
-        request.mode != "record"
-        or request.target.pid is None
-        or pid_identity_validator is None
+        request.mode != "record" or request.target.pid is None or pid_identity_validator is None
     ):
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
@@ -508,14 +509,15 @@ class _PerfControl:
     def child_fds(self) -> tuple[int, int]:
         return self._control_reader.fileno(), self._ack_writer.fileno()
 
-    def after_start(self) -> None:
+    def after_start(self, process: subprocess.Popen[bytes]) -> None:
         self._close_child_ends()
+        deadline = time.monotonic() + _PERF_CONTROL_TIMEOUT_SECONDS
         # perf's documented control protocol has no generic ping command. Because `-D -1`
         # already opened the events disabled, an acknowledged idempotent `disable` is the
         # non-enabling barrier that proves perf has finished binding the target.
-        self._send("disable")
+        self._send("disable", process, phase="target_binding", deadline=deadline)
         self._validator()
-        self._send("enable")
+        self._send("enable", process, phase="bounded_enable", deadline=deadline)
         if self._ready_callback is not None:
             self._ready_callback()
 
@@ -535,33 +537,75 @@ class _PerfControl:
         self._ack_writer.close()
         self._child_closed = True
 
-    def _send(self, command: str) -> None:
+    def _send(
+        self,
+        command: str,
+        process: subprocess.Popen[bytes],
+        *,
+        phase: str,
+        deadline: float,
+    ) -> None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise self._control_timeout(process, phase=phase)
+        self._control_writer.settimeout(remaining)
         try:
             self._control_writer.sendall(command.encode("ascii") + b"\n")
-            acknowledgement = self._read_acknowledgement()
+            acknowledgement = self._read_acknowledgement(
+                process,
+                phase=phase,
+                deadline=deadline,
+            )
+        except TimeoutError as exc:
+            raise self._control_timeout(process, phase=phase) from exc
         except OSError as exc:
-            raise PerfLensError(
-                ErrorCode.EXTERNAL_TOOL_FAILED,
-                "external_tool",
-                "perf control channel failed before collection could be enabled",
-                recoverable=True,
+            raise self._control_error(
+                "perf control channel closed before collection readiness was established",
+                process,
+                phase=phase,
             ) from exc
         if acknowledgement.lstrip(b"\0") != b"ack\n":
-            raise PerfLensError(
-                ErrorCode.EXTERNAL_TOOL_FAILED,
-                "external_tool",
+            raise self._control_error(
                 "perf returned an invalid control acknowledgement",
-                recoverable=True,
+                process,
+                phase=phase,
             )
 
-    def _read_acknowledgement(self) -> bytes:
+    def _read_acknowledgement(
+        self,
+        process: subprocess.Popen[bytes],
+        *,
+        phase: str,
+        deadline: float,
+    ) -> bytes:
         while b"\n" not in self._ack_buffer:
             if len(self._ack_buffer) >= _PERF_CONTROL_ACK_MAX_BYTES:
                 break
-            chunk = self._ack_reader.recv(_PERF_CONTROL_ACK_MAX_BYTES - len(self._ack_buffer))
+            exit_code = process.poll()
+            if exit_code is not None:
+                raise self._control_error(
+                    "perf exited before collection readiness was established",
+                    process,
+                    phase=phase,
+                    exit_code=exit_code,
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise self._control_timeout(process, phase=phase)
+            self._ack_reader.settimeout(min(_PERF_CONTROL_POLL_SECONDS, remaining))
+            try:
+                chunk = self._ack_reader.recv(_PERF_CONTROL_ACK_MAX_BYTES - len(self._ack_buffer))
+            except TimeoutError:
+                continue
             if not chunk:
-                break
+                raise self._control_error(
+                    "perf closed its control channel before collection readiness was established",
+                    process,
+                    phase=phase,
+                )
             self._ack_buffer.extend(chunk)
+            if time.monotonic() >= deadline:
+                raise self._control_timeout(process, phase=phase)
         newline = self._ack_buffer.find(b"\n")
         if newline < 0:
             acknowledgement = bytes(self._ack_buffer)
@@ -571,6 +615,49 @@ class _PerfControl:
         acknowledgement = bytes(self._ack_buffer[:end])
         del self._ack_buffer[:end]
         return acknowledgement
+
+    @staticmethod
+    def _control_timeout(
+        process: subprocess.Popen[bytes],
+        *,
+        phase: str,
+    ) -> PerfLensError:
+        exit_code = process.poll()
+        if exit_code is not None:
+            return _PerfControl._control_error(
+                "perf exited before collection readiness was established",
+                process,
+                phase=phase,
+                exit_code=exit_code,
+            )
+        return PerfLensError(
+            ErrorCode.EXTERNAL_TOOL_TIMEOUT,
+            "perf_control",
+            "perf remained alive but did not acknowledge collection readiness "
+            "within the bounded startup window",
+            recoverable=True,
+            details={"phase": phase},
+        )
+
+    @staticmethod
+    def _control_error(
+        message: str,
+        process: subprocess.Popen[bytes],
+        *,
+        phase: str,
+        exit_code: int | None = None,
+    ) -> PerfLensError:
+        observed_exit = process.poll() if exit_code is None else exit_code
+        details: dict[str, object] = {"phase": phase}
+        if observed_exit is not None:
+            details["exit_code"] = observed_exit
+        return PerfLensError(
+            ErrorCode.EXTERNAL_TOOL_FAILED,
+            "perf_control",
+            message,
+            recoverable=True,
+            details=details,
+        )
 
 
 def _read_metrics(

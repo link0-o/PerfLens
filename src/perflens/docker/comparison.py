@@ -35,6 +35,10 @@ from perflens.contracts.docker import (
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 
+CONTAINER_ENVIRONMENT_MISMATCH_WARNING = (
+    "Container environment fingerprints differ; attribution is invalid."
+)
+
 
 def build_container_measurement(
     collection: CollectionArtifact,
@@ -314,7 +318,7 @@ def compare_container_measurements(
         )
     )
     if not environment_match:
-        warnings.append("Container environment fingerprints differ; attribution is invalid.")
+        warnings.append(CONTAINER_ENVIRONMENT_MISMATCH_WARNING)
     if not containerized_benchmarks:
         warnings.append("Both benchmark artifacts must explicitly declare containerized=true.")
     if correctness_status != "passed":

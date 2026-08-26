@@ -3,13 +3,13 @@
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -38,6 +38,8 @@ const HARDWARE_PROBE_MAX_MILLISECONDS: u64 = 250;
 const HARDWARE_PROBE_OUTPUT_BYTES: u64 = 1 << 20;
 const POST_PROBE_FALLBACK_MINIMUM_MILLISECONDS: u64 = 50;
 const PERF_CONTROL_ACK_MAX_BYTES: usize = 16;
+const PERF_CONTROL_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
+const PERF_CONTROL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const PERF_TARGET_EXIT_GRACE: Duration = Duration::from_secs(2);
 const SOFTWARE_STAT_EVENTS: &[&str] = &[
     "task-clock",
@@ -862,6 +864,7 @@ where
             && plan.fallback_allowed
             && fallback_reason.is_none()
             && error.code == "EXTERNAL_TOOL_FAILED"
+            && error.stage == "external_tool"
             && remaining_milliseconds >= POST_PROBE_FALLBACK_MINIMUM_MILLISECONDS
         {
             fs::remove_file(&temporary).map_err(|_error| spool_error())?;
@@ -1046,7 +1049,9 @@ where
                 Some("hardware_probe_produced_no_usable_counts")
             }
         }),
-        Err(error) if error.code == "EXTERNAL_TOOL_FAILED" => Ok(Some("hardware_probe_failed")),
+        Err(error) if error.code == "EXTERNAL_TOOL_FAILED" && error.stage == "external_tool" => {
+            Ok(Some("hardware_probe_failed"))
+        }
         Err(error) => Err(error),
     };
     fs::remove_file(&temporary).map_err(|_error| spool_error())?;
@@ -1202,10 +1207,10 @@ where
         perf_control_error("Perf acknowledgement descriptor could not be inherited")
     })?;
     control_writer
-        .set_write_timeout(Some(Duration::from_secs(5)))
+        .set_write_timeout(Some(PERF_CONTROL_HANDSHAKE_TIMEOUT))
         .map_err(|_error| perf_control_error("Perf control timeout could not be bounded"))?;
     ack_reader
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(PERF_CONTROL_POLL_INTERVAL))
         .map_err(|_error| {
             perf_control_error("Perf acknowledgement timeout could not be bounded")
         })?;
@@ -1283,21 +1288,30 @@ where
     // Revalidating the original owner/start-time identity after this barrier ensures a recycled
     // numeric PID is rejected before any event can be enabled; the kernel event descriptors then
     // remain bound to the task perf actually opened.
-    if send_perf_control(&mut control_writer, &mut acknowledgements, "disable").is_err() {
+    let startup_deadline = Instant::now() + PERF_CONTROL_HANDSHAKE_TIMEOUT;
+    if let Err(failure) = send_perf_control(
+        &mut control_writer,
+        &mut acknowledgements,
+        "disable",
+        &mut child,
+        startup_deadline,
+    ) {
         terminate_perf(&mut child, Signal::SIGKILL);
-        return Err(perf_control_error(
-            "Privileged perf did not complete its disabled-event binding handshake",
-        ));
+        return Err(binding_control_error(failure));
     }
     if let Err(error) = target_validator(&plan.target) {
         terminate_perf(&mut child, Signal::SIGKILL);
         return Err(error);
     }
-    if send_perf_control(&mut control_writer, &mut acknowledgements, "enable").is_err() {
+    if let Err(failure) = send_perf_control(
+        &mut control_writer,
+        &mut acknowledgements,
+        "enable",
+        &mut child,
+        startup_deadline,
+    ) {
         terminate_perf(&mut child, Signal::SIGKILL);
-        return Err(perf_control_error(
-            "Privileged perf did not acknowledge the bounded enable request",
-        ));
+        return Err(enable_control_error(failure));
     }
     if let Err(error) = ready_notifier() {
         terminate_perf(&mut child, Signal::SIGKILL);
@@ -1351,13 +1365,20 @@ where
         )?;
     }
     if status.is_none() {
-        if !target_exited
-            && send_perf_control(&mut control_writer, &mut acknowledgements, "disable").is_err()
-        {
-            status = child.try_wait().map_err(|_error| external_error())?;
-            if status.is_none() {
-                terminate_perf(&mut child, Signal::SIGKILL);
-                return Err(external_error());
+        if !target_exited {
+            let shutdown = send_perf_control(
+                &mut control_writer,
+                &mut acknowledgements,
+                "disable",
+                &mut child,
+                Instant::now() + PERF_CONTROL_HANDSHAKE_TIMEOUT,
+            );
+            if let Err(failure) = shutdown {
+                status = child.try_wait().map_err(|_error| external_error())?;
+                if status.is_none() {
+                    terminate_perf(&mut child, Signal::SIGKILL);
+                    return Err(shutdown_control_error(failure));
+                }
             }
         }
         if status.is_none() {
@@ -1483,40 +1504,112 @@ fn perf_status_succeeded(status: ExitStatus, sent_bounded_sigint: bool) -> bool 
     status.success() || (sent_bounded_sigint && status.signal() == Some(Signal::SIGINT as i32))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PerfControlFailure {
+    Channel,
+    Timeout,
+    Closed,
+    InvalidAcknowledgement,
+    ChildExited,
+}
+
 fn send_perf_control(
     control: &mut UnixStream,
     acknowledgements: &mut BufReader<UnixStream>,
     operation: &str,
-) -> Result<(), ExecutionError> {
+    child: &mut Child,
+    deadline: Instant,
+) -> Result<(), PerfControlFailure> {
+    match child.try_wait() {
+        Ok(Some(_status)) => return Err(PerfControlFailure::ChildExited),
+        Ok(None) => {}
+        Err(_error) => return Err(PerfControlFailure::Channel),
+    }
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(PerfControlFailure::Timeout);
+    }
+    control
+        .set_write_timeout(Some(remaining))
+        .map_err(|_error| PerfControlFailure::Channel)?;
     control
         .write_all(format!("{operation}\n").as_bytes())
-        .map_err(|_error| external_error())?;
-    read_perf_control_ack(acknowledgements)
+        .map_err(|error| {
+            if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) {
+                PerfControlFailure::Timeout
+            } else {
+                PerfControlFailure::Channel
+            }
+        })?;
+    read_perf_control_ack(acknowledgements, Some(child), deadline)
 }
 
 fn read_perf_control_ack(
     acknowledgements: &mut BufReader<UnixStream>,
-) -> Result<(), ExecutionError> {
+    mut child: Option<&mut Child>,
+    deadline: Instant,
+) -> Result<(), PerfControlFailure> {
     let mut acknowledgement = Vec::with_capacity(PERF_CONTROL_ACK_MAX_BYTES);
     loop {
+        if let Some(process) = child.as_deref_mut() {
+            match process.try_wait() {
+                Ok(Some(_status)) => return Err(PerfControlFailure::ChildExited),
+                Ok(None) => {}
+                Err(_error) => return Err(PerfControlFailure::Channel),
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(PerfControlFailure::Timeout);
+        }
+        acknowledgements
+            .get_ref()
+            .set_read_timeout(Some(PERF_CONTROL_POLL_INTERVAL.min(remaining)))
+            .map_err(|_error| PerfControlFailure::Channel)?;
         let (consumed, terminated) = {
-            let available = acknowledgements
-                .fill_buf()
-                .map_err(|_error| external_error())?;
+            let available = match acknowledgements.fill_buf() {
+                Ok(available) => available,
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+                {
+                    if let Some(process) = child.as_deref_mut() {
+                        match process.try_wait() {
+                            Ok(Some(_status)) => return Err(PerfControlFailure::ChildExited),
+                            Ok(None) => {}
+                            Err(_error) => return Err(PerfControlFailure::Channel),
+                        }
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(PerfControlFailure::Timeout);
+                    }
+                    continue;
+                }
+                Err(_error) => return Err(PerfControlFailure::Channel),
+            };
             if available.is_empty() {
-                return Err(external_error());
+                if let Some(process) = child.as_deref_mut() {
+                    match process.try_wait() {
+                        Ok(Some(_status)) => return Err(PerfControlFailure::ChildExited),
+                        Ok(None) => {}
+                        Err(_error) => return Err(PerfControlFailure::Channel),
+                    }
+                }
+                return Err(PerfControlFailure::Closed);
             }
             let consumed = available
                 .iter()
                 .position(|byte| *byte == b'\n')
                 .map_or(available.len(), |position| position + 1);
             if acknowledgement.len().saturating_add(consumed) > PERF_CONTROL_ACK_MAX_BYTES {
-                return Err(external_error());
+                return Err(PerfControlFailure::InvalidAcknowledgement);
             }
             acknowledgement.extend_from_slice(&available[..consumed]);
             (consumed, available[consumed - 1] == b'\n')
         };
         acknowledgements.consume(consumed);
+        if Instant::now() >= deadline {
+            return Err(PerfControlFailure::Timeout);
+        }
         if terminated {
             break;
         }
@@ -1530,9 +1623,66 @@ fn read_perf_control_ack(
         .position(|byte| *byte != 0)
         .unwrap_or(acknowledgement.len());
     if acknowledgement[first_payload_byte..] != *b"ack\n" {
-        return Err(external_error());
+        return Err(PerfControlFailure::InvalidAcknowledgement);
     }
     Ok(())
+}
+
+const fn binding_control_error(failure: PerfControlFailure) -> ExecutionError {
+    match failure {
+        PerfControlFailure::Timeout => ExecutionError {
+            code: "EXTERNAL_TOOL_TIMEOUT",
+            stage: "perf_control",
+            message: "Privileged perf remained alive but did not acknowledge disabled-event target binding within the bounded startup window",
+        },
+        PerfControlFailure::ChildExited => perf_control_error(
+            "Privileged perf exited before completing its disabled-event binding handshake",
+        ),
+        PerfControlFailure::InvalidAcknowledgement => {
+            perf_control_error("Privileged perf returned an invalid binding acknowledgement")
+        }
+        PerfControlFailure::Channel | PerfControlFailure::Closed => perf_control_error(
+            "Privileged perf closed its control channel before target binding completed",
+        ),
+    }
+}
+
+const fn enable_control_error(failure: PerfControlFailure) -> ExecutionError {
+    match failure {
+        PerfControlFailure::Timeout => ExecutionError {
+            code: "EXTERNAL_TOOL_TIMEOUT",
+            stage: "perf_control",
+            message: "Privileged perf remained alive but did not acknowledge the bounded enable request within the startup window",
+        },
+        PerfControlFailure::ChildExited => perf_control_error(
+            "Privileged perf exited before acknowledging the bounded enable request",
+        ),
+        PerfControlFailure::InvalidAcknowledgement => {
+            perf_control_error("Privileged perf returned an invalid enable acknowledgement")
+        }
+        PerfControlFailure::Channel | PerfControlFailure::Closed => perf_control_error(
+            "Privileged perf closed its control channel before acknowledging the bounded enable request",
+        ),
+    }
+}
+
+const fn shutdown_control_error(failure: PerfControlFailure) -> ExecutionError {
+    match failure {
+        PerfControlFailure::Timeout => ExecutionError {
+            code: "EXTERNAL_TOOL_TIMEOUT",
+            stage: "perf_control",
+            message: "Privileged perf remained alive but did not acknowledge the bounded shutdown request",
+        },
+        PerfControlFailure::ChildExited => perf_control_error(
+            "Privileged perf exited while the bounded shutdown request was in flight",
+        ),
+        PerfControlFailure::InvalidAcknowledgement => {
+            perf_control_error("Privileged perf returned an invalid shutdown acknowledgement")
+        }
+        PerfControlFailure::Channel | PerfControlFailure::Closed => perf_control_error(
+            "Privileged perf closed its control channel before acknowledging bounded shutdown",
+        ),
+    }
 }
 
 fn terminate_perf(child: &mut std::process::Child, signal: Signal) {
@@ -1593,7 +1743,7 @@ const fn external_error() -> ExecutionError {
 const fn perf_control_error(message: &'static str) -> ExecutionError {
     ExecutionError {
         code: "EXTERNAL_TOOL_FAILED",
-        stage: "external_tool",
+        stage: "perf_control",
         message,
     }
 }
@@ -1615,17 +1765,17 @@ mod tests {
     use std::process::{Command, ExitStatus};
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{Duration, SystemTime};
+    use std::time::{Duration, Instant, SystemTime};
 
     use nix::sys::signal::Signal;
     use nix::unistd::geteuid;
 
     use super::{
-        ExecutionPlan, MAX_DURATION_MILLISECONDS, REPLAY_RETENTION, SOFTWARE_STAT_EVENTS,
-        assert_pid_identity_at, assert_pid_identity_at_phase, authorize_spool_capacity,
-        consume_plan, denied, docker_identity_fingerprint, execute_perf, execute_perf_with_ready,
-        perf_status_succeeded, prune_replay_markers, read_perf_control_ack,
-        recover_stale_temporary_files, sha256_nul,
+        ExecutionPlan, MAX_DURATION_MILLISECONDS, PerfControlFailure, REPLAY_RETENTION,
+        SOFTWARE_STAT_EVENTS, assert_pid_identity_at, assert_pid_identity_at_phase,
+        authorize_spool_capacity, consume_plan, denied, docker_identity_fingerprint, execute_perf,
+        execute_perf_with_ready, perf_status_succeeded, prune_replay_markers,
+        read_perf_control_ack, recover_stale_temporary_files, sha256_nul,
         stat_output_has_usable_requested_hardware_counts, trusted_root_executable, validate_plan,
         validate_spool_entries,
     };
@@ -1912,6 +2062,103 @@ finish
             .expect("make test double executable");
     }
 
+    fn write_slow_binding_fake_perf(path: &std::path::Path) {
+        std::fs::write(
+            path,
+            r#"#!/bin/sh
+set -eu
+out=''
+control=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) shift; out=$1 ;;
+    --control) shift; control=$1 ;;
+  esac
+  shift
+done
+descriptors=${control#fd:}
+ctl_fd=${descriptors%,*}
+ack_fd=${descriptors#*,}
+finish() {
+  printf '1000;;task-clock;1;100.00;;\n1;;context-switches;1;100.00;;\n0;;cpu-migrations;1;100.00;;\n2;;page-faults;1;100.00;;\n' > "$out"
+  exit 0
+}
+trap finish INT TERM
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'disable' ]
+sleep 5.25
+eval "printf 'ack\n\0' >&${ack_fd}"
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'enable' ]
+eval "printf 'ack\n\0' >&${ack_fd}"
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'disable' ]
+trap '' INT TERM
+eval "printf 'ack\n\0' >&${ack_fd}"
+finish
+"#,
+        )
+        .expect("write slow-binding perf test double");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .expect("make slow-binding test double executable");
+    }
+
+    fn write_closed_control_fake_perf(path: &std::path::Path) {
+        std::fs::write(
+            path,
+            r#"#!/bin/sh
+set -eu
+control=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --control) shift; control=$1 ;;
+  esac
+  shift
+done
+printf 'x' >> "${0}.invocations"
+descriptors=${control#fd:}
+ctl_fd=${descriptors%,*}
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'disable' ]
+exit 7
+"#,
+        )
+        .expect("write closed-control perf test double");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .expect("make closed-control test double executable");
+    }
+
+    fn write_closed_shutdown_control_fake_perf(path: &std::path::Path) {
+        std::fs::write(
+            path,
+            r#"#!/bin/sh
+set -eu
+control=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --control) shift; control=$1 ;;
+  esac
+  shift
+done
+descriptors=${control#fd:}
+ctl_fd=${descriptors%,*}
+ack_fd=${descriptors#*,}
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'disable' ]
+eval "printf 'ack\n\0' >&${ack_fd}"
+eval "IFS= read -r operation <&${ctl_fd}"
+[ "$operation" = 'enable' ]
+eval "printf 'ack\n\0' >&${ack_fd}"
+eval "exec ${ctl_fd}<&-"
+eval "exec ${ack_fd}>&-"
+sleep 5
+"#,
+        )
+        .expect("write closed-shutdown-control perf test double");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .expect("make closed-shutdown-control test double executable");
+    }
+
     fn write_fallback_fake_perf(path: &std::path::Path) {
         std::fs::write(
             path,
@@ -1984,9 +2231,6 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 [ "$mode" != 'record' ] || [ "$sample_cpu" = 1 ]
-if [ "$mode" = 'record' ] && [ "$events" = 'cycles' ]; then
-  exit 1
-fi
 descriptors=${control#fd:}
 ctl_fd=${descriptors%,*}
 ack_fd=${descriptors#*,}
@@ -2005,6 +2249,9 @@ eval "printf 'ack\n\0' >&${ack_fd}"
 eval "IFS= read -r operation <&${ctl_fd}"
 [ "$operation" = 'enable' ]
 eval "printf 'ack\n\0' >&${ack_fd}"
+if [ "$mode" = 'record' ] && [ "$events" = 'cycles' ]; then
+  exit 1
+fi
 eval "IFS= read -r operation <&${ctl_fd}"
 [ "$operation" = 'disable' ]
 trap '' INT TERM
@@ -2139,6 +2386,153 @@ exit 0
     }
 
     #[test]
+    fn perf_binding_allows_a_slow_live_startup_within_the_bounded_window() {
+        let _execution_guard = EXECUTION_TEST_LOCK.lock().expect("lock execution test");
+        let directory = std::env::temp_dir().join(format!(
+            "perflens-slow-binding-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).expect("create spool");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("secure spool");
+        let fake_perf = directory.join("perf-test-double");
+        write_slow_binding_fake_perf(&fake_perf);
+        let mut plan = record_plan();
+        plan.mode = CollectionMode::Stat;
+        plan.target.pid = std::process::id();
+        plan.target.uid = geteuid().as_raw();
+        plan.duration_milliseconds = 100;
+        plan.frequency_hz = None;
+        plan.call_graph = None;
+        plan.events = SOFTWARE_STAT_EVENTS
+            .iter()
+            .map(|event| (*event).to_owned())
+            .collect();
+        plan.requested_event_source = RequestedEventSource::SoftwareOnly;
+        plan.record_event = None;
+        let started = Instant::now();
+
+        let result = execute_perf(
+            &plan,
+            &fake_perf,
+            &directory,
+            nix::unistd::getegid().as_raw(),
+            &|_target| Ok(()),
+        )
+        .expect("accept a live perf startup beyond the former five-second guess");
+
+        assert!(started.elapsed() >= Duration::from_secs(5));
+        let artifact = directory.join(&result.artifact_name);
+        std::fs::remove_file(artifact).expect("remove artifact");
+        std::fs::remove_file(fake_perf).expect("remove test double");
+        std::fs::remove_dir(directory).expect("remove spool");
+    }
+
+    #[test]
+    fn auto_collection_does_not_hide_control_failure_with_software_fallback() {
+        let _execution_guard = EXECUTION_TEST_LOCK.lock().expect("lock execution test");
+        let directory = std::env::temp_dir().join(format!(
+            "perflens-control-failure-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).expect("create spool");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("secure spool");
+        let fake_perf = directory.join("perf-test-double");
+        write_closed_control_fake_perf(&fake_perf);
+        let invocation_log = directory.join("perf-test-double.invocations");
+        let mut plan = record_plan();
+        plan.mode = CollectionMode::Stat;
+        plan.target.pid = std::process::id();
+        plan.target.uid = geteuid().as_raw();
+        plan.frequency_hz = None;
+        plan.call_graph = None;
+        plan.events = vec!["cycles".to_owned(), "instructions".to_owned()];
+        plan.requested_event_source = RequestedEventSource::Auto;
+        plan.fallback_allowed = true;
+        plan.fallback_events = SOFTWARE_STAT_EVENTS
+            .iter()
+            .map(|event| (*event).to_owned())
+            .collect();
+        plan.record_event = None;
+        plan.fallback_record_event = None;
+        let ready_notifications = AtomicU64::new(0);
+        let mut report_ready = || {
+            ready_notifications.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        };
+
+        let error = execute_perf_with_ready(
+            &plan,
+            &fake_perf,
+            &directory,
+            nix::unistd::getegid().as_raw(),
+            &|_target| Ok(()),
+            &mut report_ready,
+        )
+        .expect_err("control failure must not be relabeled as a PMU fallback");
+
+        assert_eq!(error.code, "EXTERNAL_TOOL_FAILED");
+        assert_eq!(error.stage, "perf_control");
+        assert_eq!(
+            std::fs::read_to_string(&invocation_log).expect("read invocation log"),
+            "x"
+        );
+        assert_eq!(ready_notifications.load(Ordering::Relaxed), 0);
+        std::fs::remove_file(invocation_log).expect("remove invocation log");
+        std::fs::remove_file(fake_perf).expect("remove test double");
+        std::fs::remove_dir(directory).expect("remove spool");
+    }
+
+    #[test]
+    fn shutdown_control_failure_keeps_its_control_stage() {
+        let _execution_guard = EXECUTION_TEST_LOCK.lock().expect("lock execution test");
+        let directory = std::env::temp_dir().join(format!(
+            "perflens-shutdown-control-failure-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).expect("create spool");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("secure spool");
+        let fake_perf = directory.join("perf-test-double");
+        write_closed_shutdown_control_fake_perf(&fake_perf);
+        let mut plan = record_plan();
+        plan.mode = CollectionMode::Stat;
+        plan.target.pid = std::process::id();
+        plan.target.uid = geteuid().as_raw();
+        plan.duration_milliseconds = 50;
+        plan.frequency_hz = None;
+        plan.call_graph = None;
+        plan.events = SOFTWARE_STAT_EVENTS
+            .iter()
+            .map(|event| (*event).to_owned())
+            .collect();
+        plan.requested_event_source = RequestedEventSource::SoftwareOnly;
+        plan.record_event = None;
+
+        let error = execute_perf(
+            &plan,
+            &fake_perf,
+            &directory,
+            nix::unistd::getegid().as_raw(),
+            &|_target| Ok(()),
+        )
+        .expect_err("shutdown control failure must retain its protocol stage");
+
+        assert_eq!(error.code, "EXTERNAL_TOOL_FAILED");
+        assert_eq!(error.stage, "perf_control");
+        assert_eq!(
+            error.message,
+            "Privileged perf closed its control channel before acknowledging bounded shutdown"
+        );
+        std::fs::remove_file(fake_perf).expect("remove test double");
+        std::fs::remove_dir(directory).expect("remove spool");
+    }
+
+    #[test]
     fn formal_hardware_stat_requires_a_usable_requested_counter() {
         let path = std::env::temp_dir().join(format!(
             "perflens-helper-hardware-counts-{}-{}",
@@ -2212,8 +2606,30 @@ exit 0
             .expect("write Linux perf ACK frames");
         let mut acknowledgements = BufReader::new(reader);
 
-        read_perf_control_ack(&mut acknowledgements).expect("accept first ACK");
-        read_perf_control_ack(&mut acknowledgements).expect("accept NUL-prefixed next ACK");
+        read_perf_control_ack(
+            &mut acknowledgements,
+            None,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .expect("accept first ACK");
+        read_perf_control_ack(
+            &mut acknowledgements,
+            None,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .expect("accept NUL-prefixed next ACK");
+    }
+
+    #[test]
+    fn perf_control_ack_rejects_a_buffered_frame_after_the_deadline() {
+        let (mut writer, reader) = UnixStream::pair().expect("create ACK socket pair");
+        writer.write_all(b"ack\n\0").expect("write ready ACK frame");
+        let mut acknowledgements = BufReader::new(reader);
+
+        let failure = read_perf_control_ack(&mut acknowledgements, None, Instant::now())
+            .expect_err("an available frame must not revive an expired handshake");
+
+        assert_eq!(failure, PerfControlFailure::Timeout);
     }
 
     #[test]

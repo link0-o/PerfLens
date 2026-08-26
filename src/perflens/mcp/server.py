@@ -2305,19 +2305,12 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             artifact_id=iteration.iteration_id,
             artifact_type="docker-optimization-iteration",
             uri=store.uri(iteration.iteration_id, "docker-optimization-iteration"),
-            summary={
-                "session_id": iteration.session_id,
-                "candidate_round": iteration.candidate_round,
-                "comparable": iteration.comparable,
-                "fixed_environment_match": iteration.fixed_environment_match,
-                "treatment_changed": iteration.treatment_changed,
-                "correctness_status": iteration.correctness_status,
-                "resource_transfer_status": iteration.resource_transfer_status,
-                "conclusion": iteration.conclusion,
-                "improved_metrics": "; ".join(iteration.improved_metrics),
-                "regressed_metrics": "; ".join(iteration.regressed_metrics),
-                "warnings": "; ".join(iteration.warnings),
-            },
+            summary=_docker_optimization_iteration_summary(
+                iteration,
+                profile_comparable=profile_comparison.comparable,
+                benchmark_comparable=benchmark_comparison.comparable,
+                source_environment_match=source_comparison.environment_match,
+            ),
         )
 
     @server.tool(
@@ -2482,6 +2475,46 @@ def _managed_evidence_bytes(reference: ArtifactReference) -> int:
             recoverable=False,
         )
     return value
+
+
+def _docker_optimization_iteration_summary(
+    iteration: DockerOptimizationIterationArtifact,
+    *,
+    profile_comparable: bool,
+    benchmark_comparable: bool,
+    source_environment_match: bool,
+) -> dict[str, str | int | float | bool | None]:
+    """Expose the exact comparison chain used by the final Iteration verdict."""
+    return {
+        "session_id": iteration.session_id,
+        "candidate_round": iteration.candidate_round,
+        "comparable": iteration.comparable,
+        "baseline_build_id": iteration.baseline_build_id,
+        "candidate_build_id": iteration.candidate_build_id,
+        "baseline_measurement_id": iteration.baseline_measurement_id,
+        "candidate_measurement_id": iteration.candidate_measurement_id,
+        "baseline_analysis_id": iteration.baseline_analysis_id,
+        "candidate_analysis_id": iteration.candidate_analysis_id,
+        "profile_comparison_id": iteration.profile_comparison_id,
+        "profile_comparable": profile_comparable,
+        "baseline_benchmark_id": iteration.baseline_benchmark_id,
+        "candidate_benchmark_id": iteration.candidate_benchmark_id,
+        "benchmark_comparison_id": iteration.benchmark_comparison_id,
+        "benchmark_comparable": benchmark_comparable,
+        "source_container_comparison_id": iteration.source_container_comparison_id,
+        "source_generic_environment_match": source_environment_match,
+        "source_comparison_includes_authorized_treatment": True,
+        "fixed_environment_match": iteration.fixed_environment_match,
+        "treatment_changed": iteration.treatment_changed,
+        "correctness_status": iteration.correctness_status,
+        "actual_event_source_match": iteration.actual_event_source_match,
+        "resource_transfer_status": iteration.resource_transfer_status,
+        "deterministic_replay_passed": iteration.deterministic_replay_passed,
+        "conclusion": iteration.conclusion,
+        "improved_metrics": "; ".join(iteration.improved_metrics),
+        "regressed_metrics": "; ".join(iteration.regressed_metrics),
+        "warnings": "; ".join(iteration.warnings),
+    }
 
 
 def _finish_optimization_workload_with_evidence(

@@ -5,6 +5,32 @@
 本文记录已经复现、具有明确边界和临时处理方法的问题，包括已经修复的问题。
 不要通过降低部署器安全检查来规避问题；升级前仍可按对应版本的临时方法处理。
 
+## KI-2026-08-26：控制命令修复后 perf 就绪仍可能偶发失败（已修复）
+
+- 影响范围：两种 Collector 权限模式下的 PID `stat`、`record` 就绪链路。Rust Helper 原来
+  只用一次固定 5 秒 ACK 读取；Python `cap_perfmon` Runner 则会先等待控制回调，再排空 perf
+  的有界诊断输出；
+- 现象：Docker optimization 正常完成 baseline 构建后，可能在 Gate 放行前以事件禁用绑定
+  握手错误失败；不改变负载直接重新运行又可能成功。失败尝试不会放行 workload，也不会
+  发布 Collection 证据；
+- 根因：慢但仍存活的 perf 启动与子进程提前退出、控制通道关闭或 ACK 非法没有分开；Python
+  路径还可能让较多 stderr 填满管道，反压仍在等待控制命令的 perf。最后，
+  `event_source=auto` 可能把通用控制故障当成 PMU 执行失败并尝试软件降级，从而掩盖基础设施
+  故障；
+- 修复：Python 与 Rust 的 `disable → 身份复核 → enable` 共用一个 8 秒、感知子进程存活
+  状态的启动截止时间；Python Runner 在控制回调等待期间持续排空有界 stdout/stderr。存活
+  但超期返回 `EXTERNAL_TOOL_TIMEOUT`；提前退出、通道关闭、ACK 非法继续返回彼此可区分的
+  `EXTERNAL_TOOL_FAILED`，阶段统一为 `perf_control`。控制阶段故障绝不会被改写成 PMU 降级，
+  也绝不会放行 workload Gate；之后若有界停止阶段的控制命令失败，也保留同一阶段且不能
+  触发软件重采；
+- 回归覆盖：超过旧 5 秒猜测但仍存活的启动可以成功；诊断管道压力不会锁死就绪；两段控制
+  命令不能各自重新获得一份超时；子进程/控制通道故障只尝试一次，不发送就绪回执，也不
+  软件降级。
+
+该修复没有增加自动重试。真实控制故障仍会消耗已授权的尝试，在 workload 放行前停止，并
+精确报告失败阶段。应部署相互匹配的主包与 Collector 包、重启服务，再执行一次新的显式
+授权验收。
+
 ## KI-2026-08-26：不受支持的 perf control ping 阻断 PID 采集（已修复）
 
 - 影响范围：当已安装 perf 不实现未公开的 `ping` 控制命令时，经 Python `cap_perfmon`

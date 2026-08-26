@@ -87,6 +87,11 @@ To close PID reuse between identity validation and attachment, perf first opens 
 events disabled. An inherited control-FD `disable/ack` barrier is idempotent in that state and
 proves that binding completed; the Helper then revalidates owner and start time before sending
 `enable`. The resulting kernel event descriptors remain bound to the task perf actually opened.
+Both control phases and the intervening identity check share one eight-second startup deadline.
+A live deadline expiry is distinguished from child exit, channel closure, and malformed ACK; all
+remain `perf_control` failures, never trigger PMU fallback, and never emit readiness.
+The later bounded-shutdown `disable` uses the same liveness-aware classification and cannot become
+a hardware-to-software fallback reason.
 The Helper launches only perf and uses the control channel plus signals for duration enforcement,
 never a sleep process or workload.
 

@@ -24,7 +24,10 @@ from perflens.contracts.docker_build import (
     DockerOptimizationSessionArtifact,
     derive_docker_optimization_iteration_id,
 )
-from perflens.docker.comparison import compare_container_measurements
+from perflens.docker.comparison import (
+    CONTAINER_ENVIRONMENT_MISMATCH_WARNING,
+    compare_container_measurements,
+)
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _TREATMENT_ENVIRONMENT_FIELDS = frozenset(
@@ -148,7 +151,16 @@ def compare_docker_optimization_iteration(
     else:
         conclusion = "no_material_change"
 
-    warnings = list(source_container_comparison.warnings)
+    # The generic container comparison correctly treats every image/workload identity change as
+    # an environment mismatch.  In an optimization Iteration those two fields are independently
+    # bound to the Build Artifacts and are the authorized Treatment, so carrying the generic
+    # warning into the Agent-visible Iteration would contradict ``fixed_environment_match``.
+    # Any remaining fixed difference gets the optimization-specific warning below.
+    warnings = [
+        warning
+        for warning in source_container_comparison.warnings
+        if warning != CONTAINER_ENVIRONMENT_MISMATCH_WARNING
+    ]
     if not fixed_environment_match:
         warnings.append(
             "Fixed Docker optimization environment changed; A/B attribution is invalid."

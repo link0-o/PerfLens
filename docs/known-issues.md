@@ -5,6 +5,34 @@
 This document records reproduced issues and their bounded workarounds, including
 resolved issues. Do not weaken deployment safety checks to work around them.
 
+## KI-2026-08-26: perf readiness could fail intermittently after the control-command fix (resolved)
+
+- Affected scope: PID `stat` and `record` readiness through either Collector privilege mode. The
+  Rust Helper used one fixed five-second ACK read, while the Python `cap_perfmon` runner waited for
+  the control callback before draining perf's bounded diagnostics.
+- Symptom: a Docker optimization baseline could build correctly, then fail before Gate release with
+  a disabled-event binding-handshake error; an unchanged retry could later pass. No workload or
+  Collection evidence was released by the failed attempt.
+- Causes: slow but live perf startup was indistinguishable from early child exit, control-channel
+  closure, or an invalid ACK. The Python path could additionally back-pressure a verbose perf child
+  on its stderr pipe. Finally, `event_source=auto` could treat a generic control failure as a PMU
+  execution failure and attempt software fallback, obscuring the infrastructure fault.
+- Fix: `disable → identity revalidation → enable` now shares one eight-second, liveness-aware
+  startup deadline in Python and Rust. The Python runner drains bounded stdout/stderr while the
+  control callback is pending. Live deadline expiry returns `EXTERNAL_TOOL_TIMEOUT`; early exit,
+  channel closure, and malformed ACK remain distinct `EXTERNAL_TOOL_FAILED` failures, all at the
+  `perf_control` stage. Control-stage failures are never reclassified as PMU fallback and never
+  release the workload Gate. A later bounded-shutdown control failure retains the same stage and
+  likewise cannot trigger a software re-collection.
+- Regression coverage: a live startup beyond the former five-second guess succeeds; diagnostic
+  pipe pressure cannot deadlock readiness; the two control phases cannot each claim a fresh
+  timeout; child/control failure is attempted once and produces no readiness notification or
+  software fallback.
+
+This repair does not add an automatic retry. A real control failure still consumes the authorized
+attempt, stops before workload release, and must be reported with its precise stage. Deploy matching
+main and Collector packages, restart the services, and perform a fresh authorized acceptance.
+
 ## KI-2026-08-26: unsupported perf control ping blocked PID collection (resolved)
 
 - Affected scope: PID `stat` and `record` collection through either the Python `cap_perfmon`

@@ -13,6 +13,12 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
+- PID readiness now uses one shared eight-second, child-liveness-aware deadline for the documented
+  `disable → identity revalidation → enable` handshake. The Python Collector drains bounded perf
+  diagnostics while it waits, and both privilege modes report control timeouts, child exits,
+  channel closure, and invalid ACKs at the dedicated `perf_control` stage. Those infrastructure
+  failures no longer enter automatic hardware-to-software PMU fallback or release a managed
+  workload Gate; bounded-shutdown control failures retain the same non-fallback classification.
 - The Python Collector and privileged Rust Helper now use perf's documented, idempotent
   `disable/ack` command as their disabled-event binding barrier. The previous `ping` command is not
   supported by current `perf stat` or `perf record`, so real PID collection could time out before

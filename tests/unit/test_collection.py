@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import perflens.collection.collector as collector_module
 from perflens.collection.collector import (
     ACTIVE_COLLECTION_AUTHORIZATION,
     PID_ATTACH_AUTHORIZATION,
@@ -322,6 +323,136 @@ def test_pid_collection_waits_for_perf_binding_before_identity_revalidation_and_
     assert denied.value.code is ErrorCode.PATH_SAFETY_VIOLATION
     assert control_log.read_text(encoding="utf-8") == "disable\n"
     assert not denied_output.exists()
+
+
+def test_pid_collection_drains_startup_diagnostics_before_control_ack(
+    tmp_path: Path,
+) -> None:
+    perf = tmp_path / "diagnostic-perf"
+    perf.write_text(
+        f"#!{sys.executable}\n"
+        "import os, pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        "descriptors = args[args.index('--control') + 1].removeprefix('fd:').split(',')\n"
+        "control_fd, ack_fd = map(int, descriptors)\n"
+        "sys.stderr.write('x' * 262144); sys.stderr.flush()\n"
+        "for expected in ('disable', 'enable'):\n"
+        "    command = b''\n"
+        "    while not command.endswith(b'\\n'):\n"
+        "        command += os.read(control_fd, 16)\n"
+        "    assert command == expected.encode() + b'\\n'\n"
+        "    os.write(ack_fd, b'ack\\n\\0')\n"
+        "output.write_text('100;;cycles;10;100.0\\n200;;instructions;10;100.0\\n')\n",
+        encoding="utf-8",
+    )
+    perf.chmod(0o500)
+
+    artifact = collect_profile(
+        CollectionRequest(
+            mode="stat",
+            target=CollectionTarget(pid=os.getppid(), duration_seconds=0.01),
+            output_path=tmp_path / "diagnostic.stat.csv",
+            authorization=ACTIVE_COLLECTION_AUTHORIZATION,
+            pid_authorization=PID_ATTACH_AUTHORIZATION,
+            perf_path=perf,
+            events=("cycles", "instructions"),
+        ),
+        pid_identity_validator=lambda: None,
+    )
+
+    assert artifact.metrics[-1].event == "instructions-per-cycle"
+    assert artifact.diagnostics_truncated is False
+    assert len(artifact.diagnostics) == 1
+    assert artifact.diagnostics[0] == "x" * 512
+
+
+def test_pid_collection_classifies_a_live_control_ack_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(collector_module, "_PERF_CONTROL_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(collector_module, "_PERF_CONTROL_POLL_SECONDS", 0.02)
+    perf = tmp_path / "stalled-control-perf"
+    perf.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys, time\n"
+        "args = sys.argv[1:]\n"
+        "control_fd = int(args[args.index('--control') + 1].removeprefix('fd:').split(',')[0])\n"
+        "command = b''\n"
+        "while not command.endswith(b'\\n'):\n"
+        "    command += os.read(control_fd, 16)\n"
+        "time.sleep(2)\n",
+        encoding="utf-8",
+    )
+    perf.chmod(0o500)
+    output = tmp_path / "stalled.stat.csv"
+
+    with pytest.raises(PerfLensError) as captured:
+        collect_profile(
+            CollectionRequest(
+                mode="stat",
+                target=CollectionTarget(pid=os.getppid(), duration_seconds=0.01),
+                output_path=output,
+                authorization=ACTIVE_COLLECTION_AUTHORIZATION,
+                pid_authorization=PID_ATTACH_AUTHORIZATION,
+                perf_path=perf,
+                events=("cycles", "instructions"),
+            ),
+            pid_identity_validator=lambda: None,
+        )
+
+    assert captured.value.code is ErrorCode.EXTERNAL_TOOL_TIMEOUT
+    assert captured.value.stage == "perf_control"
+    assert captured.value.details == {"phase": "target_binding"}
+    assert not output.exists()
+
+
+def test_pid_collection_uses_one_total_control_handshake_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(collector_module, "_PERF_CONTROL_TIMEOUT_SECONDS", 0.25)
+    monkeypatch.setattr(collector_module, "_PERF_CONTROL_POLL_SECONDS", 0.01)
+    perf = tmp_path / "two-phase-slow-perf"
+    perf.write_text(
+        f"#!{sys.executable}\n"
+        "import os, pathlib, sys, time\n"
+        "args = sys.argv[1:]\n"
+        "output = pathlib.Path(args[args.index('-o') + 1])\n"
+        "descriptors = args[args.index('--control') + 1].removeprefix('fd:').split(',')\n"
+        "control_fd, ack_fd = map(int, descriptors)\n"
+        "for expected in ('disable', 'enable'):\n"
+        "    command = b''\n"
+        "    while not command.endswith(b'\\n'):\n"
+        "        command += os.read(control_fd, 16)\n"
+        "    assert command == expected.encode() + b'\\n'\n"
+        "    time.sleep(0.15)\n"
+        "    os.write(ack_fd, b'ack\\n\\0')\n"
+        "output.write_text('100;;cycles;10;100.0\\n200;;instructions;10;100.0\\n')\n",
+        encoding="utf-8",
+    )
+    perf.chmod(0o500)
+    output = tmp_path / "two-phase-slow.stat.csv"
+
+    with pytest.raises(PerfLensError) as captured:
+        collect_profile(
+            CollectionRequest(
+                mode="stat",
+                target=CollectionTarget(pid=os.getppid(), duration_seconds=0.01),
+                output_path=output,
+                authorization=ACTIVE_COLLECTION_AUTHORIZATION,
+                pid_authorization=PID_ATTACH_AUTHORIZATION,
+                perf_path=perf,
+                events=("cycles", "instructions"),
+            ),
+            pid_identity_validator=lambda: None,
+        )
+
+    assert captured.value.code is ErrorCode.EXTERNAL_TOOL_TIMEOUT
+    assert captured.value.stage == "perf_control"
+    assert captured.value.details == {"phase": "bounded_enable"}
+    assert not output.exists()
 
 
 def test_docker_pid_record_requests_kernel_mmap_build_ids(tmp_path: Path) -> None:

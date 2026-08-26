@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,38 @@ def test_runner_captures_stdout_and_bounded_stderr() -> None:
     assert output.getvalue() == b"profile"
     assert result.stderr == "warning"
     assert not result.stderr_truncated
+
+
+def test_runner_drains_bounded_stderr_while_after_start_waits(tmp_path: Path) -> None:
+    runner, executable = _runner()
+    ready_path = tmp_path / "ready"
+    output = io.BytesIO()
+
+    def await_child_start(_process: object) -> None:
+        deadline = time.monotonic() + 2
+        while not ready_path.exists():
+            if time.monotonic() >= deadline:
+                raise AssertionError("child startup signal was blocked behind stderr")
+            time.sleep(0.01)
+
+    result = runner.run_to_file(
+        (
+            str(executable),
+            "-c",
+            "import pathlib, sys; "
+            "sys.stderr.write('x' * 262144); sys.stderr.flush(); "
+            f"pathlib.Path({str(ready_path)!r}).write_text('ready'); "
+            "sys.stdout.write('profile')",
+        ),
+        output,
+        limits=CommandLimits(timeout_seconds=3, max_stderr_bytes=32),
+        after_start=await_child_start,
+    )
+
+    assert output.getvalue() == b"profile"
+    assert result.stderr == "x" * 32
+    assert result.stderr_bytes == 262144
+    assert result.stderr_truncated is True
 
 
 def test_runner_rejects_non_allowlisted_executable() -> None:

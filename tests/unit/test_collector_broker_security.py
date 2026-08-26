@@ -112,9 +112,7 @@ def test_collector_policy_fingerprint_covers_every_effective_limit(tmp_path: Pat
     assert fingerprint != broker_policy_sha256(
         replace(policy, max_duration_seconds=policy.max_duration_seconds - 1)
     )
-    assert fingerprint != broker_policy_sha256(
-        replace(policy, allow_software_fallback=True)
-    )
+    assert fingerprint != broker_policy_sha256(replace(policy, allow_software_fallback=True))
 
 
 def _docker_plan(
@@ -276,9 +274,7 @@ def test_broker_authorizes_rootless_and_requires_dedicated_rootful_policy(
     )
     _broker_with_policy(rootful_policy)._authorize(peer_uid, rootful)
 
-    forged_host = rootful.model_copy(
-        update={"target_runtime": "host", "container_target": None}
-    )
+    forged_host = rootful.model_copy(update={"target_runtime": "host", "container_target": None})
     with pytest.raises(PerfLensError):
         _broker_with_policy(rootful_policy)._authorize(peer_uid, forged_host)
 
@@ -408,6 +404,85 @@ def test_cap_perfmon_managed_collection_changes_identity_phase_only_after_ready(
     assert artifact.container_target == managed_target
     assert released == ["released"]
     assert observed_phases == [False, False, True]
+
+
+def test_cap_perfmon_does_not_misclassify_control_failure_as_pmu_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = replace(_policy(tmp_path), allow_software_fallback=True)
+    plan = _plan().model_copy(
+        update={
+            "requested_event_source": "auto",
+            "fallback_allowed": True,
+            "fallback_record_event": "cpu-clock",
+        }
+    )
+    attempts: list[str] = []
+
+    def fail_control(*_args: object, **_kwargs: object) -> CollectionArtifact:
+        attempts.append("control")
+        raise PerfLensError(
+            ErrorCode.EXTERNAL_TOOL_FAILED,
+            "perf_control",
+            "perf closed its control channel",
+            recoverable=True,
+        )
+
+    monkeypatch.setattr(broker_server, "collect_profile", fail_control)
+    broker = _broker_with_policy(policy)
+    broker._socket_path = policy.spool_root / "collector.sock"
+
+    with pytest.raises(PerfLensError) as captured:
+        broker._probe_hardware_pmu(plan)
+
+    assert captured.value.stage == "perf_control"
+    assert attempts == ["control"]
+
+
+def test_cap_perfmon_does_not_retry_formal_control_failure_as_software(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = replace(_policy(tmp_path), allow_software_fallback=True)
+    plan = _plan().model_copy(
+        update={
+            "requested_event_source": "auto",
+            "fallback_allowed": True,
+            "fallback_record_event": "cpu-clock",
+        }
+    )
+    attempts: list[str] = []
+
+    def fail_control(*_args: object, **_kwargs: object) -> CollectionArtifact:
+        attempts.append("control")
+        raise PerfLensError(
+            ErrorCode.EXTERNAL_TOOL_FAILED,
+            "perf_control",
+            "perf closed its control channel",
+            recoverable=True,
+        )
+
+    def accept_current(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    def select_hardware(*_args: object, **_kwargs: object) -> tuple[bool, str | None, float]:
+        return True, None, 0.1
+
+    monkeypatch.setattr(broker_server, "assert_plan_current", accept_current)
+    monkeypatch.setattr(broker_server, "collect_profile", fail_control)
+    broker = _broker_with_policy(policy)
+    monkeypatch.setattr(
+        broker,
+        "_probe_hardware_pmu",
+        select_hardware,
+    )
+
+    with pytest.raises(PerfLensError) as captured:
+        broker._collect_with_cap_perfmon(plan)
+
+    assert captured.value.stage == "perf_control"
+    assert attempts == ["control"]
 
 
 def test_broker_health_allows_root_admin_without_relaxing_user_policy(
@@ -975,12 +1050,12 @@ def test_client_verifies_collection_file_identity_permissions_and_digest(tmp_pat
     sched_artifact = artifact.model_copy(
         update={
             "mode": "sched",
-                "frequency_hz": None,
-                "call_graph": None,
-                "record_event": None,
-                "actual_event_source": "unknown",
-            }
-        )
+            "frequency_hz": None,
+            "call_graph": None,
+            "record_event": None,
+            "actual_event_source": "unknown",
+        }
+    )
     _verify_collection_artifact(sched_artifact, sched_plan, socket_identity, os.geteuid())
 
     with pytest.raises(PerfLensError, match="artifact policy") as forged_source:
