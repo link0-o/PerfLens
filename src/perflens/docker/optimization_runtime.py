@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import secrets
 import stat
@@ -16,6 +17,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
+from pydantic import BaseModel
+
 from perflens import __version__
 from perflens.application.evidence import contract_content_sha256
 from perflens.contracts.docker import DockerRuntimeCapabilityArtifact
@@ -24,9 +27,12 @@ from perflens.contracts.docker_build import (
     DockerBuildCapabilityArtifact,
     DockerBuildContextArtifact,
     DockerBuildRecipeArtifact,
+    DockerOptimizationDispositionArtifact,
+    DockerOptimizationIterationArtifact,
     DockerOptimizationPreviewArtifact,
     DockerOptimizationSessionArtifact,
     OptimizationCollectionMode,
+    derive_docker_optimization_disposition_id,
     derive_docker_optimization_preview_id,
 )
 from perflens.docker.build_adapter import (
@@ -40,6 +46,7 @@ from perflens.docker.build_context import (
     capture_docker_build_context,
 )
 from perflens.docker.optimization_session import (
+    EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE,
     DockerOptimizationSessionAccess,
     DockerOptimizationSessionAuthority,
     DockerOptimizationWorkloadLease,
@@ -74,6 +81,12 @@ class DockerOptimizationPreviewResult:
 @dataclass(frozen=True, slots=True)
 class DockerOptimizationBuildResult:
     build: DockerBuildArtifact
+    session: DockerOptimizationSessionArtifact
+
+
+@dataclass(frozen=True, slots=True)
+class DockerOptimizationDispositionResult:
+    disposition: DockerOptimizationDispositionArtifact
     session: DockerOptimizationSessionArtifact
 
 
@@ -434,6 +447,121 @@ class DockerOptimizationRuntime:
             self._schedule_cleanup_locked()
             return artifact
 
+    def finalize_candidate(
+        self,
+        session_id: str,
+        *,
+        iteration: DockerOptimizationIterationArtifact,
+        disposition: Literal["retain_candidate", "restore_baseline"],
+        explicit_unverified_acceptance: str | None = None,
+    ) -> DockerOptimizationDispositionResult:
+        """Bind the final workspace choice, revoke authority, and clean session resources."""
+        with self._lock:
+            runtime_session = self._require_runtime_session_locked(session_id)
+            self._assert_project_current()
+            source_session = self._authority.snapshot(runtime_session.access)
+            _verify_contract_content(iteration, "Docker optimization Iteration")
+            if (
+                iteration.session_id != session_id
+                or iteration.session_artifact_id != source_session.session_artifact_id
+                or iteration.session_artifact_content_sha256 != source_session.content_sha256
+                or iteration.baseline_build_id != source_session.baseline_build_id
+                or iteration.candidate_build_id != source_session.latest_candidate_build_id
+            ):
+                raise _authorization_error(
+                    "Docker optimization disposition differs from the current Session"
+                )
+            baseline = self._bound_iteration_build(
+                runtime_session,
+                iteration.baseline_build_id,
+                iteration.baseline_build_content_sha256,
+            )
+            candidate = self._bound_iteration_build(
+                runtime_session,
+                iteration.candidate_build_id,
+                iteration.candidate_build_content_sha256,
+            )
+            retaining = disposition == "retain_candidate"
+            requires_acceptance = (
+                retaining and iteration.conclusion != "verified_improvement"
+            )
+            if requires_acceptance:
+                if explicit_unverified_acceptance is None or not hmac.compare_digest(
+                    explicit_unverified_acceptance,
+                    EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE,
+                ):
+                    raise _authorization_error(
+                        "Retaining an unverified Docker candidate requires fresh explicit consent"
+                    )
+            elif explicit_unverified_acceptance is not None:
+                raise _authorization_error(
+                    "Docker candidate acceptance was supplied for a disposition that does not "
+                    "require it"
+                )
+            selected = candidate if retaining else baseline
+            current = capture_docker_build_context(
+                self._policy,
+                runtime_session.preview.result.recipe,
+                project_root=self._project.path,
+                private_directory=runtime_session.preview.private_directory,
+                invoking_uid=self._project.owner_uid,
+                created_at=self._wall_now(),
+            )
+            try:
+                if (
+                    current.artifact.immutable_manifest_sha256
+                    != selected.immutable_manifest_sha256
+                ):
+                    self._authority.revoke(runtime_session.access)
+                    self._release_runtime_session_locked(session_id, runtime_session)
+                    self._schedule_cleanup_locked()
+                    raise _authorization_error(
+                        "Docker optimization immutable context changed before finalization"
+                    )
+                if (
+                    current.artifact.mutable_manifest_sha256
+                    != selected.treatment_manifest_sha256
+                ):
+                    raise _authorization_error(
+                        "Docker optimization workspace does not match the selected final Build"
+                    )
+                workspace_manifest = current.artifact.mutable_manifest_sha256
+            finally:
+                _discard_snapshot(current)
+
+            accepted_at = self._wall_now()
+            receipt = (
+                _candidate_acceptance_receipt(
+                    source_session=source_session,
+                    iteration=iteration,
+                    selected_build=selected,
+                )
+                if requires_acceptance
+                else None
+            )
+            final_session = self._authority.revoke(runtime_session.access)
+            try:
+                artifact = _build_disposition_artifact(
+                    created_at=accepted_at,
+                    source_session=source_session,
+                    final_session=final_session,
+                    iteration=iteration,
+                    baseline=baseline,
+                    candidate=candidate,
+                    selected=selected,
+                    disposition=disposition,
+                    workspace_manifest_sha256=workspace_manifest,
+                    explicit_unverified_acceptance=requires_acceptance,
+                    authorization_receipt_sha256=receipt,
+                )
+            finally:
+                self._release_runtime_session_locked(session_id, runtime_session)
+                self._schedule_cleanup_locked()
+            return DockerOptimizationDispositionResult(
+                disposition=artifact,
+                session=final_session,
+            )
+
     def snapshot(self, session_id: str) -> DockerOptimizationSessionArtifact:
         with self._lock:
             runtime_session = self._require_runtime_session_locked(
@@ -453,6 +581,23 @@ class DockerOptimizationRuntime:
             if result is None:
                 raise _authorization_error("Docker Build is outside this optimization session")
             return result
+
+    @staticmethod
+    def _bound_iteration_build(
+        runtime_session: _OptimizationRuntimeSession,
+        build_id: str,
+        expected_content_sha256: str,
+    ) -> DockerBuildArtifact:
+        result = runtime_session.builds.get(build_id)
+        if result is None or not hmac.compare_digest(
+            result.artifact.content_sha256,
+            expected_content_sha256,
+        ):
+            raise _authorization_error(
+                "Docker optimization Iteration Build is outside the current Session"
+            )
+        _verify_contract_content(result.artifact, "Docker Build")
+        return result.artifact
 
     def build_recipe(self, session_id: str) -> DockerBuildRecipeArtifact:
         with self._lock:
@@ -570,6 +715,8 @@ class DockerOptimizationRuntime:
             "Run correctness and Benchmark checks before accepting performance evidence.",
             "Let the Agent select bounded stat, record, or necessary Trace evidence.",
             "Modify only mutable paths, build at most three candidates, and run matched A/B.",
+            "If evidence is not verified, ask once whether to retain the candidate or restore "
+            "the baseline without changing the evidence verdict.",
             "Conservatively remove only verified session containers and temporary image tags.",
         ]
         if not capability.base_image_present:
@@ -850,6 +997,115 @@ def _verify_content(artifact: DockerRuntimeCapabilityArtifact) -> None:
         exclude={"content_sha256"},
     ):
         raise _authorization_error("Docker runtime capability content digest does not match")
+
+
+def _verify_contract_content(artifact: BaseModel, label: str) -> None:
+    expected = getattr(artifact, "content_sha256", None)
+    if not isinstance(expected, str) or not hmac.compare_digest(
+        expected,
+        contract_content_sha256(artifact, exclude={"content_sha256"}),
+    ):
+        raise _authorization_error(f"{label} content digest does not match")
+
+
+def _candidate_acceptance_receipt(
+    *,
+    source_session: DockerOptimizationSessionArtifact,
+    iteration: DockerOptimizationIterationArtifact,
+    selected_build: DockerBuildArtifact,
+) -> str:
+    return hashlib.sha256(
+        b"\0".join(
+            (
+                b"perflens-unverified-docker-candidate-acceptance-v1",
+                secrets.token_bytes(32),
+                source_session.authorization_receipt_sha256.encode("ascii"),
+                iteration.content_sha256.encode("ascii"),
+                selected_build.content_sha256.encode("ascii"),
+            )
+        )
+    ).hexdigest()
+
+
+def _build_disposition_artifact(
+    *,
+    created_at: datetime,
+    source_session: DockerOptimizationSessionArtifact,
+    final_session: DockerOptimizationSessionArtifact,
+    iteration: DockerOptimizationIterationArtifact,
+    baseline: DockerBuildArtifact,
+    candidate: DockerBuildArtifact,
+    selected: DockerBuildArtifact,
+    disposition: Literal["retain_candidate", "restore_baseline"],
+    workspace_manifest_sha256: str,
+    explicit_unverified_acceptance: bool,
+    authorization_receipt_sha256: str | None,
+) -> DockerOptimizationDispositionArtifact:
+    if final_session.state != "revoked":
+        raise _authorization_error("Docker optimization final Session was not revoked")
+    warnings: list[str] = []
+    if explicit_unverified_acceptance:
+        warnings.append(
+            "The user retained an unverified candidate; the original Iteration conclusion "
+            "remains authoritative."
+        )
+    elif disposition == "restore_baseline":
+        warnings.append(
+            "The final workspace matched the baseline Build when the Session was revoked."
+        )
+    data: dict[str, object] = {
+        "schema_version": "1.0",
+        "perflens_version": __version__,
+        "disposition_id": derive_docker_optimization_disposition_id(
+            source_session.session_id,
+            iteration.content_sha256,
+            disposition,
+            selected.content_sha256,
+            final_session.content_sha256,
+        ),
+        "created_at": created_at.isoformat(),
+        "session_id": source_session.session_id,
+        "source_session_artifact_id": source_session.session_artifact_id,
+        "source_session_artifact_content_sha256": source_session.content_sha256,
+        "final_session_artifact_id": final_session.session_artifact_id,
+        "final_session_artifact_content_sha256": final_session.content_sha256,
+        "final_session_state": "revoked",
+        "iteration_id": iteration.iteration_id,
+        "iteration_content_sha256": iteration.content_sha256,
+        "iteration_conclusion": iteration.conclusion,
+        "disposition": disposition,
+        "baseline_build_id": baseline.build_id,
+        "baseline_build_content_sha256": baseline.content_sha256,
+        "candidate_build_id": candidate.build_id,
+        "candidate_build_content_sha256": candidate.content_sha256,
+        "selected_build_id": selected.build_id,
+        "selected_build_content_sha256": selected.content_sha256,
+        "selected_treatment_manifest_sha256": selected.treatment_manifest_sha256,
+        "workspace_mutable_manifest_sha256": workspace_manifest_sha256,
+        "workspace_matches_selected_build": True,
+        "explicit_unverified_acceptance": explicit_unverified_acceptance,
+        "authorization_receipt_sha256": authorization_receipt_sha256,
+        "warnings": tuple(warnings),
+        "allowed_conclusions": (
+            "This Artifact records only the final workspace choice and Session cleanup.",
+            "The bound Iteration remains the authoritative performance verdict.",
+        ),
+        "forbidden_conclusions": (
+            "Human acceptance must not be presented as Verified Improvement.",
+            "Retaining or restoring source bytes does not alter the A/B evidence quality.",
+        ),
+        "content_sha256": "0" * 64,
+    }
+    provisional = DockerOptimizationDispositionArtifact.model_validate(data)
+    return DockerOptimizationDispositionArtifact.model_validate(
+        {
+            **provisional.model_dump(mode="json"),
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            ),
+        }
+    )
 
 
 def _validate_sha256(value: str, label: str) -> None:

@@ -2310,7 +2310,79 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 profile_comparable=profile_comparison.comparable,
                 benchmark_comparable=benchmark_comparison.comparable,
                 source_environment_match=source_comparison.environment_match,
+                baseline_profile_quality_status=(
+                    baseline_analysis.evidence_quality.quality_status
+                ),
+                candidate_profile_quality_status=(
+                    candidate_analysis.evidence_quality.quality_status
+                ),
+                baseline_profile_sample_count=baseline_analysis.metadata.sample_count,
+                candidate_profile_sample_count=candidate_analysis.metadata.sample_count,
+                profile_metadata_differences=profile_comparison.metadata_differences,
             ),
+        )
+
+    @server.tool(
+        name="finalize_docker_optimization_candidate",
+        description=(
+            "Finalize the source-workspace choice for one replay-verified Iteration Artifact, "
+            "revoke the "
+            "bounded optimization Session, and clean only verified session resources. "
+            "Retaining a non-verified candidate requires a fresh explicit user decision and "
+            "never upgrades the original Iteration conclusion."
+        ),
+        annotations=REVOKES_DOCKER,
+        meta={"perflens/permission": "DOCKER_OPTIMIZATION_DISPOSITION"},
+        structured_output=True,
+    )
+    async def finalize_docker_optimization_candidate(
+        session_id: str,
+        iteration_id: str,
+        disposition: Literal["retain_candidate", "restore_baseline"],
+        authorization: Literal[
+            "I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE"
+        ]
+        | None = None,
+    ) -> ArtifactReference:
+        iteration = store.load_docker_optimization_iteration(iteration_id)
+        result = get_docker_optimization_runtime().finalize_candidate(
+            session_id,
+            iteration=iteration,
+            disposition=disposition,
+            explicit_unverified_acceptance=authorization,
+        )
+        store.save(
+            result.session,
+            result.session.session_artifact_id,
+            "docker-optimization-session",
+        )
+        store.save(
+            result.disposition,
+            result.disposition.disposition_id,
+            "docker-optimization-disposition",
+        )
+        return ArtifactReference(
+            artifact_id=result.disposition.disposition_id,
+            artifact_type="docker-optimization-disposition",
+            uri=store.uri(
+                result.disposition.disposition_id,
+                "docker-optimization-disposition",
+            ),
+            summary={
+                "session_id": result.disposition.session_id,
+                "iteration_id": result.disposition.iteration_id,
+                "iteration_conclusion": result.disposition.iteration_conclusion,
+                "disposition": result.disposition.disposition,
+                "selected_build_id": result.disposition.selected_build_id,
+                "workspace_matches_selected_build": (
+                    result.disposition.workspace_matches_selected_build
+                ),
+                "explicit_unverified_acceptance": (
+                    result.disposition.explicit_unverified_acceptance
+                ),
+                "final_session_state": result.disposition.final_session_state,
+                "warnings": "; ".join(result.disposition.warnings),
+            },
         )
 
     @server.tool(
@@ -2483,6 +2555,11 @@ def _docker_optimization_iteration_summary(
     profile_comparable: bool,
     benchmark_comparable: bool,
     source_environment_match: bool,
+    baseline_profile_quality_status: str,
+    candidate_profile_quality_status: str,
+    baseline_profile_sample_count: int,
+    candidate_profile_sample_count: int,
+    profile_metadata_differences: dict[str, tuple[str, str]],
 ) -> dict[str, str | int | float | bool | None]:
     """Expose the exact comparison chain used by the final Iteration verdict."""
     return {
@@ -2497,6 +2574,18 @@ def _docker_optimization_iteration_summary(
         "candidate_analysis_id": iteration.candidate_analysis_id,
         "profile_comparison_id": iteration.profile_comparison_id,
         "profile_comparable": profile_comparable,
+        "baseline_profile_quality_status": baseline_profile_quality_status,
+        "candidate_profile_quality_status": candidate_profile_quality_status,
+        "baseline_profile_sample_count": baseline_profile_sample_count,
+        "candidate_profile_sample_count": candidate_profile_sample_count,
+        "profile_sample_count_warning": (
+            baseline_profile_sample_count < 100 or candidate_profile_sample_count < 100
+        ),
+        "profile_sample_count_is_advisory": True,
+        "profile_noncomparability_reasons": "; ".join(
+            f"{key}: {before} -> {after}"
+            for key, (before, after) in sorted(profile_metadata_differences.items())
+        ),
         "baseline_benchmark_id": iteration.baseline_benchmark_id,
         "candidate_benchmark_id": iteration.candidate_benchmark_id,
         "benchmark_comparison_id": iteration.benchmark_comparison_id,

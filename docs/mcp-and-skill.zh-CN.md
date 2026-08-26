@@ -226,6 +226,14 @@ PerfLens 只接受 Treatment 变化位于 `mutable_paths` 的构建快照；它�
 编辑器或 Shell 写入其他源码路径。实际文件写权限由客户端沙箱和工具审批负责。优化会话也不
 授权 commit、push、Tag、Release、Docker daemon 管理、创建 Builder 或系统变更。
 
+`compare_docker_optimization_iterations` 之后，`verified_improvement` 可以直接选择保留候选。
+任何更弱结论都必须再由人工选择一次：保留未验证候选，或恢复基线。前者要求固定 token
+`I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE`，后者要求恢复精确基线字节。
+`finalize_docker_optimization_candidate` 会验证所选 mutable manifest、保存
+`DockerOptimizationDispositionArtifact`、撤销 Session 并清理已验证的临时资源，但不会改变
+Iteration 结论。最初的一次授权仍覆盖全部构建与测量；后续提示只决定源码处置，不扩大执行范围。
+报告默认输出在聊天中，不会写入 `mutable_paths` 之外的项目文件。
+
 ## 分析 perf.data 时的配置
 
 `perf.data` 是二进制格式，PerfLens 不直接解析它，而是安全地调用系统 `perf script` 转换。MCP 需要额外的进程执行权限：

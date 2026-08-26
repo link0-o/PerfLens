@@ -44,8 +44,10 @@ from perflens.contracts.docker import (
 from perflens.contracts.docker_build import (
     DockerBuildArtifact,
     DockerOptimizationBudget,
+    DockerOptimizationDispositionArtifact,
     DockerOptimizationSessionArtifact,
     derive_docker_build_artifact_id,
+    derive_docker_optimization_disposition_id,
     derive_docker_optimization_session_artifact_id,
 )
 from perflens.docker.comparison import (
@@ -464,6 +466,37 @@ def _optimization_session(
         baseline_build_id=baseline.build_id,
         latest_candidate_build_id=candidate.build_id,
         content_sha256="0" * 64,
+    )
+    return provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+
+
+def _revoked_optimization_session(
+    active: DockerOptimizationSessionArtifact,
+) -> DockerOptimizationSessionArtifact:
+    updated_at = "2026-08-22T00:00:04+00:00"
+    provisional = DockerOptimizationSessionArtifact.model_validate(
+        {
+            **active.model_dump(mode="json"),
+            "session_artifact_id": derive_docker_optimization_session_artifact_id(
+                active.session_id,
+                "revoked",
+                updated_at,
+                active.builds_used,
+                active.workload_runs_used,
+                active.evidence_bytes_used,
+            ),
+            "updated_at": updated_at,
+            "state": "revoked",
+            "invalidation_reason": "Docker optimization was explicitly revoked.",
+            "content_sha256": "0" * 64,
+        }
     )
     return provisional.model_copy(
         update={
@@ -1134,15 +1167,75 @@ def test_store_replays_complete_docker_optimization_iteration(
         source_container_comparison=source,
         created_at=datetime(2026, 8, 22, 0, 1, tzinfo=UTC),
     )
+    final_session = _revoked_optimization_session(session)
+    requires_acceptance = iteration.conclusion != "verified_improvement"
+    disposition_data: dict[str, object] = {
+        "schema_version": "1.0",
+        "perflens_version": __version__,
+        "disposition_id": derive_docker_optimization_disposition_id(
+            session.session_id,
+            iteration.content_sha256,
+            "retain_candidate",
+            candidate_build.content_sha256,
+            final_session.content_sha256,
+        ),
+        "created_at": "2026-08-22T00:00:04+00:00",
+        "session_id": session.session_id,
+        "source_session_artifact_id": session.session_artifact_id,
+        "source_session_artifact_content_sha256": session.content_sha256,
+        "final_session_artifact_id": final_session.session_artifact_id,
+        "final_session_artifact_content_sha256": final_session.content_sha256,
+        "final_session_state": "revoked",
+        "iteration_id": iteration.iteration_id,
+        "iteration_content_sha256": iteration.content_sha256,
+        "iteration_conclusion": iteration.conclusion,
+        "disposition": "retain_candidate",
+        "baseline_build_id": baseline_build.build_id,
+        "baseline_build_content_sha256": baseline_build.content_sha256,
+        "candidate_build_id": candidate_build.build_id,
+        "candidate_build_content_sha256": candidate_build.content_sha256,
+        "selected_build_id": candidate_build.build_id,
+        "selected_build_content_sha256": candidate_build.content_sha256,
+        "selected_treatment_manifest_sha256": candidate_build.treatment_manifest_sha256,
+        "workspace_mutable_manifest_sha256": candidate_build.treatment_manifest_sha256,
+        "workspace_matches_selected_build": True,
+        "explicit_unverified_acceptance": requires_acceptance,
+        "authorization_receipt_sha256": "a" * 64 if requires_acceptance else None,
+        "warnings": (),
+        "allowed_conclusions": ("Records workspace disposition only.",),
+        "forbidden_conclusions": ("Does not change the Iteration verdict.",),
+        "content_sha256": "0" * 64,
+    }
+    provisional_disposition = DockerOptimizationDispositionArtifact.model_validate(
+        disposition_data
+    )
+    disposition = provisional_disposition.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                provisional_disposition,
+                exclude={"content_sha256"},
+            )
+        }
+    )
     store = ArtifactStore(
         tmp_path / "stored-artifacts",
         PathPolicy((tmp_path,)),
         allow_writes=True,
     )
     store.save(session, session.session_artifact_id, "docker-optimization-session")
+    store.save(
+        final_session,
+        final_session.session_artifact_id,
+        "docker-optimization-session",
+    )
     store.save(baseline_build, baseline_build.build_id, "docker-build")
     store.save(candidate_build, candidate_build.build_id, "docker-build")
     store.save(iteration, iteration.iteration_id, "docker-optimization-iteration")
+    store.save(
+        disposition,
+        disposition.disposition_id,
+        "docker-optimization-disposition",
+    )
 
     def load_measurement(artifact_id: str) -> ContainerMeasurementArtifact:
         if artifact_id == bound_measurements[0].measurement_id:
@@ -1174,3 +1267,7 @@ def test_store_replays_complete_docker_optimization_iteration(
     assert store.load_docker_build(baseline_build.build_id) == baseline_build
     assert store.load_docker_optimization_session(session.session_artifact_id) == session
     assert store.load_docker_optimization_iteration(iteration.iteration_id) == iteration
+    assert (
+        store.load_docker_optimization_disposition(disposition.disposition_id)
+        == disposition
+    )

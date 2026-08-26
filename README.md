@@ -54,7 +54,9 @@ The current source tree supports Milestones 0 through 9; v0.3.2 remains a releas
 - v0.3.2 opt-in `bounded_optimization_session`: one reviewed confirmation can cover a fixed
   baseline build, evidence-guided collection, build snapshots whose changes are restricted to
   `mutable_paths`, up to three candidate rebuilds, and deterministic matched A/B validation under
-  hard budgets. The Agent/client sandbox, not PerfLens, enforces filesystem write permission.
+  hard budgets. A non-verified final candidate is retained only after a fresh human disposition
+  choice; that choice is recorded without upgrading the evidence verdict. The Agent/client
+  sandbox, not PerfLens, enforces filesystem write permission.
 
 It does **not** include an AI/LLM API, Web UI, source-code patch tool, benchmark
 runner, or custom agent framework.

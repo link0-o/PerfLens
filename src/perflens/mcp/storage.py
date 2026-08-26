@@ -47,6 +47,7 @@ from perflens.contracts.docker import (
 )
 from perflens.contracts.docker_build import (
     DockerBuildArtifact,
+    DockerOptimizationDispositionArtifact,
     DockerOptimizationIterationArtifact,
     DockerOptimizationSessionArtifact,
 )
@@ -541,6 +542,87 @@ class ArtifactStore:
         if replayed != iteration:
             raise self._identity_error(iteration_id, "docker-optimization-iteration")
         return iteration
+
+    def load_docker_optimization_disposition(
+        self,
+        disposition_id: str,
+    ) -> DockerOptimizationDispositionArtifact:
+        disposition = self._load(
+            disposition_id,
+            "docker-optimization-disposition",
+            DockerOptimizationDispositionArtifact,
+        )
+        self._require_embedded_id(
+            disposition.disposition_id,
+            disposition_id,
+            "docker-optimization-disposition",
+        )
+        self._verify_docker_content(
+            disposition,
+            disposition.content_sha256,
+            disposition_id,
+            "docker-optimization-disposition",
+        )
+        iteration = self.load_docker_optimization_iteration(disposition.iteration_id)
+        source_session = self.load_docker_optimization_session(
+            disposition.source_session_artifact_id
+        )
+        final_session = self.load_docker_optimization_session(
+            disposition.final_session_artifact_id
+        )
+        baseline = self.load_docker_build(disposition.baseline_build_id)
+        candidate = self.load_docker_build(disposition.candidate_build_id)
+        selected = candidate if disposition.disposition == "retain_candidate" else baseline
+        if (
+            iteration.content_sha256 != disposition.iteration_content_sha256
+            or iteration.conclusion != disposition.iteration_conclusion
+            or iteration.session_artifact_id != disposition.source_session_artifact_id
+            or iteration.session_artifact_content_sha256
+            != disposition.source_session_artifact_content_sha256
+            or iteration.baseline_build_id != disposition.baseline_build_id
+            or iteration.candidate_build_id != disposition.candidate_build_id
+            or source_session.session_id != disposition.session_id
+            or source_session.state != "active"
+            or source_session.content_sha256
+            != disposition.source_session_artifact_content_sha256
+            or final_session.session_id != disposition.session_id
+            or final_session.state != "revoked"
+            or final_session.content_sha256
+            != disposition.final_session_artifact_content_sha256
+            or source_session.project_identity_sha256
+            != final_session.project_identity_sha256
+            or source_session.client_connection_identity_sha256
+            != final_session.client_connection_identity_sha256
+            or source_session.project_policy_sha256 != final_session.project_policy_sha256
+            or source_session.preview_content_sha256 != final_session.preview_content_sha256
+            or source_session.recipe_content_sha256 != final_session.recipe_content_sha256
+            or source_session.authorization_receipt_sha256
+            != final_session.authorization_receipt_sha256
+            or source_session.baseline_build_id != baseline.build_id
+            or source_session.latest_candidate_build_id != candidate.build_id
+            or final_session.baseline_build_id != baseline.build_id
+            or final_session.latest_candidate_build_id != candidate.build_id
+            or source_session.builds_used != final_session.builds_used
+            or source_session.candidate_rounds_used != final_session.candidate_rounds_used
+            or source_session.workload_runs_used != final_session.workload_runs_used
+            or source_session.build_seconds_used != final_session.build_seconds_used
+            or source_session.workload_active_seconds_used
+            != final_session.workload_active_seconds_used
+            or source_session.evidence_bytes_used != final_session.evidence_bytes_used
+            or source_session.temporary_image_bytes_used
+            != final_session.temporary_image_bytes_used
+            or baseline.content_sha256 != disposition.baseline_build_content_sha256
+            or candidate.content_sha256 != disposition.candidate_build_content_sha256
+            or selected.build_id != disposition.selected_build_id
+            or selected.content_sha256 != disposition.selected_build_content_sha256
+            or selected.treatment_manifest_sha256
+            != disposition.selected_treatment_manifest_sha256
+        ):
+            raise self._identity_error(
+                disposition_id,
+                "docker-optimization-disposition",
+            )
+        return disposition
 
     def load_trace_analysis(
         self,

@@ -54,5 +54,8 @@ Python 和 Go 用户态锁 Adapter 仍计划进入 v0.4.0；公共合同骨架�
 v0.3.2 发布候选增加默认关闭的有界优化会话，可执行绑定 Recipe 的类型化 baseline/candidate
 构建。Preview 不 build/pull，会话不接受任意 Docker 参数或源码路径；只有经过 Artifact
 复核的匹配 A/B 才能声称 Verified Improvement。离线层只允许 `RUN --network=none`；管理员
-联网层只允许 `none` 或 `default`。详见[已知问题](known-issues.zh-CN.md)和
+联网层只允许 `none` 或 `default`。短生命周期容器可能在最终资源读取前失去 cgroup；此时
+PerfLens 只保留最后一次已验证周期快照并标记为 partial 下界，不会声称资源转移证据完整。
+人工可以明确选择保留未验证候选，但该处置不会改变 Iteration 结论。详见
+[已知问题](known-issues.zh-CN.md)和
 [v0.3.2 优化指南](docker-optimization-roadmap.zh-CN.md)。

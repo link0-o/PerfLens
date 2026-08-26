@@ -178,10 +178,15 @@ verify the real process independently before and after collection. The Docker so
 the Collector, Helpers, Agent, or Skill; the MCP process can invoke only the fixed, project-policy
 adapter surface. DEB installation does not install/start Docker, edit the `docker` group, or
 build/pull images. The separately enabled v0.3.2 optimization adapter can perform only
-typed, recipe-bound builds after its own reviewed session authorization.
+typed, recipe-bound builds after its own reviewed session authorization. A final deterministic
+Disposition step binds the selected Build to the current mutable workspace, records any explicit
+acceptance of an unverified candidate without changing the A/B verdict, then revokes authority and
+cleans verified temporary resources.
 Public artifacts omit full inspect responses, environment variables, labels, host mount sources,
 and foreign processes. Existing-container sessions bind one exact instance. Managed sessions bind
 a fixed workload recipe and derive a fresh single-use PID plan for every temporary-container run.
 The public artifacts, rootful boundary, in-memory authorization, cgroup evidence, symbol mapping,
 and matched A/B gates are specified in the
 [v0.3.1 Docker process guide](docker-container-roadmap.md).
+The build and disposition path is specified in the
+[v0.3.2 optimization guide](docker-optimization-roadmap.md).

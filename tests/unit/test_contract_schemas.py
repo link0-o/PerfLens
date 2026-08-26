@@ -76,6 +76,7 @@ from perflens.contracts.docker_build import (
     DockerBuildCapabilityArtifact,
     DockerBuildContextArtifact,
     DockerBuildRecipeArtifact,
+    DockerOptimizationDispositionArtifact,
     DockerOptimizationIterationArtifact,
     DockerOptimizationPreviewArtifact,
     DockerOptimizationSessionArtifact,
@@ -170,6 +171,9 @@ def test_checked_in_json_schemas_match_contract_models() -> None:
         "docker-build-recipe.schema.json": DockerBuildRecipeArtifact,
         "docker-build-context.schema.json": DockerBuildContextArtifact,
         "docker-build.schema.json": DockerBuildArtifact,
+        "docker-optimization-disposition.schema.json": (
+            DockerOptimizationDispositionArtifact
+        ),
         "docker-optimization-iteration.schema.json": DockerOptimizationIterationArtifact,
         "docker-optimization-preview.schema.json": DockerOptimizationPreviewArtifact,
         "docker-optimization-session.schema.json": DockerOptimizationSessionArtifact,

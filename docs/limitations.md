@@ -72,5 +72,9 @@ The v0.3.2 release candidate adds an opt-in bounded optimization session with ty
 baseline/candidate builds. Preview does not build or pull, the session never accepts arbitrary
 Docker options or source paths, and only an Artifact-verified matched A/B may claim a Verified
 Improvement. Offline tiers accept only `RUN --network=none`; the administrator-network tier admits
-only `none` or `default`. See [Known issues](known-issues.md) and the
+only `none` or `default`. A short-lived container may lose its cgroup before the final resource
+read; PerfLens then preserves the last verified periodic snapshot as a partial lower bound rather
+than claiming complete resource-transfer evidence. A human may explicitly retain a non-verified
+candidate, but that disposition never changes the Iteration verdict. See
+[Known issues](known-issues.md) and the
 [v0.3.2 optimization guide](docker-optimization-roadmap.md).

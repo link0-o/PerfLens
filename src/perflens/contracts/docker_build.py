@@ -40,6 +40,10 @@ OptimizationIterationId = Annotated[
     str,
     Field(pattern=r"^docker-optimization-iteration-[a-f0-9]{20}$"),
 ]
+OptimizationDispositionId = Annotated[
+    str,
+    Field(pattern=r"^docker-optimization-disposition-[a-f0-9]{20}$"),
+]
 NetworkTier = Literal["local_only", "pinned_pull", "admin_builder_network"]
 OptimizationCollectionMode = Literal["stat", "record", "sched", "off_cpu", "lock"]
 
@@ -179,6 +183,24 @@ def derive_docker_optimization_iteration_id(
         candidate_build_id,
         baseline_measurement_sha256,
         candidate_measurement_sha256,
+    )
+
+
+def derive_docker_optimization_disposition_id(
+    session_id: str,
+    iteration_content_sha256: str,
+    disposition: str,
+    selected_build_content_sha256: str,
+    final_session_content_sha256: str,
+) -> str:
+    return _derived_id(
+        "docker-optimization-disposition",
+        "perflens-docker-optimization-disposition-v1",
+        session_id,
+        iteration_content_sha256,
+        disposition,
+        selected_build_content_sha256,
+        final_session_content_sha256,
     )
 
 
@@ -724,4 +746,87 @@ class DockerOptimizationIterationArtifact(ContractModel):
         )
         if self.iteration_id != expected_id:
             raise ValueError("Docker optimization Iteration ID differs from its evidence")
+        return self
+
+
+class DockerOptimizationDispositionArtifact(ContractModel):
+    """Final workspace choice without changing the deterministic A/B verdict."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    perflens_version: str
+    disposition_id: OptimizationDispositionId
+    created_at: str
+    session_id: OptimizationSessionId
+    source_session_artifact_id: OptimizationSessionArtifactId
+    source_session_artifact_content_sha256: Sha256
+    final_session_artifact_id: OptimizationSessionArtifactId
+    final_session_artifact_content_sha256: Sha256
+    final_session_state: Literal["revoked"] = "revoked"
+    iteration_id: OptimizationIterationId
+    iteration_content_sha256: Sha256
+    iteration_conclusion: Literal[
+        "verified_improvement",
+        "candidate_improvement",
+        "candidate_regression",
+        "no_material_change",
+        "not_comparable",
+    ]
+    disposition: Literal["retain_candidate", "restore_baseline"]
+    baseline_build_id: BuildArtifactId
+    baseline_build_content_sha256: Sha256
+    candidate_build_id: BuildArtifactId
+    candidate_build_content_sha256: Sha256
+    selected_build_id: BuildArtifactId
+    selected_build_content_sha256: Sha256
+    selected_treatment_manifest_sha256: Sha256
+    workspace_mutable_manifest_sha256: Sha256
+    workspace_matches_selected_build: Literal[True] = True
+    explicit_unverified_acceptance: bool
+    authorization_receipt_sha256: Sha256 | None = None
+    warnings: tuple[str, ...] = ()
+    allowed_conclusions: tuple[str, ...]
+    forbidden_conclusions: tuple[str, ...]
+    content_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_disposition(self) -> DockerOptimizationDispositionArtifact:
+        _timestamp(self.created_at, "Docker optimization disposition time")
+        if (
+            self.source_session_artifact_id == self.final_session_artifact_id
+            or self.source_session_artifact_content_sha256
+            == self.final_session_artifact_content_sha256
+        ):
+            raise ValueError("Docker optimization disposition requires distinct Session states")
+        if self.baseline_build_id == self.candidate_build_id:
+            raise ValueError("Docker optimization disposition requires distinct Builds")
+        retaining = self.disposition == "retain_candidate"
+        expected_build_id = self.candidate_build_id if retaining else self.baseline_build_id
+        expected_build_content = (
+            self.candidate_build_content_sha256
+            if retaining
+            else self.baseline_build_content_sha256
+        )
+        if (
+            self.selected_build_id != expected_build_id
+            or self.selected_build_content_sha256 != expected_build_content
+        ):
+            raise ValueError("Docker optimization disposition selected the wrong Build")
+        if self.workspace_mutable_manifest_sha256 != self.selected_treatment_manifest_sha256:
+            raise ValueError("Docker optimization disposition workspace differs from its Build")
+        requires_acceptance = retaining and self.iteration_conclusion != "verified_improvement"
+        if requires_acceptance != self.explicit_unverified_acceptance:
+            raise ValueError("unverified Docker candidate acceptance state is inconsistent")
+        if requires_acceptance != (self.authorization_receipt_sha256 is not None):
+            raise ValueError("unverified Docker candidate acceptance receipt is inconsistent")
+        if not self.allowed_conclusions or not self.forbidden_conclusions:
+            raise ValueError("Docker optimization disposition must preserve conclusion boundaries")
+        expected_id = derive_docker_optimization_disposition_id(
+            self.session_id,
+            self.iteration_content_sha256,
+            self.disposition,
+            self.selected_build_content_sha256,
+            self.final_session_artifact_content_sha256,
+        )
+        if self.disposition_id != expected_id:
+            raise ValueError("Docker optimization disposition ID differs from its evidence")
         return self

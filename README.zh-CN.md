@@ -122,7 +122,8 @@ root Rust Helper；该模式不会自动启用，必须由管理员确认受限 
 `bounded_optimization_session`：用户审阅并确认一次后，Agent 可在硬预算和
 仅允许 `mutable_paths` 变化进入构建快照，按证据选择采集模式、最多重建三个候选并完成
 确定性匹配 A/B。实际文件写权限由 Agent 客户端沙箱而非 PerfLens 强制执行。preview 不执行
-构建，会话不授予任意 Docker 访问，也不授权 commit、push、Tag 或 Release。详见
+构建，会话不授予任意 Docker 访问，也不授权 commit、push、Tag 或 Release。最终候选如果
+没有达到 verified，只有在人工再次选择后才会保留；该选择会被记录，但不会升级原始证据结论。详见
 [《v0.3.2 Docker 自动优化指南》](docs/docker-optimization-roadmap.zh-CN.md)。
 
 随时可以运行只读状态检查，不需要记住多条排错命令：

@@ -62,13 +62,15 @@ The v0.3.2 implementation exposes these MCP tools:
 - `build_docker_optimization_candidate`;
 - `collect_docker_optimization_workload`;
 - `compare_docker_optimization_iterations`;
+- `finalize_docker_optimization_candidate`;
 - `revoke_docker_optimization_session`.
 
 It persists versioned `DockerBuildCapabilityArtifact`, `DockerBuildRecipeArtifact`,
 `DockerBuildContextArtifact`, `DockerBuildArtifact`, `DockerOptimizationSessionArtifact`, and
-`DockerOptimizationIterationArtifact` values. Confirmation tokens remain only in MCP memory;
-public artifacts retain a receipt digest, budgets, state, identities, and evidence hashes, never a
-token, credential, absolute host path, Docker endpoint path, or source contents.
+`DockerOptimizationIterationArtifact` values, plus a final
+`DockerOptimizationDispositionArtifact`. Confirmation inputs are never persisted; public artifacts
+retain a receipt digest, budgets, state, identities, and evidence hashes, never a credential,
+absolute host path, Docker endpoint path, or source contents.
 
 ## Build snapshot and adapter
 
@@ -171,11 +173,24 @@ or any invariant mismatch can produce only a candidate conclusion.
 
 The final report must name the Profile Comparison, Benchmark Comparison, and generic container
 Comparison IDs actually bound by the Iteration. A separately requested Comparison is diagnostic
-evidence and cannot be presented as the final Iteration input. Agent-authored candidate edits are
-retained by default only for `verified_improvement`. For `candidate_improvement`,
-`candidate_regression`, `no_material_change`, or `not_comparable`, restore the exact pre-candidate
-bytes before revocation without destructive Git operations or overwriting an independent user
-change. If safe restoration cannot be proven, stop and ask the user to resolve it.
+evidence and cannot be presented as the final Iteration input. Fewer than 100 profile records is an
+advisory noise warning, not an independent comparability failure; the report exposes the exact
+quality statuses and metadata differences that determine the verdict.
+
+For `verified_improvement`, the Agent finalizes `retain_candidate`. For
+`candidate_improvement`, `candidate_regression`, `no_material_change`, or `not_comparable`, it must
+show the exact evidence limitations and ask once whether to retain the unverified candidate or
+restore the baseline. Retaining requires a fresh explicit confirmation and creates a content-bound
+`DockerOptimizationDispositionArtifact`; the original Iteration remains authoritative and the
+result is labeled “user-retained unverified candidate.” Restoration requires the exact
+pre-candidate bytes. The finalizer verifies the selected mutable manifest, revokes the Session, and
+cleans verified temporary resources. It never edits source itself and never turns a human choice
+into Verified Improvement.
+
+When a short-lived container exits before the last cgroup read, the last verified periodic
+snapshot is retained as a partial lower bound. This cannot prove absence of CPU, memory, I/O, or
+throttling transfer and therefore cannot be weakened merely to obtain a verified verdict. Reports
+default to chat; creating a project report outside `mutable_paths` requires separate authorization.
 
 ## Implementation and release gates
 

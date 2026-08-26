@@ -53,13 +53,14 @@ v0.3.2 实现提供以下 MCP 工具：
 - `build_docker_optimization_candidate`；
 - `collect_docker_optimization_workload`；
 - `compare_docker_optimization_iterations`；
+- `finalize_docker_optimization_candidate`；
 - `revoke_docker_optimization_session`。
 
 实现会持久化版本化 `DockerBuildCapabilityArtifact`、`DockerBuildRecipeArtifact`、
 `DockerBuildContextArtifact`、`DockerBuildArtifact`、`DockerOptimizationSessionArtifact` 与
-`DockerOptimizationIterationArtifact`。确认 token 只留在 MCP 内存；公开产物只保存 receipt
-摘要、预算、状态、身份和证据哈希，不保存 token、凭据、宿主绝对路径、Docker 端点路径或
-源码内容。
+`DockerOptimizationIterationArtifact`，以及最终的 `DockerOptimizationDispositionArtifact`。
+确认输入不会持久化；公开产物只保存 receipt 摘要、预算、状态、身份和证据哈希，不保存凭据、
+宿主绝对路径、Docker 端点路径或源码内容。
 
 ## 构建快照与 Adapter
 
@@ -141,11 +142,21 @@ mutable 路径哈希、可执行文件哈希/Build ID 和候选最终镜像 dige
 Verified Improvement。partial、缺失 Benchmark、正确性失败或任一不变量不匹配只能给候选结论。
 
 最终报告必须列出 Iteration 实际绑定的 Profile Comparison、Benchmark Comparison 和通用容器
-Comparison ID；单独调用产生的 Comparison 只能作为旁证，不能冒充最终 Iteration 输入。只有
-`verified_improvement` 才默认保留 Agent 写入的候选。`candidate_improvement`、
-`candidate_regression`、`no_material_change` 或 `not_comparable` 必须在撤销会话前恢复 Agent
-本轮写入前的精确字节；不得使用破坏性 Git 操作，也不得覆盖独立发生的用户修改。无法证明安全
-恢复时应停止并明确请求用户处理。
+Comparison ID；单独调用产生的 Comparison 只能作为旁证，不能冒充最终 Iteration 输入。Profile
+少于 100 条逻辑记录只是噪声提示，不是单独的可比性硬失败；报告必须公开真正决定结论的质量状态
+与 metadata differences。
+
+`verified_improvement` 可直接完成 `retain_candidate`。对于 `candidate_improvement`、
+`candidate_regression`、`no_material_change` 或 `not_comparable`，Agent 必须先展示精确证据限制，
+再询问一次用户要“保留未验证候选”还是“恢复基线”。保留需要一次新的明确确认，并生成内容绑定的
+`DockerOptimizationDispositionArtifact`；原 Iteration 结论保持权威，报告只能称为“用户选择保留
+的未验证候选”。恢复则要求工作区回到候选前的精确字节。finalizer 会复核所选 mutable manifest、
+撤销 Session 并清理已验证的临时资源；它自身不修改源码，也不会把人工选择升级为 Verified
+Improvement。
+
+短生命周期容器如果在最终 cgroup 读取前退出，只能保留最后一次已验证周期快照，并标记为 partial
+下界；这不能证明不存在 CPU、内存、I/O 或节流转移，也不能为了得到 verified 结论而放宽。报告
+默认输出在聊天中；在 `mutable_paths` 之外创建项目报告文件需要另行授权。
 
 ## 实施与发布门禁
 

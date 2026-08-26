@@ -1,0 +1,203 @@
+{
+  "additionalProperties": false,
+  "description": "Final workspace choice without changing the deterministic A/B verdict.",
+  "properties": {
+    "allowed_conclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Conclusions",
+      "type": "array"
+    },
+    "authorization_receipt_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Authorization Receipt Sha256"
+    },
+    "baseline_build_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Baseline Build Content Sha256",
+      "type": "string"
+    },
+    "baseline_build_id": {
+      "pattern": "^docker-build-[a-f0-9]{20}$",
+      "title": "Baseline Build Id",
+      "type": "string"
+    },
+    "candidate_build_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Candidate Build Content Sha256",
+      "type": "string"
+    },
+    "candidate_build_id": {
+      "pattern": "^docker-build-[a-f0-9]{20}$",
+      "title": "Candidate Build Id",
+      "type": "string"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "disposition": {
+      "enum": [
+        "retain_candidate",
+        "restore_baseline"
+      ],
+      "title": "Disposition",
+      "type": "string"
+    },
+    "disposition_id": {
+      "pattern": "^docker-optimization-disposition-[a-f0-9]{20}$",
+      "title": "Disposition Id",
+      "type": "string"
+    },
+    "explicit_unverified_acceptance": {
+      "title": "Explicit Unverified Acceptance",
+      "type": "boolean"
+    },
+    "final_session_artifact_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Final Session Artifact Content Sha256",
+      "type": "string"
+    },
+    "final_session_artifact_id": {
+      "pattern": "^docker-optimization-session-state-[a-f0-9]{20}$",
+      "title": "Final Session Artifact Id",
+      "type": "string"
+    },
+    "final_session_state": {
+      "const": "revoked",
+      "default": "revoked",
+      "title": "Final Session State",
+      "type": "string"
+    },
+    "forbidden_conclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Forbidden Conclusions",
+      "type": "array"
+    },
+    "iteration_conclusion": {
+      "enum": [
+        "verified_improvement",
+        "candidate_improvement",
+        "candidate_regression",
+        "no_material_change",
+        "not_comparable"
+      ],
+      "title": "Iteration Conclusion",
+      "type": "string"
+    },
+    "iteration_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Iteration Content Sha256",
+      "type": "string"
+    },
+    "iteration_id": {
+      "pattern": "^docker-optimization-iteration-[a-f0-9]{20}$",
+      "title": "Iteration Id",
+      "type": "string"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "selected_build_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Selected Build Content Sha256",
+      "type": "string"
+    },
+    "selected_build_id": {
+      "pattern": "^docker-build-[a-f0-9]{20}$",
+      "title": "Selected Build Id",
+      "type": "string"
+    },
+    "selected_treatment_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Selected Treatment Manifest Sha256",
+      "type": "string"
+    },
+    "session_id": {
+      "pattern": "^docker-optimization-session-[a-f0-9]{20}$",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "source_session_artifact_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Source Session Artifact Content Sha256",
+      "type": "string"
+    },
+    "source_session_artifact_id": {
+      "pattern": "^docker-optimization-session-state-[a-f0-9]{20}$",
+      "title": "Source Session Artifact Id",
+      "type": "string"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    },
+    "workspace_matches_selected_build": {
+      "const": true,
+      "default": true,
+      "title": "Workspace Matches Selected Build",
+      "type": "boolean"
+    },
+    "workspace_mutable_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Workspace Mutable Manifest Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "disposition_id",
+    "created_at",
+    "session_id",
+    "source_session_artifact_id",
+    "source_session_artifact_content_sha256",
+    "final_session_artifact_id",
+    "final_session_artifact_content_sha256",
+    "iteration_id",
+    "iteration_content_sha256",
+    "iteration_conclusion",
+    "disposition",
+    "baseline_build_id",
+    "baseline_build_content_sha256",
+    "candidate_build_id",
+    "candidate_build_content_sha256",
+    "selected_build_id",
+    "selected_build_content_sha256",
+    "selected_treatment_manifest_sha256",
+    "workspace_mutable_manifest_sha256",
+    "explicit_unverified_acceptance",
+    "allowed_conclusions",
+    "forbidden_conclusions",
+    "content_sha256"
+  ],
+  "title": "DockerOptimizationDispositionArtifact",
+  "type": "object"
+}

@@ -387,6 +387,13 @@ def test_docker_optimization_summary_identifies_its_exact_comparison_chain() -> 
         profile_comparable=False,
         benchmark_comparable=True,
         source_environment_match=False,
+        baseline_profile_quality_status="partial",
+        candidate_profile_quality_status="verified",
+        baseline_profile_sample_count=210,
+        candidate_profile_sample_count=35,
+        profile_metadata_differences={
+            "baseline_quality_status": ("partial", "verified")
+        },
     )
 
     assert summary["profile_comparison_id"] == iteration.profile_comparison_id
@@ -403,6 +410,13 @@ def test_docker_optimization_summary_identifies_its_exact_comparison_chain() -> 
         iteration.source_container_comparison_id
     )
     assert summary["profile_comparable"] is False
+    assert summary["baseline_profile_quality_status"] == "partial"
+    assert summary["candidate_profile_quality_status"] == "verified"
+    assert summary["baseline_profile_sample_count"] == 210
+    assert summary["candidate_profile_sample_count"] == 35
+    assert summary["profile_sample_count_warning"] is True
+    assert summary["profile_sample_count_is_advisory"] is True
+    assert "baseline_quality_status" in str(summary["profile_noncomparability_reasons"])
     assert summary["benchmark_comparable"] is True
     assert summary["source_generic_environment_match"] is False
     assert summary["source_comparison_includes_authorized_treatment"] is True
@@ -436,6 +450,7 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "compare_benchmarks",
                 "compare_container_measurements",
                 "compare_docker_optimization_iterations",
+                "finalize_docker_optimization_candidate",
                 "collect_profile",
                 "inspect_collection_capabilities",
                 "inspect_docker_capability",
@@ -528,6 +543,9 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["compare_docker_optimization_iterations"].meta == {
                 "perflens/permission": "WRITES_ARTIFACTS"
             }
+            assert tools["finalize_docker_optimization_candidate"].meta == {
+                "perflens/permission": "DOCKER_OPTIMIZATION_DISPOSITION"
+            }
             docker_authorization = tools["authorize_docker_session"].input_schema["properties"][
                 "authorization"
             ]
@@ -597,6 +615,20 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "docker_options",
                 "source_path",
             }.intersection(optimization_comparison)
+            optimization_disposition = tools[
+                "finalize_docker_optimization_candidate"
+            ].input_schema["properties"]
+            assert any(
+                option.get("const")
+                == "I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE"
+                for option in optimization_disposition["authorization"]["anyOf"]
+            )
+            assert not {
+                "source_path",
+                "content",
+                "docker_options",
+                "image",
+            }.intersection(optimization_disposition)
             assert tools["collect_project_workload"].meta == {
                 "perflens/permission": "PROJECT_EXECUTION"
             }
@@ -877,8 +909,12 @@ def test_docker_optimization_requires_separate_project_opt_in(tmp_path: Path) ->
 
 def test_docker_optimization_preview_authorize_build_and_revoke_are_bound(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from tests.unit.test_docker_optimization_runtime import make_optimization_runtime
+    from tests.unit.test_docker_optimization_runtime import (
+        make_optimization_iteration,
+        make_optimization_runtime,
+    )
 
     runtime, project, adapter = make_optimization_runtime(tmp_path)
     artifact_root = tmp_path / "artifacts"
@@ -950,16 +986,63 @@ def test_docker_optimization_preview_authorize_build_and_revoke_are_bound(
                 },
             )
             assert not candidate_result.is_error
-            revoked_result = await client.call_tool(
-                "revoke_docker_optimization_session",
-                {"session_id": session["session_id"]},
+            candidate = _structured(candidate_result)
+            current_session = runtime.snapshot(cast(str, session["session_id"]))
+            iteration = make_optimization_iteration(
+                current_session,
+                runtime.build_result(
+                    cast(str, session["session_id"]),
+                    cast(str, baseline["artifact_id"]),
+                ).artifact,
+                runtime.build_result(
+                    cast(str, session["session_id"]),
+                    cast(str, candidate["artifact_id"]),
+                ).artifact,
             )
-            assert not revoked_result.is_error
-            assert _structured(revoked_result)["state"] == "revoked"
+            def load_iteration(
+                _store: ArtifactStore,
+                iteration_id: str,
+            ) -> DockerOptimizationIterationArtifact:
+                if iteration_id != iteration.iteration_id:
+                    pytest.fail("unexpected Iteration ID")
+                return iteration
+
+            monkeypatch.setattr(
+                ArtifactStore,
+                "load_docker_optimization_iteration",
+                load_iteration,
+            )
+            missing_consent = await client.call_tool(
+                "finalize_docker_optimization_candidate",
+                {
+                    "session_id": session["session_id"],
+                    "iteration_id": iteration.iteration_id,
+                    "disposition": "retain_candidate",
+                },
+            )
+            assert missing_consent.is_error
+            finalized_result = await client.call_tool(
+                "finalize_docker_optimization_candidate",
+                {
+                    "session_id": session["session_id"],
+                    "iteration_id": iteration.iteration_id,
+                    "disposition": "retain_candidate",
+                    "authorization": (
+                        "I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE"
+                    ),
+                },
+            )
+            assert not finalized_result.is_error
+            finalized = _structured(finalized_result)
+            assert finalized["artifact_type"] == "docker-optimization-disposition"
+            assert finalized["summary"]["iteration_conclusion"] == "not_comparable"
+            assert finalized["summary"]["explicit_unverified_acceptance"] is True
+            assert finalized["summary"]["final_session_state"] == "revoked"
 
     asyncio.run(exercise())
     assert len(adapter.cleaned) == 2
     assert len(tuple(artifact_root.glob("*.docker-build.json"))) == 2
+    assert len(tuple(artifact_root.glob("*.docker-optimization-disposition.json"))) == 1
 
 
 def test_docker_target_resolution_authorization_and_revocation_are_typed(

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 import pytest
+from pydantic import ValidationError
 
 from perflens.application.evidence import contract_content_sha256
 from perflens.contracts.docker import DockerRuntimeCapabilityArtifact
@@ -16,8 +17,11 @@ from perflens.contracts.docker_build import (
     DockerBuildCapabilityArtifact,
     DockerBuilderProjection,
     DockerBuildToolProjection,
+    DockerOptimizationIterationArtifact,
+    DockerOptimizationSessionArtifact,
     OptimizationCollectionMode,
     derive_docker_build_artifact_id,
+    derive_docker_optimization_iteration_id,
 )
 from perflens.docker.build_adapter import (
     DockerBuildExecutionResult,
@@ -27,6 +31,7 @@ from perflens.docker.build_context import DockerBuildContextSnapshot
 from perflens.docker.optimization_runtime import DockerOptimizationRuntime
 from perflens.docker.optimization_session import (
     EXPLICIT_DOCKER_OPTIMIZATION_AUTHORIZATION,
+    EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE,
 )
 from perflens.docker.project_config import (
     DockerProjectPolicy,
@@ -174,7 +179,7 @@ def _policy_text() -> str:
 
 
 def _runtime_capability() -> DockerRuntimeCapabilityArtifact:
-    data = {
+    data: dict[str, object] = {
         "schema_version": "1.0",
         "perflens_version": "0.3.2",
         "capability_id": "docker-capability-" + "a" * 20,
@@ -265,6 +270,87 @@ def _authorize(runtime: DockerOptimizationRuntime):
     return result, session
 
 
+def make_optimization_iteration(
+    session: DockerOptimizationSessionArtifact,
+    baseline: DockerBuildArtifact,
+    candidate: DockerBuildArtifact,
+    *,
+    conclusion: Literal[
+        "verified_improvement",
+        "candidate_improvement",
+        "candidate_regression",
+        "no_material_change",
+        "not_comparable",
+    ] = "not_comparable",
+) -> DockerOptimizationIterationArtifact:
+    comparable = conclusion != "not_comparable"
+    data: dict[str, object] = {
+        "schema_version": "1.0",
+        "perflens_version": "0.3.2",
+        "iteration_id": derive_docker_optimization_iteration_id(
+            session.session_id,
+            baseline.build_id,
+            candidate.build_id,
+            "1" * 64,
+            "2" * 64,
+        ),
+        "created_at": NOW.isoformat(),
+        "session_id": session.session_id,
+        "session_artifact_id": session.session_artifact_id,
+        "session_artifact_content_sha256": session.content_sha256,
+        "candidate_round": candidate.candidate_round,
+        "baseline_build_id": baseline.build_id,
+        "baseline_build_content_sha256": baseline.content_sha256,
+        "candidate_build_id": candidate.build_id,
+        "candidate_build_content_sha256": candidate.content_sha256,
+        "baseline_measurement_id": "container-measurement-" + "1" * 20,
+        "baseline_measurement_content_sha256": "1" * 64,
+        "candidate_measurement_id": "container-measurement-" + "2" * 20,
+        "candidate_measurement_content_sha256": "2" * 64,
+        "baseline_analysis_id": "analysis-" + "1" * 16,
+        "baseline_analysis_content_sha256": "3" * 64,
+        "candidate_analysis_id": "analysis-" + "2" * 16,
+        "candidate_analysis_content_sha256": "4" * 64,
+        "profile_comparison_id": "profile-comparison-" + "3" * 16,
+        "profile_comparison_content_sha256": "5" * 64,
+        "baseline_benchmark_id": "benchmark-" + "1" * 16,
+        "baseline_benchmark_content_sha256": "6" * 64,
+        "candidate_benchmark_id": "benchmark-" + "2" * 16,
+        "candidate_benchmark_content_sha256": "7" * 64,
+        "benchmark_comparison_id": "benchmark-comparison-" + "4" * 16,
+        "benchmark_comparison_content_sha256": "8" * 64,
+        "source_container_comparison_id": "container-comparison-" + "5" * 20,
+        "source_container_comparison_content_sha256": "9" * 64,
+        "fixed_environment_match": True,
+        "fixed_environment_differences": {},
+        "treatment_changed": True,
+        "correctness_status": "passed",
+        "actual_event_source_match": True,
+        "resource_transfer_status": "no_observed_regression",
+        "deterministic_replay_passed": True,
+        "comparable": comparable,
+        "conclusion": conclusion,
+        "improved_metrics": (
+            ("wall_time",) if conclusion == "verified_improvement" else ()
+        ),
+        "regressed_metrics": (),
+        "warnings": (),
+        "allowed_conclusions": ("Bounded test conclusion.",),
+        "forbidden_conclusions": ("No stronger conclusion.",),
+        "content_sha256": "0" * 64,
+    }
+    provisional = DockerOptimizationIterationArtifact.model_validate(data)
+    return DockerOptimizationIterationArtifact.model_validate(
+        {
+            **provisional.model_dump(mode="json"),
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            ),
+        }
+    )
+
+
 def test_runtime_requires_preview_before_build_and_allows_one_consent_flow(
     tmp_path: Path,
 ) -> None:
@@ -307,6 +393,291 @@ def test_runtime_requires_preview_before_build_and_allows_one_consent_flow(
     revoked = runtime.revoke(session.session_id)
     assert revoked.state == "revoked"
     assert adapter.cleaned == [baseline.build.build_id, candidate.build.build_id]
+
+
+@pytest.mark.parametrize(
+    "conclusion",
+    (
+        "candidate_improvement",
+        "candidate_regression",
+        "no_material_change",
+        "not_comparable",
+    ),
+)
+def test_runtime_requires_fresh_consent_to_retain_unverified_candidate(
+    tmp_path: Path,
+    conclusion: Literal[
+        "candidate_improvement",
+        "candidate_regression",
+        "no_material_change",
+        "not_comparable",
+    ],
+) -> None:
+    runtime, project, adapter = make_optimization_runtime(tmp_path)
+    _, authorized = _authorize(runtime)
+    baseline_result = runtime.build(
+        authorized.session_id,
+        build_kind="baseline",
+        candidate_round=0,
+    )
+    (project / "src/app").write_bytes(b"candidate")
+    candidate_result = runtime.build(
+        authorized.session_id,
+        build_kind="candidate",
+        candidate_round=1,
+    )
+    iteration = make_optimization_iteration(
+        candidate_result.session,
+        baseline_result.build,
+        candidate_result.build,
+        conclusion=conclusion,
+    )
+
+    with pytest.raises(PerfLensError, match="requires fresh explicit consent"):
+        runtime.finalize_candidate(
+            authorized.session_id,
+            iteration=iteration,
+            disposition="retain_candidate",
+        )
+
+    assert runtime.snapshot(authorized.session_id).state == "active"
+    result = runtime.finalize_candidate(
+        authorized.session_id,
+        iteration=iteration,
+        disposition="retain_candidate",
+        explicit_unverified_acceptance=(
+            EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE
+        ),
+    )
+
+    assert result.session.state == "revoked"
+    assert result.disposition.disposition == "retain_candidate"
+    assert result.disposition.iteration_conclusion == conclusion
+    assert result.disposition.explicit_unverified_acceptance is True
+    assert result.disposition.authorization_receipt_sha256 is not None
+    assert result.disposition.selected_build_id == candidate_result.build.build_id
+    assert (project / "src/app").read_bytes() == b"candidate"
+    assert adapter.cleaned == [
+        baseline_result.build.build_id,
+        candidate_result.build.build_id,
+    ]
+    payload = result.disposition.model_dump(mode="json")
+    invalid_updates: tuple[dict[str, object], ...] = (
+        {"final_session_artifact_id": result.disposition.source_session_artifact_id},
+        {"candidate_build_id": result.disposition.baseline_build_id},
+        {"selected_build_id": result.disposition.baseline_build_id},
+        {"workspace_mutable_manifest_sha256": "0" * 64},
+        {"explicit_unverified_acceptance": False},
+        {"authorization_receipt_sha256": None},
+        {"allowed_conclusions": ()},
+        {"disposition_id": "docker-optimization-disposition-" + "0" * 20},
+    )
+    for update in invalid_updates:
+        with pytest.raises(ValidationError):
+            result.disposition.__class__.model_validate({**payload, **update})
+
+
+def test_runtime_finalizes_restored_baseline_without_unverified_acceptance(
+    tmp_path: Path,
+) -> None:
+    runtime, project, _ = make_optimization_runtime(tmp_path)
+    _, authorized = _authorize(runtime)
+    baseline_result = runtime.build(
+        authorized.session_id,
+        build_kind="baseline",
+        candidate_round=0,
+    )
+    (project / "src/app").write_bytes(b"candidate")
+    candidate_result = runtime.build(
+        authorized.session_id,
+        build_kind="candidate",
+        candidate_round=1,
+    )
+    iteration = make_optimization_iteration(
+        candidate_result.session,
+        baseline_result.build,
+        candidate_result.build,
+    )
+    (project / "src/app").write_bytes(b"baseline")
+
+    with pytest.raises(PerfLensError, match="does not require it"):
+        runtime.finalize_candidate(
+            authorized.session_id,
+            iteration=iteration,
+            disposition="restore_baseline",
+            explicit_unverified_acceptance=(
+                EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE
+            ),
+        )
+
+    result = runtime.finalize_candidate(
+        authorized.session_id,
+        iteration=iteration,
+        disposition="restore_baseline",
+    )
+
+    assert result.session.state == "revoked"
+    assert result.disposition.disposition == "restore_baseline"
+    assert result.disposition.explicit_unverified_acceptance is False
+    assert result.disposition.authorization_receipt_sha256 is None
+    assert result.disposition.selected_build_id == baseline_result.build.build_id
+
+
+def test_runtime_rejects_disposition_when_workspace_or_iteration_changed(
+    tmp_path: Path,
+) -> None:
+    runtime, project, _ = make_optimization_runtime(tmp_path)
+    _, authorized = _authorize(runtime)
+    baseline_result = runtime.build(
+        authorized.session_id,
+        build_kind="baseline",
+        candidate_round=0,
+    )
+    (project / "src/app").write_bytes(b"candidate")
+    candidate_result = runtime.build(
+        authorized.session_id,
+        build_kind="candidate",
+        candidate_round=1,
+    )
+    iteration = make_optimization_iteration(
+        candidate_result.session,
+        baseline_result.build,
+        candidate_result.build,
+    )
+
+    with pytest.raises(PerfLensError, match="does not match the selected final Build"):
+        runtime.finalize_candidate(
+            authorized.session_id,
+            iteration=iteration,
+            disposition="restore_baseline",
+        )
+    wrong_session = iteration.model_copy(
+        update={
+            "session_artifact_id": "docker-optimization-session-state-" + "0" * 20,
+            "session_artifact_content_sha256": "0" * 64,
+            "content_sha256": "0" * 64,
+        }
+    )
+    wrong_session = wrong_session.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                wrong_session,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+    with pytest.raises(PerfLensError, match="differs from the current Session"):
+        runtime.finalize_candidate(
+            authorized.session_id,
+            iteration=wrong_session,
+            disposition="retain_candidate",
+            explicit_unverified_acceptance=(
+                EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE
+            ),
+        )
+    wrong_build = iteration.model_copy(
+        update={
+            "baseline_build_content_sha256": "0" * 64,
+            "content_sha256": "0" * 64,
+        }
+    )
+    wrong_build = wrong_build.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                wrong_build,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+    with pytest.raises(PerfLensError, match="Build is outside the current Session"):
+        runtime.finalize_candidate(
+            authorized.session_id,
+            iteration=wrong_build,
+            disposition="retain_candidate",
+            explicit_unverified_acceptance=(
+                EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE
+            ),
+        )
+    forged = iteration.model_copy(update={"content_sha256": "0" * 64})
+    with pytest.raises(PerfLensError, match="content digest does not match"):
+        runtime.finalize_candidate(
+            authorized.session_id,
+            iteration=forged,
+            disposition="retain_candidate",
+            explicit_unverified_acceptance=(
+                EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE
+            ),
+        )
+    assert runtime.snapshot(authorized.session_id).state == "active"
+
+
+def test_runtime_revokes_finalization_after_immutable_context_drift(
+    tmp_path: Path,
+) -> None:
+    runtime, project, _ = make_optimization_runtime(tmp_path)
+    _, authorized = _authorize(runtime)
+    baseline_result = runtime.build(
+        authorized.session_id,
+        build_kind="baseline",
+        candidate_round=0,
+    )
+    (project / "src/app").write_bytes(b"candidate")
+    candidate_result = runtime.build(
+        authorized.session_id,
+        build_kind="candidate",
+        candidate_round=1,
+    )
+    iteration = make_optimization_iteration(
+        candidate_result.session,
+        baseline_result.build,
+        candidate_result.build,
+    )
+    (project / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+
+    with pytest.raises(PerfLensError, match="immutable context changed"):
+        runtime.finalize_candidate(
+            authorized.session_id,
+            iteration=iteration,
+            disposition="retain_candidate",
+            explicit_unverified_acceptance=(
+                EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE
+            ),
+        )
+
+    assert runtime.snapshot(authorized.session_id).state == "revoked"
+
+
+def test_runtime_retains_verified_candidate_without_second_acceptance(
+    tmp_path: Path,
+) -> None:
+    runtime, project, _ = make_optimization_runtime(tmp_path)
+    _, authorized = _authorize(runtime)
+    baseline_result = runtime.build(
+        authorized.session_id,
+        build_kind="baseline",
+        candidate_round=0,
+    )
+    (project / "src/app").write_bytes(b"candidate")
+    candidate_result = runtime.build(
+        authorized.session_id,
+        build_kind="candidate",
+        candidate_round=1,
+    )
+    iteration = make_optimization_iteration(
+        candidate_result.session,
+        baseline_result.build,
+        candidate_result.build,
+        conclusion="verified_improvement",
+    )
+
+    result = runtime.finalize_candidate(
+        authorized.session_id,
+        iteration=iteration,
+        disposition="retain_candidate",
+    )
+
+    assert result.disposition.explicit_unverified_acceptance is False
+    assert result.disposition.authorization_receipt_sha256 is None
 
 
 def test_runtime_rejects_changed_immutable_context_and_revokes(tmp_path: Path) -> None:

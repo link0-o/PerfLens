@@ -222,6 +222,16 @@ PerfLens accepts only build snapshots whose authorized Treatment changes are wit
 The client sandbox and tool approvals enforce filesystem write access. The session grants no
 commit, push, tag, release, Docker-daemon administration, Builder creation, or system changes.
 
+After `compare_docker_optimization_iterations`, a `verified_improvement` may be finalized by
+retaining the candidate. Any weaker result requires one fresh human disposition choice: retain the
+unverified candidate or restore the baseline. The former requires the fixed
+`I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE` token; the latter requires exact baseline
+bytes. `finalize_docker_optimization_candidate` verifies the selected mutable manifest, stores a
+`DockerOptimizationDispositionArtifact`, revokes the Session, and cleans verified temporary
+resources. It never changes the Iteration verdict. The single initial authorization still covers
+all builds and measurements; this later prompt chooses source disposition only and grants no new
+execution scope. Reports default to chat, not project files outside `mutable_paths`.
+
 ## Use the Skill
 
 The repository Skill is at `.agents/skills/perflens`. In Codex, invoke it explicitly when desired:

@@ -143,15 +143,24 @@ Within the authorized optimization session:
   recoverable retry is for a genuinely corrected build/test failure. Stop at any session budget.
 - Report `Verified Improvement` only from a `verified_improvement` Iteration. Partial evidence,
   missing Benchmark, resource transfer, event-source mismatch, or fixed-environment differences
-  remain candidate/not-comparable results. Revoke the session when the loop ends. Never commit,
-  push, tag, release, or edit paths outside the authorization.
+  remain candidate/not-comparable results. Never commit, push, tag, release, or edit paths outside
+  the authorization. Produce the optimization report in chat by default; writing a report or notes
+  anywhere outside `mutable_paths` requires a separate, explicit filesystem-edit request and is not
+  part of the optimization Session.
 - Report the exact Profile, Benchmark, and source-container Comparison IDs bound by the final
   Iteration; a separately requested comparison is diagnostic evidence, not the Iteration verdict.
-  Keep Agent-authored candidate edits only for `verified_improvement`. For
-  `candidate_improvement`, `candidate_regression`, `no_material_change`, or `not_comparable`,
-  restore the exact pre-candidate bytes before revocation. Never use a destructive Git reset or
-  overwrite a path that changed independently; stop and report when safe restoration cannot be
-  proven.
+  For `verified_improvement`, call `finalize_docker_optimization_candidate` with
+  `retain_candidate`; this records the matching workspace, revokes the Session, and cleans verified
+  temporary resources. For `candidate_improvement`, `candidate_regression`, `no_material_change`,
+  or `not_comparable`, present the exact Iteration conclusion, decisive evidence gaps, bound IDs,
+  and two choices: retain the unverified candidate or restore the baseline. Recommend restoration,
+  end the response, and wait for a fresh reply. If the user elects to retain it, call the finalizer
+  with `retain_candidate` and the exact fixed token
+  `I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE`; report it only as “user-retained
+  unverified candidate.” If the user elects restoration, restore the exact pre-candidate bytes and
+  call the finalizer with `restore_baseline` and no token. The finalizer must verify that the current
+  mutable manifest matches the selected Build. Never use a destructive Git reset, overwrite a path
+  that changed independently, or claim that human acceptance upgraded the Iteration verdict.
 
 If optimization is disabled, keep using the v0.3.1 fixed-image workflows below; do not silently
 enable the policy or substitute direct Docker/build commands.

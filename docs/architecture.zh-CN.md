@@ -161,10 +161,13 @@ Adapter 只负责提示和绑定本地 Docker 身份；Linux Broker 与 Helper �
 真实进程。Docker Socket 不进入 Collector、Helper、Agent 或 Skill；MCP 进程只能调用固定、
 受项目策略限制的 Adapter。DEB 安装过程不安装/启动 Docker、修改 `docker` 用户组或自动
 build/pull 镜像；另行启用的 v0.3.2 优化 Adapter 只能在独立审阅会话授权后执行绑定 Recipe
-的类型化构建。公开产物不保存完整 inspect、环境变量、标签、宿主挂载源路径或目标外进程。已有
+的类型化构建。最终确定性 Disposition 步骤会把所选 Build 与当前 mutable 工作区绑定；若人工
+选择保留未验证候选，只记录该选择而不改变 A/B 结论，随后撤销授权并清理已验证的临时资源。
+公开产物不保存完整 inspect、环境变量、标签、宿主挂载源路径或目标外进程。已有
 容器会话绑定一个精确实例；托管会话绑定固定 workload 配方，并为每轮临时容器派生新的
 短期单次 PID 计划。公共产物、rootful 边界、内存会话、cgroup 证据、符号映射和匹配 A/B
 门禁见[《v0.3.1 Docker 进程采集与分析指南》](docker-container-roadmap.zh-CN.md)。
+构建与处置链路见[《v0.3.2 Docker 自动优化指南》](docker-optimization-roadmap.zh-CN.md)。
 
 ## 依赖方向
 

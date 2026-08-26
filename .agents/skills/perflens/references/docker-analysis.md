@@ -121,10 +121,20 @@ or fixed-environment mismatch cannot be upgraded by Agent reasoning.
 
 The final report must name the exact Profile, Benchmark, and generic container Comparison IDs
 bound by the Iteration. Standalone comparisons may be discussed separately but cannot be presented
-as that Iteration's input. Retain Agent-authored candidate edits only when the Iteration concludes
-`verified_improvement`. Otherwise restore the exact pre-candidate bytes before revocation, without
-using destructive Git operations or overwriting an independently changed path; if safe restoration
-cannot be established, leave the ambiguity visible and ask the user.
+as that Iteration's input. A profile with fewer than 100 logical records carries an advisory noise
+warning; it is not, by itself, the hard reason for non-comparability. Report the exact quality
+statuses and `metadata_differences` that made `profile_comparable` false.
+
+For `verified_improvement`, finalize with `retain_candidate`. For any other conclusion, show the
+exact evidence gaps and ask the user once whether to retain the unverified candidate or restore the
+baseline. End the response before making that disposition call. Retention requires the exact fixed
+token `I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE` after the fresh reply and must remain
+labeled “user-retained unverified candidate”; it never upgrades the Iteration. Restoration requires
+exact pre-candidate bytes. `finalize_docker_optimization_candidate` independently checks that the
+current mutable manifest matches the selected Build, records a content-bound Disposition Artifact,
+revokes the Session, and cleans verified temporary resources. Never use destructive Git operations
+or overwrite an independently changed path; if safe restoration cannot be established, leave the
+ambiguity visible and ask the user.
 
 The session accepts no build Treatment outside `mutable_paths` and grants no commit, push, tag,
 release, Docker-daemon administration, Builder creation, or system changes. Client tool approval
@@ -139,6 +149,13 @@ event source/fallback, collection mode, and cleanup state. Container-level cgrou
 the whole container and must not be presented as target-process-exclusive metrics. Never expose
 full inspect JSON, environment, labels, mount source paths, Docker Socket paths, raw foreign task
 metadata, or private authorization tokens.
+
+If Docker removes a short-lived container cgroup before the final read, the periodic monitor keeps
+the last verified snapshot and marks the resource delta partial and a lower bound. This is a real
+tail-coverage limit, not a reason to invent a complete sample or relax the Verified Improvement
+gate. It may motivate a user-retained candidate, but it cannot establish absence of resource
+transfer. Agent-authored reports default to the conversation; the optimization authorization does
+not permit creating Markdown or note files outside `mutable_paths`.
 
 For Docker `record`, prefer capture-time mmap Build IDs. During later analysis PerfLens may build a
 private temporary `symfs` only from `/workspace` modules whose path digest, Build ID, byte count,
