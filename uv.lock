@@ -845,7 +845,7 @@ dev = [
     { name = "build", specifier = ">=1.3,<2" },
     { name = "hypothesis", specifier = ">=6.135,<7" },
     { name = "pip-audit", specifier = ">=2.9,<3" },
-    { name = "pyright", extras = ["nodejs"], specifier = ">=1.1.403,<2" },
+    { name = "pyright", extras = ["nodejs"], specifier = ">=1.1.411,<2" },
     { name = "pytest", specifier = ">=9.0.3,<10" },
     { name = "pytest-cov", specifier = ">=6.2,<7" },
     { name = "pytest-timeout", specifier = ">=2.4,<3" },
