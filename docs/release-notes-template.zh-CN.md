@@ -41,8 +41,10 @@ uv tool install ./perflens-{version}-py3-none-any.whl
 
 需要分析本地 Docker 容器中一个明确进程的项目，进入项目后运行
 `perflens init --docker`，审查生成的 `container-workload.toml`，再在 Agent 对话中确认
-单次或有界会话授权。PerfLens 不安装/启动 Docker、不加入 Docker 组、不 build/pull 镜像，
-也不支持远程 Engine、Compose/Kubernetes、任意 Docker 参数或整容器 perf 聚合。
+单次或有界会话授权。PerfLens 不安装/启动 Docker、不加入 Docker 组；v0.3.1 固定镜像路径
+不 build/pull。v0.3.2 只有在项目启用 schema 1.1 优化合同并单独确认后，才允许类型化、
+绑定 Recipe 的构建。远程 Engine、Compose/Kubernetes、任意 Docker 参数和整容器 perf
+聚合仍不受支持。
 
 ## 资源怎么选
 

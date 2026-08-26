@@ -206,10 +206,12 @@ benchmark_name = ""
 
 [optimization]
 # A v0.3.2 optimization session remains disabled until every field below is reviewed. Enabling it
-# permits one explicitly confirmed, bounded session to build a baseline, edit only mutable_paths,
-# build candidates, collect evidence, and run matched A/B checks. It never grants commit or push.
+# permits one explicitly confirmed, bounded session to build a baseline, admit only mutable_paths
+# changes into candidate snapshots, collect evidence, and run matched A/B checks. The Agent's
+# actual editor permissions remain controlled by its client sandbox. It never grants commit/push.
 # v0.3.2 优化会话默认关闭。审查下列全部字段后显式开启, 才允许一次确认覆盖基线构建、
-# 仅修改 mutable_paths、候选构建、证据采集与匹配 A/B; 它永远不授权 commit 或 push。
+# 仅把 mutable_paths 的改动纳入候选快照、证据采集与匹配 A/B。Agent 的实际编辑权限仍由
+# 客户端沙箱控制; 优化会话永远不授权 commit 或 push。
 enabled = false
 context_paths = []
 mutable_paths = []

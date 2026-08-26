@@ -86,7 +86,7 @@ def render_opencode_config(
     docker_project_config: Path | None = None,
     mcp_command: Path | None = None,
 ) -> str:
-    """Return a standalone OpenCode v2 project MCP JSON document."""
+    """Return a standalone current OpenCode project MCP JSON document."""
     launch = build_mcp_launch_configuration(
         workspace,
         artifact_root=artifact_root,
@@ -110,13 +110,10 @@ def render_opencode_config(
         {
             "$schema": "https://opencode.ai/config.json",
             "mcp": {
-                "servers": {
-                    "perflens": {
-                        "type": "local",
-                        "command": [str(launch.command), *launch.arguments],
-                        "codemode": False,
-                        "disabled": False,
-                    }
+                "perflens": {
+                    "type": "local",
+                    "command": [str(launch.command), *launch.arguments],
+                    "enabled": True,
                 }
             },
         }
@@ -140,13 +137,15 @@ def plan_opencode_project_config(
     if target.exists():
         expected = _read_config(target)
         payload = _parse_document(expected, label="Existing OpenCode configuration")
-        servers = _servers(payload, create=True, label="Existing OpenCode configuration")
-        assert servers is not None
+        server_view = _servers(payload, create=True, label="Existing OpenCode configuration")
+        assert server_view is not None
+        servers, layout = server_view
+        desired_for_layout = _server_for_layout(desired, layout=layout)
         current = servers.get("perflens")
         if current is not None:
-            if current == desired:
+            if current == desired_for_layout:
                 return OpenCodeConfigInstallPlan(target, "existing", expected, expected)
-            previous = _managed_server(managed_configuration)
+            previous = _managed_server(managed_configuration, layout=layout)
             if previous is None or current != previous:
                 raise PerfLensError(
                     ErrorCode.PATH_SAFETY_VIOLATION,
@@ -158,7 +157,7 @@ def plan_opencode_project_config(
                         "Review perflens-setup/opencode-mcp.json and merge it manually.",
                     ),
                 )
-        servers["perflens"] = desired
+        servers["perflens"] = desired_for_layout
         return OpenCodeConfigInstallPlan(target, "updated", _render_document(payload), expected)
     return OpenCodeConfigInstallPlan(target, "installed", configuration, None)
 
@@ -179,10 +178,13 @@ def plan_opencode_project_config_removal(
         return None
     expected = _read_config(target)
     payload = _parse_document(expected, label="Existing OpenCode configuration")
-    servers = _servers(payload, create=False, label="Existing OpenCode configuration")
-    if servers is None or "perflens" not in servers:
+    server_view = _servers(payload, create=False, label="Existing OpenCode configuration")
+    if server_view is None:
         return None
-    managed = _managed_server(managed_configuration)
+    servers, layout = server_view
+    if "perflens" not in servers:
+        return None
+    managed = _managed_server(managed_configuration, layout=layout)
     if managed is None or servers["perflens"] != managed:
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
@@ -261,22 +263,27 @@ def _select_project_config(
     return target
 
 
-def _managed_server(configuration: str | None) -> object | None:
+def _managed_server(
+    configuration: str | None,
+    *,
+    layout: Literal["current", "legacy_v2"],
+) -> object | None:
     if configuration is None:
         return None
     payload = _parse_document(configuration, label="Recorded OpenCode configuration")
-    return _perflens_server(payload, label="Recorded OpenCode configuration")
+    server = _perflens_server(payload, label="Recorded OpenCode configuration")
+    return _server_for_layout(server, layout=layout)
 
 
 def _perflens_server(payload: dict[str, object], *, label: str) -> object:
-    servers = _servers(payload, create=False, label=label)
-    if servers is None or set(servers) != {"perflens"}:
+    server_view = _servers(payload, create=False, label=label)
+    if server_view is None or set(server_view[0]) != {"perflens"}:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
             "opencode_config",
             f"{label} has an unexpected MCP server shape",
         )
-    return servers["perflens"]
+    return server_view[0]["perflens"]
 
 
 def _servers(
@@ -284,7 +291,7 @@ def _servers(
     *,
     create: bool,
     label: str,
-) -> dict[str, object] | None:
+) -> tuple[dict[str, object], Literal["current", "legacy_v2"]] | None:
     mcp = payload.get("mcp")
     if mcp is None and create:
         mcp = {}
@@ -299,20 +306,49 @@ def _servers(
             recoverable=True,
         )
     typed_mcp = cast(dict[str, object], mcp)
-    servers = typed_mcp.get("servers")
-    if servers is None and create:
-        servers = {}
-        typed_mcp["servers"] = servers
-    if servers is None:
-        return None
+    if "servers" not in typed_mcp:
+        return typed_mcp, "current"
+    if len(typed_mcp) != 1:
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "opencode_config",
+            f"{label} mixes current and legacy MCP server layouts",
+            recoverable=True,
+        )
+    servers = typed_mcp["servers"]
     if not isinstance(servers, dict):
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
             "opencode_config",
-            f"{label} mcp.servers value must be an object",
+            f"{label} legacy mcp.servers value must be an object",
             recoverable=True,
         )
-    return cast(dict[str, object], servers)
+    return cast(dict[str, object], servers), "legacy_v2"
+
+
+def _server_for_layout(
+    server: object,
+    *,
+    layout: Literal["current", "legacy_v2"],
+) -> object:
+    if not isinstance(server, dict):
+        return server
+    typed = cast(dict[str, object], server)
+    if layout == "current":
+        if "disabled" not in typed and "codemode" not in typed:
+            return typed
+        converted = dict(typed)
+        disabled = converted.pop("disabled", False)
+        converted.pop("codemode", None)
+        converted["enabled"] = not bool(disabled)
+        return converted
+    if "enabled" not in typed:
+        return typed
+    converted = dict(typed)
+    enabled = converted.pop("enabled")
+    converted["codemode"] = False
+    converted["disabled"] = not bool(enabled)
+    return converted
 
 
 def _existing_directory(path: Path) -> Path:

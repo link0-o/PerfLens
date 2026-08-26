@@ -37,6 +37,9 @@ OpenCode 使用 `.opencode/opencode.json` 并复用 `.agents/skills/perflens`。
 云端 Coding Agent，也不会把本机 Collector、Docker Socket 或 Unix Socket 暴露给云端。
 冲突的用户手写配置会被拒绝覆盖，也不会申请管理员权限。
 
+Claude Code 与 Copilot CLI 都使用 `.mcp.json`；同时选择时，引导会验证生成内容及已记录
+所有权一致，并只执行一次原子共享更新。
+
 `--client` 可以重复传入。希望以后普通 `init` 默认包含其他客户端时，可保存严格的用户级
 默认集合：
 
@@ -198,10 +201,11 @@ PerfLens 保留其他 `mcpServers`，但拒绝覆盖名称相同且内容不同�
 
 ## 连接 OpenCode 与本地 GitHub Copilot
 
-运行 `perflens init --client opencode` 会安装共享 Agent Skill，并安全合并本地 stdio
-服务到 `.opencode/opencode.json`。检测到已有 JSONC 时会保留并要求手动合并，避免丢失
-注释。对应机制见 OpenCode 官方 [Skill](https://opencode.ai/docs/skills) 和
-[MCP Server](https://opencode.ai/v2/docs/mcp-servers) 文档。
+运行 `perflens init --client opencode` 会安装共享 Agent Skill，并安全合并本地 stdio 服务到
+`.opencode/opencode.json`。检测到已有 JSONC 时会保留并要求手工合并，避免丢失注释。新文件
+使用当前直接 `mcp` 服务映射；已有旧版嵌套 `mcp.servers` JSON 会在原布局中安全更新或移除，
+不会静默改写布局。对应机制见 OpenCode 官方 [Skill](https://opencode.ai/docs/skills) 和
+[MCP Server](https://opencode.ai/docs/mcp-servers) 文档。
 
 运行 `perflens init --client copilot` 会同时配置两个本地客户端：Copilot CLI 使用项目
 `.mcp.json`，VS Code Copilot Agent 使用 `.vscode/mcp.json`，二者复用
@@ -217,6 +221,10 @@ PerfLens 保留其他 `mcpServers`，但拒绝覆盖名称相同且内容不同�
 该 Preview 会直接返回规范化的项目相对 `context_paths` 与 `mutable_paths`；Agent 必须在
 一次确认前原样展示两份清单。成功的托管 stat、record 和 Trace 结果也会返回 Broker 已验证
 的 `evidence_bytes`，并计入优化会话预算，不能从后续分析投影中猜测。
+
+PerfLens 只接受 Treatment 变化位于 `mutable_paths` 的构建快照；它本身不能阻止 Agent
+编辑器或 Shell 写入其他源码路径。实际文件写权限由客户端沙箱和工具审批负责。优化会话也不
+授权 commit、push、Tag、Release、Docker daemon 管理、创建 Builder 或系统变更。
 
 ## 分析 perf.data 时的配置
 

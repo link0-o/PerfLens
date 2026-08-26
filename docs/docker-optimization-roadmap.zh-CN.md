@@ -2,16 +2,17 @@
 
 [English](docker-optimization-roadmap.md)
 
-状态：v0.3.2 源码实现与本地包门禁已经完成。合同、安全上下文快照、类型化 Build Adapter、
-一次确认会话工具、Build 绑定采集、确定性 A/B 比较及 Agent 策略均已实现。真实
-rootless/rootful Docker 与已安装主机验收仍是发布门禁，因此本文不宣称未经测试的主机已经
-就绪。v0.3.1 固定镜像采集继续兼容。
+状态：v0.3.2 发布候选接口已经实现，但[已知问题](known-issues.zh-CN.md)中的安全与多客户端
+发现尚未解决，因此不能宣称已经达到发布就绪。合同、上下文快照、类型化 Build Adapter、
+一次确认会话工具、Build 绑定采集、确定性 A/B 比较及 Agent 策略已经存在；完整的
+rootless/rootful Docker 与已安装主机验收也仍是发布门禁。v0.3.1 固定镜像采集继续兼容。
 
 ## 目标与边界
 
 `bounded_optimization_session` 是一次用户确认、绑定当前连接的有界授权：Agent 可构建基线、
-按证据采集、只修改已审查的项目路径、最多构建三个候选并完成匹配 A/B。它不是永久放行，
-也不授权 commit、push、Tag、Release、任意 Docker 参数或声明上下文之外的访问。
+按证据采集，只允许已审查项目路径中的变化进入构建快照，最多构建三个候选并完成匹配 A/B。
+实际文件写权限仍由客户端沙箱控制，不是 PerfLens 自身强制的 capability。该会话不是永久
+放行，也不授权 commit、push、Tag、Release、任意 Docker 参数或声明上下文之外的访问。
 
 优化会话是 Docker 目标工作流，不是 Collector 权限模式。现有 `cpu_only/full_diagnostics`
 功能配置和 `cap_perfmon/paranoid3_helper` 权限模式仍决定可取得哪些 perf 证据。v0.4.0
@@ -37,8 +38,10 @@ Verified Improvement。
 
 系统包提供 root-owned、只读且为空的 Docker 配置信任锚点。由于 Buildx 必须保存 Builder
 选择状态，每个 Preview 会在随机的用户私有 `0700` 目录中创建一个空的运行时配置。它不会
-复制用户 Docker 配置、凭据或 Context，并在 Preview 过期、失败或会话撤销时随私有快照一起
-清理；每次命令都会重新核对该目录的 inode、owner 和 mode。
+复制用户 Docker 配置、凭据或 Context；每次命令都会重新核对该目录的 inode、owner 和
+mode。显式撤销会在能够安全证明归属时立即清理私有运行时状态；Preview/会话过期会立即使
+授权失效，并由有界定时器或后续任意交互回收。MCP 连接关闭时也会撤销活动授权并执行相同的
+身份核验清理。进程崩溃仍可能留下已证明归属的对象供人工审查；禁止全局 Docker prune。
 
 ## 已实现的类型化接口（仍需真实主机验收）
 
@@ -78,11 +81,15 @@ metadata。清理仅删除能证明由本会话创建、且未被既有 Tag 或�
 
 ## 网络层级
 
-1. `local_only` 为默认：完整基础 digest 必须已在本地，pull=false，构建网络为 none。
-2. `pinned_pull`：确认后只允许从管理员 registry 白名单拉取完整 digest，实际构建仍无网络。
+1. `local_only` 为默认：完整基础 digest 必须已在本地，pull=false，设计目标是构建网络为
+   none。Dockerfile 在此层只允许 `RUN --network=none`；格式错误、`default`、`host` 或
+   自定义逐条覆盖都会被拒绝。
+2. `pinned_pull`：确认后只允许从管理员 registry 白名单拉取完整 digest，实际构建设计为无
+   网络，因此同样只允许 `RUN --network=none`。
 3. `admin_builder_network`：只允许管理员预部署、root-owned、身份固定的
    `docker-container` BuildKit Builder。其镜像、网络、proxy/CNI、registry 范围和 Buildx
-   source policy 均由管理员提供；PerfLens 不创建或修改 Builder。
+   source policy 均由管理员提供；PerfLens 不创建或修改 Builder。Dockerfile 的
+   `RUN --network` 只允许 `none` 或 `default`。
 
 在 `local_only` 中，配置的 digest 可能是本地 image ID，而不是 registry `RepoDigest`；BuildKit
 不得因此去 registry 解析它。类型化 Adapter 会为已经验证的本地镜像创建不可预测的会话私有
@@ -130,6 +137,7 @@ A/B 与 Agent 集成；最终包、宿主机与 Docker 验收。每阶段必须�
 类型、Schema 及相关 Python/Rust 协议测试，才能进入下一阶段。
 
 本地候选已经通过 Python 3.12/3.13、85% 覆盖率门禁、可复现 wheel/sdist 与 DEB、包冒烟、
-Schema/协议，以及 Rust fmt、Clippy、测试、audit、deny 门禁。稳定发布仍要求已安装主机的
-不自动激活/升级/回滚/卸载验收、v0.3.1 宿主机与固定 Docker 回归，以及真实
+Schema/协议，以及 Rust fmt、Clippy、测试、audit、deny 门禁。2026-08-26 源码审查发现的
+问题已经修复并补充拒绝路径回归测试。稳定发布仍需完成已安装主机
+的不自动激活/升级/回滚/卸载验收、v0.3.1 宿主机与固定 Docker 回归，以及真实
 rootless/rootful Docker 验收。优化会话和本实施合同都不会创建 v0.3.2 Tag。

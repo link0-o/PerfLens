@@ -10,7 +10,6 @@ from perflens import __version__
 from perflens.contracts.artifacts import ProjectDetachmentArtifact, SetupArtifact
 from perflens.distribution.claude import plan_claude_project_config_removal
 from perflens.distribution.codex import plan_codex_project_config_removal
-from perflens.distribution.copilot import plan_copilot_project_config_removal
 from perflens.distribution.opencode import plan_opencode_project_config_removal
 from perflens.distribution.skill import (
     SkillClient,
@@ -58,16 +57,33 @@ def detach_project_integration(
     managed_copilot_vscode = _recorded_configuration(
         project, setup, "copilot-vscode-mcp.json"
     )
+    selected_set = set(selected)
+    remaining_clients = set(configured) - selected_set
+    shared_mcp_selected = selected_set & {"claude-code", "copilot"}
+    preserve_shared_mcp = bool(
+        shared_mcp_selected and remaining_clients & {"claude-code", "copilot"}
+    )
 
     codex_config_plan = plan_codex_project_config_removal(project) if "codex" in selected else None
-    claude_config_plan = (
-        plan_claude_project_config_removal(
+    shared_mcp_plan = None
+    if shared_mcp_selected and not preserve_shared_mcp:
+        if (
+            len(shared_mcp_selected) == 2
+            and managed_claude is not None
+            and managed_copilot is not None
+            and managed_claude != managed_copilot
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "detach",
+                "Recorded Claude Code and Copilot ownership copies disagree",
+                recoverable=True,
+            )
+        shared_mcp_plan = plan_claude_project_config_removal(
             project,
-            managed_configuration=managed_claude,
+            managed_configuration=managed_claude or managed_copilot,
         )
-        if "claude-code" in selected
-        else None
-    )
+    claude_config_plan = shared_mcp_plan if "claude-code" in selected else None
     opencode_config_plan = (
         plan_opencode_project_config_removal(
             project,
@@ -77,14 +93,7 @@ def detach_project_integration(
         if "opencode" in selected
         else None
     )
-    copilot_config_plan = (
-        plan_copilot_project_config_removal(
-            project,
-            managed_configuration=managed_copilot,
-        )
-        if "copilot" in selected
-        else None
-    )
+    copilot_config_plan = shared_mcp_plan if "copilot" in selected else None
     copilot_vscode_config_plan = (
         plan_vscode_copilot_project_config_removal(
             project,
@@ -123,20 +132,28 @@ def detach_project_integration(
         plan=codex_config_plan,
         dry_run=dry_run,
     )
-    claude_config_status = _planned_status(
-        selected="claude-code" in selected,
-        plan=claude_config_plan,
-        dry_run=dry_run,
+    claude_config_status = (
+        "skipped"
+        if "claude-code" in selected and preserve_shared_mcp
+        else _planned_status(
+            selected="claude-code" in selected,
+            plan=claude_config_plan,
+            dry_run=dry_run,
+        )
     )
     opencode_config_status = _planned_status(
         selected="opencode" in selected,
         plan=opencode_config_plan,
         dry_run=dry_run,
     )
-    copilot_config_status = _planned_status(
-        selected="copilot" in selected,
-        plan=copilot_config_plan,
-        dry_run=dry_run,
+    copilot_config_status = (
+        "skipped"
+        if "copilot" in selected and preserve_shared_mcp
+        else _planned_status(
+            selected="copilot" in selected,
+            plan=copilot_config_plan,
+            dry_run=dry_run,
+        )
     )
     copilot_vscode_config_status = _planned_status(
         selected="copilot" in selected,
@@ -172,7 +189,7 @@ def detach_project_integration(
         shared_skill_plan,
         claude_skill_plan,
     ):
-        if plan is not None:
+        if plan is not None and all(existing is not plan for existing in plans):
             plans.append(plan)
     if not dry_run:
         for plan in plans:

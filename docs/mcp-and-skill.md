@@ -33,6 +33,9 @@ and a standalone `codex-mcp.toml` under
 administrator privileges. See the [installation guide](../INSTALL.md) for the
 complete download-to-first-analysis path.
 
+Claude Code and Copilot CLI both use `.mcp.json`. When selected together, onboarding verifies
+identical generated/recorded ownership and applies one atomic shared update.
+
 `--client` is repeatable. A user who wants future plain `init` calls to include additional
 clients can persist a strict default set:
 
@@ -190,11 +193,12 @@ and [MCP](https://code.claude.com/docs/en/mcp) documentation for client behavior
 
 ## Connect OpenCode and local GitHub Copilot
 
-Run `perflens init --client opencode` to install the shared Agent Skill and safely merge a
+Run `perflens init --client opencode` to install the shared Agent Skill and merge an OpenCode
 local stdio server into `.opencode/opencode.json`. Existing JSONC is preserved for manual
-merge because rewriting comments would be lossy. See OpenCode's official
-[Skills](https://opencode.ai/docs/skills) and
-[MCP server](https://opencode.ai/v2/docs/mcp-servers) documentation.
+merge because rewriting comments would be lossy. New files use the current direct `mcp` server
+map; existing legacy nested `mcp.servers` JSON is updated and removed in place without silently
+rewriting its layout. See OpenCode's official [Skills](https://opencode.ai/docs/skills) and
+[MCP server](https://opencode.ai/docs/mcp-servers) documentation.
 
 Run `perflens init --client copilot` to configure both local clients: Copilot CLI uses the
 project `.mcp.json`, and VS Code Copilot Agent uses `.vscode/mcp.json`. Both reuse
@@ -212,6 +216,11 @@ That Preview directly returns the normalized project-relative `context_paths` an
 the Agent must show both exact lists before the one confirmation. Successful managed stat, record,
 and Trace results also return their Broker-verified `evidence_bytes`, which is charged to the
 optimization session rather than inferred from a later analysis projection.
+
+PerfLens accepts only build snapshots whose authorized Treatment changes are within
+`mutable_paths`; it does not itself prevent an Agent editor or shell from writing elsewhere.
+The client sandbox and tool approvals enforce filesystem write access. The session grants no
+commit, push, tag, release, Docker-daemon administration, Builder creation, or system changes.
 
 ## Use the Skill
 
@@ -269,7 +278,7 @@ Tool annotations are client hints. The authorization checks above are independen
 8. `read_artifact_page` for large output
 9. `analyze_benchmark`, `compare_profiles`, and `compare_benchmarks` for A/B work
 
-`collect_profile` is intentionally outside the default sequence. Use it only after the user approves the exact target and the [Skill safety rules](../.agents/skills/perflens/references/active-collection-safety.md) have been applied. The stable automatic sequence is `stat → record`; a request for “deep analysis” does not authorize or activate the raw trace experiments.
+`collect_profile` is intentionally outside the default sequence. Use it only after the user approves the exact target and the [Skill safety rules](../.agents/skills/perflens/references/active-collection-safety.md) have been applied. Evidence selection normally starts with `stat`, then chooses `record`, `sched`, `off_cpu`, or `lock` only when the deployed feature profile and observations justify it. A request for “deep analysis” does not expand modes, targets, or authorization.
 
 For policy-approved live PIDs, use `inspect_collection_capabilities`,
 `plan_automatic_collection`, `execute_collection_plan`, and `analyze_collection`.

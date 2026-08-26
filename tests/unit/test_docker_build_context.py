@@ -268,6 +268,25 @@ def test_snapshot_rejects_writable_hardlinked_and_oversized_files(
 ) -> None:
     project, private, policy, recipe = _recipe_and_policy(tmp_path)
     source = project / "src/app"
+    source.chmod(0o660)
+
+    def reject_group_write(*, group_id: int, invoking_uid: int) -> bool:
+        del group_id, invoking_uid
+        return False
+
+    with monkeypatch.context() as context:
+        context.setattr(
+            build_context_module,
+            "_group_write_is_private",
+            reject_group_write,
+        )
+        with pytest.raises(PerfLensError):
+            capture_docker_build_context(
+                policy,
+                recipe,
+                project_root=project,
+                private_directory=private,
+            )
     source.chmod(0o666)
     with pytest.raises(PerfLensError):
         capture_docker_build_context(

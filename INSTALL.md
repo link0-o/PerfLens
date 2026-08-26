@@ -59,8 +59,9 @@ perflens init
 Use `perflens init --docker` instead when this project intentionally profiles one process in a
 local Linux Docker Engine. Review the generated `perflens-setup/container-workload.toml`; Docker
 execution still requires an explicit `per_run` or `bounded_session` confirmation through the
-project MCP. PerfLens does not install/start Docker, join its group, build/pull images, or accept
-arbitrary Docker arguments.
+project MCP. Onboarding does not install/start Docker, join its group, build/pull images, or accept
+arbitrary Docker arguments. A separately enabled schema-1.1 optimization contract may perform a
+typed build only after its own reviewed authorization.
 
 `init` activates only this project for Codex and Claude Code by default. It installs the
 selected project Skills, creates or updates the marked PerfLens block in
@@ -102,6 +103,8 @@ later global-default changes.
 OpenCode receives `.opencode/opencode.json` and reuses `.agents/skills/perflens`.
 The `copilot` selection is a local-client suite: Copilot CLI receives `.mcp.json`, VS Code
 Copilot Agent receives `.vscode/mcp.json`, and both reuse `.agents/skills/perflens`.
+Claude Code and Copilot CLI share `.mcp.json`; when both are selected, onboarding verifies one
+identical ownership copy and applies one atomic update.
 It does not configure GitHub's cloud Coding Agent, which cannot use the local Collector,
 Docker socket, or Unix sockets through these project files. Use `--read-only` to disable
 automatic workload collection. Projects that have not run `init` do not discover PerfLens. The

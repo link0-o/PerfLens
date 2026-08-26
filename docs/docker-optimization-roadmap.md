@@ -2,17 +2,19 @@
 
 [简体中文](docker-optimization-roadmap.zh-CN.md)
 
-Status: the v0.3.2 source implementation and local package gates are complete. Contracts, safe
+Status: the v0.3.2 release-candidate interfaces are implemented, but the open security and
+multi-client findings in [Known issues](known-issues.md) prevent a release-ready claim. Contracts,
 context capture, the typed Build Adapter, one-confirmation session tools, Build-bound collection,
-deterministic A/B comparison, and Agent policy are implemented. Real rootless/rootful Docker and
-installed-host acceptance remain release gates, so this document does not claim that an untested
-host is ready. Release v0.3.1 fixed-image collection remains supported.
+deterministic A/B comparison, and Agent policy exist. Full rootless/rootful Docker and installed-host
+acceptance also remain release gates. Release v0.3.1 fixed-image collection remains supported.
 
 ## Outcome and boundary
 
 `bounded_optimization_session` is one user-confirmed, connection-scoped authorization for an
-Agent to build a baseline, collect evidence, edit only reviewed project paths, build up to three
-candidates, and perform matched A/B validation. It is not permanent approval and never authorizes
+Agent to build a baseline, collect evidence, admit changes only from reviewed project paths into
+build snapshots, build up to three candidates, and perform matched A/B validation. Filesystem
+write permission remains a client-sandbox boundary, not a capability enforced by PerfLens. The
+session is not permanent approval and never authorizes
 commit, push, tags, releases, arbitrary Docker arguments, or access outside the declared project
 context.
 
@@ -44,8 +46,11 @@ Improvement.
 The package supplies a root-owned, read-only, empty Docker configuration as its trust anchor.
 Because Buildx must persist Builder-selection state, every Preview creates an empty runtime
 configuration below a randomized, user-private `0700` directory. It never copies the user's Docker
-configuration, credentials, or Context, is removed with the private snapshot on expiry, failure,
-or revocation, and has its inode, owner, and mode revalidated before every command.
+configuration, credentials, or Context, and has its inode, owner, and mode revalidated before
+every command. Explicit revocation removes private runtime state immediately when safe; expired
+Preview/session state is reclaimed by a bounded timer and by any later interaction. MCP connection
+shutdown revokes active authority and performs the same identity-verified cleanup. A process crash
+may still leave proven session objects for manual review; global Docker pruning remains forbidden.
 
 ## Implemented typed interfaces (host acceptance still required)
 
@@ -90,12 +95,14 @@ referenced by pre-existing tags or other containers. Global image or cache pruni
 ## Network tiers
 
 1. `local_only` is the default. The exact base digest must already exist; pull is false and build
-   networking is none.
+   networking is none. Dockerfile validation admits only `RUN --network=none` in this tier and
+   rejects malformed, `default`, `host`, or custom per-instruction overrides.
 2. `pinned_pull` may fetch only a complete digest from an administrator registry allowlist after
-   confirmation. The build itself still has no network.
+   confirmation. The build itself has no network, so it has the same `RUN --network=none` rule.
 3. `admin_builder_network` may use only a predeployed, root-owned, identity-pinned
    `docker-container` BuildKit Builder. Its image, network, proxy/CNI settings, registry scope, and
    Buildx source policy are administrator inputs; PerfLens never creates or mutates the Builder.
+   Dockerfile `RUN --network` may be `none` or `default`, but no other value.
 
 For `local_only`, the configured digest may be a local image ID rather than a registry
 `RepoDigest`. BuildKit must not resolve that value through a registry. The typed adapter therefore
@@ -156,6 +163,7 @@ relevant Python/Rust protocol tests before the next begins.
 
 The local candidate has passed Python 3.12/3.13, the 85% coverage gate, reproducible wheel/sdist
 and DEB builds, package smoke, schema/protocol checks, and the Rust format, Clippy, test, audit, and
-deny gates. Stable release still requires installed-host non-activation/upgrade/rollback/removal,
-v0.3.1 host and fixed-Docker regression, and real rootless/rootful Docker acceptance. PerfLens does
-not create the v0.3.2 tag as part of the optimization session or this implementation contract.
+deny gates. The 2026-08-26 source audit findings are resolved with denial-path regression tests.
+Stable release still requires installed-host non-activation/upgrade/rollback/removal, v0.3.1 host
+and fixed-Docker regression, and real rootless/rootful Docker acceptance. PerfLens does not create
+the v0.3.2 tag as part of the optimization session or this implementation contract.

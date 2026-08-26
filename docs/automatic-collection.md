@@ -42,13 +42,14 @@ socket is never passed to a Collector, Helper, or Skill and is not retained in
 public artifacts.
 
 Existing-container authorization binds one concrete instance, so restart,
-replacement, or abnormal identity changes invalidate it. Temporary test
-containers bind an authorized `ContainerWorkloadSpec`; new container IDs and
-PIDs are expected per run, but the fixed Gate must create them and every
-instance is revalidated. PerfLens does not build or pull images, install or
-start Docker, modify Docker groups, or accept arbitrary Docker arguments,
-host PID namespaces, privileged containers, arbitrary host mounts, or remote
-endpoints.
+replacement, or abnormal identity changes invalidate it. The v0.3.1 fixed-image
+temporary-container path binds an authorized `ContainerWorkloadSpec`; new container IDs and PIDs
+are expected per run, but the fixed Gate must create them and every instance is revalidated. That
+path does not build or pull images. The separately enabled v0.3.2 optimization path may execute
+only typed builds bound to an explicitly confirmed schema-1.1 Recipe, context snapshot, Builder,
+network tier, and hard budgets. Neither path installs or starts Docker, modifies Docker groups, or
+accepts arbitrary Docker arguments, host PID namespaces, privileged containers, arbitrary host
+mounts, or remote endpoints.
 
 Collection also preserves bounded cgroup-v2 before/after snapshots and
 deltas. CPU, memory, I/O, PIDs, and pressure are whole-container context, not

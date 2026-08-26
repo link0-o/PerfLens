@@ -26,19 +26,56 @@
 `perf_event_paranoid` 或 PMU 降级故障。应安装相互匹配的修复后主包与 Collector 包并重启
 托管服务，不要绕过 Broker 或降低主机安全策略。
 
-## KI-2026-08-15：高级 trace 原始入口容易被误认为稳定分析能力（待解决）
+## KI-2026-08-26：`local_only` 未拒绝所有逐条 `RUN` 网络覆盖（已解决）
+
+- 影响范围：v0.3.2 Docker 优化使用 `network_tier = "local_only"` 或 `pinned_pull`，且
+  Dockerfile 显式包含 `RUN --network=default` 或其他非 `none` 的逐条网络值；
+- 预期边界：允许的 pinned pull 完成后，实际构建本身不得联网；
+- 修复：Dockerfile 校验会拒绝格式错误和未知的逐条网络覆盖；`local_only`、`pinned_pull`
+  只允许 `RUN --network=none`，管理员固定联网层只允许 `none` 或 `default`。外层 Buildx
+  网络仍独立从已授权层级派生；
+- 回归覆盖：包含离线层对 `default`、`host`、自定义值的拒绝，以及 pinned offline 与管理员
+  联网层的正常路径。
+
+## KI-2026-08-26：Claude Code 与 Copilot 不能在一次初始化中原子共同选择（已解决）
+
+- 范围：一次 `perflens init` 或用户默认集合同时包含 `claude-code` 与 `copilot`；
+- 原因：Claude Code 与 Copilot CLI 都使用项目 `.mcp.json`，旧引导却从同一个更新前身份
+  分别生成两个修改计划；
+- 修复：引导要求生成内容和已记录所有权副本一致，只创建并应用一次原子共享计划，同时记录
+  两个客户端。detach 会在任一客户端仍保留时保留共享条目，并在二者都移除时只删除一次。
+
+## KI-2026-08-26：组写校验假定同数字组是私有组（已解决）
+
+- 范围：v0.3.2 构建上下文中文件或目录可被组写，且其数字 GID 恰好等于调用用户数字 UID；
+- 修复：数字 UID/GID 相等不再构成信任。组可写条目只有在账户与组数据库能够证明它是调用
+  用户的主组、没有其他账户把它作为主组、且没有列出不同附加成员时才会接受；身份缺失或
+  有歧义时安全拒绝，其他用户可写仍永久禁止。
+
+## KI-2026-08-26：过期优化状态不会同步回收（已解决）
+
+- 修复：生产运行时会注册有界到期定时器，后续任意运行时交互也会清理过期状态；MCP 连接
+  关闭时撤销活动授权并释放私有 Buildx 状态、快照及身份已核验的临时镜像。显式撤销仍可
+  幂等执行。进程崩溃仍可能留下已证明归属的对象供人工审查；禁止全局 Docker prune。
+
+## KI-2026-08-26：生成的优化模板夸大了编辑强制能力（已解决）
+
+- 范围：`perflens init --docker` 生成的 schema 1.1 `[optimization]` 注释；
+- 修复：生成的中英文模板改为“只有 `mutable_paths` 的变化能进入候选构建快照”，同时明确
+  实际编辑/写入权限由客户端沙箱负责，并继续禁止会话授予 commit、push、Tag 或 Release。
+
+## KI-2026-08-15：高级 trace 原始入口容易被误认为稳定分析能力（已解决）
 
 - 范围：公共模式类型与 `cap_perfmon` Python Broker 可以构造 `sched`、`lock`、`off_cpu`
   原始 perf 证据，旧文档曾把五种模式并列描述；
-- 实际边界：生成策略只启用 `record`、`stat`，`paranoid3_helper` 会拒绝另外三种模式；
-  当前没有类型化的调度延迟、锁等待/持有与 owner/waiter、或配对 off-CPU 区间产物，通用
-  `perf.data` on-CPU 分析器不能代替这些专用分析器；
+- 历史边界：生成策略只启用 `record`、`stat`，`paranoid3_helper` 会拒绝另外三种模式，
+  当时也没有类型化的调度延迟、锁或配对 off-CPU 产物；
 - 风险：开放原始模式可能带出非目标任务元数据，产生依赖内核/perf 版本的证据，或者让
   Agent 对尚未重建的等待时长作出过强结论；
-- 当前处理：文档和 Skill 已把它们标为默认关闭的实验入口；普通“深度分析/优化”仍只走
-  正式的 `stat → record` 路径；
-- 计划修复：先完成离线确定性分析器，再通过隐私和真实主机门禁决定是否在
-  `cap_perfmon` 中开放至多一种实验模式；不扩大当前高权限 Helper。详细计划见
+- 解决：v0.3.0 增加独立 Trace Helper、目标过滤、确定性的 `sched/off_cpu/lock` 证据与分析、
+  验证产物和显式 `full_diagnostics` 配置。现有高权限 stat/record Helper 仍只允许
+  `record/stat`。丢失、截断、边界缺失或无法配对的 trace 证据仍必须报告 `partial`；futex
+  证据仍不能凭空生成用户态锁 owner 或持锁时间。详细边界见
   [《采集能力扩展路线图》](collector-capability-roadmap.zh-CN.md)。
 
 ## KI-2026-08-15：原始 perf 证据到 Agent 投影缺少端到端复核（已修复）

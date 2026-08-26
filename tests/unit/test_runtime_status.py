@@ -491,3 +491,32 @@ def test_runtime_status_checks_explicit_local_clients(tmp_path: Path, client: st
     assert status.selected_clients == (client,)
     assert status.skill_status == "ready"
     assert status.mcp_config_status == "ready"
+
+
+def test_runtime_status_accepts_preserved_legacy_opencode_layout(tmp_path: Path) -> None:
+    project = tmp_path / "opencode-legacy"
+    project.mkdir()
+    setup = run_project_setup(
+        project,
+        install_skill=True,
+        install_codex_config=False,
+        install_opencode_config=True,
+        codex_enabled=False,
+        opencode_enabled=True,
+        automatic_collection=False,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+    assert setup.opencode_project_config_path is not None
+    config_path = Path(setup.opencode_project_config_path)
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    server = payload["mcp"]["perflens"]
+    server["disabled"] = not server.pop("enabled")
+    server["codemode"] = False
+    payload["mcp"] = {"servers": {"perflens": server}}
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    status = inspect_runtime_status(project, perf_path=Path("/bin/true"))
+
+    assert status.selected_clients == ("opencode",)
+    assert status.mcp_config_status == "ready"

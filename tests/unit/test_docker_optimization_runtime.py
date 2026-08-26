@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, cast
 
@@ -44,6 +44,7 @@ class _FakeBuildAdapter:
     def __init__(self, *, base_present: bool = True) -> None:
         self.base_present = base_present
         self.cleaned: list[str] = []
+        self.close_count = 0
         self.build_error: BaseException | None = None
         self.cleanup_error: PerfLensError | None = None
         self.base_image_error: PerfLensError | None = None
@@ -147,7 +148,7 @@ class _FakeBuildAdapter:
         self.cleaned.append(result.artifact.build_id)
 
     def close(self) -> None:
-        return None
+        self.close_count += 1
 
 
 def _policy_text() -> str:
@@ -423,6 +424,53 @@ def test_runtime_preview_cleanup_and_capacity_are_bounded(tmp_path: Path) -> Non
     with pytest.raises(PerfLensError) as captured:
         runtime.preview(allowed_modes=("stat",))
     assert captured.value.code is ErrorCode.RESOURCE_LIMIT_EXCEEDED
+
+
+def test_runtime_reclaims_expired_preview_on_next_interaction(tmp_path: Path) -> None:
+    wall_now = [NOW]
+    monotonic_now = [100.0]
+    runtime, _, adapter = make_optimization_runtime(
+        tmp_path,
+        wall_clock=lambda: wall_now[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    runtime.preview(allowed_modes=("stat",))
+    private_directory = next((tmp_path / "private").iterdir())
+    assert private_directory.is_dir()
+
+    wall_now[0] += timedelta(seconds=601)
+    monotonic_now[0] += 601
+    runtime.inspect_capability()
+
+    assert not private_directory.exists()
+    assert adapter.close_count >= 2
+
+
+def test_runtime_reclaims_expired_session_and_close_is_idempotent(tmp_path: Path) -> None:
+    wall_now = [NOW]
+    monotonic_now = [100.0]
+    runtime, _, adapter = make_optimization_runtime(
+        tmp_path,
+        wall_clock=lambda: wall_now[0],
+        monotonic_clock=lambda: monotonic_now[0],
+    )
+    _, session = _authorize(runtime)
+    baseline = runtime.build(session.session_id, build_kind="baseline", candidate_round=0)
+    private_directory = next((tmp_path / "private").iterdir())
+
+    wall_now[0] = datetime.fromisoformat(session.expires_at) + timedelta(seconds=1)
+    monotonic_now[0] += 7201
+    runtime.inspect_capability()
+
+    assert adapter.cleaned == [baseline.build.build_id]
+    assert not private_directory.exists()
+    with pytest.raises(PerfLensError, match="unknown to this MCP"):
+        runtime.snapshot(session.session_id)
+
+    runtime.close()
+    runtime.close()
+    with pytest.raises(PerfLensError, match="runtime is closed"):
+        runtime.inspect_capability()
 
 
 def test_runtime_rejects_candidate_without_treatment_and_unknown_build(tmp_path: Path) -> None:

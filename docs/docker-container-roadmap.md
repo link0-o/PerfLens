@@ -7,15 +7,15 @@ The bounded build-and-optimize extension is specified separately in the
 
 [简体中文](docker-container-roadmap.zh-CN.md) | English
 
-Status: **implemented release candidate; automated gates passed, real-host Docker acceptance pending**
+Status: **released in v0.3.1; every installed host still needs its own explicit acceptance**
 
-Last audited: 2026-08-22 against the v0.3.1 source and package candidate
+Last audited: 2026-08-26 against the released v0.3.1 boundary and v0.3.2 compatibility path
 
-Target release: `v0.3.1`
+Released version: `v0.3.1`
 
-This document is the v0.3.1 design, implementation, use, and release contract. The current source
-and local package candidate implement active discovery, authorization, managed launch, collection,
-analysis, and matched comparison for the bounded Docker scope below. A host still must pass the
+This document is the v0.3.1 design, implementation, use, and release contract. The released path
+implements active discovery, authorization, managed launch, collection, analysis, and matched
+comparison for the bounded Docker scope below. A host still must pass the
 explicit local-Docker acceptance before its installation can claim that the runtime is usable.
 
 The release sequence is fixed as follows:
@@ -184,14 +184,14 @@ At completion, PerfLens may stop and remove only a container whose full ID, sess
 receipt, and managed labels all match. Any uncertainty preserves the container and reports a manual
 cleanup command; it never guesses or removes a user-owned container.
 
-Without automatic image builds, changed code enters the same toolchain image through the read-only
-`/workspace` mount and private scratch. Interpreted workloads can run directly. Compiled workloads
-can write build output to scratch from the fixed container command or use host-produced artifacts
-inside the project root. A project that requires rebuilding its image must do so through the user
-or CI outside the optimization session. Editing source under `/workspace` does not end the
-session, and each generated build artifact records its digest. Rebuilding an image changes its
-digest and currently requires new authorization. A future in-session build capability needs a
-separate fixed-build-recipe authorization; arbitrary image changes cannot inherit authorization.
+In the v0.3.1 fixed-image workflow, changed code enters the same toolchain image through the
+read-only `/workspace` mount and private scratch. Interpreted workloads can run directly. Compiled
+workloads can write build output to scratch from the fixed container command or use host-produced
+artifacts inside the project root. Rebuilding that fixed image changes its digest and requires a
+new v0.3.1 authorization. v0.3.2 now provides a separate, default-off fixed-build-recipe
+authorization whose verified baseline/candidate image changes are valid Treatment; it does not
+turn arbitrary image changes into authorization. See the
+[v0.3.2 bounded optimization contract](docker-optimization-roadmap.md).
 
 ## 4. Authorization model
 

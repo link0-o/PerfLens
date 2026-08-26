@@ -622,6 +622,8 @@ def test_build_rejects_missing_or_contradictory_buildx_metadata_identity(
         f'FROM registry.example/base@{BASE_DIGEST}\nADD ["https://x/a", "/a"]\n',
         f"FROM registry.example/base@{BASE_DIGEST}\nRUN --mount=type=secret echo x\n",
         f"FROM registry.example/base@{BASE_DIGEST}\nRUN --network=host echo x\n",
+        f"FROM registry.example/base@{BASE_DIGEST}\nRUN --network=default echo x\n",
+        f"FROM registry.example/base@{BASE_DIGEST}\nRUN --network=custom echo x\n",
         f"FROM registry.example/base@{BASE_DIGEST}\nRUN --device=/dev/kvm echo x\n",
         f"FROM registry.example/base@{BASE_DIGEST}\nCOPY --from=other/image /a /a\n",
         f"FROM registry.example/base@{BASE_DIGEST}\nONBUILD ADD https://x/a /a\n",
@@ -817,6 +819,10 @@ def test_pinned_pull_uses_only_administrator_reference_then_builds_offline(
     administrator = _admin_policy(tmp_path, tier="pinned_pull", driver="docker")
     _, private, policy, snapshot = _project(
         tmp_path,
+        dockerfile=(
+            f"FROM registry.example/base@{BASE_DIGEST}\n"
+            "RUN --network=none echo offline\n"
+        ),
         network_tier="pinned_pull",
         builder_policy_id="test-builder",
     )
@@ -849,6 +855,10 @@ def test_administrator_network_builder_is_pinned_and_uses_fixed_network(
     )
     _, private, policy, snapshot = _project(
         tmp_path,
+        dockerfile=(
+            f"FROM registry.example/base@{BASE_DIGEST}\n"
+            "RUN --network=default echo authorized\n"
+        ),
         network_tier="admin_builder_network",
         builder_policy_id="test-builder",
     )

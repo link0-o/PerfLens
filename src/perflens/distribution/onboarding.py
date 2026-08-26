@@ -320,15 +320,6 @@ def run_project_setup(
         collector_spool_root=collector_spool_root,
         mcp_command=mcp_command,
     )
-    claude_plan: ClaudeConfigInstallPlan | None = (
-        plan_claude_project_config(
-            project,
-            claude_configuration,
-            managed_configuration=previous_claude_configuration,
-        )
-        if install_claude_config
-        else None
-    )
     common_configuration_options: dict[str, Any] = {
         "allow_process_execution": allow_process_execution,
         "automatic_collection": automatic_collection,
@@ -361,15 +352,49 @@ def run_project_setup(
         else None
     )
     copilot_configuration = render_copilot_config(project, **common_configuration_options)
-    copilot_plan: CopilotConfigInstallPlan | None = (
-        plan_copilot_project_config(
+    claude_plan: ClaudeConfigInstallPlan | None = None
+    copilot_plan: CopilotConfigInstallPlan | None = None
+    if install_claude_config and install_copilot_config:
+        if claude_configuration != copilot_configuration:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "setup",
+                "Claude Code and Copilot generated incompatible shared MCP configurations",
+            )
+        if (
+            previous_claude_configuration is not None
+            and previous_copilot_configuration is not None
+            and previous_claude_configuration != previous_copilot_configuration
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "setup",
+                "Recorded Claude Code and Copilot ownership copies disagree",
+                recoverable=True,
+                suggested_actions=(
+                    "Review .mcp.json and the two setup ownership copies before updating.",
+                ),
+            )
+        shared_previous = previous_claude_configuration or previous_copilot_configuration
+        shared_plan = plan_claude_project_config(
+            project,
+            claude_configuration,
+            managed_configuration=shared_previous,
+        )
+        claude_plan = shared_plan
+        copilot_plan = shared_plan
+    elif install_claude_config:
+        claude_plan = plan_claude_project_config(
+            project,
+            claude_configuration,
+            managed_configuration=previous_claude_configuration,
+        )
+    elif install_copilot_config:
+        copilot_plan = plan_copilot_project_config(
             project,
             copilot_configuration,
             managed_configuration=previous_copilot_configuration,
         )
-        if install_copilot_config
-        else None
-    )
     copilot_vscode_configuration = render_vscode_copilot_config(
         project, **common_configuration_options
     )
@@ -580,7 +605,11 @@ def run_project_setup(
             generated.append(claude_plan.path)
         if opencode_plan is not None and opencode_plan.status != "existing":
             generated.append(opencode_plan.path)
-        if copilot_plan is not None and copilot_plan.status != "existing":
+        if (
+            copilot_plan is not None
+            and copilot_plan.status != "existing"
+            and copilot_plan.path not in generated
+        ):
             generated.append(copilot_plan.path)
         if copilot_vscode_plan is not None and copilot_vscode_plan.status != "existing":
             generated.append(copilot_vscode_plan.path)
@@ -691,7 +720,7 @@ def run_project_setup(
         if opencode_plan is not None:
             opencode_plan.apply()
             applied_opencode_config = opencode_plan.status != "existing"
-        if copilot_plan is not None:
+        if copilot_plan is not None and copilot_plan is not claude_plan:
             copilot_plan.apply()
             applied_copilot_config = copilot_plan.status != "existing"
         if copilot_vscode_plan is not None:
@@ -1191,7 +1220,11 @@ def _validate_disabled_clients_detached(
             codex_plan = True
         if codex_plan is not None:
             still_active.append("codex")
-    if "claude-code" in disabled and artifact.claude_project_config_status != "skipped":
+    if (
+        "claude-code" in disabled
+        and "copilot" not in selected
+        and artifact.claude_project_config_status != "skipped"
+    ):
         try:
             claude_plan = plan_claude_project_config_removal(
                 project,
@@ -1224,7 +1257,10 @@ def _validate_disabled_clients_detached(
             still_active.append("opencode")
     if "copilot" in disabled:
         copilot_attached = False
-        if artifact.copilot_project_config_status != "skipped":
+        if (
+            "claude-code" not in selected
+            and artifact.copilot_project_config_status != "skipped"
+        ):
             try:
                 copilot_attached = (
                     plan_copilot_project_config_removal(

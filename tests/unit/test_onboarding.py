@@ -350,6 +350,55 @@ def test_setup_update_rolls_back_all_local_client_configs_on_late_failure(
     assert not (project / ".perflens-setup.perflens-backup").exists()
 
 
+def test_setup_installs_and_updates_claude_and_copilot_shared_config_atomically(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    installed = run_project_setup(
+        project,
+        install_skill=True,
+        install_codex_config=False,
+        install_claude_skill=True,
+        install_claude_config=True,
+        install_copilot_config=True,
+        install_copilot_vscode_config=True,
+        codex_enabled=False,
+        claude_enabled=True,
+        copilot_enabled=True,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+
+    shared = project / ".mcp.json"
+    assert installed.claude_project_config_status == "installed"
+    assert installed.copilot_project_config_status == "installed"
+    assert installed.generated_files.count(str(shared)) == 1
+    assert "perflens" in json.loads(shared.read_text(encoding="utf-8"))["mcpServers"]
+
+    updated = run_project_setup(
+        project,
+        install_skill=True,
+        install_codex_config=False,
+        install_claude_skill=True,
+        install_claude_config=True,
+        install_copilot_config=True,
+        install_copilot_vscode_config=True,
+        codex_enabled=False,
+        claude_enabled=True,
+        copilot_enabled=True,
+        automatic_collection=True,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+        update_existing=True,
+    )
+
+    assert updated.claude_project_config_status == "updated"
+    assert updated.copilot_project_config_status == "updated"
+    assert "--allow-automatic-collection" in shared.read_text(encoding="utf-8")
+
+
 def test_setup_update_migrates_v012_legacy_skill_path(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()

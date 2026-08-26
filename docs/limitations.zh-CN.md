@@ -50,3 +50,9 @@ Kubernetes、自动 build/pull 镜像或任意 Docker 参数。已有容器会�
 目标进程独占指标；无法保留已验证的容器 root/module 快照时，符号和源码证据必须标记为
 `partial`。详见 [v0.3.1 Docker 指南](docker-container-roadmap.zh-CN.md)。C/C++、Java、
 Python 和 Go 用户态锁 Adapter 仍计划进入 v0.4.0；公共合同骨架不代表 Adapter 当前可用。
+
+v0.3.2 发布候选增加默认关闭的有界优化会话，可执行绑定 Recipe 的类型化 baseline/candidate
+构建。Preview 不 build/pull，会话不接受任意 Docker 参数或源码路径；只有经过 Artifact
+复核的匹配 A/B 才能声称 Verified Improvement。离线层只允许 `RUN --network=none`；管理员
+联网层只允许 `none` 或 `default`。详见[已知问题](known-issues.zh-CN.md)和
+[v0.3.2 优化指南](docker-optimization-roadmap.zh-CN.md)。

@@ -23,6 +23,8 @@ Repeated `--client` options select a per-project set. Users may explicitly persi
 defaults with `perflens client-defaults`; absent `~/.config/perflens/config.toml`, the built-in
 selection remains Codex plus Claude Code. Project updates preserve their recorded selection unless
 the user supplies a replacement list.
+Claude Code and Copilot CLI both manage the `perflens` entry in `.mcp.json`; co-selection uses one
+validated ownership copy and one atomic shared update.
 
 ## Guided setup in `v0.3.0`
 

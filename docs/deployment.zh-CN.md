@@ -40,6 +40,8 @@ GitHub 云端 Coding Agent 获得宿主 Collector 或 Docker Socket 访问权。
 重复传入 `--client` 可选择一个项目级客户端集合。用户可显式运行 `perflens client-defaults`
 保存以后新项目的默认集合；`~/.config/perflens/config.toml` 不存在时，内置默认值仍只有
 Codex + Claude Code。已有项目更新时默认保留自身已记录的集合，只有显式客户端参数才替换。
+Claude Code 与 Copilot CLI 都会管理 `.mcp.json` 中的 `perflens` 条目；同时选择时使用一份
+已验证所有权副本和一次原子共享更新。
 
 ## `v0.3.0` 安装向导
 

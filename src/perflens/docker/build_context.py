@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import grp
 import hashlib
 import json
 import os
+import pwd
 import stat
 import tarfile
 import tempfile
@@ -500,11 +502,16 @@ def _validate_entry_metadata(metadata: os.stat_result, *, invoking_uid: int) -> 
         if metadata.st_uid != invoking_uid:
             raise _context_error("Docker build context symlinks must be user-owned")
         return
-    unsafe_group_write = bool(metadata.st_mode & stat.S_IWGRP) and metadata.st_gid != invoking_uid
     if (
         metadata.st_uid != invoking_uid
+        or (
+            bool(metadata.st_mode & stat.S_IWGRP)
+            and not _group_write_is_private(
+                group_id=metadata.st_gid,
+                invoking_uid=invoking_uid,
+            )
+        )
         or bool(metadata.st_mode & stat.S_IWOTH)
-        or unsafe_group_write
     ):
         raise _context_error(
             "Docker build context entries must be user-owned and not broadly writable"
@@ -523,11 +530,27 @@ def _safe_directory(path: Path, *, uid: int, label: str, private: bool) -> Path:
         raise _context_error(f"Docker build {label} identity or owner is unsafe")
     mode = stat.S_IMODE(metadata.st_mode)
     unsafe_project_write = bool(metadata.st_mode & stat.S_IWOTH) or (
-        bool(metadata.st_mode & stat.S_IWGRP) and metadata.st_gid != uid
+        bool(metadata.st_mode & stat.S_IWGRP)
+        and not _group_write_is_private(group_id=metadata.st_gid, invoking_uid=uid)
     )
     if (private and mode != 0o700) or (not private and unsafe_project_write):
         raise _context_error(f"Docker build {label} permissions are unsafe")
     return resolved
+
+
+def _group_write_is_private(*, group_id: int, invoking_uid: int) -> bool:
+    """Prove that a group-writable path is writable by only the invoking identity."""
+    try:
+        owner = pwd.getpwuid(invoking_uid)
+        group = grp.getgrgid(group_id)
+        primary_group_users = {
+            account.pw_uid for account in pwd.getpwall() if account.pw_gid == group_id
+        }
+    except (KeyError, OSError):
+        return False
+    if owner.pw_gid != group_id or primary_group_users != {invoking_uid}:
+        return False
+    return all(member == owner.pw_name for member in group.gr_mem)
 
 
 def _hash_verified_entry(path: Path, identity: _FileIdentity) -> str:

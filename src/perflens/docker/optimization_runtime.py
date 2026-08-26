@@ -93,6 +93,7 @@ class _OptimizationRuntimeSession:
     preview: _PendingPreview = field(repr=False)
     builds: dict[str, DockerBuildExecutionResult] = field(default_factory=lambda: {})
     latest_treatment_manifest_sha256: str | None = None
+    resources_released: bool = False
 
 
 class DockerOptimizationRuntime:
@@ -135,8 +136,16 @@ class DockerOptimizationRuntime:
         self._pending: dict[str, _PendingPreview] = {}
         self._sessions: dict[str, _OptimizationRuntimeSession] = {}
         self._lock = threading.RLock()
+        self._closed = False
+        self._cleanup_timer_enabled = wall_clock is None and monotonic_clock is None
+        self._cleanup_timer: threading.Timer | None = None
 
     def inspect_capability(self) -> DockerBuildCapabilityArtifact:
+        with self._lock:
+            self._ensure_open_locked()
+            self._prune_pending_locked()
+            self._prune_sessions_locked()
+            self._schedule_cleanup_locked()
         self._assert_project_current()
         runtime = self._runtime_capability_factory()
         _verify_content(runtime)
@@ -189,7 +198,9 @@ class DockerOptimizationRuntime:
         runtime = self._runtime_capability_factory()
         _verify_content(runtime)
         with self._lock:
+            self._ensure_open_locked()
             self._prune_pending_locked()
+            self._prune_sessions_locked()
             if (
                 sum(not pending.consumed for pending in self._pending.values())
                 >= _MAX_PENDING_PREVIEWS
@@ -246,6 +257,7 @@ class DockerOptimizationRuntime:
                     ),
                 )
                 self._pending[result.preview.preview_id] = pending
+                self._schedule_cleanup_locked()
                 return result
             except BaseException:
                 if adapter is not None:
@@ -262,6 +274,7 @@ class DockerOptimizationRuntime:
         explicit_authorization: str,
     ) -> DockerOptimizationSessionArtifact:
         with self._lock:
+            self._ensure_open_locked()
             self._prune_pending_locked()
             self._prune_sessions_locked()
             pending = self._pending.get(preview_id)
@@ -291,6 +304,7 @@ class DockerOptimizationRuntime:
                     pending.snapshot.artifact.mutable_manifest_sha256
                 ),
             )
+            self._schedule_cleanup_locked()
             return authorized.artifact
 
     def build(
@@ -320,6 +334,8 @@ class DockerOptimizationRuntime:
                 ):
                     self._authority.revoke(runtime_session.access)
                     _discard_snapshot(snapshot)
+                    self._release_runtime_session_locked(session_id, runtime_session)
+                    self._schedule_cleanup_locked()
                     raise _authorization_error(
                         "Docker optimization immutable build context changed"
                     )
@@ -388,6 +404,9 @@ class DockerOptimizationRuntime:
                             execution_result,
                             session_identity_sha256=_session_identity_sha256(session_id),
                         )
+                if self._authority.snapshot(runtime_session.access).state != "active":
+                    self._release_runtime_session_locked(session_id, runtime_session)
+                    self._schedule_cleanup_locked()
             raise
         with self._lock:
             runtime_session.builds[execution_result.artifact.build_id] = execution_result
@@ -396,6 +415,9 @@ class DockerOptimizationRuntime:
             )
             if snapshot is not pending.snapshot:
                 _discard_snapshot(snapshot)
+            if session.state != "active":
+                self._release_runtime_session_locked(session_id, runtime_session)
+                self._schedule_cleanup_locked()
             return DockerOptimizationBuildResult(
                 build=execution_result.artifact,
                 session=session,
@@ -408,16 +430,8 @@ class DockerOptimizationRuntime:
                 allow_inactive=True,
             )
             artifact = self._authority.revoke(runtime_session.access)
-            for build in runtime_session.builds.values():
-                try:
-                    runtime_session.preview.adapter.cleanup_build(
-                        build,
-                        session_identity_sha256=_session_identity_sha256(session_id),
-                    )
-                except PerfLensError:
-                    continue
-            runtime_session.preview.adapter.close()
-            _remove_private_directory(runtime_session.preview.private_directory)
+            self._release_runtime_session_locked(session_id, runtime_session)
+            self._schedule_cleanup_locked()
             return artifact
 
     def snapshot(self, session_id: str) -> DockerOptimizationSessionArtifact:
@@ -473,6 +487,8 @@ class DockerOptimizationRuntime:
                     != build.immutable_manifest_sha256
                 ):
                     self._authority.revoke(runtime_session.access)
+                    self._release_runtime_session_locked(session_id, runtime_session)
+                    self._schedule_cleanup_locked()
                     raise _authorization_error(
                         "Docker optimization immutable context changed before collection"
                     )
@@ -508,12 +524,35 @@ class DockerOptimizationRuntime:
     ) -> DockerOptimizationSessionArtifact:
         with self._lock:
             runtime_session = self._require_runtime_session_locked(session_id)
-            return self._authority.finish_workload(
+            artifact = self._authority.finish_workload(
                 runtime_session.access,
                 lease,
                 actual_active_seconds=actual_active_seconds,
                 actual_evidence_bytes=actual_evidence_bytes,
             )
+            if artifact.state != "active":
+                self._release_runtime_session_locked(session_id, runtime_session)
+                self._schedule_cleanup_locked()
+            return artifact
+
+    def close(self) -> None:
+        """Revoke active authority and conservatively release this connection's resources."""
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            if self._cleanup_timer is not None:
+                self._cleanup_timer.cancel()
+                self._cleanup_timer = None
+            for session_id, runtime_session in tuple(self._sessions.items()):
+                with suppress(PerfLensError):
+                    self._authority.revoke(runtime_session.access)
+                self._release_runtime_session_locked(session_id, runtime_session)
+            self._sessions.clear()
+            for pending in tuple(self._pending.values()):
+                pending.adapter.close()
+                _remove_private_directory(pending.private_directory)
+            self._pending.clear()
 
     def _build_preview_artifact(
         self,
@@ -622,12 +661,16 @@ class DockerOptimizationRuntime:
         *,
         allow_inactive: bool = False,
     ) -> _OptimizationRuntimeSession:
+        self._ensure_open_locked()
         runtime_session = self._sessions.get(session_id)
         if runtime_session is None:
             raise _authorization_error("Docker optimization session is unknown to this MCP")
         artifact = self._authority.snapshot(runtime_session.access)
-        if not allow_inactive and artifact.state != "active":
-            raise _authorization_error("Docker optimization session is no longer active")
+        if artifact.state != "active":
+            self._release_runtime_session_locked(session_id, runtime_session)
+            self._schedule_cleanup_locked()
+            if not allow_inactive:
+                raise _authorization_error("Docker optimization session is no longer active")
         return runtime_session
 
     def _prune_pending_locked(self) -> None:
@@ -653,18 +696,69 @@ class DockerOptimizationRuntime:
             for session_id, runtime_session in self._sessions.items()
             if self._authority.snapshot(runtime_session.access).state != "active"
         ]
-        while len(self._sessions) >= _MAX_ACTIVE_SESSIONS and inactive:
-            session_id = inactive.pop(0)
+        for session_id in inactive:
             runtime_session = self._sessions.pop(session_id)
-            for build in runtime_session.builds.values():
-                with suppress(PerfLensError):
-                    runtime_session.preview.adapter.cleanup_build(
-                        build,
-                        session_identity_sha256=_session_identity_sha256(session_id),
-                    )
-            runtime_session.preview.adapter.close()
-            self._pending.pop(runtime_session.preview.result.preview.preview_id, None)
-            _remove_private_directory(runtime_session.preview.private_directory)
+            self._release_runtime_session_locked(session_id, runtime_session)
+
+    def _release_runtime_session_locked(
+        self,
+        session_id: str,
+        runtime_session: _OptimizationRuntimeSession,
+    ) -> None:
+        if runtime_session.resources_released:
+            return
+        for build in runtime_session.builds.values():
+            with suppress(PerfLensError):
+                runtime_session.preview.adapter.cleanup_build(
+                    build,
+                    session_identity_sha256=_session_identity_sha256(session_id),
+                )
+        runtime_session.preview.adapter.close()
+        self._pending.pop(runtime_session.preview.result.preview.preview_id, None)
+        _remove_private_directory(runtime_session.preview.private_directory)
+        runtime_session.resources_released = True
+
+    def _ensure_open_locked(self) -> None:
+        if self._closed:
+            raise _authorization_error("Docker optimization runtime is closed")
+
+    def _schedule_cleanup_locked(self) -> None:
+        if not self._cleanup_timer_enabled or self._closed:
+            return
+        if self._cleanup_timer is not None:
+            self._cleanup_timer.cancel()
+            self._cleanup_timer = None
+        monotonic_now = self._monotonic_clock()
+        wall_now = self._wall_now()
+        delays = [
+            max(0.0, pending.monotonic_expires_at - monotonic_now)
+            for pending in self._pending.values()
+            if not pending.consumed
+        ]
+        delays.extend(
+            max(
+                0.0,
+                (datetime.fromisoformat(self._authority.snapshot(session.access).expires_at)
+                - wall_now).total_seconds(),
+            )
+            for session in self._sessions.values()
+            if self._authority.snapshot(session.access).state == "active"
+        )
+        if not delays:
+            return
+        timer = threading.Timer(max(0.01, min(min(delays), 60.0)), self._run_scheduled_cleanup)
+        timer.daemon = True
+        self._cleanup_timer = timer
+        timer.start()
+
+    def _run_scheduled_cleanup(self) -> None:
+        with self._lock:
+            self._cleanup_timer = None
+            if self._closed:
+                return
+            self._prune_pending_locked()
+            self._prune_sessions_locked()
+            self._schedule_cleanup_locked()
 
     def _assert_project_current(self) -> None:
         assert_managed_project_current(self._project)

@@ -124,9 +124,7 @@ def test_detach_removes_explicit_client_configs_and_shared_skill(
     if client == "opencode":
         assert detached.opencode_config_status == "removed"
         target = project / ".opencode/opencode.json"
-        assert "perflens" not in json.loads(target.read_text(encoding="utf-8"))["mcp"][
-            "servers"
-        ]
+        assert "perflens" not in json.loads(target.read_text(encoding="utf-8"))["mcp"]
     else:
         assert detached.copilot_config_status == "removed"
         assert detached.copilot_vscode_config_status == "removed"
@@ -136,6 +134,41 @@ def test_detach_removes_explicit_client_configs_and_shared_skill(
         assert "perflens" not in json.loads(
             (project / ".vscode/mcp.json").read_text(encoding="utf-8")
         )["servers"]
+
+
+def test_detach_shared_claude_copilot_config_is_preserved_or_removed_once(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "shared-mcp"
+    project.mkdir()
+    run_project_setup(
+        project,
+        install_skill=True,
+        install_codex_config=False,
+        install_claude_skill=True,
+        install_claude_config=True,
+        install_copilot_config=True,
+        install_copilot_vscode_config=True,
+        codex_enabled=False,
+        claude_enabled=True,
+        copilot_enabled=True,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+
+    claude_only = detach_project_integration(project, client="claude-code")
+    assert claude_only.claude_config_status == "skipped"
+    assert "perflens" in json.loads(
+        (project / ".mcp.json").read_text(encoding="utf-8")
+    )["mcpServers"]
+
+    detached = detach_project_integration(project)
+    assert detached.claude_config_status == "removed"
+    assert detached.copilot_config_status == "removed"
+    assert detached.removed_paths.count(str(project / ".mcp.json")) == 1
+    assert "perflens" not in json.loads(
+        (project / ".mcp.json").read_text(encoding="utf-8")
+    )["mcpServers"]
 
 
 def test_detach_refuses_modified_skill_before_removing_any_config(tmp_path: Path) -> None:

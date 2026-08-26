@@ -246,6 +246,7 @@ class TypedDockerBuildAdapter:
             snapshot,
             dockerfile=policy.optimization.dockerfile,
             base_image_digest=policy.optimization.base_image_digest,
+            network_tier=policy.optimization.network_tier,
             administrator_policy=self._administrator_policy,
         )
         if policy.optimization.network_tier == "pinned_pull":
@@ -957,6 +958,7 @@ def _read_and_validate_dockerfile(
     *,
     dockerfile: str,
     base_image_digest: str,
+    network_tier: Literal["local_only", "pinned_pull", "admin_builder_network"],
     administrator_policy: DockerAdministratorBuilderPolicy | None,
 ) -> str:
     try:
@@ -1035,12 +1037,25 @@ def _read_and_validate_dockerfile(
             if (
                 "--mount=type=secret" in lowered
                 or "--mount=type=ssh" in lowered
-                or "--network=host" in lowered
                 or "--security=" in lowered
                 or "--device=" in lowered
             ):
                 raise _build_error(
                     "Dockerfile secret, SSH, host network, insecure, or device use is forbidden"
+                )
+            network_matches = tuple(
+                re.finditer(r"(?:^|\s)--network\s*=\s*([^\s]+)", argument, flags=re.IGNORECASE)
+            )
+            if "--network" in argument.lower() and not network_matches:
+                raise _build_error("Dockerfile RUN uses a malformed network override")
+            allowed_run_networks = (
+                {"none", "default"}
+                if network_tier == "admin_builder_network"
+                else {"none"}
+            )
+            if any(match.group(1).lower() not in allowed_run_networks for match in network_matches):
+                raise _build_error(
+                    "Dockerfile RUN network override exceeds the authorized network tier"
                 )
             for match in re.finditer(r"--mount=([^\s]+)", argument, flags=re.IGNORECASE):
                 for option in match.group(1).split(","):

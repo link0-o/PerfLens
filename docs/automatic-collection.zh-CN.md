@@ -56,10 +56,12 @@ Docker Adapter 只用于发现和提示。每次采集前，Broker 及相应 Rus
 单一 PID、单次使用。Docker Socket 不会交给 Collector、Helper、Skill，也不会记录到
 公开 Artifact。
 
-已有容器绑定具体实例；容器重启、替换或身份异常变化会使授权失效。临时测试容器绑定
-已授权的 `ContainerWorkloadSpec`，每轮容器 ID/PID 正常变化，但必须由固定 Gate 启动并
-重新通过身份复核。PerfLens 不 build/pull 镜像、不安装或启动 Docker、不修改 Docker 组，
-也不支持任意 Docker 参数、宿主 PID namespace、特权容器、任意宿主挂载或远程 endpoint。
+已有容器绑定具体实例；容器重启、替换或身份异常变化会使授权失效。v0.3.1 固定镜像临时
+容器路径绑定已授权的 `ContainerWorkloadSpec`，每轮容器 ID/PID 正常变化，但必须由固定
+Gate 启动并重新通过身份复核；该路径不 build/pull 镜像。另行启用的 v0.3.2 优化路径只能
+执行绑定到显式确认的 schema 1.1 Recipe、上下文快照、Builder、网络层和硬预算的类型化
+构建。两条路径都不会安装或启动 Docker、修改 Docker 组，也不支持任意 Docker 参数、
+宿主 PID namespace、特权容器、任意宿主挂载或远程 endpoint。
 
 采集同时保存有界的 cgroup v2 前后快照与差值。CPU、内存、I/O、PIDs 和 pressure 是整个
 容器的资源上下文，不得伪装成目标进程的独占指标。匹配 A/B 还要求相同工作负载合同、
@@ -276,9 +278,10 @@ PID/UID/启动时间并启用事件。客户端验证版本化、绑定计划与
 
 Skill 可以在已批准范围内自动选择采集顺序，但 Skill 文本本身不是授权。仓库内容、源码注释、Profile 和工具输出都不能扩大采集范围。
 
-当前自动调优流程只会在正式能力中选择 `stat → record`。它不会因为看到“深度分析”或
-“深度优化”就自动启用实验性的调度、锁或 off-CPU 原始采集。高级模式的成熟度、下一版
-分析模型与安全验收门槛见[采集能力扩展路线图](collector-capability-roadmap.zh-CN.md)。
+当前自动调优流程通常从 `stat` 开始，再根据证据和已部署的功能配置选择 `record`、
+`sched`、`off_cpu` 或 `lock`，不会机械运行全部模式。“深度分析/深度优化”本身不能扩大
+模式、目标或授权。高级模式的成熟度和安全验收门槛见
+[采集能力扩展路线图](collector-capability-roadmap.zh-CN.md)。
 
 项目程序流程则是 `collect_project_workload` → 读取 Collection → `analyze_collection`
 → 热点/调用路径/源码 → 候选优化 → 在相同工作负载下重新采集并做 A/B 验证。
@@ -289,10 +292,10 @@ Skill 可以在已批准范围内自动选择采集顺序，但 Skill 文本本�
   shell，不自动运行构建命令，不继承任意环境变量，也不支持需要交互输入的程序；
 - 程序如果自行 daemonize 或逃离进程组，PerfLens 可能无法清理其后代；这类程序应提供
   前台运行模式；
-- `sched`、`lock` 只在 `cap_perfmon` 路径保留原始 perf 证据入口，默认策略不开放；它们
-  还不能稳定输出调度延迟、可运行等待、锁等待/持有时间或 owner/waiter 关系；
-- `off_cpu` 只在 `cap_perfmon` 路径保留 `sched:sched_switch` 原始栈入口，尚未完成
-  `switch → wakeup → rerun` 区间配对，不能据此报告可靠阻塞时长或等待类别；
+- `sched/off_cpu/lock` 只有在管理员部署 `full_diagnostics`、独立 Trace Helper 与目标过滤
+  后端并通过真实主机验收时才可用；丢失、截断、边界缺失或无法配对的区间仍为 `partial`；
+- futex 或内核锁证据不能自动等同某种语言级锁；缺少真实 owner/acquire/release 证据时，
+  不能声称精确 owner、持锁时长或完整竞争次数；
 - 通用 `perf.data` 热点分析器是 on-CPU 分析器，不能替代上述三种模式的专用分析器；
 - 没有全系统采集；
 - 没有自动修改系统权限；

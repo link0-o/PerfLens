@@ -6,8 +6,8 @@ from __future__ import annotations
 import argparse
 import math
 import time
-from collections.abc import Callable
-from contextlib import suppress
+from collections.abc import AsyncGenerator, Callable
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -270,6 +270,16 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         allow_writes=config.allow_writes,
         max_artifact_bytes=config.max_artifact_bytes,
     )
+    docker_optimization_runtime: DockerOptimizationRuntime | None = None
+
+    @asynccontextmanager
+    async def server_lifespan(_server: MCPServer[None]) -> AsyncGenerator[None]:
+        try:
+            yield None
+        finally:
+            if docker_optimization_runtime is not None:
+                docker_optimization_runtime.close()
+
     server: MCPServer[None] = MCPServer(
         "perflens",
         title="PerfLens Linux Performance Analysis",
@@ -290,9 +300,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "arbitrary mounts, networking, capabilities, or host namespaces."
         ),
         version=__version__,
+        lifespan=server_lifespan,
     )
     collection_plans: dict[str, CollectionPlanArtifact] = {}
-    docker_optimization_runtime: DockerOptimizationRuntime | None = None
 
     def get_docker_optimization_runtime() -> DockerOptimizationRuntime:
         nonlocal docker_optimization_runtime

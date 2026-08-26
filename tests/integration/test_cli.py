@@ -308,7 +308,7 @@ def test_init_explicit_opencode_uses_shared_skill_and_local_mcp(tmp_path: Path) 
     assert not (project / ".codex").exists()
     assert not (project / ".claude").exists()
     payload = json.loads((project / ".opencode/opencode.json").read_text(encoding="utf-8"))
-    assert payload["mcp"]["servers"]["perflens"]["command"][0] == str(
+    assert payload["mcp"]["perflens"]["command"][0] == str(
         Path(sys.executable).resolve()
     )
 

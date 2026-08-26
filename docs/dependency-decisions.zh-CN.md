@@ -21,7 +21,7 @@
 | MCP 协议 | 复用官方 MCP Python SDK 2.x | MCP 位于 Analysis Core 之外，暴露类型化的本地 stdio 工具。 |
 | Benchmark 格式 | 自研薄 Adapter | 把文档化的 pyperf、Google Benchmark 和 hyperfine JSON 规范化为一个带版本 Contract；不自研 Benchmark Runner。 |
 | 统计比较 | 自研保守的标准库实现 | 重复均值使用明确标注为近似值的正态区间，并结合实际影响和可比性检查；结果仍然只是候选。 |
-| 主动采集 | 复用系统 perf | 正式、默认关闭的薄封装覆盖 `record`、`stat`。`cap_perfmon` Broker 保留默认关闭的原始 `sched`/`lock`/`off_cpu` 实验入口，但完成专用确定性分析器之前不能宣称稳定支持。PerfLens 负责授权、资源边界、诊断和不可变输出，不重新实现内核探针。 |
+| 主动采集 | 复用系统 perf | `record`/`stat` 是稳定 CPU 模式；可选的 `full_diagnostics` 配置使用独立的目标过滤 Trace Helper 与确定性的 `sched`/`off_cpu`/`lock` 分析器，不完整证据仍保持为 `partial`。PerfLens 负责授权、资源边界、诊断和不可变输出，不重新实现内核探针。 |
 | Release 来源证明 | 复用官方 `actions/attest` | 由 GitHub Actions 的短时 OIDC 身份签发 SLSA Provenance；只用于标签发布工作流，固定到完整提交 SHA，不成为运行依赖。签发任务与项目代码执行及 Release 写权限隔离。 |
 | Debian `paranoid=3` Helper | 新增小型 Rust 二进制 | 只把必须持有高权限的固定 perf PID 执行边界移出 Python；使用安全 Rust、固定稳定工具链和 `Cargo.lock`。CLI/MCP/Skill/Broker/分析器仍是 Python，普通 wheel 和最终用户不需要 Rust。 |
 | Helper 边界模型 | 复用 Serde/Serde JSON 和最小系统调用依赖 | 严格类型、未知字段拒绝和共享 JSON Schema 比自研解析器更可靠；依赖必须锁定、进入 SBOM/许可证审计，`unsafe` 只能集中在无法由安全封装表达的 syscall 边界。 |

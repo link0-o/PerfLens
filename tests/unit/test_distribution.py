@@ -93,6 +93,7 @@ def test_opencode_project_config_round_trip_preserves_other_servers(tmp_path: Pa
     server = payload["mcp"]["servers"]["perflens"]
     assert server["type"] == "local"
     assert server["command"][0] == str(Path(sys.executable).resolve())
+    assert server["disabled"] is False
     removal = plan_opencode_project_config_removal(
         project,
         managed_configuration=rendered,
@@ -117,6 +118,22 @@ def test_opencode_refuses_ambiguous_or_jsonc_project_configuration(tmp_path: Pat
     with pytest.raises(PerfLensError) as ambiguous:
         plan_opencode_project_config(project, rendered)
     assert ambiguous.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    (project / "opencode.jsonc").unlink()
+    (project / "opencode.json").write_text(
+        json.dumps(
+            {
+                "mcp": {
+                    "perflens": {"type": "local", "command": ["/bin/false"]},
+                    "servers": {"perflens": {"type": "local", "command": ["/bin/true"]}},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(PerfLensError) as mixed_layout:
+        plan_opencode_project_config(project, rendered)
+    assert mixed_layout.value.code is ErrorCode.INVALID_INPUT
 
 
 def test_copilot_cli_and_vscode_render_local_project_mcp(tmp_path: Path) -> None:
@@ -188,6 +205,9 @@ def test_opencode_config_install_update_existing_and_remove_safely(tmp_path: Pat
     installed = plan_opencode_project_config(project, original)
     assert installed.status == "installed"
     installed.apply()
+    installed_payload = json.loads(installed.path.read_text(encoding="utf-8"))
+    assert "servers" not in installed_payload["mcp"]
+    assert installed_payload["mcp"]["perflens"]["enabled"] is True
 
     existing = plan_opencode_project_config(project, original)
     assert existing.status == "existing"
@@ -533,9 +553,7 @@ def test_new_client_configs_merge_empty_documents_and_reject_unowned_targets(
         mcp_command=Path(sys.executable),
     )
     plan_opencode_project_config(opencode_project, opencode_rendered).apply()
-    assert "perflens" in json.loads(opencode_target.read_text(encoding="utf-8"))["mcp"][
-        "servers"
-    ]
+    assert "perflens" in json.loads(opencode_target.read_text(encoding="utf-8"))["mcp"]
 
     opencode_target.unlink()
     opencode_target.symlink_to(tmp_path / "missing-opencode-target")

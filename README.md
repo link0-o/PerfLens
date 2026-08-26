@@ -26,7 +26,7 @@ conversion provenance, quality gates, and Agent-facing verification.
 PerfLens is an evidence-driven performance-analysis toolkit for Linux
 applications and coding agents.
 
-The current release formally supports Milestones 0 through 9:
+The current source tree supports Milestones 0 through 9; v0.3.2 remains a release candidate:
 
 - streaming FlameGraph-compatible folded stack input;
 - deterministic self and inclusive hotspot aggregation;
@@ -52,8 +52,9 @@ The current release formally supports Milestones 0 through 9:
   Docker Engine, including cgroup v2 context, bounded container symbol mapping, managed temporary
   test containers, and evidence-matched A/B comparison.
 - v0.3.2 opt-in `bounded_optimization_session`: one reviewed confirmation can cover a fixed
-  baseline build, evidence-guided collection, edits restricted to `mutable_paths`, up to three
-  candidate rebuilds, and deterministic matched A/B validation under hard budgets.
+  baseline build, evidence-guided collection, build snapshots whose changes are restricted to
+  `mutable_paths`, up to three candidate rebuilds, and deterministic matched A/B validation under
+  hard budgets. The Agent/client sandbox, not PerfLens, enforces filesystem write permission.
 
 It does **not** include an AI/LLM API, Web UI, source-code patch tool, benchmark
 runner, or custom agent framework.
@@ -97,6 +98,8 @@ for future plain `init` calls, run, for example,
 `perflens client-defaults --client codex --client claude-code --client copilot`.
 This writes strict `~/.config/perflens/config.toml`; if it is absent, the built-in default remains
 Codex plus Claude Code. Explicit `init --client ...` values override it for one invocation.
+Claude Code and Copilot CLI share `.mcp.json`; onboarding validates one identical ownership copy
+and updates the shared entry atomically when both are selected.
 Rerun with `perflens init --update` when upgrading managed integration or
 changing collection gates. Update mode requires a matching `setup.json`, updates
 only recorded client entries and marked blocks, and refuses
@@ -139,7 +142,8 @@ process, and fixed project policy; it excludes arbitrary Docker arguments, remot
 Compose/Kubernetes, image build/pull, and whole-container perf aggregation. Checked-in Runtime
 Lock public contracts are groundwork, not available adapters. See the
 [v0.3.1 Docker process guide](docs/docker-container-roadmap.md).
-Release v0.3.2 adds the separately opt-in, benchmark-required bounded Docker optimization session.
+The current v0.3.2 release candidate adds the separately opt-in, benchmark-required bounded Docker
+optimization session.
 It does not build during preview, does not grant arbitrary Docker access, and never authorizes
 commit, push, tags, or releases. See the
 [v0.3.2 Docker optimization guide](docs/docker-optimization-roadmap.md).
@@ -165,9 +169,8 @@ Domain failures are Chinese-first for people. Automation should use the global
 `PERFLENS_JSON_ERRORS=1` to preserve the versioned JSON error artifact.
 `perflens doctor` follows the same human-first principle: add `--json` for its
 versioned capability artifact or `--output <new-file.json>` to save it safely.
-Its five-mode output diagnoses local permission prerequisites; it is not a
-stability claim for the three raw trace experiments or proof that the separate
-Collector succeeded.
+Its five-mode output diagnoses local permission prerequisites; it does not prove that the
+independent Collector or any requested host mode passed real collection acceptance.
 
 After administrator deployment and a fresh login, verify the Collector without
 finding a PID:

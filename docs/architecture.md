@@ -176,7 +176,9 @@ perf process evidence + before/after cgroup v2 snapshots
 The adapter only supplies and binds local Docker identity; the Linux Broker and Helpers still
 verify the real process independently before and after collection. The Docker socket never enters
 the Collector, Helpers, Agent, or Skill; the MCP process can invoke only the fixed, project-policy
-adapter surface. DEBs do not install/start Docker, edit the `docker` group, or build/pull images.
+adapter surface. DEB installation does not install/start Docker, edit the `docker` group, or
+build/pull images. The separately enabled v0.3.2 optimization adapter can perform only
+typed, recipe-bound builds after its own reviewed session authorization.
 Public artifacts omit full inspect responses, environment variables, labels, host mount sources,
 and foreign processes. Existing-container sessions bind one exact instance. Managed sessions bind
 a fixed workload recipe and derive a fresh single-use PID plan for every temporary-container run.

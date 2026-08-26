@@ -514,13 +514,25 @@ def _read_opencode_perflens_table(
     mcp = cast(dict[str, object], parsed).get("mcp")
     if not isinstance(mcp, dict):
         return "missing", None
-    servers = cast(dict[str, object], mcp).get("servers")
-    if not isinstance(servers, dict):
-        return "missing", None
-    table = cast(dict[str, object], servers).get("perflens")
+    typed_mcp = cast(dict[str, object], mcp)
+    legacy_servers = typed_mcp.get("servers")
+    legacy = legacy_servers is not None
+    if legacy:
+        if len(typed_mcp) != 1 or not isinstance(legacy_servers, dict):
+            return "incomplete", None
+        table = cast(dict[str, object], legacy_servers).get("perflens")
+    else:
+        table = typed_mcp.get("perflens")
     if not isinstance(table, dict):
         return "missing", None
-    return "ready", cast(dict[str, object], table)
+    normalized = dict(cast(dict[str, object], table))
+    if legacy:
+        disabled = normalized.pop("disabled", False)
+        codemode = normalized.pop("codemode", False)
+        if not isinstance(disabled, bool) or not isinstance(codemode, bool):
+            return "incomplete", None
+        normalized["enabled"] = not disabled
+    return "ready", normalized
 
 
 def _selected_clients(

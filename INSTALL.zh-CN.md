@@ -125,8 +125,9 @@ perflens init --docker
 ```
 
 先审查生成的 `perflens-setup/container-workload.toml`。Docker 执行仍要求通过项目 MCP
-明确确认 `per_run` 或 `bounded_session`；PerfLens 不安装/启动 Docker、不加入 Docker 组、
-不 build/pull 镜像，也不接受任意 Docker 参数。
+明确确认 `per_run` 或 `bounded_session`；初始化本身不安装/启动 Docker、不加入 Docker 组、
+不 build/pull 镜像，也不接受任意 Docker 参数。另行启用 schema 1.1 优化合同后，只有经过
+独立审阅授权的类型化构建会话才能执行构建。
 
 默认同时激活 Codex 和 Claude Code，并启用有界项目运行与自动采集。也可以明确选择：
 
@@ -161,11 +162,13 @@ default_clients = ["codex", "claude-code", "copilot"]
 `init --update` 时会保留该项目 `setup.json` 已记录的客户端，不会因全局默认值后来改变
 而静默增删接入。
 
-`opencode` 会生成项目 `.opencode/opencode.json` 并复用
+`opencode` 生成 OpenCode 项目 `.opencode/opencode.json` 并复用
 `.agents/skills/perflens`。`copilot` 代表本地 Copilot 套件：同时为 Copilot CLI
 安全合并项目 `.mcp.json`，为 VS Code Copilot Agent 安全合并 `.vscode/mcp.json`，并
 复用 `.agents/skills/perflens`。这不会配置 GitHub 云端 Coding Agent；云端 Agent
 不能通过这些项目文件访问本机 Collector、Docker Socket 或 Unix Socket。
+Claude Code 与 Copilot CLI 共用 `.mcp.json`；同时选择二者时，引导会验证同一份所有权
+副本并只执行一次原子更新。
 
 默认允许 `stat`、`record` 项目采集，MCP 上限是单次 30 秒、99 Hz、256 MiB，计划
 120 秒失效；已有 PID 附加默认关闭。Skill 常用约 10 秒作为起点，但会按工作负载调整。

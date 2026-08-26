@@ -2,7 +2,7 @@
 
 [简体中文](release-readiness.zh-CN.md) | English
 
-This is the 2026-08-24 local validation record for the v0.3.2 release candidate. It is not a
+This is the 2026-08-26 local validation record for the v0.3.2 release candidate. It is not a
 substitute for the tag workflow or for acceptance on each deployed host. Every release reruns the
 [release procedure](releasing.md), and a configured workflow is not evidence that its remote run
 passed.
@@ -31,7 +31,8 @@ with cgroup v2:
 - container-bound `stat/record` and `full_diagnostics` trace plans;
 - cgroup v2 resource context, module/Build-ID/source mapping, and PMU-fallback provenance;
 - evidence-bound Benchmark, treatment, correctness, and matched A/B verification;
-- project-scoped Codex and Claude Code Skill/MCP integration through `perflens init --docker`.
+- project-scoped Codex, Claude Code, OpenCode, and local Copilot Skill/MCP integration through
+  `perflens init --docker` and explicit client selection.
 
 The release does not include remote Docker, Docker Desktop VMs, Compose/Kubernetes, arbitrary
 Docker arguments, whole-container perf aggregation, or the planned v0.4.0
@@ -40,12 +41,12 @@ typed local Build Adapter and one of its three explicit network tiers.
 
 ## Automated local gates
 
-| Gate | 2026-08-24 candidate result |
+| Gate | 2026-08-26 candidate result |
 |---|---|
 | Ruff | passed |
 | Pyright strict mode | 0 errors, 0 warnings |
-| Python 3.12 | 1204 passed; 85.03% coverage |
-| Python 3.13 | 1204 passed; 85.03% coverage |
+| Python 3.12 | 1303 passed; 85.06% coverage |
+| Python 3.13 | 1303 passed; 85.06% coverage |
 | Rust format/Clippy/tests | passed |
 | Rust dependencies | `cargo audit` clean with the official local advisory DB clone; `cargo deny check` passed |
 | Protocol/Schema | generated files clean; Python/Rust valid and invalid goldens passed |
@@ -61,8 +62,12 @@ remains 85% and must not be lowered for a release.
 - Docker, Agent, Skill, MCP, Broker, and Helper boundaries remain separate; no component invokes
   sudo or changes sysctl, Docker groups, daemon configuration, or socket permissions.
 - Docker commands and mount/network/resource policy derive from typed project contracts. Remote
-  endpoints, arbitrary arguments, build/pull, privileged mode, host PID, devices, extra
+  endpoints, arbitrary arguments, unbound build/pull, privileged mode, host PID, devices, extra
   capabilities, Docker-socket mounts, and host-path escape are rejected.
+- Offline build tiers reject every explicit `RUN --network` value except `none`; the pinned
+  administrator-network tier admits only `none` or `default`.
+- Preview/session expiry has a bounded cleanup timer and interaction-time pruning; MCP disconnect
+  revokes active optimization authority and conservatively releases identity-verified resources.
 - The Broker, stat/record Helper, and Trace Helper independently verify the container target's UID,
   PID start time, namespace, cgroup, plan lifetime, single-use identity, and limits.
 - Public output omits full inspect data, environment, labels, socket/mount-source/cgroup paths, and
@@ -75,12 +80,14 @@ remains 85% and must not be lowered for a release.
 
 ## Remaining real-host release gate
 
-Automation uses real Unix sockets plus bounded Docker/perf test doubles. The candidate still needs
-one explicit local installation acceptance covering package non-activation, upgrade/rollback/
-removal behavior, the available rootless/rootful Docker setup, v0.3.1 fixed-image collection,
-v0.3.2 baseline/candidate builds, matched A/B, software-PMU fallback, and the host Collector
-regression path. Rootful UID 0 additionally needs the dedicated administrator risk
-acknowledgement. Results apply only to that host and workload.
+Automation uses real Unix sockets plus bounded Docker/perf test doubles. On 2026-08-25 one installed
+rootful-Docker, non-root workload completed a v0.3.2 baseline build and `software_only` stat run:
+the Gate released the workload, correctness and Benchmark passed, the Collection reported
+`actual_event_source=software`, and cleanup was `removed`. This proves only that host and workload.
+The candidate still needs the complete release matrix covering package non-activation,
+upgrade/rollback/removal, rootless and rootful Docker, v0.3.1 fixed-image regression,
+baseline/candidate matched A/B, Trace selection, and host Collector regression. Rootful UID 0
+additionally needs the dedicated administrator risk acknowledgement.
 
 Do not create or push `v0.3.2` until this acceptance, the clean-worktree check, and remote CI all
 pass. Existing `v0.3.0` and `v0.3.1` tags remain immutable.

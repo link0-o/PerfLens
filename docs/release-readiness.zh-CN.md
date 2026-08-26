@@ -2,7 +2,7 @@
 
 简体中文 | [English](release-readiness.md)
 
-本文是 2026-08-24 对 v0.3.2 发布候选的本地验证记录，不代替 Tag 工作流，也不代替每台
+本文是 2026-08-26 对 v0.3.2 发布候选的本地验证记录，不代替 Tag 工作流，也不代替每台
 部署主机的真实验收。每次发布都必须重新执行[《发布流程》](releasing.zh-CN.md)；远程工作流
 已经配置不等于对应运行已经通过。
 
@@ -27,7 +27,8 @@ v0.3.0 的 Linux 宿主机 `stat/record/sched/off_cpu/lock` 与 v0.3.1 固定镜
 - 与容器身份绑定的 `stat/record` 和 `full_diagnostics` trace 计划；
 - cgroup v2 资源上下文、模块/Build ID/源码映射和 PMU 降级来源；
 - 与证据绑定的 Benchmark、处理变量、正确性和匹配 A/B 验证；
-- 通过 `perflens init --docker` 提供项目级 Codex/Claude Code Skill 与 MCP 集成。
+- 通过 `perflens init --docker` 和显式客户端选择提供项目级 Codex、Claude Code、OpenCode
+  与本地 Copilot Skill/MCP 集成。
 
 本版本不包含远程 Docker、Docker Desktop VM、Compose/Kubernetes、任意 Docker 参数、
 整容器 perf 聚合，也不包含计划进入 v0.4.0 的 C/C++、Java、Python、Go 运行时锁 Adapter。
@@ -35,12 +36,12 @@ v0.3.0 的 Linux 宿主机 `stat/record/sched/off_cpu/lock` 与 v0.3.1 固定镜
 
 ## 自动化本地门禁
 
-| 门禁 | 2026-08-24 候选结果 |
+| 门禁 | 2026-08-26 候选结果 |
 |---|---|
 | Ruff | 通过 |
 | Pyright 严格模式 | 0 错误、0 警告 |
-| Python 3.12 | 1204 通过；覆盖率 85.03% |
-| Python 3.13 | 1204 通过；覆盖率 85.03% |
+| Python 3.12 | 1303 通过；覆盖率 85.06% |
+| Python 3.13 | 1303 通过；覆盖率 85.06% |
 | Rust 格式/Clippy/测试 | 通过 |
 | Rust 依赖 | 使用官方本地 advisory DB 干净克隆运行 `cargo audit` 无发现；`cargo deny check` 通过 |
 | 协议/Schema | 生成文件无差异；Python/Rust 有效与无效 golden 通过 |
@@ -55,8 +56,12 @@ v0.3.0 的 Linux 宿主机 `stat/record/sched/off_cpu/lock` 与 v0.3.1 固定镜
 - Docker、Agent、Skill、MCP、Broker 和 Helper 边界保持分离；任何组件都不调用 sudo，也不
   修改 sysctl、Docker 用户组、daemon 配置或 Socket 权限。
 - Docker 命令及挂载/网络/资源策略从类型化项目合同派生；远程 endpoint、任意参数、
-  build/pull、privileged、host PID、设备、额外 capability、Docker Socket 挂载和宿主路径
+  未绑定合同的 build/pull、privileged、host PID、设备、额外 capability、Docker Socket 挂载和宿主路径
   逃逸都会被拒绝。
+- 离线构建层会拒绝除 `none` 外的所有显式 `RUN --network` 值；管理员固定联网层只允许
+  `none` 或 `default`。
+- Preview/Session 到期具有有界清理定时器和交互时回收；MCP 断开时撤销活动优化授权，并
+  保守释放经过身份核验的资源。
 - Broker、stat/record Helper 与 Trace Helper 独立验证容器目标 UID、PID 启动时间、
   namespace、cgroup、计划期限、单次身份和资源上限。
 - 公开输出不保存完整 inspect、环境变量、标签、Socket/挂载源/cgroup 路径和目标外 argv；
@@ -68,10 +73,13 @@ v0.3.0 的 Linux 宿主机 `stat/record/sched/off_cpu/lock` 与 v0.3.1 固定镜
 
 ## 剩余真实主机发布门
 
-自动化测试使用真实 Unix Socket 和有界 Docker/perf Test Double。候选仍需在本机执行一次
-显式安装验收，覆盖包不自动激活、升级/回滚/卸载语义、实际可用的 rootless/rootful Docker、
-v0.3.1 固定镜像采集、v0.3.2 baseline/candidate 构建与匹配 A/B、软件 PMU 降级和宿主
-Collector 回归。rootful UID 0 还要求专用管理员风险确认。结果只证明该主机和对应 workload。
+自动化测试使用真实 Unix Socket 和有界 Docker/perf Test Double。2026-08-25 已在一台安装后
+rootful Docker 主机上，以非 root workload 完成一次 v0.3.2 baseline 构建与
+`software_only` stat：Gate 成功放行、正确性和 Benchmark 通过、Collection 报告
+`actual_event_source=software`，清理状态为 `removed`。这只证明该主机和该 workload。
+发布前仍需补齐包不自动激活、升级/回滚/卸载、rootless/rootful Docker、v0.3.1 固定镜像
+回归、baseline/candidate 匹配 A/B、Trace 选择和宿主 Collector 回归的完整矩阵。rootful
+UID 0 还要求专用管理员风险确认。
 
 在真实验收、干净工作区检查和远程 CI 全部通过前，不要创建或推送 `v0.3.2`。已有
 `v0.3.0` 与 `v0.3.1` Tag 保持不可变。

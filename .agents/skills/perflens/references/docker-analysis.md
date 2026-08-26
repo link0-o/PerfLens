@@ -85,7 +85,9 @@ pulls. Its public authorization surface contains the exact normalized project-re
 `context_paths` and `mutable_paths`; report those values verbatim rather than inferring scope from
 the Dockerfile/lock-file risk booleans. After the user confirms that exact Preview once, the session
 may build one baseline and up to three candidates, run at most ten fixed workloads, collect only
-authorized evidence modes, and edit only `mutable_paths`. The fixed ceilings are four builds, one
+authorized evidence modes, and admit only `mutable_paths` changes into candidate snapshots. The
+Agent must also obey the client sandbox's edit permissions; PerfLens validates build inputs but
+does not itself prevent editor or shell writes elsewhere. The fixed ceilings are four builds, one
 recoverable retry, 7200 seconds hard expiry, 1 GiB evidence, and 10 GiB temporary images; reaching a
 ceiling ends the loop. Successful stat, record, and Trace collections charge the session using the
 Broker-verified raw evidence byte count carried by their managed-run result.
@@ -103,9 +105,11 @@ Treatment. Call `compare_docker_optimization_iterations`; only its `verified_imp
 permits that claim. Partial analysis, absent Benchmark, correctness failure, resource regression,
 or fixed-environment mismatch cannot be upgraded by Agent reasoning.
 
-The session grants neither source paths outside `mutable_paths` nor commit, push, tag, release,
-Docker-daemon administration, Builder creation, or system changes. Client tool approval remains a
-separate UI boundary from the single PerfLens optimization confirmation.
+The session accepts no build Treatment outside `mutable_paths` and grants no commit, push, tag,
+release, Docker-daemon administration, Builder creation, or system changes. Client tool approval
+and filesystem sandboxing remain separate boundaries from the single PerfLens confirmation.
+Explicit revocation, bounded expiry cleanup, later runtime interaction, and MCP connection shutdown
+all conservatively release only identity-verified session resources; never substitute global prune.
 
 ## Evidence and reporting
 

@@ -13,15 +13,15 @@
 | 规则 | 安全 YAML；安装包内置通用、Linux 和 C++ 候选规则 |
 | 报告 | JSON 证据包和 Markdown |
 | MCP | 官方 Python SDK 2.x，本地 stdio 传输 |
-| Skill | Codex `.agents/skills` 与 Claude Code `.claude/skills` 项目 Skill，并使用 `skill-creator` 验证 |
-| AI 客户端配置 | Codex 项目 `.codex/config.toml`；Claude Code 项目 `.mcp.json` |
+| Skill | Codex/OpenCode/本地 Copilot `.agents/skills` 与 Claude Code `.claude/skills` 项目 Skill，并使用 `skill-creator` 验证 |
+| AI 客户端配置 | Codex `.codex/config.toml`；Claude Code/Copilot CLI `.mcp.json`；OpenCode `.opencode/opencode.json`；VS Code Copilot Agent `.vscode/mcp.json` |
 | 主动采集 | 发布版 `0.3.0` 正式支持 `record/stat`，并通过独立 Trace Helper 提供可选的 `sched/off_cpu/lock` |
 | 自动采集 | 支持宿主 PID，或本地 Docker Engine 中一个明确授权的进程；普通用户编排与使用 `SO_PEERCRED` 认证的 Collector 仍保持分离 |
 | Collector 策略 | 当前版本 1；`cpu_only` 允许 `record/stat`，`full_diagnostics` 额外允许 `sched/off_cpu/lock`；缺失版本号按旧版版本 1 读取，不支持的版本会被拒绝 |
 | paranoid=3 Helper | 现有 Rust Helper 永远只支持 `record/stat`；v0.3.0 用另一套服务/协议/Socket/spool 的 Trace Helper 处理高级模式 |
 | 目标运行时 | Linux 宿主 PID，或本地 Linux Docker Engine + cgroup v2 中的一个明确进程；不支持远程 Engine、Docker Desktop VM、Compose 或整容器聚合 |
 | 原生 DEB | Debian 13 `amd64`、系统 Python 3.13；主包和完全同版本 Collector 包分离 |
-| 产物 Schema | 1.0 |
+| 产物 Schema | 公共产物 1.0；Docker 项目策略严格读取 1.0 与 1.1 |
 
 PerfLens 不直接解析 `perf.data`。二进制兼容性由选定的系统 `perf` 负责；无法解码
 Profile 时，应使用与采集环境匹配的 perf。GNU addr2line 后备流程已使用 Binutils 2.44
@@ -35,7 +35,8 @@ LSM 或高级 trace 模式都兼容；每台 `full_diagnostics` 主机仍须单�
 
 发布版 v0.3.1 可以发现已有本地容器中的进程，或创建固定策略的托管临时测试容器；它把
 容器身份绑定到宿主 PID，采集 cgroup v2 上下文，并进行有界模块/源码映射。Docker 始终是
-可选外部环境：PerfLens 不安装 Docker，也不 build/pull 镜像。rootful UID 0 默认关闭，
+可选外部环境：PerfLens 不安装 Docker，v0.3.1 路径也不 build/pull 镜像；默认关闭的
+v0.3.2 优化会话只能在确认后执行绑定 Recipe 的类型化构建。rootful UID 0 默认关闭，
 只有管理员明确启用专用策略边界后才允许。详细兼容与拒绝矩阵见
 [Docker 进程采集与分析指南](docker-container-roadmap.zh-CN.md)。C/C++、Java、Python 和 Go
 用户态锁 Adapter 仍计划进入 v0.4.0。
@@ -52,3 +53,6 @@ perflens status --project /项目的绝对路径
 `stat`/`record` 路径已通过验收，且结论仍受返回的事件来源与证据限制约束。v0.3.0
 `full_diagnostics` 还必须在相同主机上分别通过 `sched/off_cpu/lock` 验收，不能由 CPU
 路径成功推断高级模式可用。
+
+`opencode` 引导会生成当前直接 `mcp` 服务映射；已有旧版嵌套 `mcp.servers` JSON 可在不改变
+布局的情况下安全更新或移除。由于无法无损保留注释，已有 JSONC 会保留并要求审阅后手工合并。
