@@ -33,6 +33,14 @@ sudo perflens-admin setup
 [《Collector 权限模式选择与切换》](collector-mode-lifecycle.zh-CN.md)。下文的
 `stage-collector-assets`/`deploy --config` 流程继续作为自定义策略和离线审查的高级入口。
 
+项目接入仍以普通用户执行。`perflens init` 默认启用 Codex 与 Claude Code；
+`--client opencode` 显式启用 OpenCode，`--client copilot` 同时配置本地 Copilot CLI
+（`.mcp.json`）和 VS Code Copilot Agent（`.vscode/mcp.json`）。这些本地项目文件不会让
+GitHub 云端 Coding Agent 获得宿主 Collector 或 Docker Socket 访问权。
+重复传入 `--client` 可选择一个项目级客户端集合。用户可显式运行 `perflens client-defaults`
+保存以后新项目的默认集合；`~/.config/perflens/config.toml` 不存在时，内置默认值仍只有
+Codex + Claude Code。已有项目更新时默认保留自身已记录的集合，只有显式客户端参数才替换。
+
 ## `v0.3.0` 安装向导
 
 v0.3.0 已把首次配置改成“功能配置优先、权限实现随后推荐”的两阶段向导。DEB 安装
@@ -544,7 +552,7 @@ perflens accept-collector --authorize-host-acceptance
 ```
 
 软件卸载前，普通用户先对每个已接入项目运行 `perflens detach --project <项目>
---dry-run`，确认后去掉 `--dry-run`。它移除经过验证的 Codex/Claude 项目 MCP 接入和
+--dry-run`，确认后去掉 `--dry-run`。它按 `setup.json` 移除经过验证的客户端项目 MCP 接入和
 未修改托管 Skill，但保留引导与性能证据，也不会代替系统服务卸载。然后由管理员执行：
 
 ```bash

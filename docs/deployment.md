@@ -15,6 +15,15 @@ host-level switch, then run `perflens init --update` in initialized projects. Se
 the [Collector privilege-mode lifecycle](collector-mode-lifecycle.md). The staged
 asset flow below remains the advanced path for reviewed custom policy.
 
+Project onboarding remains unprivileged. Plain `perflens init` activates Codex and Claude
+Code; `--client opencode` opts in OpenCode, while `--client copilot` configures both local
+Copilot CLI (`.mcp.json`) and VS Code Copilot Agent (`.vscode/mcp.json`). These local project
+files never grant GitHub's cloud Coding Agent access to the host Collector or Docker socket.
+Repeated `--client` options select a per-project set. Users may explicitly persist future-init
+defaults with `perflens client-defaults`; absent `~/.config/perflens/config.toml`, the built-in
+selection remains Codex plus Claude Code. Project updates preserve their recorded selection unless
+the user supplies a replacement list.
+
 ## Guided setup in `v0.3.0`
 
 Release v0.3.0 implements a feature-first, privilege-second wizard. DEB
@@ -364,7 +373,7 @@ privileged service or requiring the user to discover a PID.
 
 Before package removal, ordinary users first preview and run `perflens detach
 --project <project>` for every configured project. This removes verified
-Codex/Claude MCP entries and unchanged managed project Skills while preserving
+selected-client MCP entries and unchanged managed project Skills while preserving
 onboarding and evidence. Then run `sudo perflens-admin undeploy --dry-run`
 and `sudo perflens-admin undeploy`. It removes only a verified managed unit while
 preserving policy, collected artifacts, and the system identity. See the

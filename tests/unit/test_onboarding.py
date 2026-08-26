@@ -289,6 +289,67 @@ def test_setup_update_replaces_owned_bundle_and_both_client_configs(tmp_path: Pa
     assert not (project / ".perflens-setup.perflens-backup").exists()
 
 
+def test_setup_update_rolls_back_all_local_client_configs_on_late_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    run_project_setup(
+        project,
+        install_skill=True,
+        install_codex_config=False,
+        install_opencode_config=True,
+        install_copilot_config=True,
+        install_copilot_vscode_config=True,
+        codex_enabled=False,
+        opencode_enabled=True,
+        copilot_enabled=True,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+    tracked = (
+        project / ".opencode/opencode.json",
+        project / ".mcp.json",
+        project / ".vscode/mcp.json",
+        project / "perflens-setup/setup.json",
+    )
+    original = {path: path.read_bytes() for path in tracked}
+    real_rmtree = onboarding.shutil.rmtree
+    failed = False
+
+    def fail_final_backup_removal(path: Path, *, ignore_errors: bool = False) -> None:
+        nonlocal failed
+        candidate = Path(path)
+        if not failed and candidate.name == ".perflens-setup.perflens-backup":
+            failed = True
+            raise OSError("injected finalization failure")
+        real_rmtree(candidate, ignore_errors=ignore_errors)
+
+    monkeypatch.setattr(onboarding.shutil, "rmtree", fail_final_backup_removal)
+
+    with pytest.raises(OSError, match="injected finalization failure"):
+        run_project_setup(
+            project,
+            install_skill=True,
+            install_codex_config=False,
+            install_opencode_config=True,
+            install_copilot_config=True,
+            install_copilot_vscode_config=True,
+            codex_enabled=False,
+            opencode_enabled=True,
+            copilot_enabled=True,
+            automatic_collection=True,
+            mcp_command=Path(sys.executable),
+            perf_path=Path("/bin/true"),
+            update_existing=True,
+        )
+
+    assert failed is True
+    assert {path: path.read_bytes() for path in tracked} == original
+    assert not (project / ".perflens-setup.perflens-backup").exists()
+
+
 def test_setup_update_migrates_v012_legacy_skill_path(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -752,6 +813,22 @@ def test_setup_artifact_accepts_payload_before_project_config_fields(tmp_path: P
     payload.pop("claude_project_config_path")
     payload.pop("claude_project_config_status")
     payload.pop("claude_project_config_managed")
+    for field in (
+        "selected_clients",
+        "opencode_mcp_config_path",
+        "opencode_project_config_path",
+        "opencode_project_config_status",
+        "opencode_project_config_managed",
+        "copilot_mcp_config_path",
+        "copilot_project_config_path",
+        "copilot_project_config_status",
+        "copilot_project_config_managed",
+        "copilot_vscode_mcp_config_path",
+        "copilot_vscode_project_config_path",
+        "copilot_vscode_project_config_status",
+        "copilot_vscode_project_config_managed",
+    ):
+        payload.pop(field)
 
     restored = SetupArtifact.model_validate(payload)
 

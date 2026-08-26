@@ -24,10 +24,32 @@ perflens init
 它默认同时激活 Codex 和 Claude Code。Codex 使用项目 `.agents/skills` 和
 `.codex/config.toml`；Claude Code 使用项目 `.claude/skills` 和 `.mcp.json`。
 未运行 `init` 的其他项目没有这些入口，因此客户端不会认为 PerfLens 在那里可用。
-使用 `--client codex`、`--client claude-code` 或 `--read-only` 可以缩小范围。
+使用 `--client codex`、`--client claude-code` 或 `--read-only` 可以缩小范围；另外可用：
+
+```bash
+perflens init --client opencode
+perflens init --client copilot
+```
+
+OpenCode 使用 `.opencode/opencode.json` 并复用 `.agents/skills/perflens`。`copilot`
+是本地客户端套件：Copilot CLI 使用 `.mcp.json`，VS Code Copilot Agent 使用
+`.vscode/mcp.json`，二者同样复用 `.agents/skills/perflens`。该选项不配置 GitHub
+云端 Coding Agent，也不会把本机 Collector、Docker Socket 或 Unix Socket 暴露给云端。
 冲突的用户手写配置会被拒绝覆盖，也不会申请管理员权限。
+
+`--client` 可以重复传入。希望以后普通 `init` 默认包含其他客户端时，可保存严格的用户级
+默认集合：
+
+```bash
+perflens client-defaults --client codex --client claude-code --client opencode
+```
+
+生成的 `~/.config/perflens/config.toml` 使用 schema `1.0`；文件不存在时，内置默认值仍是
+Codex + Claude Code。显式 `init --client ...` 集合只覆盖本次调用。
+
 升级接入或调整权限开关时使用 `perflens init --update`。普通重复初始化不会覆盖已有
-引导目录；更新模式也只更新所有权记录匹配的 MCP 配置和未修改 Skill。要停用已有客户端，
+引导目录；未传 `--client` 时，更新保留该项目已记录的客户端，不套用后来改变的用户默认值；
+更新模式也只更新所有权记录匹配的 MCP 配置和未修改 Skill。要停用已有客户端，
 先执行对应客户端的 `detach`，再用新的客户端范围更新。`perflens-setup` 是托管生成目录；
 额外用户文件会阻止更新，已有 Collector 暂存资产在未要求重新生成时保留。
 从 `v0.1.2` 升级时，`perflens init --update` 会把内容未修改的旧 Skill 目录
@@ -89,6 +111,8 @@ perflens install-skill --project /absolute/path/to/workspace
 perflens codex-config --workspace /absolute/path/to/workspace
 perflens install-skill --client claude-code --project /absolute/path/to/workspace
 perflens claude-config --workspace /absolute/path/to/workspace
+perflens install-skill --client opencode --project /absolute/path/to/workspace
+perflens install-skill --client copilot --project /absolute/path/to/workspace
 ```
 
 第一条命令不会覆盖已有 Skill；第二条命令只把 TOML 输出到终端供你检查，不会自动修改
@@ -171,6 +195,20 @@ PerfLens 保留其他 `mcpServers`，但拒绝覆盖名称相同且内容不同�
 对应机制见 Claude Code 官方的
 [Skill 文档](https://code.claude.com/docs/en/slash-commands)和
 [MCP 项目级配置文档](https://code.claude.com/docs/en/mcp)。
+
+## 连接 OpenCode 与本地 GitHub Copilot
+
+运行 `perflens init --client opencode` 会安装共享 Agent Skill，并安全合并本地 stdio
+服务到 `.opencode/opencode.json`。检测到已有 JSONC 时会保留并要求手动合并，避免丢失
+注释。对应机制见 OpenCode 官方 [Skill](https://opencode.ai/docs/skills) 和
+[MCP Server](https://opencode.ai/v2/docs/mcp-servers) 文档。
+
+运行 `perflens init --client copilot` 会同时配置两个本地客户端：Copilot CLI 使用项目
+`.mcp.json`，VS Code Copilot Agent 使用 `.vscode/mcp.json`，二者复用
+`.agents/skills/perflens`。重启或重新加载两个客户端，并分别确认项目 MCP 信任提示。
+对应机制见 GitHub 官方 [Copilot CLI MCP](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers)
+和 [VS Code MCP](https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp-in-your-ide/extend-copilot-chat-with-mcp)
+文档。GitHub 云端 Coding Agent 是不同运行环境，不在本机 Collector/Docker 支持范围内。
 
 如果 Skill 已加载但客户端没有注入 PerfLens 原生 MCP 工具，应停止任务，并从已经完成
 初始化的项目中重启或重新加载客户端。不得让 Agent 通过 Shell 启动 `perflens-mcp`，也
@@ -355,9 +393,9 @@ perflens detach --project /绝对路径/项目 --dry-run
 perflens detach --project /绝对路径/项目
 ```
 
-默认同时处理 Codex 和 Claude Code，并删除经过验证的 MCP 条目和未修改托管 Skill。
-Codex 只删除带完整托管标记且只包含 `mcp_servers.perflens` 的块；Claude 只删除与引导目录
-`claude-mcp.json` 完全一致的 `perflens` 条目。引导文件、分析产物和 Collector 数据保留；
-用户修改或无法验证所有权的内容拒绝自动删除。使用 `--client codex|claude-code` 只处理
+默认处理 `setup.json` 记录的全部客户端，并只删除经过验证的 PerfLens MCP 条目和未修改
+托管 Skill。Codex 托管标记、各客户端引导目录所有权副本及原文件内容必须一致。引导文件、
+分析产物和 Collector 数据保留；用户修改或无法验证所有权的内容拒绝自动删除。使用
+`--client codex|claude-code|opencode|copilot` 只处理
 一个客户端，使用 `--keep-skills` 保留 Skill，自定义引导目录使用 `--setup-directory`。
 保留的 Skill 仍可被客户端发现，所以 `--keep-skills` 不是彻底停用。

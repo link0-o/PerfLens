@@ -15,7 +15,7 @@ from perflens.domain.errors import ErrorCode, PerfLensError
 SKILL_NAME = "perflens"
 SKILL_ARCHIVE_BASENAME = "perflens-skill"
 LEGACY_SKILL_NAMES = ("perflens-performance-analysis",)
-SkillClient = Literal["codex", "claude-code"]
+SkillClient = Literal["codex", "claude-code", "opencode", "copilot"]
 _MAX_SKILL_FILES = 64
 _MAX_SKILL_BYTES = 2 << 20
 
@@ -47,7 +47,11 @@ class SkillRemovalPlan:
 def project_skill_path(project_root: Path, *, client: SkillClient = "codex") -> Path:
     """Return the client-specific project Skill path without creating it."""
     root = _existing_directory(project_root, label="Project root")
-    parents = (".agents", "skills") if client == "codex" else (".claude", "skills")
+    parents = (
+        (".claude", "skills")
+        if client == "claude-code"
+        else (".agents", "skills")
+    )
     return root.joinpath(*parents, SKILL_NAME)
 
 
@@ -58,7 +62,11 @@ def project_skill_candidates(
 ) -> tuple[Path, ...]:
     """Return current and legacy managed Skill paths for one client."""
     root = _existing_directory(project_root, label="Project root")
-    parents = (".agents", "skills") if client == "codex" else (".claude", "skills")
+    parents = (
+        (".claude", "skills")
+        if client == "claude-code"
+        else (".agents", "skills")
+    )
     return tuple(root.joinpath(*parents, name) for name in (SKILL_NAME, *LEGACY_SKILL_NAMES))
 
 
@@ -93,7 +101,7 @@ def install_project_skill(
 ) -> Path:
     """Install the bundled Skill in one selected client's project directory."""
     root = _existing_directory(project_root, label="Project root")
-    client_directory = ".agents" if client == "codex" else ".claude"
+    client_directory = ".claude" if client == "claude-code" else ".agents"
     agents_root = _safe_child_directory(root, client_directory)
     skills_root = _safe_child_directory(agents_root, "skills")
     target = skills_root / SKILL_NAME

@@ -1241,6 +1241,9 @@ class RuntimeStatusArtifact(ContractModel):
     checked_at: str
     project_root: str
     setup_directory: str
+    selected_clients: tuple[
+        Literal["codex", "claude-code", "opencode", "copilot"], ...
+    ] = ()
     setup_status: Literal["missing", "incomplete", "ready"]
     skill_status: Literal["missing", "incomplete", "ready"]
     mcp_config_status: Literal["missing", "incomplete", "ready"]
@@ -1280,6 +1283,9 @@ class SetupArtifact(ContractModel):
     perflens_version: str
     project_root: str
     output_directory: str
+    selected_clients: tuple[
+        Literal["codex", "claude-code", "opencode", "copilot"], ...
+    ] = ()
     skill_status: Literal["installed", "updated", "existing", "skipped"]
     skill_path: str | None = None
     skill_fingerprint: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
@@ -1293,6 +1299,24 @@ class SetupArtifact(ContractModel):
     claude_project_config_path: str | None = None
     claude_project_config_status: Literal["installed", "updated", "existing", "skipped"] = "skipped"
     claude_project_config_managed: bool = False
+    opencode_mcp_config_path: str | None = None
+    opencode_project_config_path: str | None = None
+    opencode_project_config_status: Literal[
+        "installed", "updated", "existing", "skipped"
+    ] = "skipped"
+    opencode_project_config_managed: bool = False
+    copilot_mcp_config_path: str | None = None
+    copilot_project_config_path: str | None = None
+    copilot_project_config_status: Literal[
+        "installed", "updated", "existing", "skipped"
+    ] = "skipped"
+    copilot_project_config_managed: bool = False
+    copilot_vscode_mcp_config_path: str | None = None
+    copilot_vscode_project_config_path: str | None = None
+    copilot_vscode_project_config_status: Literal[
+        "installed", "updated", "existing", "skipped"
+    ] = "skipped"
+    copilot_vscode_project_config_managed: bool = False
     capability_report_path: str
     collector_assets_path: str | None = None
     automatic_collection_enabled: bool = False
@@ -1323,13 +1347,23 @@ class ProjectDetachmentArtifact(ContractModel):
     detachment_id: str = Field(pattern=r"^detachment-[a-f0-9]{16}$")
     project_root: str
     dry_run: bool
-    selected_clients: tuple[Literal["codex", "claude-code"], ...] = ("codex",)
+    selected_clients: tuple[
+        Literal["codex", "claude-code", "opencode", "copilot"], ...
+    ] = ("codex",)
     remove_skills: bool = False
     setup_directory: str | None = None
     codex_config_path: str
     codex_config_status: Literal["not_found", "planned", "removed", "skipped"]
     claude_config_path: str | None = None
     claude_config_status: Literal["not_found", "planned", "removed", "skipped"] = "skipped"
+    opencode_config_path: str | None = None
+    opencode_config_status: Literal["not_found", "planned", "removed", "skipped"] = "skipped"
+    copilot_config_path: str | None = None
+    copilot_config_status: Literal["not_found", "planned", "removed", "skipped"] = "skipped"
+    copilot_vscode_config_path: str | None = None
+    copilot_vscode_config_status: Literal[
+        "not_found", "planned", "removed", "skipped"
+    ] = "skipped"
     codex_skill_path: str | None = None
     codex_skill_status: Literal["not_found", "planned", "removed", "preserved", "skipped"] = (
         "skipped"
@@ -1338,6 +1372,14 @@ class ProjectDetachmentArtifact(ContractModel):
     claude_skill_status: Literal["not_found", "planned", "removed", "preserved", "skipped"] = (
         "skipped"
     )
+    opencode_skill_path: str | None = None
+    opencode_skill_status: Literal[
+        "not_found", "planned", "removed", "preserved", "skipped"
+    ] = "skipped"
+    copilot_skill_path: str | None = None
+    copilot_skill_status: Literal[
+        "not_found", "planned", "removed", "preserved", "skipped"
+    ] = "skipped"
     removed_paths: tuple[str, ...] = ()
     preserved_paths: tuple[str, ...] = ()
     next_steps: tuple[str, ...] = ()

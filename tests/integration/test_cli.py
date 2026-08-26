@@ -21,9 +21,20 @@ from perflens.contracts.artifacts import (
     CollectionModeCapability,
     RuntimeStatusArtifact,
 )
+from perflens.distribution import client_defaults
 from perflens.distribution.skill import SKILL_NAME
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def isolate_user_client_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep CLI tests independent of a developer's real per-user defaults."""
+    path = tmp_path / "user-defaults" / "config.toml"
+    monkeypatch.setattr(client_defaults, "default_client_config_path", lambda: path)
 
 
 def test_cli_help_is_chinese_first_without_changing_public_command_names() -> None:
@@ -271,6 +282,94 @@ def test_init_activates_selected_clients_only_inside_the_project(tmp_path: Path)
     assert "--allow-automatic-collection" not in server["args"]
 
 
+def test_init_explicit_opencode_uses_shared_skill_and_local_mcp(tmp_path: Path) -> None:
+    project = tmp_path / "opencode-project"
+    project.mkdir()
+
+    initialized = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--client",
+            "opencode",
+            "--read-only",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+
+    assert initialized.exit_code == 0, initialized.output
+    assert "OpenCode Skill:" in initialized.output
+    assert "Codex MCP:" not in initialized.output
+    assert (project / ".agents/skills/perflens/SKILL.md").is_file()
+    assert not (project / ".codex").exists()
+    assert not (project / ".claude").exists()
+    payload = json.loads((project / ".opencode/opencode.json").read_text(encoding="utf-8"))
+    assert payload["mcp"]["servers"]["perflens"]["command"][0] == str(
+        Path(sys.executable).resolve()
+    )
+
+
+def test_init_explicit_copilot_configures_cli_and_vscode_agent(tmp_path: Path) -> None:
+    project = tmp_path / "copilot-project"
+    project.mkdir()
+
+    initialized = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--client",
+            "copilot",
+            "--read-only",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+
+    assert initialized.exit_code == 0, initialized.output
+    assert "Copilot CLI MCP:" in initialized.output
+    assert "VS Code Copilot MCP:" in initialized.output
+    assert (project / ".agents/skills/perflens/SKILL.md").is_file()
+    cli = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))
+    vscode = json.loads((project / ".vscode/mcp.json").read_text(encoding="utf-8"))
+    assert cli["mcpServers"]["perflens"]["command"] == str(Path(sys.executable).resolve())
+    assert vscode["servers"]["perflens"]["command"] == str(
+        Path(sys.executable).resolve()
+    )
+    setup = json.loads((project / "perflens-setup/setup.json").read_text(encoding="utf-8"))
+    assert setup["selected_clients"] == ["copilot"]
+
+    updated = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--client",
+            "copilot",
+            "--read-only",
+            "--update",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+    assert updated.exit_code == 0, updated.output
+    status = runner.invoke(
+        app,
+        ["status", "--project", str(project), "--perf-path", "/bin/true"],
+    )
+    assert status.exit_code == 0, status.output
+    assert "已启用客户端: copilot" in status.output
+    assert "项目 MCP 配置: 已接入" in status.output
+
+
 def test_init_defaults_to_codex_and_claude_code_project_activation(tmp_path: Path) -> None:
     project = tmp_path / "both-project"
     project.mkdir()
@@ -324,6 +423,157 @@ def test_init_defaults_to_codex_and_claude_code_project_activation(tmp_path: Pat
     )
     assert updated.exit_code == 0, updated.output
     assert "更新模式" in updated.output
+
+
+def test_client_defaults_drive_new_init_and_explicit_clients_override_them(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "user-config" / "config.toml"
+    configured = runner.invoke(
+        app,
+        [
+            "client-defaults",
+            "--config",
+            str(config),
+            "--client",
+            "opencode",
+            "--client",
+            "copilot",
+        ],
+    )
+    assert configured.exit_code == 0, configured.output
+    assert "opencode, copilot" in configured.output
+
+    configured_project = tmp_path / "configured-project"
+    configured_project.mkdir()
+    initialized = runner.invoke(
+        app,
+        [
+            "init",
+            str(configured_project),
+            "--client-config",
+            str(config),
+            "--read-only",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+    assert initialized.exit_code == 0, initialized.output
+    assert "已启用客户端: opencode, copilot" in initialized.output
+    assert "客户端选择来源: 用户默认配置" in initialized.output
+    assert (configured_project / ".opencode/opencode.json").is_file()
+    assert (configured_project / ".vscode/mcp.json").is_file()
+    assert not (configured_project / ".codex").exists()
+    assert not (configured_project / ".claude").exists()
+
+    overridden_project = tmp_path / "overridden-project"
+    overridden_project.mkdir()
+    overridden = runner.invoke(
+        app,
+        [
+            "init",
+            str(overridden_project),
+            "--client-config",
+            str(config),
+            "--client",
+            "claude-code",
+            "--read-only",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+    assert overridden.exit_code == 0, overridden.output
+    assert "已启用客户端: claude-code" in overridden.output
+    assert "客户端选择来源: 命令行显式选择" in overridden.output
+    assert (overridden_project / ".claude/skills/perflens/SKILL.md").is_file()
+    assert not (overridden_project / ".agents").exists()
+
+
+def test_init_update_without_clients_preserves_the_project_selection(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    initialized = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--client",
+            "opencode",
+            "--read-only",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+    assert initialized.exit_code == 0, initialized.output
+
+    config = tmp_path / "defaults" / "config.toml"
+    configured = runner.invoke(
+        app,
+        [
+            "client-defaults",
+            "--config",
+            str(config),
+            "--client",
+            "codex",
+            "--client",
+            "copilot",
+        ],
+    )
+    assert configured.exit_code == 0, configured.output
+    updated = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--client-config",
+            str(config),
+            "--update",
+            "--read-only",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+
+    assert updated.exit_code == 0, updated.output
+    assert "已启用客户端: opencode" in updated.output
+    assert "客户端选择来源: 当前项目已有配置" in updated.output
+    assert (project / ".opencode/opencode.json").is_file()
+    assert not (project / ".codex").exists()
+
+
+def test_init_rejects_mixing_legacy_all_with_another_client(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    initialized = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--client",
+            "all",
+            "--client",
+            "copilot",
+            "--read-only",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+
+    assert initialized.exit_code != 0
+    assert "all cannot be combined" in initialized.output
 
 
 def test_cli_detach_one_client_then_updates_to_narrower_scope(tmp_path: Path) -> None:

@@ -19,8 +19,13 @@ cd /absolute/path/to/workspace
 perflens init
 ```
 
-It activates Codex and Claude Code by default. Use `--client codex`,
-`--client claude-code`, or `--read-only` to narrow the scope. It installs only
+It activates Codex and Claude Code by default. Use `--client codex` or
+`--client claude-code` to select one of them. Use `--client opencode` for OpenCode,
+or `--client copilot` for the local Copilot suite (Copilot CLI plus VS Code Copilot
+Agent). OpenCode and Copilot reuse `.agents/skills/perflens`; their project MCP files are
+`.opencode/opencode.json`, `.mcp.json`, and `.vscode/mcp.json`, respectively. The Copilot
+option does not configure GitHub's cloud Coding Agent or expose local sockets to it. Use
+`--read-only` to disable automatic workload collection. It installs only
 project Skills and MCP configuration, then creates Chinese and English next steps,
 capability diagnostics, a safely managed project `.codex/config.toml` block,
 and a standalone `codex-mcp.toml` under
@@ -28,9 +33,20 @@ and a standalone `codex-mcp.toml` under
 administrator privileges. See the [installation guide](../INSTALL.md) for the
 complete download-to-first-analysis path.
 
+`--client` is repeatable. A user who wants future plain `init` calls to include additional
+clients can persist a strict default set:
+
+```bash
+perflens client-defaults --client codex --client claude-code --client opencode
+```
+
+The generated `~/.config/perflens/config.toml` has schema `1.0`; without it, the built-in
+selection is Codex plus Claude Code. An explicit `init --client ...` list wins for that call.
+
 Use `perflens init --update` to refresh an existing project after an upgrade or
 to change collection gates. Update mode requires a matching ownership artifact
-and refuses modified Skills or unverified client configuration. Detach a client
+and refuses modified Skills or unverified client configuration. When no client list is supplied,
+it preserves that project's recorded clients rather than applying changed user defaults. Detach a client
 before updating with a narrower client selection. The managed setup directory
 refuses unexpected user files and preserves staged Collector assets unless
 regeneration is explicitly requested.
@@ -85,6 +101,9 @@ step separately:
 ```bash
 perflens install-skill --project /absolute/path/to/workspace
 perflens codex-config --workspace /absolute/path/to/workspace
+perflens install-skill --client claude-code --project /absolute/path/to/workspace
+perflens install-skill --client opencode --project /absolute/path/to/workspace
+perflens install-skill --client copilot --project /absolute/path/to/workspace
 ```
 
 The first command refuses to overwrite an existing Skill. The second command
@@ -168,6 +187,22 @@ If the top-level `.claude/skills` directory was created after Claude Code
 started, restart once, then invoke `/perflens`.
 See the official Claude Code [Skills](https://code.claude.com/docs/en/slash-commands)
 and [MCP](https://code.claude.com/docs/en/mcp) documentation for client behavior.
+
+## Connect OpenCode and local GitHub Copilot
+
+Run `perflens init --client opencode` to install the shared Agent Skill and safely merge a
+local stdio server into `.opencode/opencode.json`. Existing JSONC is preserved for manual
+merge because rewriting comments would be lossy. See OpenCode's official
+[Skills](https://opencode.ai/docs/skills) and
+[MCP server](https://opencode.ai/v2/docs/mcp-servers) documentation.
+
+Run `perflens init --client copilot` to configure both local clients: Copilot CLI uses the
+project `.mcp.json`, and VS Code Copilot Agent uses `.vscode/mcp.json`. Both reuse
+`.agents/skills/perflens`. Restart or reload each client and approve its own project MCP trust
+prompt. See GitHub's official [Copilot CLI MCP](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers)
+and [VS Code MCP](https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp-in-your-ide/extend-copilot-chat-with-mcp)
+documentation. GitHub's cloud Coding Agent is a different runtime and is outside local
+Collector/Docker support.
 
 If the Skill loads but the native PerfLens MCP tools are absent, stop the task and restart or
 reload the client from the initialized project. Do not let an Agent launch `perflens-mcp` through
@@ -270,10 +305,10 @@ perflens detach --project /absolute/path/to/project --dry-run
 perflens detach --project /absolute/path/to/project
 ```
 
-By default both clients are handled: a complete marked Codex block, an exact
-recorded Claude `perflens` entry, and unchanged managed project Skills are
-removed. Other client settings, onboarding files, analysis artifacts, and
+By default all clients recorded by `setup.json` are handled: only verified PerfLens
+entries and unchanged managed project Skills are removed. Other client settings,
+onboarding files, analysis artifacts, and
 Collector data are preserved; modified or unverified content is refused. Use
-`--client codex|claude-code` for one client, `--keep-skills` to retain Skills,
+`--client codex|claude-code|opencode|copilot` for one client, `--keep-skills` to retain Skills,
 and `--setup-directory` for a custom onboarding directory. A retained Skill
 remains discoverable, so `--keep-skills` is not complete deactivation.

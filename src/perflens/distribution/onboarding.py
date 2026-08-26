@@ -7,7 +7,7 @@ import shlex
 import shutil
 import stat
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from perflens import __version__
 from perflens.artifacts.filesystem import write_json_new_atomic, write_text_atomic
@@ -19,6 +19,7 @@ from perflens.distribution.claude import (
     plan_claude_project_config_removal,
     render_claude_config,
 )
+from perflens.distribution.client_defaults import ClientName
 from perflens.distribution.codex import (
     CodexConfigInstallPlan,
     plan_codex_project_config,
@@ -26,6 +27,18 @@ from perflens.distribution.codex import (
     render_codex_config,
 )
 from perflens.distribution.collector import install_collector_assets
+from perflens.distribution.copilot import (
+    CopilotConfigInstallPlan,
+    plan_copilot_project_config,
+    plan_copilot_project_config_removal,
+    render_copilot_config,
+)
+from perflens.distribution.opencode import (
+    OpenCodeConfigInstallPlan,
+    plan_opencode_project_config,
+    plan_opencode_project_config_removal,
+    render_opencode_config,
+)
 from perflens.distribution.skill import (
     SKILL_NAME,
     SkillClient,
@@ -36,6 +49,12 @@ from perflens.distribution.skill import (
     project_skill_path,
     recorded_project_skill_path,
     refresh_project_skill,
+)
+from perflens.distribution.vscode import (
+    VSCodeConfigInstallPlan,
+    plan_vscode_copilot_project_config,
+    plan_vscode_copilot_project_config_removal,
+    render_vscode_copilot_config,
 )
 from perflens.docker.project_config import (
     load_docker_project_policy,
@@ -55,6 +74,26 @@ _DEPLOYED_FEATURE_PROFILE = Path("/etc/perflens/profile.toml")
 _DOCKER_PROJECT_CONFIG_NAME = "container-workload.toml"
 
 
+def configured_project_clients(
+    project_root: Path,
+    *,
+    output_directory: Path | None = None,
+) -> tuple[ClientName, ...] | None:
+    """Return a trustworthy existing project's selected clients, if initialized."""
+    project = _existing_project(project_root)
+    output = _output_path(project, output_directory)
+    if not output.exists() and not output.is_symlink():
+        return None
+    _output, artifact = _setup_output_state(
+        project,
+        output_directory,
+        update_existing=True,
+    )
+    if artifact is None:
+        return None
+    return _selected_clients_from_setup(artifact)
+
+
 def run_project_setup(
     project_root: Path,
     *,
@@ -63,8 +102,13 @@ def run_project_setup(
     install_codex_config: bool = True,
     install_claude_skill: bool = False,
     install_claude_config: bool = False,
+    install_opencode_config: bool = False,
+    install_copilot_config: bool = False,
+    install_copilot_vscode_config: bool = False,
     codex_enabled: bool = True,
     claude_enabled: bool = False,
+    opencode_enabled: bool = False,
+    copilot_enabled: bool = False,
     allow_process_execution: bool = False,
     mcp_command: Path | None = None,
     prepare_collector: bool = False,
@@ -151,16 +195,66 @@ def run_project_setup(
             ),
         )
     admin_command = selected_collector_command.with_name("perflens-admin")
+    selected_client_list: list[
+        Literal["codex", "claude-code", "opencode", "copilot"]
+    ] = []
+    if codex_enabled:
+        selected_client_list.append("codex")
+    if claude_enabled:
+        selected_client_list.append("claude-code")
+    if opencode_enabled:
+        selected_client_list.append("opencode")
+    if copilot_enabled:
+        selected_client_list.append("copilot")
+    selected_clients = tuple(selected_client_list)
     previous_claude_configuration = _previous_claude_configuration(
         project,
         previous_artifact,
+    )
+    previous_opencode_configuration = _previous_client_configuration(
+        project,
+        previous_artifact,
+        managed=(
+            previous_artifact.opencode_project_config_managed
+            if previous_artifact is not None
+            else False
+        ),
+        filename="opencode-mcp.json",
+        label="OpenCode",
+    )
+    previous_copilot_configuration = _previous_client_configuration(
+        project,
+        previous_artifact,
+        managed=(
+            previous_artifact.copilot_project_config_managed
+            if previous_artifact is not None
+            else False
+        ),
+        filename="copilot-mcp.json",
+        label="Copilot CLI",
+    )
+    previous_copilot_vscode_configuration = _previous_client_configuration(
+        project,
+        previous_artifact,
+        managed=(
+            previous_artifact.copilot_vscode_project_config_managed
+            if previous_artifact is not None
+            else False
+        ),
+        filename="copilot-vscode-mcp.json",
+        label="VS Code Copilot",
     )
     _validate_disabled_clients_detached(
         project,
         previous_artifact,
         codex_enabled=codex_enabled,
         claude_enabled=claude_enabled,
+        opencode_enabled=opencode_enabled,
+        copilot_enabled=copilot_enabled,
         previous_claude_configuration=previous_claude_configuration,
+        previous_opencode_configuration=previous_opencode_configuration,
+        previous_copilot_configuration=previous_copilot_configuration,
+        previous_copilot_vscode_configuration=previous_copilot_vscode_configuration,
     )
     skill_path, skill_status = _skill_preflight(
         project,
@@ -235,6 +329,59 @@ def run_project_setup(
         if install_claude_config
         else None
     )
+    common_configuration_options: dict[str, Any] = {
+        "allow_process_execution": allow_process_execution,
+        "automatic_collection": automatic_collection,
+        "allow_project_execution": automatic_collection,
+        "allow_pid_attach": allow_pid_attach,
+        "automatic_modes": selected_automatic_modes,
+        "automatic_max_duration_seconds": automatic_max_duration_seconds,
+        "automatic_max_frequency_hz": automatic_max_frequency_hz,
+        "automatic_max_output_bytes": automatic_max_output_bytes,
+        "automatic_plan_ttl_seconds": automatic_plan_ttl_seconds,
+        "allow_docker_targets": docker_runtime_enabled,
+        "allow_docker_optimization": docker_optimization_enabled,
+        "docker_project_config": docker_project_config if docker_runtime_enabled else None,
+        "collector_spool_root": collector_spool_root,
+        "mcp_command": mcp_command,
+    }
+    opencode_configuration = render_opencode_config(project, **common_configuration_options)
+    opencode_plan: OpenCodeConfigInstallPlan | None = (
+        plan_opencode_project_config(
+            project,
+            opencode_configuration,
+            managed_configuration=previous_opencode_configuration,
+            recorded_path=(
+                previous_artifact.opencode_project_config_path
+                if previous_artifact is not None
+                else None
+            ),
+        )
+        if install_opencode_config
+        else None
+    )
+    copilot_configuration = render_copilot_config(project, **common_configuration_options)
+    copilot_plan: CopilotConfigInstallPlan | None = (
+        plan_copilot_project_config(
+            project,
+            copilot_configuration,
+            managed_configuration=previous_copilot_configuration,
+        )
+        if install_copilot_config
+        else None
+    )
+    copilot_vscode_configuration = render_vscode_copilot_config(
+        project, **common_configuration_options
+    )
+    copilot_vscode_plan: VSCodeConfigInstallPlan | None = (
+        plan_vscode_copilot_project_config(
+            project,
+            copilot_vscode_configuration,
+            managed_configuration=previous_copilot_vscode_configuration,
+        )
+        if install_copilot_vscode_config
+        else None
+    )
     capabilities = inspect_collection_capabilities(perf_path)
     collection_status, blocked_modes = _collection_status(capabilities)
     selected_uid = os.geteuid() if collector_uid is None else collector_uid
@@ -247,8 +394,13 @@ def run_project_setup(
         admin_command=admin_command,
         codex_plan=codex_plan,
         claude_plan=claude_plan,
+        opencode_plan=opencode_plan,
+        copilot_plan=copilot_plan,
+        copilot_vscode_plan=copilot_vscode_plan,
         codex_selected=codex_enabled,
         claude_selected=claude_enabled,
+        opencode_selected=opencode_enabled,
+        copilot_selected=copilot_enabled,
     )
     if docker_runtime_enabled:
         next_steps = (
@@ -263,6 +415,9 @@ def run_project_setup(
     installed_claude_skill = False
     applied_codex_config = False
     applied_claude_config = False
+    applied_opencode_config = False
+    applied_copilot_config = False
+    applied_copilot_vscode_config = False
     moved_collector_assets = False
     moved_docker_config = False
     try:
@@ -303,8 +458,13 @@ def run_project_setup(
                 selected_collector_command,
                 codex_plan,
                 claude_plan,
+                opencode_plan,
+                copilot_plan,
+                copilot_vscode_plan,
                 codex_enabled,
                 claude_enabled,
+                opencode_enabled,
+                copilot_enabled,
                 collector_privilege_mode,
                 docker_runtime_enabled,
             ),
@@ -322,8 +482,13 @@ def run_project_setup(
                 selected_collector_command,
                 codex_plan,
                 claude_plan,
+                opencode_plan,
+                copilot_plan,
+                copilot_vscode_plan,
                 codex_enabled,
                 claude_enabled,
+                opencode_enabled,
+                copilot_enabled,
                 collector_privilege_mode,
                 docker_runtime_enabled,
             ),
@@ -334,6 +499,24 @@ def run_project_setup(
         write_text_atomic(
             claude_configuration,
             claude_mcp_config_path,
+            max_output_bytes=_MAX_GUIDE_BYTES,
+        )
+        opencode_mcp_config_path = output / "opencode-mcp.json"
+        write_text_atomic(
+            opencode_configuration,
+            opencode_mcp_config_path,
+            max_output_bytes=_MAX_GUIDE_BYTES,
+        )
+        copilot_mcp_config_path = output / "copilot-mcp.json"
+        write_text_atomic(
+            copilot_configuration,
+            copilot_mcp_config_path,
+            max_output_bytes=_MAX_GUIDE_BYTES,
+        )
+        copilot_vscode_mcp_config_path = output / "copilot-vscode-mcp.json"
+        write_text_atomic(
+            copilot_vscode_configuration,
+            copilot_vscode_mcp_config_path,
             max_output_bytes=_MAX_GUIDE_BYTES,
         )
         if docker_runtime_enabled:
@@ -385,6 +568,9 @@ def run_project_setup(
             chinese_guide_path,
             english_guide_path,
             claude_mcp_config_path,
+            opencode_mcp_config_path,
+            copilot_mcp_config_path,
+            copilot_vscode_mcp_config_path,
         ]
         if docker_runtime_enabled:
             generated.append(docker_project_config)
@@ -392,6 +578,12 @@ def run_project_setup(
             generated.append(codex_plan.path)
         if claude_plan is not None and claude_plan.status != "existing":
             generated.append(claude_plan.path)
+        if opencode_plan is not None and opencode_plan.status != "existing":
+            generated.append(opencode_plan.path)
+        if copilot_plan is not None and copilot_plan.status != "existing":
+            generated.append(copilot_plan.path)
+        if copilot_vscode_plan is not None and copilot_vscode_plan.status != "existing":
+            generated.append(copilot_vscode_plan.path)
         if collector_assets_path is not None:
             generated.extend(sorted(collector_assets_path.iterdir()))
         setup_path = output / "setup.json"
@@ -400,6 +592,7 @@ def run_project_setup(
             perflens_version=__version__,
             project_root=str(project),
             output_directory=str(output),
+            selected_clients=selected_clients,
             skill_status=skill_status,
             skill_path=str(skill_path) if skill_path is not None else None,
             skill_fingerprint=skill_fingerprint,
@@ -426,6 +619,51 @@ def run_project_setup(
                     )
                 )
             ),
+            opencode_mcp_config_path=str(opencode_mcp_config_path),
+            opencode_project_config_path=(
+                str(opencode_plan.path) if opencode_plan is not None else None
+            ),
+            opencode_project_config_status=(
+                opencode_plan.status if opencode_plan is not None else "skipped"
+            ),
+            opencode_project_config_managed=_configuration_is_managed(
+                opencode_plan,
+                previous=(
+                    previous_artifact.opencode_project_config_managed
+                    if previous_artifact is not None
+                    else False
+                ),
+            ),
+            copilot_mcp_config_path=str(copilot_mcp_config_path),
+            copilot_project_config_path=(
+                str(copilot_plan.path) if copilot_plan is not None else None
+            ),
+            copilot_project_config_status=(
+                copilot_plan.status if copilot_plan is not None else "skipped"
+            ),
+            copilot_project_config_managed=_configuration_is_managed(
+                copilot_plan,
+                previous=(
+                    previous_artifact.copilot_project_config_managed
+                    if previous_artifact is not None
+                    else False
+                ),
+            ),
+            copilot_vscode_mcp_config_path=str(copilot_vscode_mcp_config_path),
+            copilot_vscode_project_config_path=(
+                str(copilot_vscode_plan.path) if copilot_vscode_plan is not None else None
+            ),
+            copilot_vscode_project_config_status=(
+                copilot_vscode_plan.status if copilot_vscode_plan is not None else "skipped"
+            ),
+            copilot_vscode_project_config_managed=_configuration_is_managed(
+                copilot_vscode_plan,
+                previous=(
+                    previous_artifact.copilot_vscode_project_config_managed
+                    if previous_artifact is not None
+                    else False
+                ),
+            ),
             capability_report_path=str(capability_path),
             collector_assets_path=(
                 str(collector_assets_path) if collector_assets_path is not None else None
@@ -450,6 +688,15 @@ def run_project_setup(
         if claude_plan is not None:
             claude_plan.apply()
             applied_claude_config = claude_plan.status != "existing"
+        if opencode_plan is not None:
+            opencode_plan.apply()
+            applied_opencode_config = opencode_plan.status != "existing"
+        if copilot_plan is not None:
+            copilot_plan.apply()
+            applied_copilot_config = copilot_plan.status != "existing"
+        if copilot_vscode_plan is not None:
+            copilot_vscode_plan.apply()
+            applied_copilot_vscode_config = copilot_vscode_plan.status != "existing"
         if skill_status == "updated":
             skill_path, _ = refresh_project_skill(
                 project,
@@ -487,6 +734,12 @@ def run_project_setup(
         if backup is not None:
             shutil.rmtree(backup)
     except BaseException:
+        if applied_copilot_vscode_config and copilot_vscode_plan is not None:
+            _rollback_config_plan(copilot_vscode_plan)
+        if applied_copilot_config and copilot_plan is not None:
+            _rollback_config_plan(copilot_plan)
+        if applied_opencode_config and opencode_plan is not None:
+            _rollback_config_plan(opencode_plan)
         if applied_claude_config and claude_plan is not None:
             _rollback_config_plan(claude_plan)
         if applied_codex_config and codex_plan is not None:
@@ -710,11 +963,14 @@ def _validate_setup_update_contents(output: Path) -> None:
     managed_names = {
         "NEXT_STEPS.md",
         "claude-mcp.json",
+        "copilot-mcp.json",
+        "copilot-vscode-mcp.json",
         "codex-mcp.toml",
         "collection-capabilities.json",
         _DOCKER_PROJECT_CONFIG_NAME,
         "collector-assets",
         "setup.json",
+        "opencode-mcp.json",
         "下一步.zh-CN.md",
     }
     try:
@@ -851,35 +1107,91 @@ def _previous_claude_configuration(
         ) from exc
 
 
+def _previous_client_configuration(
+    project: Path,
+    artifact: SetupArtifact | None,
+    *,
+    managed: bool,
+    filename: str,
+    label: str,
+) -> str | None:
+    if artifact is None or not managed:
+        return None
+    setup = Path(artifact.output_directory)
+    path = setup / filename
+    if not setup.is_relative_to(project) or path.is_symlink() or not path.is_file():
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            f"Recorded {label} MCP ownership file is missing or unsafe",
+            details={"path": str(path)},
+        )
+    try:
+        raw = path.read_bytes()
+        if len(raw) > _MAX_SETUP_JSON_BYTES:
+            raise ValueError(f"{label} MCP ownership file exceeds its size limit")
+        return raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            f"Recorded {label} MCP ownership file is invalid",
+            details={"path": str(path)},
+        ) from exc
+
+
+def _selected_clients_from_setup(
+    artifact: SetupArtifact,
+) -> tuple[Literal["codex", "claude-code", "opencode", "copilot"], ...]:
+    if artifact.selected_clients:
+        return artifact.selected_clients
+    legacy: list[Literal["codex", "claude-code", "opencode", "copilot"]] = []
+    if artifact.codex_project_config_status != "skipped" or artifact.skill_status != "skipped":
+        legacy.append("codex")
+    if (
+        artifact.claude_project_config_status != "skipped"
+        or artifact.claude_skill_status != "skipped"
+    ):
+        legacy.append("claude-code")
+    return tuple(legacy)
+
+
 def _validate_disabled_clients_detached(
     project: Path,
     artifact: SetupArtifact | None,
     *,
     codex_enabled: bool,
     claude_enabled: bool,
+    opencode_enabled: bool,
+    copilot_enabled: bool,
     previous_claude_configuration: str | None,
+    previous_opencode_configuration: str | None,
+    previous_copilot_configuration: str | None,
+    previous_copilot_vscode_configuration: str | None,
 ) -> None:
     if artifact is None:
         return
     still_active: list[str] = []
-    if not codex_enabled and artifact.codex_project_config_status != "skipped":
+    previous = set(_selected_clients_from_setup(artifact))
+    selected = {
+        client
+        for client, enabled in (
+            ("codex", codex_enabled),
+            ("claude-code", claude_enabled),
+            ("opencode", opencode_enabled),
+            ("copilot", copilot_enabled),
+        )
+        if enabled
+    }
+    disabled = previous - selected
+    if "codex" in disabled and artifact.codex_project_config_status != "skipped":
         try:
             codex_plan = plan_codex_project_config_removal(project)
         except PerfLensError:
             codex_plan = True
         if codex_plan is not None:
             still_active.append("codex")
-    if (
-        not codex_enabled
-        and artifact.skill_status != "skipped"
-        and any(
-            path.exists() or path.is_symlink()
-            for path in project_skill_candidates(project, client="codex")
-        )
-        and "codex" not in still_active
-    ):
-        still_active.append("codex")
-    if not claude_enabled and artifact.claude_project_config_status != "skipped":
+    if "claude-code" in disabled and artifact.claude_project_config_status != "skipped":
         try:
             claude_plan = plan_claude_project_config_removal(
                 project,
@@ -890,7 +1202,7 @@ def _validate_disabled_clients_detached(
         if claude_plan is not None:
             still_active.append("claude-code")
     if (
-        not claude_enabled
+        "claude-code" in disabled
         and artifact.claude_skill_status != "skipped"
         and any(
             path.exists() or path.is_symlink()
@@ -899,6 +1211,57 @@ def _validate_disabled_clients_detached(
         and "claude-code" not in still_active
     ):
         still_active.append("claude-code")
+    if "opencode" in disabled and artifact.opencode_project_config_status != "skipped":
+        try:
+            opencode_plan = plan_opencode_project_config_removal(
+                project,
+                managed_configuration=previous_opencode_configuration,
+                recorded_path=artifact.opencode_project_config_path,
+            )
+        except PerfLensError:
+            opencode_plan = True
+        if opencode_plan is not None:
+            still_active.append("opencode")
+    if "copilot" in disabled:
+        copilot_attached = False
+        if artifact.copilot_project_config_status != "skipped":
+            try:
+                copilot_attached = (
+                    plan_copilot_project_config_removal(
+                        project,
+                        managed_configuration=previous_copilot_configuration,
+                    )
+                    is not None
+                )
+            except PerfLensError:
+                copilot_attached = True
+        if artifact.copilot_vscode_project_config_status != "skipped":
+            try:
+                copilot_attached = copilot_attached or (
+                    plan_vscode_copilot_project_config_removal(
+                        project,
+                        managed_configuration=previous_copilot_vscode_configuration,
+                    )
+                    is not None
+                )
+            except PerfLensError:
+                copilot_attached = True
+        if copilot_attached:
+            still_active.append("copilot")
+    shared_was_selected = bool(previous & {"codex", "opencode", "copilot"})
+    shared_is_selected = bool(selected & {"codex", "opencode", "copilot"})
+    if (
+        shared_was_selected
+        and not shared_is_selected
+        and artifact.skill_status != "skipped"
+        and any(
+            path.exists() or path.is_symlink()
+            for path in project_skill_candidates(project, client="codex")
+        )
+    ):
+        for client in sorted(disabled & {"codex", "opencode", "copilot"}):
+            if client not in still_active:
+                still_active.append(client)
     if still_active:
         raise PerfLensError(
             ErrorCode.INVALID_INPUT,
@@ -954,7 +1317,13 @@ def _owned_skill_fingerprint(
 
 
 def _rollback_config_plan(
-    plan: CodexConfigInstallPlan | ClaudeConfigInstallPlan,
+    plan: (
+        CodexConfigInstallPlan
+        | ClaudeConfigInstallPlan
+        | OpenCodeConfigInstallPlan
+        | CopilotConfigInstallPlan
+        | VSCodeConfigInstallPlan
+    ),
 ) -> None:
     if plan.status == "existing":
         return
@@ -972,6 +1341,20 @@ def _rollback_config_plan(
             )
     except (OSError, PerfLensError):
         return
+
+
+def _configuration_is_managed(
+    plan: (
+        ClaudeConfigInstallPlan
+        | OpenCodeConfigInstallPlan
+        | CopilotConfigInstallPlan
+        | VSCodeConfigInstallPlan
+        | None
+    ),
+    *,
+    previous: bool,
+) -> bool:
+    return plan is not None and (plan.status in {"installed", "updated"} or previous)
 
 
 def _skill_preflight(
@@ -1054,8 +1437,13 @@ def _next_steps(
     admin_command: Path,
     codex_plan: CodexConfigInstallPlan | None,
     claude_plan: ClaudeConfigInstallPlan | None,
+    opencode_plan: OpenCodeConfigInstallPlan | None,
+    copilot_plan: CopilotConfigInstallPlan | None,
+    copilot_vscode_plan: VSCodeConfigInstallPlan | None,
     codex_selected: bool,
     claude_selected: bool,
+    opencode_selected: bool,
+    copilot_selected: bool,
 ) -> tuple[str, ...]:
     steps = [
         f"Review {output / '下一步.zh-CN.md'}.",
@@ -1074,6 +1462,13 @@ def _next_steps(
         steps.append(
             "Approve the project MCP server in Claude Code; configuration is at "
             f"{claude_plan.path}."
+        )
+    if opencode_selected and opencode_plan is not None:
+        steps.append(f"Restart OpenCode; project MCP config is at {opencode_plan.path}.")
+    if copilot_selected and copilot_plan is not None and copilot_vscode_plan is not None:
+        steps.append(
+            "Restart Copilot CLI and VS Code; project MCP configs are at "
+            f"{copilot_plan.path} and {copilot_vscode_plan.path}."
         )
     if prepare_collector:
         steps.append(
@@ -1104,8 +1499,13 @@ def _chinese_guide(
     collector_command: Path = _WHEEL_COLLECTOR_COMMAND,
     codex_plan: CodexConfigInstallPlan | None = None,
     claude_plan: ClaudeConfigInstallPlan | None = None,
+    opencode_plan: OpenCodeConfigInstallPlan | None = None,
+    copilot_plan: CopilotConfigInstallPlan | None = None,
+    copilot_vscode_plan: VSCodeConfigInstallPlan | None = None,
     codex_selected: bool = True,
     claude_selected: bool = False,
+    opencode_selected: bool = False,
+    copilot_selected: bool = False,
     collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon",
     docker_runtime_enabled: bool = False,
 ) -> str:
@@ -1167,7 +1567,7 @@ perflens setup --project <项目> --prepare-collector --automatic-collection
     )
     project_section = (
         f"""
-## 6. 直接优化当前项目
+## 8. 直接优化当前项目
 
 MCP 配置已包含自动采集和普通用户项目执行能力。Collector 部署并验收后，可以说：
 
@@ -1182,7 +1582,7 @@ PID 并交给 Collector。用户不需要查找或输入 PID。
 """
         if automatic_collection
         else """
-## 6. 直接优化当前项目
+## 8. 直接优化当前项目
 
 本次 MCP 配置没有开启项目自动运行。需要该能力时，请使用一个新的输出目录重新运行
 `perflens setup --automatic-collection`，并先完成 Collector 部署。
@@ -1190,9 +1590,9 @@ PID 并交给 Collector。用户不需要查找或输入 PID。
     )
     docker_section = (
         f"""
-## 7. 本地 Docker 目标
+## 9. 本地 Docker 目标
 
-已生成 `{output / _DOCKER_PROJECT_CONFIG_NAME}`，并只在当前项目的 Codex/Claude MCP
+已生成 `{output / _DOCKER_PROJECT_CONFIG_NAME}`，并只在当前项目所选客户端的 MCP
 配置中启用 Docker 目标工具。初始化没有连接 Docker、操作容器、构建或拉取镜像，
 也没有修改 Docker 用户组。
 
@@ -1202,7 +1602,7 @@ PID 并交给 Collector。用户不需要查找或输入 PID。
 """
         if docker_runtime_enabled
         else """
-## 7. 本地 Docker 目标
+## 9. 本地 Docker 目标
 
 本项目没有启用 Docker 目标。需要时运行 `perflens init --docker --update`；该命令只
 生成项目策略，不会操作容器。
@@ -1259,18 +1659,45 @@ Claude Code 会在首次使用项目级 MCP 时单独请求信任；PerfLens 不
         )
     )
     codex_skill_section = (
-        f"""## 2. Codex Skill
+        f"""## 2. 共享 Agent Skill
 
-PerfLens Skill 位于项目的 `.agents/skills/{SKILL_NAME}`。可以对 Codex 说：
+PerfLens Skill 位于项目的 `.agents/skills/{SKILL_NAME}`，供 Codex、OpenCode 和本地
+GitHub Copilot 客户端复用。可以说：
 
 ```text
 使用 $perflens 分析这个项目的性能 Profile，区分直接证据、候选原因和缺失证据。
 ```
 """
-        if codex_selected
-        else """## 2. Codex Skill (未启用)
+        if codex_selected or opencode_selected or copilot_selected
+        else """## 2. Codex Skill (未启用) / 共享 Agent Skill
 
-当前项目没有安装 Codex Skill，也没有写入 `.codex/config.toml`。
+当前项目没有启用使用 `.agents/skills` 的客户端。
+"""
+    )
+    opencode_section = (
+        f"""## 4. OpenCode (已启用)
+
+项目 MCP 已安全{_codex_status_chinese(opencode_plan.status)}到
+`{opencode_plan.path}`，并复用 `.agents/skills/{SKILL_NAME}`。重启 OpenCode 后使用
+PerfLens；独立配置副本位于 `{output / 'opencode-mcp.json'}`。
+"""
+        if opencode_selected and opencode_plan is not None
+        else "## 4. OpenCode (未启用)\n\n需要时运行 `perflens init --client opencode`。\n"
+    )
+    copilot_section = (
+        f"""## 5. GitHub Copilot 本地客户端 (已启用)
+
+Copilot CLI 使用 `{copilot_plan.path}`，VS Code Copilot Agent 使用
+`{copilot_vscode_plan.path}`，二者复用 `.agents/skills/{SKILL_NAME}`。重启 Copilot CLI
+和 VS Code，并在各自界面确认项目 MCP 信任。独立配置副本位于
+`{output / 'copilot-mcp.json'}` 和 `{output / 'copilot-vscode-mcp.json'}`。
+
+此配置不支持 GitHub 云端 Coding Agent 访问本机 Collector、Docker 或 Unix Socket。
+"""
+        if copilot_selected and copilot_plan is not None and copilot_vscode_plan is not None
+        else """## 5. GitHub Copilot 本地客户端 (未启用)
+
+需要 Copilot CLI 和 VS Code Copilot Agent 时运行 `perflens init --client copilot`。
 """
     )
     return f"""# PerfLens 安装后的下一步
@@ -1284,13 +1711,15 @@ PerfLens Skill 位于项目的 `.agents/skills/{SKILL_NAME}`。可以对 Codex �
 {codex_skill_section}
 
 {claude_section}
-## 4. 当前采集检查
+{opencode_section}
+{copilot_section}
+## 6. 当前采集检查
 
 权限报告：`{output / "collection-capabilities.json"}`
 
 综合状态：`{_collection_status_chinese(capabilities)}`。这只是权限诊断，不是成功采样证明。
 {collector_section}
-## 5. 一条命令检查当前状态
+## 7. 一条命令检查当前状态
 
 以后不需要重新记住部署排错命令，直接运行本次引导对应的只读检查：
 
@@ -1303,18 +1732,19 @@ PerfLens Skill 位于项目的 `.agents/skills/{SKILL_NAME}`。可以对 Codex �
 
 {project_section}
 {docker_section}
-## 8. 采集时长
+## 10. 采集时长
 
 实时采集不是固定 10 秒。自动计划默认 10 秒，用户可以在请求中调整，
 但 MCP 和 Collector 都会执行各自的时长上限；当前默认上限是 30 秒。
 `accept-collector` 使用内置测试负载完成部署验收，不需要输入 PID；默认 1 秒且最多 5 秒。
 
-## 9. 获取帮助
+## 11. 获取帮助
 
 ```bash
 perflens --help
 perflens doctor
 perflens init --help
+perflens client-defaults
 perflens setup --help
 ```
 """
@@ -1369,8 +1799,13 @@ def _english_guide(
     collector_command: Path = _WHEEL_COLLECTOR_COMMAND,
     codex_plan: CodexConfigInstallPlan | None = None,
     claude_plan: ClaudeConfigInstallPlan | None = None,
+    opencode_plan: OpenCodeConfigInstallPlan | None = None,
+    copilot_plan: CopilotConfigInstallPlan | None = None,
+    copilot_vscode_plan: VSCodeConfigInstallPlan | None = None,
     codex_selected: bool = True,
     claude_selected: bool = False,
+    opencode_selected: bool = False,
+    copilot_selected: bool = False,
     collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon",
     docker_runtime_enabled: bool = False,
 ) -> str:
@@ -1426,23 +1861,41 @@ def _english_guide(
         else "Local Docker targeting is disabled. Run `perflens init --docker --update` to "
         "generate a project policy without operating a container."
     )
+    opencode = (
+        f"OpenCode MCP is {opencode_plan.status} at `{opencode_plan.path}` and reuses "
+        f"`.agents/skills/{SKILL_NAME}`."
+        if opencode_selected and opencode_plan is not None
+        else "OpenCode is not activated; opt in with `perflens init --client opencode`."
+    )
+    copilot = (
+        f"Copilot CLI MCP is {copilot_plan.status} at `{copilot_plan.path}` and VS Code "
+        f"Copilot Agent MCP is {copilot_vscode_plan.status} at "
+        f"`{copilot_vscode_plan.path}`; both reuse `.agents/skills/{SKILL_NAME}`. This "
+        "does not grant GitHub's cloud Coding Agent access to local services."
+        if copilot_selected and copilot_plan is not None and copilot_vscode_plan is not None
+        else "Local Copilot clients are not activated; opt in with "
+        "`perflens init --client copilot`."
+    )
     return f"""# PerfLens next steps
 
 Project: `{project}`
 
 1. {codex}
 2. {claude}
-3. Use the selected project Skill for evidence-first analysis.
-4. Review `{output / "collection-capabilities.json"}`; the aggregate status is
+3. {opencode}
+4. {copilot}
+5. Use the selected project Skill for evidence-first analysis.
+6. Review `{output / "collection-capabilities.json"}`; the aggregate status is
    `{_collection_status(capabilities)[0]}` and is not proof of successful sampling.
-5. {collector}
-6. Project workload execution is {"enabled" if automatic_collection else "disabled"} in the
+7. {collector}
+8. Project workload execution is {"enabled" if automatic_collection else "disabled"} in the
    generated MCP configuration. It always runs as the ordinary MCP user and still requires
    per-call authorization.
-7. Recheck this exact onboarding bundle with `{status_command}`. Keep
+9. Recheck this exact onboarding bundle with `{status_command}`. Keep
    `--setup-directory` when a custom output directory was used; the command is read-only.
-8. {docker}
+10. {docker}
 
-Run `perflens --help`, `perflens doctor`, `perflens init --help`, or
+Run `perflens --help`, `perflens doctor`, `perflens init --help`,
+`perflens client-defaults`, or
 `perflens setup --help` for command help.
 """

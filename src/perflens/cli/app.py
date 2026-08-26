@@ -63,10 +63,16 @@ from perflens.contracts.trace import (
 )
 from perflens.distribution.acceptance import accept_collector
 from perflens.distribution.claude import render_claude_config
+from perflens.distribution.client_defaults import (
+    ClientName,
+    load_client_defaults,
+    normalize_client_options,
+    save_client_defaults,
+)
 from perflens.distribution.codex import render_codex_config
 from perflens.distribution.collector import install_collector_assets
 from perflens.distribution.detach import detach_project_integration
-from perflens.distribution.onboarding import run_project_setup
+from perflens.distribution.onboarding import configured_project_clients, run_project_setup
 from perflens.distribution.skill import install_project_skill
 from perflens.distribution.status import inspect_runtime_status
 from perflens.domain.errors import ErrorCode, PerfLensError
@@ -123,6 +129,45 @@ def root(
         raise typer.Exit()
 
 
+@app.command("client-defaults")
+def client_defaults_command(
+    clients: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--client",
+            metavar="codex|claude-code|opencode|copilot",
+            help=(
+                "保存为普通 perflens init 的默认客户端; 可重复传入, 例如 "
+                "--client codex --client copilot。"
+            ),
+        ),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            dir_okay=False,
+            help="可选客户端默认配置路径; 默认 ~/.config/perflens/config.toml。",
+        ),
+    ] = None,
+) -> None:
+    """查看或保存普通 init 使用的默认 AI 客户端集合。"""
+    try:
+        defaults = (
+            load_client_defaults(config_path)
+            if clients is None
+            else save_client_defaults(tuple(clients), config_path=config_path)
+        )
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo("PerfLens init 默认客户端")
+    typer.echo(f"配置文件: {defaults.path}")
+    typer.echo("客户端: " + ", ".join(defaults.clients))
+    typer.echo(f"来源: {'用户配置' if defaults.configured else '内置默认值'}")
+    if clients is not None:
+        typer.echo("后续新项目运行 `perflens init` 时将使用此集合。")
+
+
 @app.command("install-skill")
 def install_skill_command(
     project_root: Annotated[
@@ -134,7 +179,7 @@ def install_skill_command(
         ),
     ] = Path("."),
     client: Annotated[
-        Literal["codex", "claude-code"],
+        Literal["codex", "claude-code", "opencode", "copilot"],
         typer.Option("--client", help="安装 Skill 的项目客户端。"),
     ] = "codex",
 ) -> None:
@@ -317,12 +362,25 @@ def init_command(
         ),
     ] = Path("perflens-setup"),
     client: Annotated[
-        Literal["all", "codex", "claude-code"],
+        list[str] | None,
         typer.Option(
             "--client",
-            help="要在当前项目激活的 AI 客户端, 默认同时支持两者。",
+            metavar="codex|claude-code|opencode|copilot",
+            help=(
+                "临时覆盖当前项目的 AI 客户端; 可重复传入 codex、claude-code、"
+                "opencode 或 copilot。省略时读取客户端默认配置; 旧的 all 值仍表示 "
+                "Codex 和 Claude Code。"
+            ),
         ),
-    ] = "all",
+    ] = None,
+    client_config: Annotated[
+        Path | None,
+        typer.Option(
+            "--client-config",
+            dir_okay=False,
+            help="可选客户端默认配置路径; 仅在未显式传 --client 时读取。",
+        ),
+    ] = None,
     automatic_collection: Annotated[
         bool,
         typer.Option(
@@ -424,18 +482,51 @@ def init_command(
     ] = False,
 ) -> None:
     """只在当前项目激活 PerfLens Skill 和 MCP, 未 init 的项目不可见。"""
-    codex_selected = client in {"all", "codex"}
-    claude_selected = client in {"all", "claude-code"}
     try:
+        client_source: str
+        selected_clients: tuple[ClientName, ...]
+        if client is not None:
+            selected_clients = normalize_client_options(tuple(client))
+            client_source = "命令行显式选择"
+        else:
+            existing_clients = (
+                configured_project_clients(
+                    project_root,
+                    output_directory=setup_directory,
+                )
+                if update_existing
+                else None
+            )
+            if existing_clients is not None:
+                selected_clients = existing_clients
+                client_source = "当前项目已有配置"
+            else:
+                defaults = load_client_defaults(client_config)
+                selected_clients = defaults.clients
+                client_source = (
+                    f"用户默认配置 {defaults.path}"
+                    if defaults.configured
+                    else "内置默认值"
+                )
+        codex_selected = "codex" in selected_clients
+        claude_selected = "claude-code" in selected_clients
+        opencode_selected = "opencode" in selected_clients
+        copilot_selected = "copilot" in selected_clients
+        shared_skill_selected = codex_selected or opencode_selected or copilot_selected
         artifact = run_project_setup(
             project_root,
             output_directory=setup_directory,
-            install_skill=codex_selected,
+            install_skill=shared_skill_selected,
             install_codex_config=codex_selected,
             install_claude_skill=claude_selected,
             install_claude_config=claude_selected,
+            install_opencode_config=opencode_selected,
+            install_copilot_config=copilot_selected,
+            install_copilot_vscode_config=copilot_selected,
             codex_enabled=codex_selected,
             claude_enabled=claude_selected,
+            opencode_enabled=opencode_selected,
+            copilot_enabled=copilot_selected,
             allow_process_execution=automatic_collection,
             mcp_command=mcp_command,
             prepare_collector=prepare_collector,
@@ -457,12 +548,21 @@ def init_command(
     if update_existing:
         typer.echo("更新模式: 已重建托管引导; 客户端配置与 Skill 的用户修改不会被覆盖。")
     typer.echo(f"项目: {artifact.project_root}")
+    typer.echo("已启用客户端: " + ", ".join(selected_clients))
+    typer.echo(f"客户端选择来源: {client_source}")
     if codex_selected:
         typer.echo(f"Codex Skill: {artifact.skill_path}")
         typer.echo(f"Codex MCP: {artifact.codex_project_config_path}")
     if claude_selected:
         typer.echo(f"Claude Code Skill: {artifact.claude_skill_path}")
         typer.echo(f"Claude Code MCP: {artifact.claude_project_config_path}")
+    if opencode_selected:
+        typer.echo(f"OpenCode Skill: {artifact.skill_path}")
+        typer.echo(f"OpenCode MCP: {artifact.opencode_project_config_path}")
+    if copilot_selected:
+        typer.echo(f"Copilot Skill: {artifact.skill_path}")
+        typer.echo(f"Copilot CLI MCP: {artifact.copilot_project_config_path}")
+        typer.echo(f"VS Code Copilot MCP: {artifact.copilot_vscode_project_config_path}")
     typer.echo(f"Collector 权限模式: {artifact.collector_privilege_mode}")
     typer.echo(f"Collector 功能配置: {artifact.collector_feature_profile}")
     typer.echo(f"Docker 目标运行时: {'已启用' if artifact.docker_runtime_enabled else '未启用'}")
@@ -730,10 +830,10 @@ def detach_command(
         ),
     ] = Path("."),
     client: Annotated[
-        Literal["all", "codex", "claude-code"],
+        Literal["all", "codex", "claude-code", "opencode", "copilot"],
         typer.Option(
             "--client",
-            help="解除接入的客户端, 默认同时处理 Codex 和 Claude Code。",
+            help="解除接入的客户端; all 按引导记录处理全部已选择客户端。",
         ),
     ] = "all",
     keep_skills: Annotated[
@@ -1988,6 +2088,8 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
     }
     typer.echo("PerfLens 状态检查 (只读)")
     typer.echo(f"项目: {artifact.project_root}")
+    if artifact.selected_clients:
+        typer.echo("已启用客户端: " + ", ".join(artifact.selected_clients))
     typer.echo(f"引导目录: {setup_labels[artifact.setup_status]}")
     typer.echo(f"Skill: {skill_labels[artifact.skill_status]}")
     typer.echo(f"项目 MCP 配置: {mcp_labels[artifact.mcp_config_status]}")
@@ -2109,6 +2211,13 @@ def _render_detachment_chinese(
     typer.echo(f"Codex Skill: {skill_labels[artifact.codex_skill_status]}")
     typer.echo(f"Claude Code MCP: {config_labels[artifact.claude_config_status]}")
     typer.echo(f"Claude Code Skill: {skill_labels[artifact.claude_skill_status]}")
+    typer.echo(f"OpenCode MCP: {config_labels[artifact.opencode_config_status]}")
+    typer.echo(f"OpenCode Skill: {skill_labels[artifact.opencode_skill_status]}")
+    typer.echo(f"Copilot CLI MCP: {config_labels[artifact.copilot_config_status]}")
+    typer.echo(
+        f"VS Code Copilot MCP: {config_labels[artifact.copilot_vscode_config_status]}"
+    )
+    typer.echo(f"Copilot Skill: {skill_labels[artifact.copilot_skill_status]}")
     typer.echo("保留边界: 不删除引导目录、分析结果或系统 Collector 数据。")
     if artifact.removed_paths:
         typer.echo("已移除路径:")
@@ -2124,12 +2233,17 @@ def _render_detachment_chinese(
     if "planned" in {
         artifact.codex_config_status,
         artifact.claude_config_status,
+        artifact.opencode_config_status,
+        artifact.copilot_config_status,
+        artifact.copilot_vscode_config_status,
         artifact.codex_skill_status,
         artifact.claude_skill_status,
+        artifact.opencode_skill_status,
+        artifact.copilot_skill_status,
     }:
         selected_client = (
             "all"
-            if set(artifact.selected_clients) == {"codex", "claude-code"}
+            if len(artifact.selected_clients) != 1
             else artifact.selected_clients[0]
         )
         command_parts = [
@@ -2149,8 +2263,13 @@ def _render_detachment_chinese(
     elif "removed" in {
         artifact.codex_config_status,
         artifact.claude_config_status,
+        artifact.opencode_config_status,
+        artifact.copilot_config_status,
+        artifact.copilot_vscode_config_status,
         artifact.codex_skill_status,
         artifact.claude_skill_status,
+        artifact.opencode_skill_status,
+        artifact.copilot_skill_status,
     }:
         typer.echo("- 重启已解除接入的 AI 客户端, 让项目停止发现 PerfLens。")
         typer.echo("- 确认其他项目也已 detach 后, 再卸载 wheel 或 DEB。")

@@ -133,8 +133,39 @@ perflens init --docker
 ```bash
 perflens init --client codex
 perflens init --client claude-code
+perflens init --client opencode
+perflens init --client copilot
 perflens init --read-only
 ```
+
+同一项目要启用多个客户端时可以重复传入 `--client`。如果希望以后新项目执行普通
+`perflens init` 时自动包含其他客户端，可以保存用户级默认集合：
+
+```bash
+perflens client-defaults \
+  --client codex \
+  --client claude-code \
+  --client copilot
+perflens client-defaults                  # 查看当前有效默认值
+```
+
+没有该配置文件时，内置默认值始终只有 Codex + Claude Code。命令会写入权限为 `0600`
+的 `~/.config/perflens/config.toml`；用户也可以审查或手工编辑为：
+
+```toml
+schema_version = "1.0"
+default_clients = ["codex", "claude-code", "copilot"]
+```
+
+显式 `init --client ...` 只覆盖本次初始化。已有项目执行未带 `--client` 的
+`init --update` 时会保留该项目 `setup.json` 已记录的客户端，不会因全局默认值后来改变
+而静默增删接入。
+
+`opencode` 会生成项目 `.opencode/opencode.json` 并复用
+`.agents/skills/perflens`。`copilot` 代表本地 Copilot 套件：同时为 Copilot CLI
+安全合并项目 `.mcp.json`，为 VS Code Copilot Agent 安全合并 `.vscode/mcp.json`，并
+复用 `.agents/skills/perflens`。这不会配置 GitHub 云端 Coding Agent；云端 Agent
+不能通过这些项目文件访问本机 Collector、Docker Socket 或 Unix Socket。
 
 默认允许 `stat`、`record` 项目采集，MCP 上限是单次 30 秒、99 Hz、256 MiB，计划
 120 秒失效；已有 PID 附加默认关闭。Skill 常用约 10 秒作为起点，但会按工作负载调整。
@@ -162,7 +193,8 @@ perflens init --update
 `perflens detach --client <不再使用的客户端>`，再按新的选择执行 `init --update`。
 使用自定义引导目录时，初始化、更新和 detach 都应传入同一个 `--setup-directory`。
 
-PerfLens 的程序和 Skill 资源随软件包安装，但不会写入 Codex/Claude Code 的全局发现目录。
+PerfLens 的程序和 Skill 资源随软件包安装，但 `init` 不会写入任何客户端的全局发现目录；
+只有用户显式运行 `client-defaults` 才会写 PerfLens 自己的用户级默认配置。
 只有运行过 `init` 的项目才会生成项目 Skill 和 MCP 配置；其他项目不会看到 PerfLens。
 
 该命令只在所选项目内执行安全操作：
@@ -170,9 +202,14 @@ PerfLens 的程序和 Skill 资源随软件包安装，但不会写入 Codex/Cla
 - 安装或识别 PerfLens 分析与优化 Skill；
 - 安全创建或更新项目 `.codex/config.toml` 中由 PerfLens 标记管理的 MCP 配置块；
 - 安全合并项目 `.mcp.json` 中的 Claude Code MCP 服务并保留其他服务；
+- 选择 OpenCode 时安全合并 `.opencode/opencode.json`；
+- 选择 Copilot 时同时安全合并 Copilot CLI 的 `.mcp.json` 和 VS Code Copilot Agent
+  的 `.vscode/mcp.json`；
 - 按选择安装 `.agents/skills` 和/或 `.claude/skills` 项目 Skill；
 - 生成 `perflens-setup/codex-mcp.toml`；
 - 生成 `perflens-setup/claude-mcp.json`；
+- 生成 `perflens-setup/opencode-mcp.json`、`copilot-mcp.json` 和
+  `copilot-vscode-mcp.json` 供审查和所有权验证；
 - 生成只读权限报告 `collection-capabilities.json`；
 - 生成中文 `下一步.zh-CN.md`；
 - 生成带 `schema_version` 的 `setup.json`。
@@ -363,11 +400,11 @@ perflens detach --project /绝对路径/你的项目 --dry-run
 perflens detach --project /绝对路径/你的项目
 ```
 
-该命令默认同时处理 Codex 和 Claude Code：只删除带完整托管标记的 Codex 块、与
+该命令默认按照 `setup.json` 处理当时选择的全部客户端：只删除带完整托管标记的配置、与
 `claude-mcp.json` 记录完全一致的 Claude `perflens` 条目，以及与 `setup.json` 指纹一致的
 未修改项目 Skill。其他客户端设置、`perflens-setup`、自定义引导目录、
 `perflens-results` 和 Collector 数据都保留。用户修改或无法验证所有权的内容会被拒绝
-自动删除。只处理一个客户端使用 `--client codex|claude-code`；保留 Skill 使用
+自动删除。只处理一个客户端使用 `--client codex|claude-code|opencode|copilot`；保留 Skill 使用
 `--keep-skills`；自定义引导目录需同时传 `--setup-directory`。自动化程序使用 `--json`，
 留档使用 `--output <新文件.json>`。保留的 Skill 仍会被客户端发现，因此不能把
 `--keep-skills` 当作彻底停用；缩小后续 `init --update` 客户端范围前应移除对应 Skill。

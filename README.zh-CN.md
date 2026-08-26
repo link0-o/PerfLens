@@ -1,7 +1,7 @@
 # PerfLens
 
-> 基于证据的 Linux 性能分析工具，集成 CLI、MCP Server、Codex 与 Claude Code Skill。
-> Evidence-driven Linux performance analysis for Codex and Claude Code.
+> 基于证据的 Linux 性能分析工具，集成 CLI、MCP Server，以及 Codex、Claude Code、OpenCode 与本地 GitHub Copilot Skill。
+> Evidence-driven Linux performance analysis for Codex, Claude Code, OpenCode, and local GitHub Copilot clients.
 
 [![CI](https://github.com/link0-o/PerfLens/actions/workflows/ci.yml/badge.svg)](https://github.com/link0-o/PerfLens/actions/workflows/ci.yml)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue)](pyproject.toml)
@@ -77,20 +77,28 @@ perflens init --docker
 只会在用户确认单次授权或内存中的有界会话后，调用类型化 MCP 工具完成发现、采集和比较。
 
 `init` 默认只在当前项目激活 Codex 和 Claude Code 集成，并开启受策略约束的自动采集。
-只使用一个客户端时传 `--client codex` 或 `--client claude-code`；只分析已有证据时传
-`--read-only`。没有运行 `init` 的其他项目不会出现 PerfLens Skill 或项目 MCP 配置。
+只使用一个默认客户端时传 `--client codex` 或 `--client claude-code`；OpenCode 使用
+`--client opencode`，本地 Copilot CLI 与 VS Code 插件一起使用 `--client copilot`；
+只分析已有证据时传 `--read-only`。没有运行 `init` 的其他项目不会出现 PerfLens Skill
+或项目 MCP 配置。
+同一项目可以重复传入 `--client`。若希望以后普通 `init` 默认包含其他客户端，可运行
+`perflens client-defaults --client codex --client claude-code --client copilot`；它写入严格的
+`~/.config/perflens/config.toml`。配置不存在时，默认仍只有 Codex + Claude Code；显式
+`init --client ...` 只覆盖本次调用。
 然后打开命令显示的 `下一步.zh-CN.md`。完整新手流程见[《安装与首次使用》](INSTALL.zh-CN.md)。
 引导会自动选择可信 DEB `/usr/bin` 或 wheel `/opt/perflens` 部署入口；直接复制指南中的
 命令即可，不需要记忆或猜测路径。
-Codex 配置写入项目 `.codex/config.toml`；Claude Code 配置安全合并到项目
-`.mcp.json`，并保留其他 MCP 服务。两者都不修改用户级全局配置。
-以后需要切换自动采集参数或升级托管配置时使用 `perflens init --update`。更新只接受
+Codex 配置写入 `.codex/config.toml`；Claude Code 配置写入 `.mcp.json`；OpenCode
+配置写入 `.opencode/opencode.json`；Copilot CLI 与 VS Code Copilot Agent 分别使用
+`.mcp.json` 和 `.vscode/mcp.json`。所有配置都保留其他服务且不修改用户级全局配置。
+以后需要切换自动采集参数或升级托管配置时使用 `perflens init --update`。未显式传
+`--client` 时，更新保留项目原来记录的客户端集合，不套用后来变化的用户默认值。更新只接受
 与 `setup.json` 所有权记录匹配的引导目录、MCP 条目和未修改 Skill；客户端配置或 Skill
 的用户修改会保留并报错。`perflens-setup` 是可重建的托管目录，不应存放用户文件；检测
 到额外文件时更新会拒绝，已有 Collector 暂存资产在未要求重新生成时会保留。要停用某个
 已有客户端，先对该客户端执行 `detach`，再用新的客户端选择更新。
 卸载软件包前使用 `perflens detach --project <项目> --dry-run` 预演，再去掉
-`--dry-run`。默认同时安全移除 Codex/Claude Code 托管 MCP 和未修改的项目 Skill，保留
+`--dry-run`。默认按 `setup.json` 安全移除已选择客户端的托管 MCP 和未修改 Skill，保留
 `perflens-setup`、分析证据和系统 Collector 数据；使用 `--keep-skills` 可只解除 MCP。
 
 Debian 13 用户也可以直接安装原生 `.deb`，不需要自己创建 Python 环境。主包与
@@ -273,6 +281,8 @@ cd /absolute/path/to/workspace
 perflens init                    # Codex + Claude Code
 perflens init --client codex     # 只启用 Codex
 perflens init --client claude-code --read-only
+perflens init --client opencode  # OpenCode
+perflens init --client copilot   # Copilot CLI + VS Code Copilot Agent
 perflens init --update           # 安全更新已有项目接入
 ```
 
@@ -284,9 +294,12 @@ perflens init --update           # 安全更新已有项目接入
 ```bash
 perflens install-skill --project /absolute/path/to/workspace
 perflens install-skill --client claude-code --project /absolute/path/to/workspace
+perflens install-skill --client opencode --project /absolute/path/to/workspace
+perflens install-skill --client copilot --project /absolute/path/to/workspace
 ```
 
-该命令会创建 `.agents/skills/perflens`，如果目标已经存在则拒绝覆盖。然后生成项目级 MCP 配置：
+该命令为 Claude Code 创建 `.claude/skills/perflens`，为其他客户端创建共享的
+`.agents/skills/perflens`；目标已存在时拒绝覆盖。然后生成项目级 MCP 配置：
 
 ```bash
 perflens codex-config --workspace /absolute/path/to/workspace

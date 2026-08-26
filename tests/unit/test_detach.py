@@ -97,6 +97,47 @@ def test_detach_can_select_one_client_and_preserve_skills(tmp_path: Path) -> Non
     assert (project / ".claude/skills/perflens/SKILL.md").is_file()
 
 
+@pytest.mark.parametrize("client", ["opencode", "copilot"])
+def test_detach_removes_explicit_client_configs_and_shared_skill(
+    tmp_path: Path,
+    client: str,
+) -> None:
+    project = tmp_path / client
+    project.mkdir()
+    run_project_setup(
+        project,
+        install_skill=True,
+        install_codex_config=False,
+        install_opencode_config=client == "opencode",
+        install_copilot_config=client == "copilot",
+        install_copilot_vscode_config=client == "copilot",
+        codex_enabled=False,
+        opencode_enabled=client == "opencode",
+        copilot_enabled=client == "copilot",
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+
+    detached = detach_project_integration(project, client=client)  # pyright: ignore[reportArgumentType]
+
+    assert not (project / ".agents/skills/perflens").exists()
+    if client == "opencode":
+        assert detached.opencode_config_status == "removed"
+        target = project / ".opencode/opencode.json"
+        assert "perflens" not in json.loads(target.read_text(encoding="utf-8"))["mcp"][
+            "servers"
+        ]
+    else:
+        assert detached.copilot_config_status == "removed"
+        assert detached.copilot_vscode_config_status == "removed"
+        assert "perflens" not in json.loads(
+            (project / ".mcp.json").read_text(encoding="utf-8")
+        )["mcpServers"]
+        assert "perflens" not in json.loads(
+            (project / ".vscode/mcp.json").read_text(encoding="utf-8")
+        )["servers"]
+
+
 def test_detach_refuses_modified_skill_before_removing_any_config(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -145,6 +186,16 @@ def test_detachment_artifact_accepts_original_codex_only_payload(tmp_path: Path)
         "codex_skill_status",
         "claude_skill_path",
         "claude_skill_status",
+        "opencode_config_path",
+        "opencode_config_status",
+        "copilot_config_path",
+        "copilot_config_status",
+        "copilot_vscode_config_path",
+        "copilot_vscode_config_status",
+        "opencode_skill_path",
+        "opencode_skill_status",
+        "copilot_skill_path",
+        "copilot_skill_status",
         "removed_paths",
     ):
         payload.pop(field)

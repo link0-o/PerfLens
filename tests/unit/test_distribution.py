@@ -18,6 +18,12 @@ from perflens.distribution.codex import (
     render_codex_config,
 )
 from perflens.distribution.collector import install_collector_assets
+from perflens.distribution.copilot import render_copilot_config
+from perflens.distribution.opencode import (
+    plan_opencode_project_config,
+    plan_opencode_project_config_removal,
+    render_opencode_config,
+)
 from perflens.distribution.skill import (
     SKILL_NAME,
     bundled_skill_fingerprint,
@@ -25,6 +31,11 @@ from perflens.distribution.skill import (
     plan_project_skill_removal,
     project_skill_fingerprint,
     refresh_project_skill,
+)
+from perflens.distribution.vscode import (
+    plan_vscode_copilot_project_config,
+    plan_vscode_copilot_project_config_removal,
+    render_vscode_copilot_config,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 
@@ -60,6 +71,503 @@ def test_project_skill_install_copies_the_complete_skill_and_refuses_overwrite(
         install_project_skill(project)
     assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
     assert (installed / "SKILL.md").read_text(encoding="utf-8") == skill_text
+
+
+def test_opencode_project_config_round_trip_preserves_other_servers(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    parent = project / ".opencode"
+    parent.mkdir()
+    target = parent / "opencode.json"
+    target.write_text(
+        json.dumps({"mcp": {"servers": {"other": {"type": "remote"}}}}),
+        encoding="utf-8",
+    )
+    rendered = render_opencode_config(project, mcp_command=Path(sys.executable))
+
+    plan = plan_opencode_project_config(project, rendered)
+    plan.apply()
+
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert payload["mcp"]["servers"]["other"] == {"type": "remote"}
+    server = payload["mcp"]["servers"]["perflens"]
+    assert server["type"] == "local"
+    assert server["command"][0] == str(Path(sys.executable).resolve())
+    removal = plan_opencode_project_config_removal(
+        project,
+        managed_configuration=rendered,
+        recorded_path=str(target),
+    )
+    assert removal is not None
+    removal.apply()
+    assert "perflens" not in json.loads(target.read_text(encoding="utf-8"))["mcp"]["servers"]
+
+
+def test_opencode_refuses_ambiguous_or_jsonc_project_configuration(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    rendered = render_opencode_config(project, mcp_command=Path(sys.executable))
+    (project / "opencode.jsonc").write_text("// user comments\n{}\n", encoding="utf-8")
+
+    with pytest.raises(PerfLensError) as jsonc:
+        plan_opencode_project_config(project, rendered)
+    assert jsonc.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    (project / "opencode.json").write_text("{}\n", encoding="utf-8")
+    with pytest.raises(PerfLensError) as ambiguous:
+        plan_opencode_project_config(project, rendered)
+    assert ambiguous.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_copilot_cli_and_vscode_render_local_project_mcp(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    cli = json.loads(render_copilot_config(project, mcp_command=Path(sys.executable)))
+    vscode_rendered = render_vscode_copilot_config(project, mcp_command=Path(sys.executable))
+    vscode = json.loads(vscode_rendered)
+
+    assert cli["mcpServers"]["perflens"]["command"] == str(Path(sys.executable).resolve())
+    assert vscode["servers"]["perflens"]["type"] == "stdio"
+    assert vscode["servers"]["perflens"]["command"] == str(Path(sys.executable).resolve())
+
+    install = plan_vscode_copilot_project_config(project, vscode_rendered)
+    install.apply()
+    removal = plan_vscode_copilot_project_config_removal(
+        project,
+        managed_configuration=vscode_rendered,
+    )
+    assert removal is not None
+    removal.apply()
+    assert (
+        "perflens"
+        not in json.loads((project / ".vscode/mcp.json").read_text(encoding="utf-8"))["servers"]
+    )
+
+
+def test_new_client_configs_refuse_user_entry_symlink_and_toctou(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    opencode_parent = project / ".opencode"
+    opencode_parent.mkdir()
+    opencode_target = opencode_parent / "opencode.json"
+    opencode_target.write_text(
+        json.dumps({"mcp": {"servers": {"perflens": {"type": "remote"}}}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(PerfLensError) as occupied:
+        plan_opencode_project_config(
+            project,
+            render_opencode_config(project, mcp_command=Path(sys.executable)),
+        )
+    assert occupied.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    opencode_target.unlink()
+    vscode_rendered = render_vscode_copilot_config(project, mcp_command=Path(sys.executable))
+    plan = plan_vscode_copilot_project_config(project, vscode_rendered)
+    vscode_parent = project / ".vscode"
+    vscode_parent.mkdir()
+    (vscode_parent / "mcp.json").write_text('{"servers":{"user":{}}}\n', encoding="utf-8")
+    with pytest.raises(PerfLensError) as changed:
+        plan.apply()
+    assert changed.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (project / ".vscode").rename(project / ".vscode-real")
+    (project / ".vscode").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(PerfLensError) as linked:
+        plan_vscode_copilot_project_config(project, vscode_rendered)
+    assert linked.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_opencode_config_install_update_existing_and_remove_safely(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    original = render_opencode_config(project, mcp_command=Path(sys.executable))
+
+    installed = plan_opencode_project_config(project, original)
+    assert installed.status == "installed"
+    installed.apply()
+
+    existing = plan_opencode_project_config(project, original)
+    assert existing.status == "existing"
+    existing.apply()
+
+    updated_content = render_opencode_config(
+        project,
+        mcp_command=Path(sys.executable),
+        allow_process_execution=True,
+    )
+    updated = plan_opencode_project_config(
+        project,
+        updated_content,
+        managed_configuration=original,
+        recorded_path=str(installed.path),
+    )
+    assert updated.status == "updated"
+    updated.apply()
+
+    removal = plan_opencode_project_config_removal(
+        project,
+        managed_configuration=updated_content,
+        recorded_path=str(installed.path),
+    )
+    assert removal is not None
+    removal.apply()
+    assert (
+        plan_opencode_project_config_removal(
+            project,
+            managed_configuration=updated_content,
+            recorded_path=str(installed.path),
+        )
+        is None
+    )
+
+
+def test_opencode_config_rejects_invalid_documents_and_unsafe_paths(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    rendered = render_opencode_config(project, mcp_command=Path(sys.executable))
+
+    for invalid in (
+        "not-json",
+        "[]",
+        "{}",
+        '{"mcp":[]}',
+        '{"mcp":{"servers":[]}}',
+        '{"mcp":{"servers":{"other":{}}}}',
+    ):
+        with pytest.raises(PerfLensError) as malformed:
+            plan_opencode_project_config(project, invalid)
+        assert malformed.value.code is ErrorCode.INVALID_INPUT
+
+    with pytest.raises(PerfLensError) as missing:
+        plan_opencode_project_config(tmp_path / "missing", rendered)
+    assert missing.value.code is ErrorCode.INVALID_INPUT
+
+    not_directory = tmp_path / "not-directory"
+    not_directory.write_text("file", encoding="utf-8")
+    with pytest.raises(PerfLensError) as file_workspace:
+        plan_opencode_project_config(not_directory, rendered)
+    assert file_workspace.value.code is ErrorCode.INVALID_INPUT
+
+    with pytest.raises(PerfLensError) as unrecorded:
+        plan_opencode_project_config(
+            project,
+            rendered,
+            recorded_path=str(project / "outside.json"),
+        )
+    assert unrecorded.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    parent = project / ".opencode"
+    parent.write_text("not a directory", encoding="utf-8")
+    with pytest.raises(PerfLensError) as unsafe_parent:
+        plan_opencode_project_config(project, rendered)
+    assert unsafe_parent.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_code"),
+    [
+        (b"not-json", ErrorCode.INVALID_INPUT),
+        (b"[]", ErrorCode.INVALID_INPUT),
+        (b'{"mcp":[]}', ErrorCode.INVALID_INPUT),
+        (b'{"mcp":{"servers":[]}}', ErrorCode.INVALID_INPUT),
+        (b"\xff", ErrorCode.INVALID_INPUT),
+        (b" " * ((1 << 20) + 1), ErrorCode.RESOURCE_LIMIT_EXCEEDED),
+    ],
+)
+def test_opencode_config_rejects_unsafe_existing_content(
+    tmp_path: Path,
+    content: bytes,
+    expected_code: ErrorCode,
+) -> None:
+    project = tmp_path / "project"
+    target = project / ".opencode" / "opencode.json"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(content)
+    rendered = render_opencode_config(project, mcp_command=Path(sys.executable))
+
+    with pytest.raises(PerfLensError) as captured:
+        plan_opencode_project_config(project, rendered)
+    assert captured.value.code is expected_code
+
+
+def test_opencode_config_removal_preserves_unowned_or_changed_entries(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    rendered = render_opencode_config(project, mcp_command=Path(sys.executable))
+
+    assert (
+        plan_opencode_project_config_removal(
+            project,
+            managed_configuration=rendered,
+        )
+        is None
+    )
+
+    target = project / ".opencode" / "opencode.json"
+    target.parent.mkdir()
+    target.write_text('{"mcp":{"servers":{"other":{}}}}', encoding="utf-8")
+    assert (
+        plan_opencode_project_config_removal(
+            project,
+            managed_configuration=rendered,
+        )
+        is None
+    )
+
+    target.write_text(
+        '{"mcp":{"servers":{"perflens":{"type":"remote"}}}}',
+        encoding="utf-8",
+    )
+    with pytest.raises(PerfLensError) as unowned:
+        plan_opencode_project_config_removal(
+            project,
+            managed_configuration=rendered,
+        )
+    assert unowned.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_opencode_config_apply_detects_path_and_content_replacement(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    rendered = render_opencode_config(project, mcp_command=Path(sys.executable))
+
+    parent_replaced = plan_opencode_project_config(project, rendered)
+    parent_replaced.path.parent.write_text("not a directory", encoding="utf-8")
+    with pytest.raises(PerfLensError) as parent_error:
+        parent_replaced.apply()
+    assert parent_error.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    parent_replaced.path.parent.unlink()
+    parent_replaced.path.parent.mkdir()
+    parent_replaced.path.write_text("{}", encoding="utf-8")
+    with pytest.raises(PerfLensError) as changed:
+        parent_replaced.apply()
+    assert changed.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    parent_replaced.path.unlink()
+    outside = tmp_path / "outside"
+    outside.write_text("{}", encoding="utf-8")
+    parent_replaced.path.symlink_to(outside)
+    with pytest.raises(PerfLensError) as linked:
+        parent_replaced.apply()
+    assert linked.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_vscode_copilot_config_install_update_existing_and_remove_safely(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    original = render_vscode_copilot_config(project, mcp_command=Path(sys.executable))
+
+    installed = plan_vscode_copilot_project_config(project, original)
+    assert installed.status == "installed"
+    installed.apply()
+
+    existing = plan_vscode_copilot_project_config(project, original)
+    assert existing.status == "existing"
+    existing.apply()
+
+    updated_content = render_vscode_copilot_config(
+        project,
+        mcp_command=Path(sys.executable),
+        allow_process_execution=True,
+    )
+    updated = plan_vscode_copilot_project_config(
+        project,
+        updated_content,
+        managed_configuration=original,
+    )
+    assert updated.status == "updated"
+    updated.apply()
+
+    removal = plan_vscode_copilot_project_config_removal(
+        project,
+        managed_configuration=updated_content,
+    )
+    assert removal is not None
+    removal.apply()
+    assert (
+        plan_vscode_copilot_project_config_removal(
+            project,
+            managed_configuration=updated_content,
+        )
+        is None
+    )
+
+
+def test_vscode_copilot_config_rejects_invalid_documents_and_paths(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    rendered = render_vscode_copilot_config(project, mcp_command=Path(sys.executable))
+
+    for invalid in ("not-json", "[]", "{}", '{"servers":[]}', '{"servers":{"other":{}}}'):
+        with pytest.raises(PerfLensError) as malformed:
+            plan_vscode_copilot_project_config(project, invalid)
+        assert malformed.value.code is ErrorCode.INVALID_INPUT
+
+    with pytest.raises(PerfLensError) as missing:
+        plan_vscode_copilot_project_config(tmp_path / "missing", rendered)
+    assert missing.value.code is ErrorCode.INVALID_INPUT
+
+    not_directory = tmp_path / "not-directory"
+    not_directory.write_text("file", encoding="utf-8")
+    with pytest.raises(PerfLensError) as file_workspace:
+        plan_vscode_copilot_project_config(not_directory, rendered)
+    assert file_workspace.value.code is ErrorCode.INVALID_INPUT
+
+    parent = project / ".vscode"
+    parent.write_text("not a directory", encoding="utf-8")
+    with pytest.raises(PerfLensError) as unsafe_parent:
+        plan_vscode_copilot_project_config(project, rendered)
+    assert unsafe_parent.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_code"),
+    [
+        (b"not-json", ErrorCode.INVALID_INPUT),
+        (b"[]", ErrorCode.INVALID_INPUT),
+        (b'{"servers":[]}', ErrorCode.INVALID_INPUT),
+        (b"\xff", ErrorCode.INVALID_INPUT),
+        (b" " * ((1 << 20) + 1), ErrorCode.RESOURCE_LIMIT_EXCEEDED),
+    ],
+)
+def test_vscode_copilot_config_rejects_unsafe_existing_content(
+    tmp_path: Path,
+    content: bytes,
+    expected_code: ErrorCode,
+) -> None:
+    project = tmp_path / "project"
+    target = project / ".vscode" / "mcp.json"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(content)
+    rendered = render_vscode_copilot_config(project, mcp_command=Path(sys.executable))
+
+    with pytest.raises(PerfLensError) as captured:
+        plan_vscode_copilot_project_config(project, rendered)
+    assert captured.value.code is expected_code
+
+
+def test_vscode_copilot_removal_preserves_unowned_or_changed_entries(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    rendered = render_vscode_copilot_config(project, mcp_command=Path(sys.executable))
+
+    assert (
+        plan_vscode_copilot_project_config_removal(
+            project,
+            managed_configuration=rendered,
+        )
+        is None
+    )
+
+    target = project / ".vscode" / "mcp.json"
+    target.parent.mkdir()
+    target.write_text('{"servers":{"other":{}}}', encoding="utf-8")
+    assert (
+        plan_vscode_copilot_project_config_removal(
+            project,
+            managed_configuration=rendered,
+        )
+        is None
+    )
+
+    target.write_text(
+        '{"servers":{"perflens":{"type":"sse"}}}',
+        encoding="utf-8",
+    )
+    with pytest.raises(PerfLensError) as unowned:
+        plan_vscode_copilot_project_config_removal(
+            project,
+            managed_configuration=rendered,
+        )
+    assert unowned.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_vscode_copilot_apply_detects_path_and_content_replacement(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    rendered = render_vscode_copilot_config(project, mcp_command=Path(sys.executable))
+
+    parent_replaced = plan_vscode_copilot_project_config(project, rendered)
+    parent_replaced.path.parent.write_text("not a directory", encoding="utf-8")
+    with pytest.raises(PerfLensError) as parent_error:
+        parent_replaced.apply()
+    assert parent_error.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    parent_replaced.path.parent.unlink()
+    parent_replaced.path.parent.mkdir()
+    parent_replaced.path.write_text("{}", encoding="utf-8")
+    with pytest.raises(PerfLensError) as changed:
+        parent_replaced.apply()
+    assert changed.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    parent_replaced.path.unlink()
+    outside = tmp_path / "outside"
+    outside.write_text("{}", encoding="utf-8")
+    parent_replaced.path.symlink_to(outside)
+    with pytest.raises(PerfLensError) as linked:
+        parent_replaced.apply()
+    assert linked.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
+def test_new_client_configs_merge_empty_documents_and_reject_unowned_targets(
+    tmp_path: Path,
+) -> None:
+    opencode_project = tmp_path / "opencode-project"
+    opencode_target = opencode_project / ".opencode" / "opencode.json"
+    opencode_target.parent.mkdir(parents=True)
+    opencode_target.write_text("{}\n", encoding="utf-8")
+    opencode_rendered = render_opencode_config(
+        opencode_project,
+        mcp_command=Path(sys.executable),
+    )
+    plan_opencode_project_config(opencode_project, opencode_rendered).apply()
+    assert "perflens" in json.loads(opencode_target.read_text(encoding="utf-8"))["mcp"][
+        "servers"
+    ]
+
+    opencode_target.unlink()
+    opencode_target.symlink_to(tmp_path / "missing-opencode-target")
+    with pytest.raises(PerfLensError) as opencode_link:
+        plan_opencode_project_config(opencode_project, opencode_rendered)
+    assert opencode_link.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    vscode_project = tmp_path / "vscode-project"
+    vscode_target = vscode_project / ".vscode" / "mcp.json"
+    vscode_target.parent.mkdir(parents=True)
+    vscode_target.write_text("{}\n", encoding="utf-8")
+    vscode_rendered = render_vscode_copilot_config(
+        vscode_project,
+        mcp_command=Path(sys.executable),
+    )
+    plan_vscode_copilot_project_config(vscode_project, vscode_rendered).apply()
+    assert "perflens" in json.loads(vscode_target.read_text(encoding="utf-8"))["servers"]
+
+    vscode_target.write_text(
+        '{"servers":{"perflens":{"type":"sse"}}}',
+        encoding="utf-8",
+    )
+    with pytest.raises(PerfLensError) as vscode_unowned:
+        plan_vscode_copilot_project_config(vscode_project, vscode_rendered)
+    assert vscode_unowned.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+    with pytest.raises(PerfLensError) as vscode_unverified_removal:
+        plan_vscode_copilot_project_config_removal(
+            vscode_project,
+            managed_configuration=None,
+        )
+    assert vscode_unverified_removal.value.code is ErrorCode.PATH_SAFETY_VIOLATION
 
 
 def test_project_skill_install_rejects_parent_symlink_escape(tmp_path: Path) -> None:

@@ -62,14 +62,49 @@ execution still requires an explicit `per_run` or `bounded_session` confirmation
 project MCP. PerfLens does not install/start Docker, join its group, build/pull images, or accept
 arbitrary Docker arguments.
 
-`init` activates only this project for Codex and Claude Code. It installs the
+`init` activates only this project for Codex and Claude Code by default. It installs the
 selected project Skills, creates or updates the marked PerfLens block in
 `.codex/config.toml`, safely merges the Claude Code `.mcp.json`, and creates
 `perflens-setup/` with standalone MCP configurations, a capability report,
 bilingual next steps, and a versioned setup artifact. Other project settings
 are preserved; conflicting user-managed PerfLens entries are never overwritten.
-Use `--client codex`, `--client claude-code`, or `--read-only` to narrow the
-activation. Projects that have not run `init` do not discover PerfLens. The
+Use `--client codex` or `--client claude-code` to select one default client. OpenCode and
+local GitHub Copilot clients are explicit opt-ins:
+
+```bash
+perflens init --client opencode
+perflens init --client copilot
+```
+
+Repeat `--client` to activate several clients for one project. To change what a plain
+`perflens init` selects for future projects, save per-user defaults:
+
+```bash
+perflens client-defaults \
+  --client codex \
+  --client claude-code \
+  --client copilot
+perflens client-defaults                  # inspect the effective defaults
+```
+
+Without that file, the built-in default remains exactly Codex plus Claude Code. The command
+writes a strict `0600` `~/.config/perflens/config.toml`; it can also be reviewed or edited as:
+
+```toml
+schema_version = "1.0"
+default_clients = ["codex", "claude-code", "copilot"]
+```
+
+`init --client ...` overrides this list for one invocation. `init --update` without an explicit
+client list preserves the clients already recorded by that project instead of silently applying
+later global-default changes.
+
+OpenCode receives `.opencode/opencode.json` and reuses `.agents/skills/perflens`.
+The `copilot` selection is a local-client suite: Copilot CLI receives `.mcp.json`, VS Code
+Copilot Agent receives `.vscode/mcp.json`, and both reuse `.agents/skills/perflens`.
+It does not configure GitHub's cloud Coding Agent, which cannot use the local Collector,
+Docker socket, or Unix sockets through these project files. Use `--read-only` to disable
+automatic workload collection. Projects that have not run `init` do not discover PerfLens. The
 same setup directory is never overwritten implicitly. After a package upgrade
 or when changing collection gates, use `perflens init --update`; it requires a
 matching ownership artifact and refuses modified Skills or unverified MCP
@@ -174,10 +209,10 @@ spool evidence are preserved; rerun ordinary-user `accept-collector` afterward.
 
 Before uninstalling, run `perflens detach --project <project> --dry-run` and then
 repeat without `--dry-run` for every configured project. Detach removes verified
-Codex and Claude Code MCP entries plus unchanged managed project Skills by
+all client MCP entries recorded by that setup plus unchanged managed project Skills by
 default. It preserves unrelated settings, onboarding directories, results, and
 Collector data, and refuses user-modified or unverified content. Use
-`--client codex|claude-code` to select one client, `--keep-skills` to retain
+`--client codex|claude-code|opencode|copilot` to select one client, `--keep-skills` to retain
 Skills, and `--setup-directory` for a non-default onboarding directory. A kept
 Skill remains discoverable, so `--keep-skills` is not complete deactivation and
 must not be used before narrowing a later `init --update` client selection.

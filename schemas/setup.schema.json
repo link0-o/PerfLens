@@ -168,6 +168,86 @@
       "default": null,
       "title": "Container Workload Config Path"
     },
+    "copilot_mcp_config_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Copilot Mcp Config Path"
+    },
+    "copilot_project_config_managed": {
+      "default": false,
+      "title": "Copilot Project Config Managed",
+      "type": "boolean"
+    },
+    "copilot_project_config_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Copilot Project Config Path"
+    },
+    "copilot_project_config_status": {
+      "default": "skipped",
+      "enum": [
+        "installed",
+        "updated",
+        "existing",
+        "skipped"
+      ],
+      "title": "Copilot Project Config Status",
+      "type": "string"
+    },
+    "copilot_vscode_mcp_config_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Copilot Vscode Mcp Config Path"
+    },
+    "copilot_vscode_project_config_managed": {
+      "default": false,
+      "title": "Copilot Vscode Project Config Managed",
+      "type": "boolean"
+    },
+    "copilot_vscode_project_config_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Copilot Vscode Project Config Path"
+    },
+    "copilot_vscode_project_config_status": {
+      "default": "skipped",
+      "enum": [
+        "installed",
+        "updated",
+        "existing",
+        "skipped"
+      ],
+      "title": "Copilot Vscode Project Config Status",
+      "type": "string"
+    },
     "docker_optimization_enabled": {
       "default": false,
       "title": "Docker Optimization Enabled",
@@ -196,6 +276,46 @@
       "title": "Next Steps",
       "type": "array"
     },
+    "opencode_mcp_config_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Opencode Mcp Config Path"
+    },
+    "opencode_project_config_managed": {
+      "default": false,
+      "title": "Opencode Project Config Managed",
+      "type": "boolean"
+    },
+    "opencode_project_config_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Opencode Project Config Path"
+    },
+    "opencode_project_config_status": {
+      "default": "skipped",
+      "enum": [
+        "installed",
+        "updated",
+        "existing",
+        "skipped"
+      ],
+      "title": "Opencode Project Config Status",
+      "type": "string"
+    },
     "output_directory": {
       "title": "Output Directory",
       "type": "string"
@@ -213,6 +333,20 @@
       "default": "1.0",
       "title": "Schema Version",
       "type": "string"
+    },
+    "selected_clients": {
+      "default": [],
+      "items": {
+        "enum": [
+          "codex",
+          "claude-code",
+          "opencode",
+          "copilot"
+        ],
+        "type": "string"
+      },
+      "title": "Selected Clients",
+      "type": "array"
     },
     "skill_fingerprint": {
       "anyOf": [

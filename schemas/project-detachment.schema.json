@@ -86,6 +86,76 @@
       "title": "Codex Skill Status",
       "type": "string"
     },
+    "copilot_config_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Copilot Config Path"
+    },
+    "copilot_config_status": {
+      "default": "skipped",
+      "enum": [
+        "not_found",
+        "planned",
+        "removed",
+        "skipped"
+      ],
+      "title": "Copilot Config Status",
+      "type": "string"
+    },
+    "copilot_skill_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Copilot Skill Path"
+    },
+    "copilot_skill_status": {
+      "default": "skipped",
+      "enum": [
+        "not_found",
+        "planned",
+        "removed",
+        "preserved",
+        "skipped"
+      ],
+      "title": "Copilot Skill Status",
+      "type": "string"
+    },
+    "copilot_vscode_config_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Copilot Vscode Config Path"
+    },
+    "copilot_vscode_config_status": {
+      "default": "skipped",
+      "enum": [
+        "not_found",
+        "planned",
+        "removed",
+        "skipped"
+      ],
+      "title": "Copilot Vscode Config Status",
+      "type": "string"
+    },
     "detachment_id": {
       "pattern": "^detachment-[a-f0-9]{16}$",
       "title": "Detachment Id",
@@ -102,6 +172,53 @@
       },
       "title": "Next Steps",
       "type": "array"
+    },
+    "opencode_config_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Opencode Config Path"
+    },
+    "opencode_config_status": {
+      "default": "skipped",
+      "enum": [
+        "not_found",
+        "planned",
+        "removed",
+        "skipped"
+      ],
+      "title": "Opencode Config Status",
+      "type": "string"
+    },
+    "opencode_skill_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Opencode Skill Path"
+    },
+    "opencode_skill_status": {
+      "default": "skipped",
+      "enum": [
+        "not_found",
+        "planned",
+        "removed",
+        "preserved",
+        "skipped"
+      ],
+      "title": "Opencode Skill Status",
+      "type": "string"
     },
     "perflens_version": {
       "title": "Perflens Version",
@@ -145,7 +262,9 @@
       "items": {
         "enum": [
           "codex",
-          "claude-code"
+          "claude-code",
+          "opencode",
+          "copilot"
         ],
         "type": "string"
       },

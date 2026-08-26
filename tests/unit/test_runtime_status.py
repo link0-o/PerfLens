@@ -467,3 +467,27 @@ def test_runtime_status_requires_dedicated_collector_service_user(
     assert artifact.collector_health_error_code == ErrorCode.PATH_SAFETY_VIOLATION.value
     assert artifact.automatic_collection_status == "collector_unavailable"
     assert "collector_service_user_missing" in artifact.issues
+@pytest.mark.parametrize("client", ["opencode", "copilot"])
+def test_runtime_status_checks_explicit_local_clients(tmp_path: Path, client: str) -> None:
+    project = tmp_path / client
+    project.mkdir()
+    run_project_setup(
+        project,
+        install_skill=True,
+        install_codex_config=False,
+        install_opencode_config=client == "opencode",
+        install_copilot_config=client == "copilot",
+        install_copilot_vscode_config=client == "copilot",
+        codex_enabled=False,
+        opencode_enabled=client == "opencode",
+        copilot_enabled=client == "copilot",
+        automatic_collection=False,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+
+    status = inspect_runtime_status(project, perf_path=Path("/bin/true"))
+
+    assert status.selected_clients == (client,)
+    assert status.skill_status == "ready"
+    assert status.mcp_config_status == "ready"

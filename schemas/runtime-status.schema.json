@@ -206,6 +206,20 @@
       "title": "Schema Version",
       "type": "string"
     },
+    "selected_clients": {
+      "default": [],
+      "items": {
+        "enum": [
+          "codex",
+          "claude-code",
+          "opencode",
+          "copilot"
+        ],
+        "type": "string"
+      },
+      "title": "Selected Clients",
+      "type": "array"
+    },
     "setup_directory": {
       "title": "Setup Directory",
       "type": "string"

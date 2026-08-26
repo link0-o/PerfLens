@@ -1,4 +1,4 @@
-"""Safely detach project-level Codex and Claude Code integrations."""
+"""Safely detach project-level AI client integrations."""
 
 from __future__ import annotations
 
@@ -10,16 +10,19 @@ from perflens import __version__
 from perflens.contracts.artifacts import ProjectDetachmentArtifact, SetupArtifact
 from perflens.distribution.claude import plan_claude_project_config_removal
 from perflens.distribution.codex import plan_codex_project_config_removal
+from perflens.distribution.copilot import plan_copilot_project_config_removal
+from perflens.distribution.opencode import plan_opencode_project_config_removal
 from perflens.distribution.skill import (
     SkillClient,
     plan_project_skill_removal,
     project_skill_candidates,
     project_skill_path,
 )
+from perflens.distribution.vscode import plan_vscode_copilot_project_config_removal
 from perflens.domain.errors import ErrorCode, PerfLensError
 
 _MAX_SETUP_BYTES = 1 << 20
-DetachClient = Literal["all", "codex", "claude-code"]
+DetachClient = Literal["all", "codex", "claude-code", "opencode", "copilot"]
 
 
 class _ApplyPlan(Protocol):
@@ -47,8 +50,14 @@ def detach_project_integration(
             details={"path": str(project)},
         )
     setup = _load_setup_artifact(project, setup_directory)
-    selected: tuple[SkillClient, ...] = ("codex", "claude-code") if client == "all" else (client,)
+    configured = _configured_clients(setup)
+    selected: tuple[SkillClient, ...] = configured if client == "all" else (client,)
     managed_claude = _recorded_claude_configuration(project, setup)
+    managed_opencode = _recorded_configuration(project, setup, "opencode-mcp.json")
+    managed_copilot = _recorded_configuration(project, setup, "copilot-mcp.json")
+    managed_copilot_vscode = _recorded_configuration(
+        project, setup, "copilot-vscode-mcp.json"
+    )
 
     codex_config_plan = plan_codex_project_config_removal(project) if "codex" in selected else None
     claude_config_plan = (
@@ -59,14 +68,43 @@ def detach_project_integration(
         if "claude-code" in selected
         else None
     )
-    codex_skill_plan = (
+    opencode_config_plan = (
+        plan_opencode_project_config_removal(
+            project,
+            managed_configuration=managed_opencode,
+            recorded_path=(setup.opencode_project_config_path if setup is not None else None),
+        )
+        if "opencode" in selected
+        else None
+    )
+    copilot_config_plan = (
+        plan_copilot_project_config_removal(
+            project,
+            managed_configuration=managed_copilot,
+        )
+        if "copilot" in selected
+        else None
+    )
+    copilot_vscode_config_plan = (
+        plan_vscode_copilot_project_config_removal(
+            project,
+            managed_configuration=managed_copilot_vscode,
+        )
+        if "copilot" in selected
+        else None
+    )
+    shared_clients = {"codex", "opencode", "copilot"}
+    remove_shared_skill = remove_skills and not (
+        (set(configured) - set(selected)) & shared_clients
+    )
+    shared_skill_plan = (
         plan_project_skill_removal(
             project,
             client="codex",
             expected_fingerprint=(setup.skill_fingerprint if setup is not None else None),
             recorded_path=(setup.skill_path if setup is not None else None),
         )
-        if remove_skills and "codex" in selected
+        if remove_shared_skill and bool(set(selected) & shared_clients)
         else None
     )
     claude_skill_plan = (
@@ -90,10 +128,31 @@ def detach_project_integration(
         plan=claude_config_plan,
         dry_run=dry_run,
     )
+    opencode_config_status = _planned_status(
+        selected="opencode" in selected,
+        plan=opencode_config_plan,
+        dry_run=dry_run,
+    )
+    copilot_config_status = _planned_status(
+        selected="copilot" in selected,
+        plan=copilot_config_plan,
+        dry_run=dry_run,
+    )
+    copilot_vscode_config_status = _planned_status(
+        selected="copilot" in selected,
+        plan=copilot_vscode_config_plan,
+        dry_run=dry_run,
+    )
+    shared_skill_status = _skill_status(
+        selected=bool(set(selected) & shared_clients),
+        remove_skills=remove_shared_skill,
+        plan=shared_skill_plan,
+        dry_run=dry_run,
+    )
     codex_skill_status = _skill_status(
         selected="codex" in selected,
-        remove_skills=remove_skills,
-        plan=codex_skill_plan,
+        remove_skills=remove_shared_skill,
+        plan=shared_skill_plan,
         dry_run=dry_run,
     )
     claude_skill_status = _skill_status(
@@ -107,7 +166,10 @@ def detach_project_integration(
     for plan in (
         codex_config_plan,
         claude_config_plan,
-        codex_skill_plan,
+        opencode_config_plan,
+        copilot_config_plan,
+        copilot_vscode_config_plan,
+        shared_skill_plan,
         claude_skill_plan,
     ):
         if plan is not None:
@@ -120,17 +182,21 @@ def detach_project_integration(
     preserved = _preserved_paths(
         project,
         setup_path=(Path(setup.output_directory) if setup is not None else None),
-        selected=selected,
-        remove_skills=remove_skills,
+        remove_shared_skill=remove_shared_skill,
+        remove_claude_skill=remove_skills and "claude-code" in selected,
     )
     identity = "\0".join(
         (
             str(project),
             client,
+            ",".join(selected),
             str(remove_skills),
             codex_config_status,
             claude_config_status,
-            codex_skill_status,
+            opencode_config_status,
+            copilot_config_status,
+            copilot_vscode_config_status,
+            shared_skill_status,
             claude_skill_status,
             str(dry_run),
         )
@@ -154,9 +220,19 @@ def detach_project_integration(
         codex_config_status=codex_config_status,
         claude_config_path=str(project / ".mcp.json"),
         claude_config_status=claude_config_status,
+        opencode_config_path=(
+            str(opencode_config_plan.path)
+            if opencode_config_plan is not None
+            else (setup.opencode_project_config_path if setup is not None else None)
+        ),
+        opencode_config_status=opencode_config_status,
+        copilot_config_path=str(project / ".mcp.json"),
+        copilot_config_status=copilot_config_status,
+        copilot_vscode_config_path=str(project / ".vscode/mcp.json"),
+        copilot_vscode_config_status=copilot_vscode_config_status,
         codex_skill_path=str(
-            codex_skill_plan.path
-            if codex_skill_plan is not None
+            shared_skill_plan.path
+            if shared_skill_plan is not None
             else project_skill_path(project, client="codex")
         ),
         codex_skill_status=codex_skill_status,
@@ -166,6 +242,12 @@ def detach_project_integration(
             else project_skill_path(project, client="claude-code")
         ),
         claude_skill_status=claude_skill_status,
+        opencode_skill_path=str(project_skill_path(project, client="opencode")),
+        opencode_skill_status=(
+            shared_skill_status if "opencode" in selected else "skipped"
+        ),
+        copilot_skill_path=str(project_skill_path(project, client="copilot")),
+        copilot_skill_status=(shared_skill_status if "copilot" in selected else "skipped"),
         removed_paths=removed_paths,
         preserved_paths=preserved,
         next_steps=tuple(next_steps),
@@ -253,17 +335,59 @@ def _recorded_claude_configuration(
         raise _unsafe_setup(path) from exc
 
 
+def _recorded_configuration(
+    project: Path,
+    setup: SetupArtifact | None,
+    filename: str,
+) -> str | None:
+    if setup is None:
+        return None
+    managed = {
+        "opencode-mcp.json": setup.opencode_project_config_managed,
+        "copilot-mcp.json": setup.copilot_project_config_managed,
+        "copilot-vscode-mcp.json": setup.copilot_vscode_project_config_managed,
+    }[filename]
+    if not managed:
+        return None
+    path = Path(setup.output_directory) / filename
+    if not path.is_relative_to(project) or path.is_symlink() or not path.is_file():
+        raise _unsafe_setup(path)
+    try:
+        raw = path.read_bytes()
+        if len(raw) > _MAX_SETUP_BYTES:
+            raise ValueError("MCP ownership file exceeds its size limit")
+        return raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise _unsafe_setup(path) from exc
+
+
+def _configured_clients(setup: SetupArtifact | None) -> tuple[SkillClient, ...]:
+    if setup is None:
+        return ("codex", "claude-code")
+    if setup.selected_clients:
+        return setup.selected_clients
+    selected: list[SkillClient] = []
+    if setup.codex_project_config_status != "skipped" or setup.skill_status != "skipped":
+        selected.append("codex")
+    if (
+        setup.claude_project_config_status != "skipped"
+        or setup.claude_skill_status != "skipped"
+    ):
+        selected.append("claude-code")
+    return tuple(selected)
+
+
 def _preserved_paths(
     project: Path,
     *,
     setup_path: Path | None,
-    selected: tuple[SkillClient, ...],
-    remove_skills: bool,
+    remove_shared_skill: bool,
+    remove_claude_skill: bool,
 ) -> tuple[str, ...]:
     candidates = [setup_path or project / "perflens-setup", project / "perflens-results"]
-    if not remove_skills or "codex" not in selected:
+    if not remove_shared_skill:
         candidates.extend(project_skill_candidates(project, client="codex"))
-    if not remove_skills or "claude-code" not in selected:
+    if not remove_claude_skill:
         candidates.extend(project_skill_candidates(project, client="claude-code"))
     return tuple(str(path) for path in candidates if path.exists() or path.is_symlink())
 

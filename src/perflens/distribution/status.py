@@ -66,6 +66,7 @@ def inspect_runtime_status(
     project = _project_directory(project_root)
     setup = _setup_path(project, setup_directory)
     setup_status, automatic_requested, setup_issues, setup_artifact = _inspect_setup(project, setup)
+    selected_clients = _selected_clients(setup_artifact) if setup_artifact is not None else ()
     skill_status = _inspect_selected_skills(project, setup_artifact)
     mcp_status = _inspect_selected_project_configs(project, setup, setup_artifact)
     assets_status = _inspect_assets(setup, automatic_requested=automatic_requested)
@@ -158,6 +159,7 @@ def inspect_runtime_status(
             setup_status,
             skill_status,
             mcp_status,
+            ",".join(selected_clients),
             str(automatic_requested),
             str(docker_runtime_enabled),
             str(docker_optimization_enabled),
@@ -182,6 +184,7 @@ def inspect_runtime_status(
         checked_at=checked_at,
         project_root=str(project),
         setup_directory=str(setup),
+        selected_clients=selected_clients,
         setup_status=setup_status,
         skill_status=skill_status,
         mcp_config_status=mcp_status,
@@ -306,9 +309,10 @@ def _inspect_selected_skills(
     artifact: SetupArtifact | None,
 ) -> SkillStatus:
     clients: list[Literal["codex", "claude-code"]] = []
-    if artifact is None or artifact.skill_status != "skipped":
+    selected = set(_selected_clients(artifact)) if artifact is not None else {"codex"}
+    if selected & {"codex", "opencode", "copilot"}:
         clients.append("codex")
-    if artifact is not None and artifact.claude_skill_status != "skipped":
+    if "claude-code" in selected:
         clients.append("claude-code")
     if not clients:
         return "missing"
@@ -357,10 +361,30 @@ def _inspect_selected_project_configs(
     artifact: SetupArtifact | None,
 ) -> McpStatus:
     statuses: list[McpStatus] = []
-    if artifact is None or artifact.codex_project_config_status != "skipped":
+    selected = set(_selected_clients(artifact)) if artifact is not None else {"codex"}
+    if "codex" in selected:
         statuses.append(_inspect_codex_project_config(project, setup))
-    if artifact is not None and artifact.claude_project_config_status != "skipped":
-        statuses.append(_inspect_claude_project_config(project, setup))
+    if "claude-code" in selected:
+        statuses.append(
+            _inspect_json_project_config(
+                project / ".mcp.json", setup / "claude-mcp.json", "mcpServers"
+            )
+        )
+    if "opencode" in selected:
+        statuses.append(_inspect_opencode_project_config(project, setup, artifact))
+    if "copilot" in selected:
+        statuses.append(
+            _inspect_json_project_config(
+                project / ".mcp.json", setup / "copilot-mcp.json", "mcpServers"
+            )
+        )
+        statuses.append(
+            _inspect_json_project_config(
+                project / ".vscode/mcp.json",
+                setup / "copilot-vscode-mcp.json",
+                "servers",
+            )
+        )
     if not statuses:
         return "missing"
     if all(status == "ready" for status in statuses):
@@ -397,19 +421,17 @@ def _inspect_codex_project_config(project: Path, setup: Path) -> McpStatus:
     return "ready" if str(validated_command) == command else "incomplete"
 
 
-def _inspect_claude_project_config(project: Path, setup: Path) -> McpStatus:
-    path = project / ".mcp.json"
+def _inspect_json_project_config(path: Path, snippet: Path, server_key: str) -> McpStatus:
     if not path.exists() and not path.is_symlink():
         return "missing"
     if path.is_symlink() or not path.is_file():
         return "incomplete"
-    project_status, project_table = _read_claude_perflens_table(path)
+    project_status, project_table = _read_json_perflens_table(path, server_key)
     if project_status != "ready" or project_table is None:
         return project_status
-    snippet = setup / "claude-mcp.json"
     if snippet.is_symlink() or not snippet.is_file():
         return "incomplete"
-    expected_status, expected_table = _read_claude_perflens_table(snippet)
+    expected_status, expected_table = _read_json_perflens_table(snippet, server_key)
     if expected_status != "ready" or expected_table != project_table:
         return "incomplete"
     command = project_table.get("command")
@@ -422,7 +444,62 @@ def _inspect_claude_project_config(project: Path, setup: Path) -> McpStatus:
     return "ready" if str(validated_command) == command else "incomplete"
 
 
-def _read_claude_perflens_table(
+def _read_json_perflens_table(
+    path: Path,
+    server_key: str,
+) -> tuple[McpStatus, dict[str, object] | None]:
+    try:
+        raw = path.read_bytes()
+        if len(raw) > _MAX_SETUP_BYTES:
+            return "incomplete", None
+        parsed: object = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return "incomplete", None
+    if not isinstance(parsed, dict):
+        return "incomplete", None
+    servers = cast(dict[str, object], parsed).get(server_key)
+    if not isinstance(servers, dict):
+        return "missing", None
+    table = cast(dict[str, object], servers).get("perflens")
+    if not isinstance(table, dict):
+        return "missing", None
+    return "ready", cast(dict[str, object], table)
+
+
+def _inspect_opencode_project_config(
+    project: Path,
+    setup: Path,
+    artifact: SetupArtifact | None,
+) -> McpStatus:
+    recorded = artifact.opencode_project_config_path if artifact is not None else None
+    path = Path(recorded) if recorded is not None else project / ".opencode/opencode.json"
+    if not path.is_relative_to(project):
+        return "incomplete"
+    if not path.exists() and not path.is_symlink():
+        return "missing"
+    if path.is_symlink() or not path.is_file():
+        return "incomplete"
+    actual = _read_opencode_perflens_table(path)
+    expected = _read_opencode_perflens_table(setup / "opencode-mcp.json")
+    if actual[0] != "ready" or expected[0] != "ready" or actual[1] != expected[1]:
+        return "incomplete"
+    assert actual[1] is not None
+    command = actual[1].get("command")
+    if (
+        not isinstance(command, list)
+        or not command
+        or not isinstance(command[0], str)
+        or not Path(command[0]).is_absolute()
+    ):
+        return "incomplete"
+    try:
+        validated = validate_mcp_executable(Path(command[0]))
+    except PerfLensError:
+        return "incomplete"
+    return "ready" if str(validated) == command[0] else "incomplete"
+
+
+def _read_opencode_perflens_table(
     path: Path,
 ) -> tuple[McpStatus, dict[str, object] | None]:
     try:
@@ -434,13 +511,32 @@ def _read_claude_perflens_table(
         return "incomplete", None
     if not isinstance(parsed, dict):
         return "incomplete", None
-    servers = cast(dict[str, object], parsed).get("mcpServers")
+    mcp = cast(dict[str, object], parsed).get("mcp")
+    if not isinstance(mcp, dict):
+        return "missing", None
+    servers = cast(dict[str, object], mcp).get("servers")
     if not isinstance(servers, dict):
         return "missing", None
     table = cast(dict[str, object], servers).get("perflens")
     if not isinstance(table, dict):
         return "missing", None
     return "ready", cast(dict[str, object], table)
+
+
+def _selected_clients(
+    artifact: SetupArtifact,
+) -> tuple[Literal["codex", "claude-code", "opencode", "copilot"], ...]:
+    if artifact.selected_clients:
+        return artifact.selected_clients
+    selected: list[Literal["codex", "claude-code", "opencode", "copilot"]] = []
+    if artifact.codex_project_config_status != "skipped" or artifact.skill_status != "skipped":
+        selected.append("codex")
+    if (
+        artifact.claude_project_config_status != "skipped"
+        or artifact.claude_skill_status != "skipped"
+    ):
+        selected.append("claude-code")
+    return tuple(selected)
 
 
 def _read_perflens_mcp_table(

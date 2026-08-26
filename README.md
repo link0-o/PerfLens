@@ -1,7 +1,7 @@
 # PerfLens
 
-> Evidence-driven Linux performance analysis with a CLI, MCP Server, and project Skills for Codex and Claude Code.
-> 基于证据的 Linux 性能分析工具，支持 Codex 与 Claude Code。
+> Evidence-driven Linux performance analysis with a CLI, MCP Server, and project Skills for Codex, Claude Code, OpenCode, and local GitHub Copilot clients.
+> 基于证据的 Linux 性能分析工具，支持 Codex、Claude Code、OpenCode 与本地 GitHub Copilot 客户端。
 
 [![CI](https://github.com/link0-o/PerfLens/actions/workflows/ci.yml/badge.svg)](https://github.com/link0-o/PerfLens/actions/workflows/ci.yml)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue)](pyproject.toml)
@@ -88,28 +88,37 @@ or start Docker, join the Docker group, build/pull an image, deploy a Collector,
 The Skill uses typed MCP discovery, authorization, collection, and comparison tools only after the
 user confirms either one run or a bounded in-memory session.
 
-This activates Codex and Claude Code by default. Select only one with
-`--client codex` or `--client claude-code`, or use `--read-only` when the
+This activates Codex and Claude Code by default. Select one of them with
+`--client codex` or `--client claude-code`; use `--client opencode` for OpenCode,
+or `--client copilot` for both Copilot CLI and VS Code Copilot Agent. Use `--read-only` when the
 project should analyze existing evidence without automatic collection.
+Repeat `--client` to select several clients for one project. To make that selection the default
+for future plain `init` calls, run, for example,
+`perflens client-defaults --client codex --client claude-code --client copilot`.
+This writes strict `~/.config/perflens/config.toml`; if it is absent, the built-in default remains
+Codex plus Claude Code. Explicit `init --client ...` values override it for one invocation.
 Rerun with `perflens init --update` when upgrading managed integration or
 changing collection gates. Update mode requires a matching `setup.json`, updates
-only the previously generated Claude entry and marked Codex block, and refuses
+only recorded client entries and marked blocks, and refuses
 to overwrite a modified Skill or unverified client configuration. The managed
 `perflens-setup` directory is rebuilt and must not contain user files; unexpected
 entries cause refusal, while staged Collector assets are preserved unless
-regeneration is explicitly requested. Detach a no-longer-needed client before
+regeneration is explicitly requested. With no explicit `--client`, update preserves the current
+project's recorded client set. Detach a no-longer-needed client before
 updating with a narrower `--client` selection.
 
 Follow the generated `NEXT_STEPS.md`. See [Installation and first use](INSTALL.md) for the complete beginner flow.
 Onboarding safely selects the native `/usr/bin` or wheel `/opt/perflens` layout,
 so copy the exact generated deployment command instead of guessing paths.
-It installs only project-scoped integration: Codex uses `.codex/config.toml`
-and `.agents/skills`, while Claude Code uses `.mcp.json` and `.claude/skills`.
+It installs only project-scoped integration: Codex uses `.codex/config.toml`, Claude Code
+uses `.mcp.json` and `.claude/skills`, OpenCode uses `.opencode/opencode.json`, and the
+local Copilot suite uses `.mcp.json` plus `.vscode/mcp.json`. Codex, OpenCode, and Copilot
+share `.agents/skills`.
 Existing unrelated configuration is preserved; user-level global configuration
 is not modified.
 Before package uninstall, preview `perflens detach --project <project>
 --dry-run`, then repeat without `--dry-run`. By default it removes verified
-Codex/Claude MCP entries and unchanged project Skills while preserving
+selected-client MCP entries and unchanged project Skills while preserving
 onboarding, analysis evidence, and system Collector data. Use `--keep-skills`
 to detach MCP only or `--client` to select one client.
 
@@ -394,11 +403,13 @@ For separate, advanced steps, install the bundled Skill for a specific client:
 ```bash
 perflens install-skill --project /absolute/path/to/workspace
 perflens install-skill --client claude-code --project /absolute/path/to/workspace
+perflens install-skill --client opencode --project /absolute/path/to/workspace
+perflens install-skill --client copilot --project /absolute/path/to/workspace
 ```
 
-The command creates
-`.agents/skills/perflens` and refuses to overwrite an
-existing Skill. To print a project-scoped MCP configuration:
+The command creates `.claude/skills/perflens` for Claude Code or the shared
+`.agents/skills/perflens` for the other clients, and refuses to overwrite an existing Skill.
+To print a project-scoped MCP configuration:
 
 ```bash
 perflens codex-config --workspace /absolute/path/to/workspace
