@@ -87,6 +87,7 @@ from perflens.contracts.docker_build import (
 )
 from perflens.contracts.runtime_locks import (
     RuntimeAdapterCapabilityArtifact,
+    RuntimeExecutionContext,
     RuntimeLockAnalysisArtifact,
     RuntimeLockAnalysisVerificationArtifact,
     RuntimeLockEvidenceArtifact,
@@ -167,6 +168,7 @@ MODELS = {
     "lock-analysis.schema.json": LockAnalysisArtifact,
     "trace-analysis-verification.schema.json": TraceAnalysisVerificationArtifact,
     "runtime-adapter-capability.schema.json": RuntimeAdapterCapabilityArtifact,
+    "runtime-execution-context.schema.json": RuntimeExecutionContext,
     "runtime-lock-evidence.schema.json": RuntimeLockEvidenceArtifact,
     "runtime-lock-analysis.schema.json": RuntimeLockAnalysisArtifact,
     "runtime-lock-analysis-verification.schema.json": (RuntimeLockAnalysisVerificationArtifact),

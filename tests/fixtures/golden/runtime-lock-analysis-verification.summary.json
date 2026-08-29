@@ -1,0 +1,185 @@
+{
+  "analysis": {
+    "schema_version": "1.1",
+    "runtime_lock_analysis_id": "runtime-lock-analysis-709ad7843d62f559",
+    "runtime_lock_evidence_id": "runtime-lock-evidence-79057ed0e5e5402de145dfaf",
+    "runtime_lock_evidence_content_sha256": "671640de55e129abebbe848cba612810dad119858a6403ee49f5a91175672fc1",
+    "runtime_lock_evidence_content_bytes": 5632,
+    "quality_status": "complete",
+    "measurement_semantics": "exact",
+    "totals": {
+      "exact_wait_count": 1,
+      "exact_wait_ns": 50,
+      "thresholded_wait_count": 0,
+      "thresholded_wait_ns": 0,
+      "sampled_observation_count": 0,
+      "cumulative_observation_count": 0,
+      "observed_or_estimated_wait_ns": 50,
+      "exact_hold_count": 1,
+      "exact_hold_ns": 50,
+      "owner_observed_count": 1
+    },
+    "projection_sha256": {
+      "locks": "fd33900b7ec596a19091a49edacbf1f5879daf99eb16319c189051ec67f019e8",
+      "contexts": "dbcae5f54d9eed579b8915508ea9877c82a61c39798a0d26b0299d767a62163c",
+      "call_paths": "0119cd39e4fd1ee2f55e24e03990f30b9a8378728fbd925ae2dd79e3af74cc3a",
+      "outcomes": "729d270295505808e69c19667b26332395ad54b8b501503b7d9240fbae7da269",
+      "lock_kinds": "96d0cb907b8290b1969ca06ea42f85fac2a031f9d82b982b6df98f92c7e16a46"
+    },
+    "coverage": {
+      "locks": {
+        "total_row_count": 1,
+        "exported_row_count": 1,
+        "omitted_row_count": 0,
+        "omitted_exact_wait_count": 0,
+        "omitted_exact_wait_ns": 0,
+        "omitted_thresholded_wait_count": 0,
+        "omitted_thresholded_wait_ns": 0,
+        "omitted_sampled_observation_count": 0,
+        "omitted_cumulative_observation_count": 0,
+        "omitted_observed_or_estimated_wait_ns": 0,
+        "omitted_exact_hold_count": 0,
+        "omitted_exact_hold_ns": 0,
+        "omitted_owner_observed_count": 0
+      },
+      "contexts": {
+        "total_row_count": 1,
+        "exported_row_count": 1,
+        "omitted_row_count": 0,
+        "omitted_exact_wait_count": 0,
+        "omitted_exact_wait_ns": 0,
+        "omitted_thresholded_wait_count": 0,
+        "omitted_thresholded_wait_ns": 0,
+        "omitted_sampled_observation_count": 0,
+        "omitted_cumulative_observation_count": 0,
+        "omitted_observed_or_estimated_wait_ns": 0,
+        "omitted_exact_hold_count": 0,
+        "omitted_exact_hold_ns": 0,
+        "omitted_owner_observed_count": 0
+      },
+      "call_paths": {
+        "total_row_count": 1,
+        "exported_row_count": 1,
+        "omitted_row_count": 0,
+        "omitted_exact_wait_count": 0,
+        "omitted_exact_wait_ns": 0,
+        "omitted_thresholded_wait_count": 0,
+        "omitted_thresholded_wait_ns": 0,
+        "omitted_sampled_observation_count": 0,
+        "omitted_cumulative_observation_count": 0,
+        "omitted_observed_or_estimated_wait_ns": 0,
+        "omitted_exact_hold_count": 0,
+        "omitted_exact_hold_ns": 0,
+        "omitted_owner_observed_count": 0
+      },
+      "outcomes": {
+        "total_row_count": 1,
+        "exported_row_count": 1,
+        "omitted_row_count": 0,
+        "omitted_exact_wait_count": 0,
+        "omitted_exact_wait_ns": 0,
+        "omitted_thresholded_wait_count": 0,
+        "omitted_thresholded_wait_ns": 0,
+        "omitted_sampled_observation_count": 0,
+        "omitted_cumulative_observation_count": 0,
+        "omitted_observed_or_estimated_wait_ns": 0,
+        "omitted_exact_hold_count": 0,
+        "omitted_exact_hold_ns": 0,
+        "omitted_owner_observed_count": 0
+      },
+      "lock_kinds": {
+        "total_row_count": 1,
+        "exported_row_count": 1,
+        "omitted_row_count": 0,
+        "omitted_exact_wait_count": 0,
+        "omitted_exact_wait_ns": 0,
+        "omitted_thresholded_wait_count": 0,
+        "omitted_thresholded_wait_ns": 0,
+        "omitted_sampled_observation_count": 0,
+        "omitted_cumulative_observation_count": 0,
+        "omitted_observed_or_estimated_wait_ns": 0,
+        "omitted_exact_hold_count": 0,
+        "omitted_exact_hold_ns": 0,
+        "omitted_owner_observed_count": 0
+      }
+    },
+    "allowed_conclusions": [
+      "runtime_lock_evidence_quality_and_identity",
+      "observed_runtime_wait_distribution",
+      "observed_runtime_hold_distribution"
+    ],
+    "forbidden_conclusions": [
+      "performance_root_cause",
+      "verified_improvement",
+      "cross_artifact_lock_identity",
+      "system_wide_or_cross_target_behavior"
+    ],
+    "analysis_fingerprint": "709ad7843d62f559c4bda88e3ae65af39c0f65e8cff04d3e9ed0530cba4b3fae",
+    "content_sha256": "b7fc17e840472261b7df31327826178d1a6f2256edf904360a6d1c66a68e0d25",
+    "content_bytes": 9201
+  },
+  "verification": {
+    "schema_version": "1.1",
+    "runtime_lock_verification_id": "runtime-lock-verification-9d3ea60f9c5c8c33",
+    "runtime_lock_evidence_id": "runtime-lock-evidence-79057ed0e5e5402de145dfaf",
+    "runtime_lock_evidence_content_sha256": "671640de55e129abebbe848cba612810dad119858a6403ee49f5a91175672fc1",
+    "runtime_lock_analysis_id": "runtime-lock-analysis-709ad7843d62f559",
+    "runtime_lock_analysis_content_sha256": "b7fc17e840472261b7df31327826178d1a6f2256edf904360a6d1c66a68e0d25",
+    "created_at": "2026-08-30T00:00:00+00:00",
+    "verification_status": "verified",
+    "checks": [
+      {
+        "name": "source_identity",
+        "status": "passed",
+        "detail": "Private source byte count and SHA-256 match the immutable source receipt."
+      },
+      {
+        "name": "source_conversion_replay",
+        "status": "passed",
+        "detail": "Private source conversion reproduced the complete public Runtime Lock evidence."
+      },
+      {
+        "name": "evidence_invariants",
+        "status": "passed",
+        "detail": "Every Evidence invariant was either satisfied or assigned to a specific failed check."
+      },
+      {
+        "name": "conversion_replay",
+        "status": "passed",
+        "detail": "Conversion manifest and normalized context/stack/event replay are deterministic."
+      },
+      {
+        "name": "target_scope",
+        "status": "passed",
+        "detail": "Target PID/TID and runtime execution-context scope are preserved."
+      },
+      {
+        "name": "semantic_count_conservation",
+        "status": "passed",
+        "detail": "Input dispositions and the single measurement semantics are conserved."
+      },
+      {
+        "name": "event_pairing",
+        "status": "passed",
+        "detail": "Wait/acquire/release and park/unpark pairs are ordered and identity-matched."
+      },
+      {
+        "name": "wait_hold_conservation",
+        "status": "passed",
+        "detail": "Integer wait, hold, profile-weight, outcome, and owner totals match replay."
+      },
+      {
+        "name": "aggregate_projection_conservation",
+        "status": "passed",
+        "detail": "All lock/context/path/outcome/kind projections and omissions match replay."
+      },
+      {
+        "name": "agent_visible_content_sha256",
+        "status": "passed",
+        "detail": "Every Agent-visible Analysis field matches its digest and input fingerprint."
+      }
+    ],
+    "verifier_version": "runtime-lock-verifier-v2",
+    "content_sha256": "9826d5550315d5a5750c90a85da4b94f81a420c7469e62b49b87da9f6852e563"
+  }
+}

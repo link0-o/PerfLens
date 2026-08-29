@@ -34,6 +34,45 @@
     }
   },
   "additionalProperties": false,
+  "allOf": [
+    {
+      "else": {
+        "properties": {
+          "verifier_version": {
+            "const": "runtime-lock-verifier-v2"
+          }
+        }
+      },
+      "if": {
+        "anyOf": [
+          {
+            "not": {
+              "required": [
+                "schema_version"
+              ]
+            }
+          },
+          {
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "verifier_version": {
+            "const": "runtime-lock-verifier-v1"
+          }
+        }
+      }
+    }
+  ],
   "properties": {
     "checks": {
       "items": {
@@ -78,8 +117,11 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "1.0",
       "default": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },
@@ -93,8 +135,11 @@
       "type": "string"
     },
     "verifier_version": {
-      "const": "runtime-lock-verifier-v1",
       "default": "runtime-lock-verifier-v1",
+      "enum": [
+        "runtime-lock-verifier-v1",
+        "runtime-lock-verifier-v2"
+      ],
       "title": "Verifier Version",
       "type": "string"
     }

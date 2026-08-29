@@ -1,0 +1,175 @@
+{
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "os_thread"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "runtime_context_id": {
+            "type": "null"
+          },
+          "target_tid": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "target_tid"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "process_aggregate"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "runtime_context_id": {
+            "type": "null"
+          },
+          "target_tid": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "java_platform_thread",
+              "java_virtual_thread",
+              "go_goroutine"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "runtime_context_id": {
+            "pattern": "^runtime-native-[a-f0-9]{16,64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "runtime_context_id"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "java_virtual_thread",
+              "go_goroutine"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "target_tid": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ],
+  "description": "One runtime scheduling context without inventing an OS thread identity.\n\nRuntime-native identities are Artifact-local opaque strings because Java\nand Go identifiers are not interchangeable with Linux TIDs and must not be\ncorrelated across Artifacts.  Only contexts whose source really exposes a\nnative thread may carry ``target_tid``.",
+  "properties": {
+    "context_id": {
+      "pattern": "^runtime-context-[a-f0-9]{16,64}$",
+      "title": "Context Id",
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "os_thread",
+        "java_platform_thread",
+        "java_virtual_thread",
+        "go_goroutine",
+        "process_aggregate"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "name": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^[^\\x00\\r\\n]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "pattern": "^(?!/|\\\\\\\\|//|[A-Za-z]:[\\\\/]).+$",
+      "title": "Name"
+    },
+    "runtime_context_id": {
+      "anyOf": [
+        {
+          "pattern": "^runtime-native-[a-f0-9]{16,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Context Id"
+    },
+    "target_pid": {
+      "exclusiveMinimum": 0,
+      "title": "Target Pid",
+      "type": "integer"
+    },
+    "target_tid": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Tid"
+    }
+  },
+  "required": [
+    "context_id",
+    "kind",
+    "target_pid"
+  ],
+  "title": "RuntimeExecutionContext",
+  "type": "object"
+}

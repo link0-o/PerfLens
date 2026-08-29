@@ -83,6 +83,7 @@ from perflens.contracts.docker_build import (
 )
 from perflens.contracts.runtime_locks import (
     RuntimeAdapterCapabilityArtifact,
+    RuntimeExecutionContext,
     RuntimeLockAnalysisArtifact,
     RuntimeLockAnalysisVerificationArtifact,
     RuntimeLockEvidenceArtifact,
@@ -160,20 +161,17 @@ def test_checked_in_json_schemas_match_contract_models() -> None:
         "lock-analysis.schema.json": LockAnalysisArtifact,
         "trace-analysis-verification.schema.json": TraceAnalysisVerificationArtifact,
         "runtime-adapter-capability.schema.json": RuntimeAdapterCapabilityArtifact,
+        "runtime-execution-context.schema.json": RuntimeExecutionContext,
         "runtime-lock-evidence.schema.json": RuntimeLockEvidenceArtifact,
         "runtime-lock-analysis.schema.json": RuntimeLockAnalysisArtifact,
-        "runtime-lock-analysis-verification.schema.json": (
-            RuntimeLockAnalysisVerificationArtifact
-        ),
+        "runtime-lock-analysis-verification.schema.json": (RuntimeLockAnalysisVerificationArtifact),
         "runtime-lock-import-header.schema.json": RuntimeLockImportHeader,
         "docker-runtime-capability.schema.json": DockerRuntimeCapabilityArtifact,
         "docker-build-capability.schema.json": DockerBuildCapabilityArtifact,
         "docker-build-recipe.schema.json": DockerBuildRecipeArtifact,
         "docker-build-context.schema.json": DockerBuildContextArtifact,
         "docker-build.schema.json": DockerBuildArtifact,
-        "docker-optimization-disposition.schema.json": (
-            DockerOptimizationDispositionArtifact
-        ),
+        "docker-optimization-disposition.schema.json": (DockerOptimizationDispositionArtifact),
         "docker-optimization-iteration.schema.json": DockerOptimizationIterationArtifact,
         "docker-optimization-preview.schema.json": DockerOptimizationPreviewArtifact,
         "docker-optimization-session.schema.json": DockerOptimizationSessionArtifact,

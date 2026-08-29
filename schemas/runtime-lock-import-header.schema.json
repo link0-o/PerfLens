@@ -30,10 +30,106 @@
       "title": "RuntimeClock",
       "type": "object"
     },
+    "RuntimeContainerTargetReference": {
+      "additionalProperties": false,
+      "description": "Content-bound references to existing Docker identity Artifacts.\n\n``target_identity_sha256`` is the ContainerTarget identity fingerprint. It\nbinds the namespace inode tuple and cgroup-v2 identity without copying that\nprivate identity surface into Runtime Lock Evidence.",
+      "properties": {
+        "cgroup_identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Cgroup Identity Sha256",
+          "type": "string"
+        },
+        "container_identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Container Identity Sha256",
+          "type": "string"
+        },
+        "container_run_content_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Container Run Content Sha256",
+          "type": "string"
+        },
+        "container_run_id": {
+          "pattern": "^container-run-[a-f0-9]{20}$",
+          "title": "Container Run Id",
+          "type": "string"
+        },
+        "container_target_content_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Container Target Content Sha256",
+          "type": "string"
+        },
+        "container_target_id": {
+          "pattern": "^container-target-[a-f0-9]{20}$",
+          "title": "Container Target Id",
+          "type": "string"
+        },
+        "target_identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Target Identity Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "container_target_id",
+        "container_target_content_sha256",
+        "container_run_id",
+        "container_run_content_sha256",
+        "container_identity_sha256",
+        "target_identity_sha256",
+        "cgroup_identity_sha256"
+      ],
+      "title": "RuntimeContainerTargetReference",
+      "type": "object"
+    },
     "RuntimeTargetIdentity": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "container_reference": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "target_kind": {
+                "const": "docker"
+              }
+            },
+            "required": [
+              "target_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "container_reference": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "container_reference"
+            ]
+          }
+        }
+      ],
       "description": "PID identity bound at collection/import time.",
       "properties": {
+        "container_reference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeContainerTargetReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "observed_target_tids": {
           "default": [],
           "items": {
@@ -41,6 +137,15 @@
           },
           "title": "Observed Target Tids",
           "type": "array"
+        },
+        "target_kind": {
+          "default": "host",
+          "enum": [
+            "host",
+            "docker"
+          ],
+          "title": "Target Kind",
+          "type": "string"
         },
         "target_pid": {
           "exclusiveMinimum": 0,
@@ -68,6 +173,60 @@
     }
   },
   "additionalProperties": false,
+  "allOf": [
+    {
+      "else": {
+        "properties": {
+          "target": {
+            "required": [
+              "target_kind"
+            ]
+          }
+        }
+      },
+      "if": {
+        "anyOf": [
+          {
+            "not": {
+              "required": [
+                "schema_version"
+              ]
+            }
+          },
+          {
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "target_kind"
+                  ]
+                },
+                {
+                  "required": [
+                    "container_reference"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
   "description": "First record of the strict custom/runtime NDJSON import contract.\n\nThe header intentionally contains no path, command, environment, or raw lock\naddress.  The adapter computes ``RuntimeSourceManifest`` hashes after it has\nconsumed the complete immutable stream.",
   "properties": {
     "adapter_id": {
@@ -213,8 +372,11 @@
       "title": "Sampling Period"
     },
     "schema_version": {
-      "const": "1.0",
       "default": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },

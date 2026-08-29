@@ -1,5 +1,146 @@
 {
   "$defs": {
+    "RuntimeCallPathAggregate": {
+      "additionalProperties": false,
+      "properties": {
+        "cumulative_observation_count": {
+          "minimum": 0,
+          "title": "Cumulative Observation Count",
+          "type": "integer"
+        },
+        "exact_holds": {
+          "$ref": "#/$defs/RuntimeNanosecondDistribution"
+        },
+        "exact_waits": {
+          "$ref": "#/$defs/RuntimeNanosecondDistribution"
+        },
+        "execution_context_count": {
+          "minimum": 0,
+          "title": "Execution Context Count",
+          "type": "integer"
+        },
+        "lock_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lock Count"
+        },
+        "observed_or_estimated_wait_ns": {
+          "minimum": 0,
+          "title": "Observed Or Estimated Wait Ns",
+          "type": "integer"
+        },
+        "owner_observed_count": {
+          "minimum": 0,
+          "title": "Owner Observed Count",
+          "type": "integer"
+        },
+        "sampled_observation_count": {
+          "minimum": 0,
+          "title": "Sampled Observation Count",
+          "type": "integer"
+        },
+        "stack_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-stack-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Stack Id"
+        },
+        "thresholded_waits": {
+          "$ref": "#/$defs/RuntimeNanosecondDistribution"
+        }
+      },
+      "required": [
+        "exact_waits",
+        "thresholded_waits",
+        "sampled_observation_count",
+        "cumulative_observation_count",
+        "observed_or_estimated_wait_ns",
+        "exact_holds",
+        "owner_observed_count",
+        "stack_id",
+        "execution_context_count"
+      ],
+      "title": "RuntimeCallPathAggregate",
+      "type": "object"
+    },
+    "RuntimeExecutionContextAggregate": {
+      "additionalProperties": false,
+      "properties": {
+        "cumulative_observation_count": {
+          "minimum": 0,
+          "title": "Cumulative Observation Count",
+          "type": "integer"
+        },
+        "exact_holds": {
+          "$ref": "#/$defs/RuntimeNanosecondDistribution"
+        },
+        "exact_waits": {
+          "$ref": "#/$defs/RuntimeNanosecondDistribution"
+        },
+        "execution_context_id": {
+          "pattern": "^runtime-context-[a-f0-9]{16,64}$",
+          "title": "Execution Context Id",
+          "type": "string"
+        },
+        "lock_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lock Count"
+        },
+        "observed_or_estimated_wait_ns": {
+          "minimum": 0,
+          "title": "Observed Or Estimated Wait Ns",
+          "type": "integer"
+        },
+        "owner_observed_count": {
+          "minimum": 0,
+          "title": "Owner Observed Count",
+          "type": "integer"
+        },
+        "sampled_observation_count": {
+          "minimum": 0,
+          "title": "Sampled Observation Count",
+          "type": "integer"
+        },
+        "thresholded_waits": {
+          "$ref": "#/$defs/RuntimeNanosecondDistribution"
+        }
+      },
+      "required": [
+        "exact_waits",
+        "thresholded_waits",
+        "sampled_observation_count",
+        "cumulative_observation_count",
+        "observed_or_estimated_wait_ns",
+        "exact_holds",
+        "owner_observed_count",
+        "execution_context_id"
+      ],
+      "title": "RuntimeExecutionContextAggregate",
+      "type": "object"
+    },
     "RuntimeLockAggregate": {
       "additionalProperties": false,
       "properties": {
@@ -72,25 +213,129 @@
           "title": "Top Stack Ids",
           "type": "array"
         },
+        "waiter_execution_context_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Waiter Execution Context Count"
+        },
         "waiter_thread_count": {
-          "minimum": 0,
-          "title": "Waiter Thread Count",
-          "type": "integer"
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Waiter Thread Count"
         }
       },
       "required": [
-        "lock_id",
-        "lock_kind",
         "exact_waits",
         "thresholded_waits",
         "sampled_observation_count",
         "cumulative_observation_count",
         "observed_or_estimated_wait_ns",
         "exact_holds",
-        "waiter_thread_count",
-        "owner_observed_count"
+        "owner_observed_count",
+        "lock_id",
+        "lock_kind"
       ],
       "title": "RuntimeLockAggregate",
+      "type": "object"
+    },
+    "RuntimeLockKindAggregate": {
+      "additionalProperties": false,
+      "properties": {
+        "cumulative_observation_count": {
+          "minimum": 0,
+          "title": "Cumulative Observation Count",
+          "type": "integer"
+        },
+        "exact_holds": {
+          "$ref": "#/$defs/RuntimeNanosecondDistribution"
+        },
+        "exact_waits": {
+          "$ref": "#/$defs/RuntimeNanosecondDistribution"
+        },
+        "execution_context_count": {
+          "minimum": 0,
+          "title": "Execution Context Count",
+          "type": "integer"
+        },
+        "lock_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lock Count"
+        },
+        "lock_kind": {
+          "enum": [
+            "mutex",
+            "recursive_mutex",
+            "rwlock_read",
+            "rwlock_write",
+            "condition",
+            "semaphore",
+            "park",
+            "gil",
+            "runtime_internal",
+            "channel",
+            "wait_group",
+            "custom",
+            "unknown"
+          ],
+          "title": "Lock Kind",
+          "type": "string"
+        },
+        "observed_or_estimated_wait_ns": {
+          "minimum": 0,
+          "title": "Observed Or Estimated Wait Ns",
+          "type": "integer"
+        },
+        "owner_observed_count": {
+          "minimum": 0,
+          "title": "Owner Observed Count",
+          "type": "integer"
+        },
+        "sampled_observation_count": {
+          "minimum": 0,
+          "title": "Sampled Observation Count",
+          "type": "integer"
+        },
+        "thresholded_waits": {
+          "$ref": "#/$defs/RuntimeNanosecondDistribution"
+        }
+      },
+      "required": [
+        "exact_waits",
+        "thresholded_waits",
+        "sampled_observation_count",
+        "cumulative_observation_count",
+        "observed_or_estimated_wait_ns",
+        "exact_holds",
+        "owner_observed_count",
+        "lock_kind",
+        "execution_context_count"
+      ],
+      "title": "RuntimeLockKindAggregate",
       "type": "object"
     },
     "RuntimeLockResourceLimits": {
@@ -226,9 +471,339 @@
       ],
       "title": "RuntimeNanosecondDistribution",
       "type": "object"
+    },
+    "RuntimeProjectionCoverage": {
+      "additionalProperties": false,
+      "description": "Export/omission accounting for one bounded projection.",
+      "properties": {
+        "exported_row_count": {
+          "minimum": 0,
+          "title": "Exported Row Count",
+          "type": "integer"
+        },
+        "omitted_cumulative_observation_count": {
+          "minimum": 0,
+          "title": "Omitted Cumulative Observation Count",
+          "type": "integer"
+        },
+        "omitted_exact_hold_count": {
+          "minimum": 0,
+          "title": "Omitted Exact Hold Count",
+          "type": "integer"
+        },
+        "omitted_exact_hold_ns": {
+          "minimum": 0,
+          "title": "Omitted Exact Hold Ns",
+          "type": "integer"
+        },
+        "omitted_exact_wait_count": {
+          "minimum": 0,
+          "title": "Omitted Exact Wait Count",
+          "type": "integer"
+        },
+        "omitted_exact_wait_ns": {
+          "minimum": 0,
+          "title": "Omitted Exact Wait Ns",
+          "type": "integer"
+        },
+        "omitted_observed_or_estimated_wait_ns": {
+          "minimum": 0,
+          "title": "Omitted Observed Or Estimated Wait Ns",
+          "type": "integer"
+        },
+        "omitted_owner_observed_count": {
+          "minimum": 0,
+          "title": "Omitted Owner Observed Count",
+          "type": "integer"
+        },
+        "omitted_row_count": {
+          "minimum": 0,
+          "title": "Omitted Row Count",
+          "type": "integer"
+        },
+        "omitted_sampled_observation_count": {
+          "minimum": 0,
+          "title": "Omitted Sampled Observation Count",
+          "type": "integer"
+        },
+        "omitted_thresholded_wait_count": {
+          "minimum": 0,
+          "title": "Omitted Thresholded Wait Count",
+          "type": "integer"
+        },
+        "omitted_thresholded_wait_ns": {
+          "minimum": 0,
+          "title": "Omitted Thresholded Wait Ns",
+          "type": "integer"
+        },
+        "total_row_count": {
+          "minimum": 0,
+          "title": "Total Row Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total_row_count",
+        "exported_row_count",
+        "omitted_row_count",
+        "omitted_exact_wait_count",
+        "omitted_exact_wait_ns",
+        "omitted_thresholded_wait_count",
+        "omitted_thresholded_wait_ns",
+        "omitted_sampled_observation_count",
+        "omitted_cumulative_observation_count",
+        "omitted_observed_or_estimated_wait_ns",
+        "omitted_exact_hold_count",
+        "omitted_exact_hold_ns",
+        "omitted_owner_observed_count"
+      ],
+      "title": "RuntimeProjectionCoverage",
+      "type": "object"
+    },
+    "RuntimeWaitOutcomeAggregate": {
+      "additionalProperties": false,
+      "properties": {
+        "cumulative_observation_count": {
+          "minimum": 0,
+          "title": "Cumulative Observation Count",
+          "type": "integer"
+        },
+        "exact_holds": {
+          "$ref": "#/$defs/RuntimeNanosecondDistribution"
+        },
+        "exact_waits": {
+          "$ref": "#/$defs/RuntimeNanosecondDistribution"
+        },
+        "execution_context_count": {
+          "minimum": 0,
+          "title": "Execution Context Count",
+          "type": "integer"
+        },
+        "lock_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lock Count"
+        },
+        "observed_or_estimated_wait_ns": {
+          "minimum": 0,
+          "title": "Observed Or Estimated Wait Ns",
+          "type": "integer"
+        },
+        "owner_observed_count": {
+          "minimum": 0,
+          "title": "Owner Observed Count",
+          "type": "integer"
+        },
+        "sampled_observation_count": {
+          "minimum": 0,
+          "title": "Sampled Observation Count",
+          "type": "integer"
+        },
+        "thresholded_waits": {
+          "$ref": "#/$defs/RuntimeNanosecondDistribution"
+        },
+        "wait_outcome": {
+          "enum": [
+            "acquired",
+            "notified",
+            "unparked",
+            "timed_out",
+            "interrupted",
+            "failed",
+            "unknown"
+          ],
+          "title": "Wait Outcome",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_waits",
+        "thresholded_waits",
+        "sampled_observation_count",
+        "cumulative_observation_count",
+        "observed_or_estimated_wait_ns",
+        "exact_holds",
+        "owner_observed_count",
+        "wait_outcome",
+        "execution_context_count"
+      ],
+      "title": "RuntimeWaitOutcomeAggregate",
+      "type": "object"
     }
   },
   "additionalProperties": false,
+  "allOf": [
+    {
+      "else": {
+        "properties": {
+          "aggregates": {
+            "items": {
+              "allOf": [
+                {
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "waiter_thread_count"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "required": [
+                    "waiter_execution_context_count"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "execution_context_aggregates",
+          "call_path_aggregates",
+          "wait_outcome_aggregates",
+          "lock_kind_aggregates",
+          "total_exact_wait_ns",
+          "total_thresholded_wait_ns",
+          "total_observed_or_estimated_wait_ns",
+          "total_exact_hold_ns",
+          "total_owner_observed_count",
+          "lock_coverage",
+          "execution_context_coverage",
+          "call_path_coverage",
+          "wait_outcome_coverage",
+          "lock_kind_coverage"
+        ]
+      },
+      "if": {
+        "anyOf": [
+          {
+            "not": {
+              "required": [
+                "schema_version"
+              ]
+            }
+          },
+          {
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "allOf": [
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "execution_context_aggregates"
+                  ]
+                },
+                {
+                  "required": [
+                    "call_path_aggregates"
+                  ]
+                },
+                {
+                  "required": [
+                    "wait_outcome_aggregates"
+                  ]
+                },
+                {
+                  "required": [
+                    "lock_kind_aggregates"
+                  ]
+                },
+                {
+                  "required": [
+                    "total_exact_wait_ns"
+                  ]
+                },
+                {
+                  "required": [
+                    "total_thresholded_wait_ns"
+                  ]
+                },
+                {
+                  "required": [
+                    "total_observed_or_estimated_wait_ns"
+                  ]
+                },
+                {
+                  "required": [
+                    "total_exact_hold_ns"
+                  ]
+                },
+                {
+                  "required": [
+                    "total_owner_observed_count"
+                  ]
+                },
+                {
+                  "required": [
+                    "lock_coverage"
+                  ]
+                },
+                {
+                  "required": [
+                    "execution_context_coverage"
+                  ]
+                },
+                {
+                  "required": [
+                    "call_path_coverage"
+                  ]
+                },
+                {
+                  "required": [
+                    "wait_outcome_coverage"
+                  ]
+                },
+                {
+                  "required": [
+                    "lock_kind_coverage"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "properties": {
+              "aggregates": {
+                "items": {
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "waiter_execution_context_count"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
   "properties": {
     "aggregates": {
       "items": {
@@ -249,6 +824,25 @@
       "title": "Analysis Fingerprint",
       "type": "string"
     },
+    "call_path_aggregates": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RuntimeCallPathAggregate"
+      },
+      "title": "Call Path Aggregates",
+      "type": "array"
+    },
+    "call_path_coverage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RuntimeProjectionCoverage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "content_bytes": {
       "exclusiveMinimum": 0,
       "title": "Content Bytes",
@@ -263,6 +857,25 @@
       "title": "Created At",
       "type": "string"
     },
+    "execution_context_aggregates": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RuntimeExecutionContextAggregate"
+      },
+      "title": "Execution Context Aggregates",
+      "type": "array"
+    },
+    "execution_context_coverage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RuntimeProjectionCoverage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "forbidden_conclusions": {
       "items": {
         "type": "string"
@@ -272,6 +885,36 @@
     },
     "limits": {
       "$ref": "#/$defs/RuntimeLockResourceLimits"
+    },
+    "lock_coverage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RuntimeProjectionCoverage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "lock_kind_aggregates": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RuntimeLockKindAggregate"
+      },
+      "title": "Lock Kind Aggregates",
+      "type": "array"
+    },
+    "lock_kind_coverage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RuntimeProjectionCoverage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "measurement_semantics": {
       "enum": [
@@ -328,8 +971,11 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "1.0",
       "default": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },
@@ -343,9 +989,33 @@
       "title": "Total Exact Hold Count",
       "type": "integer"
     },
+    "total_exact_hold_ns": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Total Exact Hold Ns",
+      "type": "integer"
+    },
     "total_exact_wait_count": {
       "minimum": 0,
       "title": "Total Exact Wait Count",
+      "type": "integer"
+    },
+    "total_exact_wait_ns": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Total Exact Wait Ns",
+      "type": "integer"
+    },
+    "total_observed_or_estimated_wait_ns": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Total Observed Or Estimated Wait Ns",
+      "type": "integer"
+    },
+    "total_owner_observed_count": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Total Owner Observed Count",
       "type": "integer"
     },
     "total_sampled_observation_count": {
@@ -357,6 +1027,31 @@
       "minimum": 0,
       "title": "Total Thresholded Wait Count",
       "type": "integer"
+    },
+    "total_thresholded_wait_ns": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Total Thresholded Wait Ns",
+      "type": "integer"
+    },
+    "wait_outcome_aggregates": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RuntimeWaitOutcomeAggregate"
+      },
+      "title": "Wait Outcome Aggregates",
+      "type": "array"
+    },
+    "wait_outcome_coverage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RuntimeProjectionCoverage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

@@ -19,6 +19,19 @@
           "title": "Event Kind",
           "type": "string"
         },
+        "execution_context_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-context-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Context Id"
+        },
         "lock_id": {
           "anyOf": [
             {
@@ -75,21 +88,41 @@
           "title": "Stack Id"
         },
         "target_tid": {
-          "exclusiveMinimum": 0,
-          "title": "Target Tid",
-          "type": "integer"
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Tid"
         },
         "timestamp_ns": {
           "minimum": 0,
           "title": "Timestamp Ns",
           "type": "integer"
+        },
+        "wait_end_event_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-event-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wait End Event Id"
         }
       },
       "required": [
         "event_id",
         "event_index",
         "timestamp_ns",
-        "target_tid",
         "lock_kind",
         "measurement_semantics"
       ],
@@ -126,6 +159,58 @@
       "title": "RuntimeClock",
       "type": "object"
     },
+    "RuntimeContainerTargetReference": {
+      "additionalProperties": false,
+      "description": "Content-bound references to existing Docker identity Artifacts.\n\n``target_identity_sha256`` is the ContainerTarget identity fingerprint. It\nbinds the namespace inode tuple and cgroup-v2 identity without copying that\nprivate identity surface into Runtime Lock Evidence.",
+      "properties": {
+        "cgroup_identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Cgroup Identity Sha256",
+          "type": "string"
+        },
+        "container_identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Container Identity Sha256",
+          "type": "string"
+        },
+        "container_run_content_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Container Run Content Sha256",
+          "type": "string"
+        },
+        "container_run_id": {
+          "pattern": "^container-run-[a-f0-9]{20}$",
+          "title": "Container Run Id",
+          "type": "string"
+        },
+        "container_target_content_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Container Target Content Sha256",
+          "type": "string"
+        },
+        "container_target_id": {
+          "pattern": "^container-target-[a-f0-9]{20}$",
+          "title": "Container Target Id",
+          "type": "string"
+        },
+        "target_identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Target Identity Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "container_target_id",
+        "container_target_content_sha256",
+        "container_run_id",
+        "container_run_content_sha256",
+        "container_identity_sha256",
+        "target_identity_sha256",
+        "cgroup_identity_sha256"
+      ],
+      "title": "RuntimeContainerTargetReference",
+      "type": "object"
+    },
     "RuntimeEvidenceQuality": {
       "additionalProperties": false,
       "properties": {
@@ -158,9 +243,21 @@
           "title": "Duplicate Record Count",
           "type": "integer"
         },
+        "duplicate_stack_record_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Duplicate Stack Record Count",
+          "type": "integer"
+        },
         "emitted_event_count": {
           "minimum": 0,
           "title": "Emitted Event Count",
+          "type": "integer"
+        },
+        "emitted_stack_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Emitted Stack Count",
           "type": "integer"
         },
         "exact_event_count": {
@@ -196,6 +293,18 @@
           "title": "Malformed Record Count",
           "type": "integer"
         },
+        "malformed_stack_record_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Malformed Stack Record Count",
+          "type": "integer"
+        },
+        "out_of_order_record_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Out Of Order Record Count",
+          "type": "integer"
+        },
         "owner_observed_event_count": {
           "minimum": 0,
           "title": "Owner Observed Event Count",
@@ -204,6 +313,12 @@
         "sampled_event_count": {
           "minimum": 0,
           "title": "Sampled Event Count",
+          "type": "integer"
+        },
+        "stack_input_record_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Stack Input Record Count",
           "type": "integer"
         },
         "status": {
@@ -222,6 +337,12 @@
         "truncated_event_count": {
           "minimum": 0,
           "title": "Truncated Event Count",
+          "type": "integer"
+        },
+        "truncated_stack_record_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Truncated Stack Record Count",
           "type": "integer"
         },
         "unsupported_record_count": {
@@ -249,6 +370,181 @@
         "diagnostics_truncated"
       ],
       "title": "RuntimeEvidenceQuality",
+      "type": "object"
+    },
+    "RuntimeExecutionContext": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "os_thread"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "runtime_context_id": {
+                "type": "null"
+              },
+              "target_tid": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "target_tid"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "process_aggregate"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "runtime_context_id": {
+                "type": "null"
+              },
+              "target_tid": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "java_platform_thread",
+                  "java_virtual_thread",
+                  "go_goroutine"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "runtime_context_id": {
+                "pattern": "^runtime-native-[a-f0-9]{16,64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "runtime_context_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "java_virtual_thread",
+                  "go_goroutine"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "target_tid": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "description": "One runtime scheduling context without inventing an OS thread identity.\n\nRuntime-native identities are Artifact-local opaque strings because Java\nand Go identifiers are not interchangeable with Linux TIDs and must not be\ncorrelated across Artifacts.  Only contexts whose source really exposes a\nnative thread may carry ``target_tid``.",
+      "properties": {
+        "context_id": {
+          "pattern": "^runtime-context-[a-f0-9]{16,64}$",
+          "title": "Context Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "os_thread",
+            "java_platform_thread",
+            "java_virtual_thread",
+            "go_goroutine",
+            "process_aggregate"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^[^\\x00\\r\\n]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "pattern": "^(?!/|\\\\\\\\|//|[A-Za-z]:[\\\\/]).+$",
+          "title": "Name"
+        },
+        "runtime_context_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-native-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Context Id"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        },
+        "target_tid": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Tid"
+        }
+      },
+      "required": [
+        "context_id",
+        "kind",
+        "target_pid"
+      ],
+      "title": "RuntimeExecutionContext",
       "type": "object"
     },
     "RuntimeLockResourceLimits": {
@@ -347,6 +643,19 @@
           "title": "Event Kind",
           "type": "string"
         },
+        "execution_context_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-context-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Context Id"
+        },
         "lock_id": {
           "anyOf": [
             {
@@ -403,9 +712,17 @@
           "title": "Stack Id"
         },
         "target_tid": {
-          "exclusiveMinimum": 0,
-          "title": "Target Tid",
-          "type": "integer"
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Tid"
         },
         "timestamp_ns": {
           "minimum": 0,
@@ -417,7 +734,6 @@
         "event_id",
         "event_index",
         "timestamp_ns",
-        "target_tid",
         "lock_kind",
         "measurement_semantics"
       ],
@@ -455,6 +771,19 @@
           "default": "release",
           "title": "Event Kind",
           "type": "string"
+        },
+        "execution_context_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-context-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Context Id"
         },
         "hold_duration_ns": {
           "anyOf": [
@@ -525,9 +854,17 @@
           "title": "Stack Id"
         },
         "target_tid": {
-          "exclusiveMinimum": 0,
-          "title": "Target Tid",
-          "type": "integer"
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Tid"
         },
         "timestamp_ns": {
           "minimum": 0,
@@ -539,7 +876,6 @@
         "event_id",
         "event_index",
         "timestamp_ns",
-        "target_tid",
         "lock_kind",
         "measurement_semantics"
       ],
@@ -582,6 +918,19 @@
           "default": "sampled_contention",
           "title": "Event Kind",
           "type": "string"
+        },
+        "execution_context_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-context-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Context Id"
         },
         "lock_id": {
           "anyOf": [
@@ -644,9 +993,17 @@
           "title": "Stack Id"
         },
         "target_tid": {
-          "exclusiveMinimum": 0,
-          "title": "Target Tid",
-          "type": "integer"
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Tid"
         },
         "timestamp_ns": {
           "minimum": 0,
@@ -658,7 +1015,6 @@
         "event_id",
         "event_index",
         "timestamp_ns",
-        "target_tid",
         "lock_kind",
         "measurement_semantics",
         "observed_count",
@@ -669,6 +1025,43 @@
     },
     "RuntimeSourceManifest": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "required": [
+              "converter_version"
+            ]
+          },
+          "if": {
+            "anyOf": [
+              {
+                "not": {
+                  "required": [
+                    "schema_version"
+                  ]
+                }
+              },
+              {
+                "properties": {
+                  "schema_version": {
+                    "const": "1.0"
+                  }
+                },
+                "required": [
+                  "schema_version"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "converter_version"
+              ]
+            }
+          }
+        }
+      ],
       "description": "Versioned identity and semantics of one normalized input source.",
       "properties": {
         "adapter_id": {
@@ -713,6 +1106,20 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Conversion Fingerprint",
           "type": "string"
+        },
+        "converter_version": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Converter Version"
         },
         "duration_threshold_ns": {
           "anyOf": [
@@ -793,8 +1200,11 @@
           "title": "Sampling Period"
         },
         "schema_version": {
-          "const": "1.0",
           "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -898,6 +1308,7 @@
         "module": {
           "maxLength": 4096,
           "minLength": 1,
+          "pattern": "^(?!/|\\\\\\\\|//|[A-Za-z]:[\\\\/]).+$",
           "title": "Module",
           "type": "string"
         },
@@ -912,6 +1323,7 @@
             }
           ],
           "default": null,
+          "pattern": "^(?!/|\\\\\\\\|//|[A-Za-z]:[\\\\/]).+$",
           "title": "Source File"
         },
         "source_line": {
@@ -930,6 +1342,7 @@
         "symbol": {
           "maxLength": 4096,
           "minLength": 1,
+          "pattern": "^(?!/|\\\\\\\\|//|[A-Za-z]:[\\\\/]).+$",
           "title": "Symbol",
           "type": "string"
         }
@@ -943,8 +1356,52 @@
     },
     "RuntimeTargetIdentity": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "container_reference": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "target_kind": {
+                "const": "docker"
+              }
+            },
+            "required": [
+              "target_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "container_reference": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "container_reference"
+            ]
+          }
+        }
+      ],
       "description": "PID identity bound at collection/import time.",
       "properties": {
+        "container_reference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeContainerTargetReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "observed_target_tids": {
           "default": [],
           "items": {
@@ -952,6 +1409,15 @@
           },
           "title": "Observed Target Tids",
           "type": "array"
+        },
+        "target_kind": {
+          "default": "host",
+          "enum": [
+            "host",
+            "docker"
+          ],
+          "title": "Target Kind",
+          "type": "string"
         },
         "target_pid": {
           "exclusiveMinimum": 0,
@@ -1075,6 +1541,19 @@
           "title": "Event Kind",
           "type": "string"
         },
+        "execution_context_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-context-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Context Id"
+        },
         "lock_id": {
           "anyOf": [
             {
@@ -1117,10 +1596,31 @@
           "title": "Measurement Semantics",
           "type": "string"
         },
+        "parked_execution_context_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-context-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parked Execution Context Id"
+        },
         "parked_target_tid": {
-          "exclusiveMinimum": 0,
-          "title": "Parked Target Tid",
-          "type": "integer"
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parked Target Tid"
         },
         "stack_id": {
           "anyOf": [
@@ -1136,9 +1636,17 @@
           "title": "Stack Id"
         },
         "target_tid": {
-          "exclusiveMinimum": 0,
-          "title": "Target Tid",
-          "type": "integer"
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Tid"
         },
         "timestamp_ns": {
           "minimum": 0,
@@ -1150,10 +1658,8 @@
         "event_id",
         "event_index",
         "timestamp_ns",
-        "target_tid",
         "lock_kind",
-        "measurement_semantics",
-        "parked_target_tid"
+        "measurement_semantics"
       ],
       "title": "RuntimeUnparkEvent",
       "type": "object"
@@ -1177,6 +1683,19 @@
           "title": "Event Kind",
           "type": "string"
         },
+        "execution_context_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-context-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Context Id"
+        },
         "lock_id": {
           "anyOf": [
             {
@@ -1218,6 +1737,19 @@
           ],
           "title": "Measurement Semantics",
           "type": "string"
+        },
+        "owner_execution_context_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-context-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Execution Context Id"
         },
         "owner_target_tid": {
           "anyOf": [
@@ -1246,9 +1778,17 @@
           "title": "Stack Id"
         },
         "target_tid": {
-          "exclusiveMinimum": 0,
-          "title": "Target Tid",
-          "type": "integer"
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Tid"
         },
         "timestamp_ns": {
           "minimum": 0,
@@ -1260,7 +1800,6 @@
         "event_id",
         "event_index",
         "timestamp_ns",
-        "target_tid",
         "lock_kind",
         "measurement_semantics"
       ],
@@ -1290,6 +1829,19 @@
           "default": "wait_end",
           "title": "Event Kind",
           "type": "string"
+        },
+        "execution_context_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-context-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Context Id"
         },
         "lock_id": {
           "anyOf": [
@@ -1346,6 +1898,19 @@
           "title": "Outcome",
           "type": "string"
         },
+        "owner_execution_context_id": {
+          "anyOf": [
+            {
+              "pattern": "^runtime-context-[a-f0-9]{16,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Execution Context Id"
+        },
         "owner_target_tid": {
           "anyOf": [
             {
@@ -1373,9 +1938,17 @@
           "title": "Stack Id"
         },
         "target_tid": {
-          "exclusiveMinimum": 0,
-          "title": "Target Tid",
-          "type": "integer"
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Tid"
         },
         "timestamp_ns": {
           "minimum": 0,
@@ -1400,7 +1973,6 @@
         "event_id",
         "event_index",
         "timestamp_ns",
-        "target_tid",
         "lock_kind",
         "measurement_semantics",
         "duration_ns",
@@ -1411,6 +1983,282 @@
     }
   },
   "additionalProperties": false,
+  "allOf": [
+    {
+      "else": {
+        "properties": {
+          "events": {
+            "items": {
+              "allOf": [
+                {
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "target_tid"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "owner_target_tid"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "parked_target_tid"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "properties": {
+                    "execution_context_id": {
+                      "pattern": "^runtime-context-[a-f0-9]{16,64}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "execution_context_id"
+                  ]
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "event_kind": {
+                        "const": "unpark"
+                      }
+                    },
+                    "required": [
+                      "event_kind"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "parked_execution_context_id": {
+                        "pattern": "^runtime-context-[a-f0-9]{16,64}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "parked_execution_context_id"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "quality": {
+            "required": [
+              "out_of_order_record_count",
+              "stack_input_record_count",
+              "emitted_stack_count",
+              "malformed_stack_record_count",
+              "duplicate_stack_record_count",
+              "truncated_stack_record_count"
+            ]
+          },
+          "source": {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "target": {
+            "required": [
+              "target_kind"
+            ]
+          }
+        },
+        "required": [
+          "execution_contexts"
+        ]
+      },
+      "if": {
+        "anyOf": [
+          {
+            "not": {
+              "required": [
+                "schema_version"
+              ]
+            }
+          },
+          {
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "allOf": [
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "execution_contexts"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "properties": {
+              "events": {
+                "items": {
+                  "allOf": [
+                    {
+                      "not": {
+                        "anyOf": [
+                          {
+                            "required": [
+                              "execution_context_id"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "owner_execution_context_id"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "parked_execution_context_id"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "wait_end_event_id"
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "properties": {
+                        "target_tid": {
+                          "exclusiveMinimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "target_tid"
+                      ]
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "event_kind": {
+                            "const": "unpark"
+                          }
+                        },
+                        "required": [
+                          "event_kind"
+                        ]
+                      },
+                      "then": {
+                        "properties": {
+                          "parked_target_tid": {
+                            "exclusiveMinimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "parked_target_tid"
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              "quality": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "out_of_order_record_count"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "stack_input_record_count"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "emitted_stack_count"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "malformed_stack_record_count"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "duplicate_stack_record_count"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "truncated_stack_record_count"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "source": {
+                "anyOf": [
+                  {
+                    "not": {
+                      "required": [
+                        "schema_version"
+                      ]
+                    }
+                  },
+                  {
+                    "properties": {
+                      "schema_version": {
+                        "const": "1.0"
+                      }
+                    },
+                    "required": [
+                      "schema_version"
+                    ]
+                  }
+                ]
+              },
+              "target": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "target_kind"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "container_reference"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
   "properties": {
     "allowed_conclusions": {
       "items": {
@@ -1479,6 +2327,14 @@
       "title": "Evidence Fingerprint",
       "type": "string"
     },
+    "execution_contexts": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RuntimeExecutionContext"
+      },
+      "title": "Execution Contexts",
+      "type": "array"
+    },
     "forbidden_conclusions": {
       "items": {
         "type": "string"
@@ -1498,8 +2354,11 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "1.0",
       "default": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },
