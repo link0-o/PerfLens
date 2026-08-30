@@ -554,9 +554,7 @@ class ArtifactStore:
             or session.budget != preview.budget
             or created < datetime.fromisoformat(preview.created_at)
             or created > datetime.fromisoformat(preview.expires_at)
-            or (
-                datetime.fromisoformat(session.expires_at) - created
-            ).total_seconds()
+            or (datetime.fromisoformat(session.expires_at) - created).total_seconds()
             != session.budget.hard_expiry_seconds
         ):
             raise self._identity_error(session_artifact_id, "runtime-lock-session")
@@ -619,8 +617,7 @@ class ArtifactStore:
                 )
             )
             if (
-                previous.content_sha256
-                != session.previous_session_artifact_content_sha256
+                previous.content_sha256 != session.previous_session_artifact_content_sha256
                 or previous.revision + 1 != session.revision
                 or previous.state != "active"
                 or not usage_transition_valid
@@ -644,10 +641,9 @@ class ArtifactStore:
             "runtime-lock-run",
         )
         session = self.load_runtime_lock_session(run.session_artifact_id)
+        preview = self.load_runtime_lock_preview(session.preview_id)
         analysis, evidence, _ = self.load_runtime_lock_analysis(run.runtime_lock_analysis_id)
-        verification = self.load_runtime_lock_verification(
-            run.runtime_lock_verification_id
-        )
+        verification = self.load_runtime_lock_verification(run.runtime_lock_verification_id)
         run_started = datetime.fromisoformat(run.started_at)
         run_created = datetime.fromisoformat(run.created_at)
         if (
@@ -656,6 +652,13 @@ class ArtifactStore:
             or run.session_revision != session.revision
             or session.state != "active"
             or run.target_scope != session.target_scope
+            or (
+                run.target_scope == "host_launched_workload"
+                and (
+                    preview.workload is None
+                    or run.workload_identity_sha256 != preview.workload.workload_identity_sha256
+                )
+            )
             or run.adapter_id not in session.allowed_adapters
             or run.measurement_semantics not in session.allowed_semantics
             or run.runtime_lock_evidence_id != evidence.runtime_lock_evidence_id
@@ -665,9 +668,8 @@ class ArtifactStore:
             or run.runtime_lock_verification_content_sha256 != verification.content_sha256
             or run.measurement_semantics != analysis.measurement_semantics
             or run.measurement_semantics != evidence.source.measurement_semantics
-            or evidence.source.source_format
-            != _RUNTIME_LOCK_ADAPTER_SOURCE_FORMATS[run.adapter_id]
-            or run.quality_status != analysis.quality_status
+            or evidence.source.source_format != _RUNTIME_LOCK_ADAPTER_SOURCE_FORMATS[run.adapter_id]
+            or not _runtime_lock_run_quality_matches_analysis(run, analysis)
             or run.allowed_conclusions != analysis.allowed_conclusions
             or run.forbidden_conclusions != analysis.forbidden_conclusions
             or run.event_count != len(evidence.events)
@@ -701,9 +703,7 @@ class ArtifactStore:
         )
         baseline = self.load_runtime_lock_run(comparison.baseline_run_id)
         candidate = self.load_runtime_lock_run(comparison.candidate_run_id)
-        _, baseline_evidence, _ = self.load_runtime_lock_analysis(
-            baseline.runtime_lock_analysis_id
-        )
+        _, baseline_evidence, _ = self.load_runtime_lock_analysis(baseline.runtime_lock_analysis_id)
         _, candidate_evidence, _ = self.load_runtime_lock_analysis(
             candidate.runtime_lock_analysis_id
         )
@@ -1923,6 +1923,23 @@ class ArtifactStore:
                 details={"value": value[:128]},
             )
         return value
+
+
+def _runtime_lock_run_quality_matches_analysis(
+    run: RuntimeLockRunArtifact,
+    analysis: RuntimeLockAnalysisArtifact,
+) -> bool:
+    if run.quality_status == analysis.quality_status:
+        return True
+    return (
+        run.quality_status == "partial"
+        and analysis.quality_status == "complete"
+        and any(
+            warning.startswith("Independent TID polling was partial:")
+            or warning.startswith("Native launch coverage is partial:")
+            for warning in run.warnings
+        )
+    )
 
 
 def _file_identity(

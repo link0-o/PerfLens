@@ -13,11 +13,13 @@ from perflens.contracts.runtime_lock_sessions import (
     RuntimeLockSessionArtifact,
     RuntimeLockSessionBudget,
     RuntimeLockSessionPreviewArtifact,
+    RuntimeLockWorkloadBinding,
     derive_runtime_lock_capability_id,
     derive_runtime_lock_comparison_id,
     derive_runtime_lock_preview_id,
     derive_runtime_lock_run_id,
     derive_runtime_lock_session_artifact_id,
+    derive_runtime_lock_workload_identity,
 )
 
 _ZERO = "0" * 64
@@ -59,6 +61,25 @@ def _capability() -> RuntimeLockCapabilityArtifact:
 def _preview() -> RuntimeLockSessionPreviewArtifact:
     created, expires = _times()
     capability = _capability()
+    program_sha256 = "b" * 64
+    workload = RuntimeLockWorkloadBinding(
+        adapter_id="cpython_threading",
+        workload_kind="python_script",
+        program="workloads/locks.py",
+        program_sha256=program_sha256,
+        program_size=128,
+        working_directory=".",
+        arguments=("--rounds", "10"),
+        workload_identity_sha256=derive_runtime_lock_workload_identity(
+            "cpython_threading",
+            "python_script",
+            "workloads/locks.py",
+            program_sha256,
+            128,
+            ".",
+            ("--rounds", "10"),
+        ),
+    )
     return RuntimeLockSessionPreviewArtifact(
         perflens_version="0.4.0",
         preview_id=derive_runtime_lock_preview_id(
@@ -78,6 +99,7 @@ def _preview() -> RuntimeLockSessionPreviewArtifact:
         target_scope="host_launched_workload",
         allowed_adapters=("cpython_threading",),
         allowed_semantics=("exact", "thresholded"),
+        workload=workload,
         budget=RuntimeLockSessionBudget(),
         planned_actions=("Launch one authorized CPython workload.",),
         authorization_summary_sha256=_SIX,
@@ -185,9 +207,42 @@ def test_runtime_lock_preview_rejects_unsafe_import_root() -> None:
     payload = _preview().model_dump(mode="json")
     payload["target_scope"] = "controlled_import"
     payload["import_roots"] = ["../secrets"]
+    payload["workload"] = None
 
     with pytest.raises(ValidationError, match="normalized project-relative"):
         RuntimeLockSessionPreviewArtifact.model_validate(payload)
+
+
+def test_runtime_lock_workload_binding_rejects_secret_or_identity_change() -> None:
+    workload = _preview().workload
+    assert workload is not None
+    payload = workload.model_dump(mode="json")
+    payload["arguments"] = ["--token=private"]
+    with pytest.raises(ValidationError, match="unsafe material"):
+        RuntimeLockWorkloadBinding.model_validate(payload)
+
+    for arguments in (
+        ["--password", "private"],
+        ["--passwd", "private"],
+        ["--pwd", "private"],
+        ["--token", "private"],
+        ["--secret", "private"],
+        ["--credentials", "private"],
+        ["--authorization", "private"],
+        ["--api-key", "private"],
+        ["--client_secret", "private"],
+        ["--access-token", "private"],
+        ["--refresh_token", "private"],
+    ):
+        payload = workload.model_dump(mode="json")
+        payload["arguments"] = arguments
+        with pytest.raises(ValidationError, match="unsafe material"):
+            RuntimeLockWorkloadBinding.model_validate(payload)
+
+    payload = workload.model_dump(mode="json")
+    payload["program_sha256"] = "f" * 64
+    with pytest.raises(ValidationError, match="identity differs"):
+        RuntimeLockWorkloadBinding.model_validate(payload)
 
 
 def test_runtime_lock_session_rejects_budget_overrun() -> None:

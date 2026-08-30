@@ -8,6 +8,7 @@ import hashlib
 import math
 import os
 import stat
+import tempfile
 import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager, suppress
@@ -113,11 +114,14 @@ from perflens.contracts.runtime_lock_sessions import (
     RuntimeLockSessionArtifact,
     RuntimeLockSessionPreviewArtifact,
     RuntimeLockTargetScope,
+    RuntimeLockWorkloadBinding,
     derive_runtime_lock_run_id,
+    derive_runtime_lock_workload_identity,
 )
 from perflens.contracts.runtime_locks import (
     RuntimeLockAnalysisVerificationArtifact,
     RuntimeLockCallPathPage,
+    RuntimeLockEvidenceArtifact,
     RuntimeLockHotspotPage,
     RuntimeLockResourceLimits,
 )
@@ -175,8 +179,20 @@ from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.storage import ArtifactStore, PathPolicy
 from perflens.runtime_locks import import_runtime_lock_ndjson
 from perflens.runtime_locks.capability import (
+    NATIVE_PTHREAD_PROVENANCE_LIMITATION,
     RuntimeLockCapabilityInspection,
     inspect_runtime_lock_capability,
+)
+from perflens.runtime_locks.native_launcher import (
+    NativeLaunchCapability,
+    NativeLaunchRequest,
+    NativeLaunchResult,
+    NativePthreadLauncher,
+    discover_native_pthread_probe_policy,
+    inspect_native_pthread_installation,
+)
+from perflens.runtime_locks.native_pthread_converter import (
+    convert_native_pthread_probe,
 )
 from perflens.runtime_locks.project_config import (
     RuntimeLockProjectPolicy,
@@ -248,6 +264,9 @@ class ServerConfig:
     docker_optimization_runtime_factory: Callable[[], DockerOptimizationRuntime] | None = None
     runtime_lock_runtime_factory: Callable[[], RuntimeLockSessionRuntime] | None = None
     runtime_lock_capability_factory: Callable[[], RuntimeLockCapabilityInspection] | None = None
+    runtime_lock_native_launcher_factory: Callable[[Path, Path], NativePthreadLauncher] | None = (
+        None
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,8 +334,14 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     if not config.allow_runtime_locks and (
         config.runtime_lock_runtime_factory is not None
         or config.runtime_lock_capability_factory is not None
+        or config.runtime_lock_native_launcher_factory is not None
     ):
         raise ValueError("Runtime Lock factories require Runtime Lock sessions")
+    if (
+        config.runtime_lock_native_launcher_factory is not None
+        and not config.allow_process_execution
+    ):
+        raise ValueError("Native Runtime Lock launcher requires process execution")
     docker_policy = (
         load_docker_project_policy(
             config.docker_project_config,
@@ -359,6 +384,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     )
     docker_optimization_runtime: DockerOptimizationRuntime | None = None
     runtime_lock_runtime: RuntimeLockSessionRuntime | None = None
+    runtime_lock_native_launcher: NativePthreadLauncher | None = None
+    runtime_lock_native_private_root: Path | None = None
 
     @asynccontextmanager
     async def server_lifespan(_server: MCPServer[None]) -> AsyncGenerator[None]:
@@ -374,6 +401,11 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                         terminal_session.session_artifact_id,
                         "runtime-lock-session",
                     )
+            if runtime_lock_native_private_root is not None:
+                with suppress(OSError, PerfLensError):
+                    _cleanup_native_runtime_lock_retained_streams(runtime_lock_native_private_root)
+                with suppress(OSError):
+                    runtime_lock_native_private_root.rmdir()
 
     server: MCPServer[None] = MCPServer(
         "perflens",
@@ -442,9 +474,30 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         )
         if config.runtime_lock_capability_factory is not None:
             return config.runtime_lock_capability_factory()
+        native_capability: NativeLaunchCapability
+        if config.allow_process_execution:
+            discovery = discover_native_pthread_probe_policy()
+            native_capability = inspect_native_pthread_installation(discovery.policy)
+        else:
+            native_capability = NativeLaunchCapability(
+                target_scope="host_launched_workload",
+                launch_backend="host_launcher",
+                availability="unavailable",
+                target_identity_sha256=None,
+                target_label="native-pthread",
+                probe_sha256=None,
+                runtime_glibc_version=None,
+                supported_semantics=(),
+                supported_lock_surfaces=(),
+                limitations=(
+                    "Active Native pthread instrumentation is disabled by project MCP policy; "
+                    "controlled import and deterministic analysis remain available.",
+                ),
+            )
         return inspect_runtime_lock_capability(
             runtime_lock_policy,
             project_identity_sha256=runtime_lock_project.identity_sha256,
+            native_pthread_capability=native_capability,
         )
 
     def get_runtime_lock_session_runtime() -> RuntimeLockSessionRuntime:
@@ -463,6 +516,55 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             runtime_lock_config_sha256=runtime_lock_policy.sha256,
         )
         return runtime_lock_runtime
+
+    def get_runtime_lock_native_launcher() -> NativePthreadLauncher:
+        nonlocal runtime_lock_native_launcher, runtime_lock_native_private_root
+        _require_runtime_locks(config)
+        if not config.allow_process_execution:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "runtime_lock_authorization",
+                "Native Runtime Lock workload execution is disabled by project MCP policy",
+                recoverable=True,
+            )
+        if runtime_lock_native_launcher is not None:
+            return runtime_lock_native_launcher
+        assert runtime_lock_project is not None
+        private_root = Path(
+            tempfile.mkdtemp(
+                prefix=".runtime-lock-native-",
+                dir=config.artifact_root,
+            )
+        )
+        private_root.chmod(0o700)
+        try:
+            if config.runtime_lock_native_launcher_factory is not None:
+                launcher = config.runtime_lock_native_launcher_factory(
+                    runtime_lock_project.path,
+                    private_root,
+                )
+            else:
+                discovery = discover_native_pthread_probe_policy()
+                if discovery.policy is None:
+                    raise PerfLensError(
+                        ErrorCode.EXTERNAL_TOOL_FAILED,
+                        "runtime_lock_capability",
+                        "The packaged Native pthread probe is unavailable or unsafe",
+                        recoverable=True,
+                        details={"limitations": discovery.limitations},
+                    )
+                launcher = NativePthreadLauncher(
+                    project_root=runtime_lock_project.path,
+                    private_output_root=private_root,
+                    probe_policy=discovery.policy,
+                )
+        except Exception:
+            with suppress(OSError):
+                private_root.rmdir()
+            raise
+        runtime_lock_native_private_root = private_root
+        runtime_lock_native_launcher = launcher
+        return launcher
 
     def capture_module_snapshot(
         executed: _ExecutedBrokerPlan,
@@ -609,6 +711,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         target_scope: RuntimeLockTargetScope,
         allowed_adapters: tuple[RuntimeLockAdapterId, ...],
         allowed_semantics: tuple[Literal["exact", "thresholded", "sampled", "cumulative"], ...],
+        executable: str | None = None,
+        arguments: tuple[str, ...] = (),
     ) -> RuntimeLockSessionPreviewArtifact:
         _require_runtime_locks(config)
         assert runtime_lock_policy is not None
@@ -620,6 +724,71 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         )
         inspection = inspect_runtime_lock_session_capability()
         runtime = get_runtime_lock_session_runtime()
+        workload: RuntimeLockWorkloadBinding | None = None
+        preview_warnings: tuple[str, ...] = ()
+        if target_scope == "host_launched_workload":
+            if allowed_adapters != ("native_pthread",) or executable is None:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_authorization",
+                    "Native host Runtime Lock Preview requires one exact executable and Adapter",
+                    recoverable=True,
+                )
+            _require_runtime_lock_adapter_capability(
+                inspection,
+                adapter_id="native_pthread",
+                allowed_semantics=allowed_semantics,
+            )
+            assert runtime_lock_project is not None
+            launcher = get_runtime_lock_native_launcher()
+            executable_path = _runtime_lock_project_executable(
+                runtime_lock_project.path,
+                executable,
+            )
+            target = launcher.inspect_target(executable_path)
+            target_capability = launcher.capability(executable_path)
+            if target_capability.availability == "unavailable" or any(
+                semantics not in target_capability.supported_semantics
+                for semantics in allowed_semantics
+            ):
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "runtime_lock_capability",
+                    "The reviewed Native pthread workload does not support this semantics scope",
+                    recoverable=True,
+                    details={"limitations": target_capability.limitations},
+                )
+            workload_identity = derive_runtime_lock_workload_identity(
+                "native_pthread",
+                "native_elf",
+                target.project_relative_path,
+                target.binary_sha256,
+                target.size,
+                ".",
+                arguments,
+            )
+            workload = RuntimeLockWorkloadBinding(
+                adapter_id="native_pthread",
+                workload_kind="native_elf",
+                program=target.project_relative_path,
+                program_sha256=target.binary_sha256,
+                program_size=target.size,
+                working_directory=".",
+                arguments=arguments,
+                workload_identity_sha256=workload_identity,
+            )
+            preview_warnings = tuple(
+                dict.fromkeys(
+                    (*target_capability.limitations, NATIVE_PTHREAD_PROVENANCE_LIMITATION)
+                )
+            )
+        elif executable is not None or arguments:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "runtime_lock_authorization",
+                "Only a host-launched Runtime Lock Preview may bind an executable workload",
+                recoverable=True,
+            )
         preview = runtime.preview(
             inspection.capability,
             target_scope=target_scope,
@@ -628,12 +797,17 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             import_roots=(
                 runtime_lock_policy.import_roots if target_scope == "controlled_import" else ()
             ),
+            workload=workload,
             budget=runtime_lock_policy.budget,
             planned_actions=_runtime_lock_planned_actions(target_scope),
             warnings=(
-                ("Only generic controlled import is implemented in the current milestone.",)
-                if target_scope != "controlled_import"
-                else ()
+                preview_warnings
+                if target_scope == "host_launched_workload"
+                else (
+                    ("This Runtime Lock launch entry point is not implemented yet.",)
+                    if target_scope != "controlled_import"
+                    else ()
+                )
             ),
             expires_in_seconds=runtime_lock_policy.preview_ttl_seconds,
         )
@@ -686,6 +860,393 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "runtime-lock-session",
         )
         return session
+
+    @server.tool(
+        name="collect_runtime_lock_evidence",
+        description=(
+            "Execute only the exact Native pthread host workload bound into an authorized "
+            "Runtime Lock Preview. The packaged probe, fixed environment, private output, "
+            "duration, event count, and one single-use lease remain independently bounded."
+        ),
+        annotations=EXECUTES_TARGET,
+        meta={"perflens/permission": "RUNTIME_LOCK_WORKLOAD_EXECUTION"},
+        structured_output=True,
+    )
+    async def collect_runtime_lock_evidence(
+        session_id: str,
+        measurement_semantics: Literal["exact", "thresholded"],
+        duration_seconds: int,
+        max_events: int = 20_000,
+    ) -> ArtifactReference:
+        _require_runtime_locks(config)
+        assert runtime_lock_policy is not None
+        assert runtime_lock_project is not None
+        runtime = get_runtime_lock_session_runtime()
+        lease = None
+        launch_result: NativeLaunchResult | None = None
+        pinned: _PinnedRuntimeLockImport | None = None
+        started_monotonic = time.monotonic()
+        actual_evidence_bytes = 0
+        actual_exact_events = 0
+        run_finished = False
+        cleanup_attempted = False
+        private_stream_removed = False
+        private_stream_retained = False
+        retain_private_stream_on_failure = False
+        private_retention_quota_bytes = 0
+        operation_failed = False
+        failure_reason: Literal[
+            "adapter_output_invalid",
+            "correctness_failed",
+            "identity_or_policy_changed",
+            "internal_collection_error",
+            "resource_limit_exceeded",
+            "target_exited",
+            "target_identity_changed",
+        ] = "internal_collection_error"
+        try:
+            assert_runtime_lock_project_policy_current(
+                runtime_lock_policy,
+                allowed_roots=config.allowed_roots,
+            )
+            assert_managed_project_current(runtime_lock_project)
+            session = runtime.snapshot(session_id)
+            private_retention_quota_bytes = session.budget.max_evidence_bytes
+            preview = store.load_runtime_lock_preview(session.preview_id)
+            workload = _validate_native_runtime_lock_session(
+                session,
+                preview,
+                runtime_lock_policy,
+                measurement_semantics=measurement_semantics,
+                duration_seconds=duration_seconds,
+                max_events=max_events,
+            )
+            launcher = get_runtime_lock_native_launcher()
+            assert runtime_lock_native_private_root is not None
+            executable_path = _runtime_lock_project_executable(
+                runtime_lock_project.path,
+                workload.program,
+            )
+            target = launcher.inspect_target(executable_path)
+            if (
+                target.project_relative_path != workload.program
+                or target.binary_sha256 != workload.program_sha256
+                or target.size != workload.program_size
+            ):
+                failure_reason = "target_identity_changed"
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_collection",
+                    "Native pthread workload differs from the authorized Preview",
+                    recoverable=True,
+                )
+            threshold_ns = (
+                None
+                if measurement_semantics == "exact"
+                else runtime_lock_policy.adapter_policy("native_pthread").duration_threshold_ns
+            )
+            request = NativeLaunchRequest(
+                arguments=workload.arguments,
+                semantics=measurement_semantics,
+                threshold_ns=threshold_ns,
+                duration_seconds=duration_seconds,
+                max_events=max_events,
+            )
+            operation_identity = _runtime_lock_native_operation_identity(
+                session,
+                target.identity_sha256,
+                measurement_semantics,
+                duration_seconds,
+                max_events,
+            )
+            lease = runtime.begin_run(
+                session_id,
+                adapter_id="native_pthread",
+                measurement_semantics=measurement_semantics,
+                operation_identity_sha256=operation_identity,
+                target_identity_sha256=target.identity_sha256,
+                workload_identity_sha256=workload.workload_identity_sha256,
+                reserve_active_seconds=duration_seconds,
+                reserve_evidence_bytes=session.budget.max_artifact_bytes,
+                reserve_exact_events=(max_events if measurement_semantics == "exact" else 0),
+            )
+            reserved_session = runtime.snapshot(session_id)
+            store.save(
+                reserved_session,
+                reserved_session.session_artifact_id,
+                "runtime-lock-session",
+            )
+            launch_result = launcher.launch(
+                executable_path,
+                request,
+                expected_target_identity_sha256=target.identity_sha256,
+            )
+            actual_evidence_bytes = launch_result.stream_size
+            actual_exact_events = (
+                launch_result.declared_event_count or 0 if measurement_semantics == "exact" else 0
+            )
+            failure_reason = "adapter_output_invalid"
+            if launch_result.termination_reason == "duration_limit":
+                failure_reason = "resource_limit_exceeded"
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "runtime_lock_collection",
+                    "Native pthread workload exceeded its authorized duration",
+                    recoverable=True,
+                )
+            if launch_result.termination_reason != "exited" or launch_result.exit_code is None:
+                failure_reason = "target_exited"
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "runtime_lock_collection",
+                    "Native pthread workload identity became unavailable",
+                    recoverable=True,
+                )
+            if launch_result.exit_code != 0:
+                failure_reason = "correctness_failed"
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "runtime_lock_collection",
+                    "Native pthread workload exited unsuccessfully",
+                    recoverable=True,
+                    details={"exit_code": launch_result.exit_code},
+                )
+            pinned = _pin_native_runtime_lock_stream(
+                launch_result,
+                private_root=runtime_lock_native_private_root,
+                max_source_bytes=session.budget.max_artifact_bytes,
+            )
+            # Once a bounded stream has passed the private-file identity gate, retain it
+            # privately if conversion or deterministic verification fails. It is never
+            # persisted as a public Artifact or exposed by an MCP resource.
+            retain_private_stream_on_failure = True
+            limits = RuntimeLockResourceLimits(
+                max_source_bytes=session.budget.max_artifact_bytes,
+                max_input_records=max_events,
+                max_output_bytes=session.budget.max_artifact_bytes,
+            )
+            with os.fdopen(os.dup(pinned.descriptor), "rb") as private_source:
+                os.lseek(private_source.fileno(), 0, os.SEEK_SET)
+                receipt = convert_native_pthread_probe(
+                    private_source,
+                    limits=limits,
+                    created_at=launch_result.started_at,
+                )
+            _assert_runtime_lock_import_unchanged(pinned)
+            evidence = receipt.evidence
+            try:
+                identity_warnings = _assert_native_runtime_lock_evidence_identity(
+                    evidence,
+                    receipt_source_sha256=receipt.raw_source_sha256,
+                    receipt_source_bytes=receipt.raw_source_bytes,
+                    launch_result=launch_result,
+                    expected_target_identity_sha256=target.identity_sha256,
+                    measurement_semantics=measurement_semantics,
+                    duration_threshold_ns=threshold_ns,
+                    max_events=max_events,
+                )
+            except PerfLensError:
+                failure_reason = "target_identity_changed"
+                raise
+            analysis = build_runtime_lock_analysis(evidence)
+            with os.fdopen(os.dup(pinned.descriptor), "rb") as private_source:
+                os.lseek(private_source.fileno(), 0, os.SEEK_SET)
+                private_verification = verify_runtime_lock_analysis_artifact(
+                    analysis,
+                    evidence,
+                    private_source_stream=private_source,
+                )
+            _assert_runtime_lock_import_unchanged(pinned)
+            require_usable_runtime_lock_analysis(private_verification)
+            verification = verify_runtime_lock_analysis_artifact(analysis, evidence)
+            require_usable_runtime_lock_analysis(verification)
+            retain_private_stream_on_failure = False
+            actual_evidence_bytes = len(serialize_json(evidence))
+            actual_exact_events = len(evidence.events) if measurement_semantics == "exact" else 0
+            started_wall = datetime.fromisoformat(launch_result.started_at)
+            finished_wall = datetime.fromisoformat(launch_result.finished_at)
+            duration = math.ceil((finished_wall - started_wall).total_seconds())
+            if duration > duration_seconds:
+                failure_reason = "resource_limit_exceeded"
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "runtime_lock_collection",
+                    "Native pthread evidence exceeded its authorized active-time reservation",
+                    recoverable=True,
+                )
+            provisional_run = RuntimeLockRunArtifact(
+                schema_version="1.0",
+                perflens_version=__version__,
+                run_id=derive_runtime_lock_run_id(
+                    session_id,
+                    "native_pthread",
+                    evidence.content_sha256,
+                    launch_result.started_at,
+                ),
+                created_at=launch_result.finished_at,
+                started_at=launch_result.started_at,
+                finished_at=launch_result.finished_at,
+                session_id=session_id,
+                session_artifact_id=lease.session_artifact_id,
+                session_artifact_content_sha256=lease.session_artifact_content_sha256,
+                session_revision=lease.session_revision,
+                target_scope="host_launched_workload",
+                operation_identity_sha256=operation_identity,
+                target_identity_sha256=target.identity_sha256,
+                adapter_id="native_pthread",
+                measurement_semantics=measurement_semantics,
+                workload_identity_sha256=workload.workload_identity_sha256,
+                runtime_lock_evidence_id=evidence.runtime_lock_evidence_id,
+                runtime_lock_evidence_content_sha256=evidence.content_sha256,
+                runtime_lock_analysis_id=analysis.runtime_lock_analysis_id,
+                runtime_lock_analysis_content_sha256=analysis.content_sha256,
+                runtime_lock_verification_id=verification.runtime_lock_verification_id,
+                runtime_lock_verification_content_sha256=verification.content_sha256,
+                duration_seconds=duration,
+                evidence_bytes=actual_evidence_bytes,
+                event_count=len(evidence.events),
+                correctness_status="passed",
+                quality_status=(
+                    "partial"
+                    if identity_warnings or launch_result.quality_status == "partial"
+                    else analysis.quality_status
+                ),
+                warnings=tuple(
+                    dict.fromkeys(
+                        (
+                            *preview.warnings,
+                            *launch_result.limitations,
+                            *evidence.quality.limitations,
+                            *identity_warnings,
+                        )
+                    )
+                ),
+                allowed_conclusions=analysis.allowed_conclusions,
+                forbidden_conclusions=analysis.forbidden_conclusions,
+                content_sha256="0" * 64,
+            )
+            run = provisional_run.model_copy(
+                update={
+                    "content_sha256": contract_content_sha256(
+                        provisional_run,
+                        exclude={"content_sha256"},
+                    )
+                }
+            )
+            pinned_metadata = pinned.metadata
+            os.close(pinned.descriptor)
+            pinned = None
+            cleanup_attempted = True
+            _remove_native_runtime_lock_stream(
+                launch_result.stream_path,
+                private_root=runtime_lock_native_private_root,
+                expected_metadata=pinned_metadata,
+            )
+            private_stream_removed = True
+            for artifact, artifact_id, artifact_type in (
+                (evidence, evidence.runtime_lock_evidence_id, "runtime-lock-evidence"),
+                (analysis, analysis.runtime_lock_analysis_id, "runtime-lock-analysis"),
+                (
+                    verification,
+                    verification.runtime_lock_verification_id,
+                    "runtime-lock-verification",
+                ),
+                (run, run.run_id, "runtime-lock-run"),
+            ):
+                store.save(artifact, artifact_id, artifact_type)
+            final_session = runtime.finish_run(session_id, lease, run)
+            run_finished = True
+            store.save(
+                final_session,
+                final_session.session_artifact_id,
+                "runtime-lock-session",
+            )
+            return ArtifactReference(
+                artifact_id=run.run_id,
+                artifact_type="runtime-lock-run",
+                uri=store.uri(run.run_id, "runtime-lock-run"),
+                summary={
+                    "session_id": session_id,
+                    "adapter_id": run.adapter_id,
+                    "runtime": analysis.runtime,
+                    "measurement_semantics": run.measurement_semantics,
+                    "runtime_lock_evidence_id": run.runtime_lock_evidence_id,
+                    "runtime_lock_analysis_id": run.runtime_lock_analysis_id,
+                    "runtime_lock_verification_id": run.runtime_lock_verification_id,
+                    "private_source_replay_status": private_verification.verification_status,
+                    "quality_status": run.quality_status,
+                    "event_count": run.event_count,
+                    "evidence_bytes": run.evidence_bytes,
+                    "target_pid": launch_result.target_pid,
+                    "target_uid": launch_result.target_uid,
+                    "exit_code": launch_result.exit_code,
+                    "session_state": final_session.state,
+                },
+            )
+        except Exception:
+            operation_failed = True
+            if lease is not None and not run_finished:
+                with suppress(PerfLensError):
+                    terminal = runtime.fail_run(
+                        session_id,
+                        lease,
+                        actual_active_seconds=time.monotonic() - started_monotonic,
+                        actual_evidence_bytes=actual_evidence_bytes,
+                        actual_exact_events=actual_exact_events,
+                        reason=failure_reason,
+                    )
+                    store.save(
+                        terminal,
+                        terminal.session_artifact_id,
+                        "runtime-lock-session",
+                    )
+            elif lease is None:
+                with suppress(PerfLensError):
+                    terminal = runtime.revoke(session_id)
+                    store.save(
+                        terminal,
+                        terminal.session_artifact_id,
+                        "runtime-lock-session",
+                    )
+            raise
+        finally:
+            if (
+                operation_failed
+                and retain_private_stream_on_failure
+                and pinned is not None
+                and runtime_lock_native_private_root is not None
+            ):
+                try:
+                    _retain_native_runtime_lock_stream(
+                        pinned,
+                        private_root=runtime_lock_native_private_root,
+                        max_retained_bytes=private_retention_quota_bytes,
+                    )
+                    private_stream_retained = True
+                    cleanup_attempted = True
+                except PerfLensError:
+                    # Preserve the original collection error. A rejected retention
+                    # attempt falls through to identity-checked removal below so the
+                    # private quota cannot grow without a bound.
+                    pass
+            if pinned is not None:
+                os.close(pinned.descriptor)
+            if (
+                launch_result is not None
+                and runtime_lock_native_private_root is not None
+                and not cleanup_attempted
+                and not private_stream_removed
+                and not private_stream_retained
+            ):
+                try:
+                    _remove_native_runtime_lock_stream(
+                        launch_result.stream_path,
+                        private_root=runtime_lock_native_private_root,
+                        expected_metadata=(pinned.metadata if pinned is not None else None),
+                    )
+                except PerfLensError:
+                    if not operation_failed:
+                        raise
 
     @server.tool(
         name="import_runtime_lock_evidence",
@@ -3584,6 +4145,20 @@ def _validate_runtime_lock_preview_policy(
             "Runtime Lock Adapter or semantics scope exceeds project policy",
             recoverable=True,
         )
+    if target_scope in {"managed_temporary_container", "docker_optimization"} and (
+        "native_pthread" in allowed_adapters
+    ):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "runtime_lock_authorization",
+            "Active Native pthread collection for managed Docker targets is not implemented "
+            "before the separately reviewed Stage 7 integration",
+            recoverable=True,
+            suggested_actions=(
+                "Use host_launched_workload for active Native pthread collection.",
+                "Use generic_ndjson_import for a separately authorized controlled import.",
+            ),
+        )
     covered_semantics: set[str] = set()
     for adapter_id in allowed_adapters:
         adapter = policy.adapter_policy(adapter_id)
@@ -3608,6 +4183,508 @@ def _validate_runtime_lock_preview_policy(
             "Runtime Lock semantics are not covered by the selected Adapter policies",
             recoverable=True,
         )
+
+
+def _require_runtime_lock_adapter_capability(
+    inspection: RuntimeLockCapabilityInspection,
+    *,
+    adapter_id: RuntimeLockAdapterId,
+    allowed_semantics: tuple[Literal["exact", "thresholded", "sampled", "cumulative"], ...],
+) -> None:
+    reference = next(
+        (item for item in inspection.capability.adapters if item.adapter_id == adapter_id),
+        None,
+    )
+    if (
+        reference is None
+        or reference.availability not in {"available", "partial"}
+        or any(item not in reference.supported_semantics for item in allowed_semantics)
+    ):
+        raise PerfLensError(
+            ErrorCode.EXTERNAL_TOOL_FAILED,
+            "runtime_lock_capability",
+            "The selected Runtime Lock Adapter is unavailable for this semantics scope",
+            recoverable=True,
+            details={"adapter_id": adapter_id},
+        )
+
+
+def _runtime_lock_project_executable(project_root: Path, value: str) -> Path:
+    if not value or "\x00" in value or "\\" in value or len(value.encode("utf-8")) > 4096:
+        raise _runtime_lock_native_error("Native pthread executable path is invalid")
+    relative = PurePosixPath(value)
+    if (
+        relative.is_absolute()
+        or str(relative) != value
+        or relative in {PurePosixPath("."), PurePosixPath("..")}
+        or ".." in relative.parts
+    ):
+        raise _runtime_lock_native_error(
+            "Native pthread executable must be one normalized project-relative path"
+        )
+    return project_root.joinpath(*relative.parts)
+
+
+def _validate_native_runtime_lock_session(
+    session: RuntimeLockSessionArtifact,
+    preview: RuntimeLockSessionPreviewArtifact,
+    policy: RuntimeLockProjectPolicy,
+    *,
+    measurement_semantics: Literal["exact", "thresholded"],
+    duration_seconds: int,
+    max_events: int,
+) -> RuntimeLockWorkloadBinding:
+    workload = preview.workload
+    if (
+        session.state != "active"
+        or session.target_scope != "host_launched_workload"
+        or preview.target_scope != session.target_scope
+        or preview.content_sha256 != session.preview_content_sha256
+        or preview.runtime_lock_config_sha256 != policy.sha256
+        or session.runtime_lock_config_sha256 != policy.sha256
+        or session.allowed_adapters != ("native_pthread",)
+        or workload is None
+        or workload.adapter_id != "native_pthread"
+        or workload.workload_kind != "native_elf"
+        or measurement_semantics not in session.allowed_semantics
+        or isinstance(duration_seconds, bool)
+        or not 1 <= duration_seconds <= session.budget.max_collection_duration_seconds
+        or isinstance(max_events, bool)
+        or not 1 <= max_events <= session.budget.max_exact_events
+        or (
+            measurement_semantics == "exact"
+            and duration_seconds > session.budget.max_exact_duration_seconds
+        )
+    ):
+        raise _runtime_lock_native_error(
+            "Native pthread collection is outside the authorized Runtime Lock Session"
+        )
+    _validate_runtime_lock_preview_policy(
+        policy,
+        target_scope="host_launched_workload",
+        allowed_adapters=("native_pthread",),
+        allowed_semantics=(measurement_semantics,),
+    )
+    adapter_policy = policy.adapter_policy("native_pthread")
+    if measurement_semantics == "exact" and not adapter_policy.exact_enabled:
+        raise _runtime_lock_native_error("Native pthread exact collection is disabled by policy")
+    return workload
+
+
+def _runtime_lock_native_operation_identity(
+    session: RuntimeLockSessionArtifact,
+    target_identity_sha256: str,
+    measurement_semantics: str,
+    duration_seconds: int,
+    max_events: int,
+) -> str:
+    material = "\0".join(
+        (
+            "perflens-runtime-lock-native-operation-v1",
+            session.session_id,
+            str(session.revision),
+            str(session.workload_runs_used + 1),
+            target_identity_sha256,
+            measurement_semantics,
+            str(duration_seconds),
+            str(max_events),
+        )
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _pin_native_runtime_lock_stream(
+    result: NativeLaunchResult,
+    *,
+    private_root: Path,
+    max_source_bytes: int,
+) -> _PinnedRuntimeLockImport:
+    root = private_root.resolve(strict=True)
+    path = result.stream_path
+    name = path.name
+    token = name.removeprefix("native-pthread-").removesuffix(".ndjson")
+    if (
+        not path.is_absolute()
+        or path.parent != root
+        or not name.startswith("native-pthread-")
+        or not name.endswith(".ndjson")
+        or len(token) != 20
+        or any(character not in "0123456789abcdef" for character in token)
+        or path.is_symlink()
+    ):
+        raise _runtime_lock_native_error(
+            "Native pthread private stream path is outside its fixed private root"
+        )
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+        )
+        metadata = os.fstat(descriptor)
+        current = path.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or not 1 <= metadata.st_size <= max_source_bytes
+            or metadata.st_size != result.stream_size
+            or _runtime_lock_file_identity(metadata) != _runtime_lock_file_identity(current)
+        ):
+            raise _runtime_lock_native_error(
+                "Native pthread private stream owner, type, mode, size, or identity is unsafe"
+            )
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 1 << 20):
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        if (
+            _runtime_lock_file_identity(metadata) != _runtime_lock_file_identity(after)
+            or digest.hexdigest() != result.stream_sha256
+        ):
+            raise _runtime_lock_native_error(
+                "Native pthread private stream differs from its launcher receipt"
+            )
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        return _PinnedRuntimeLockImport(
+            descriptor=descriptor,
+            path=path,
+            project_relative_path=name,
+            source_sha256=digest.hexdigest(),
+            metadata=metadata,
+        )
+    except PerfLensError:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+    except OSError as exc:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise _runtime_lock_native_error(
+            "Native pthread private stream cannot be opened safely"
+        ) from exc
+
+
+def _assert_native_runtime_lock_evidence_identity(
+    evidence: RuntimeLockEvidenceArtifact,
+    *,
+    receipt_source_sha256: str,
+    receipt_source_bytes: int,
+    launch_result: NativeLaunchResult,
+    expected_target_identity_sha256: str,
+    measurement_semantics: Literal["exact", "thresholded"],
+    duration_threshold_ns: int | None,
+    max_events: int,
+) -> tuple[str, ...]:
+    target = evidence.target
+    source = evidence.source
+    events = evidence.events
+    evidence_tids = set(target.observed_target_tids)
+    launch_tids = set(launch_result.observed_tids)
+    if (
+        launch_result.target_identity_sha256 != expected_target_identity_sha256
+        or launch_result.target_start_ticks is None
+        or target.target_kind != "host"
+        or target.target_pid != launch_result.target_pid
+        or target.target_uid != launch_result.target_uid
+        or target.target_start_time_ticks != launch_result.target_start_ticks
+        or launch_result.target_uid != os.geteuid()
+        or launch_result.target_pid not in evidence_tids
+        or launch_result.target_pid not in launch_tids
+        or source.adapter_id != "native-pthread"
+        or source.measurement_semantics != measurement_semantics
+        or source.duration_threshold_ns != duration_threshold_ns
+        or source.source_sha256 != receipt_source_sha256
+        or source.source_bytes != receipt_source_bytes
+        or receipt_source_sha256 != launch_result.stream_sha256
+        or receipt_source_bytes != launch_result.stream_size
+        or len(events) > max_events
+    ):
+        raise _runtime_lock_native_error(
+            "Native pthread target, stream, semantics, or TID identity changed during collection"
+        )
+    context_ids = {context.context_id for context in evidence.execution_contexts}
+    if any(
+        context.target_pid != launch_result.target_pid
+        or (context.target_tid is not None and context.target_tid not in evidence_tids)
+        for context in evidence.execution_contexts
+    ) or any(event.execution_context_id not in context_ids for event in evidence.events):
+        raise _runtime_lock_native_error(
+            "Native pthread execution context escaped the bound target process"
+        )
+    transient_tids = evidence_tids - launch_tids
+    if transient_tids:
+        return (
+            "Independent TID polling was partial: some evidence TIDs were shorter-lived than "
+            "the procfs polling window; "
+            "PID, UID, start time, probe stream, and execution-context binding passed, but the "
+            "independent TID coverage check is partial.",
+        )
+    return ()
+
+
+def _remove_native_runtime_lock_stream(
+    path: Path,
+    *,
+    private_root: Path,
+    expected_metadata: os.stat_result | None,
+) -> None:
+    root = private_root.resolve(strict=True)
+    if not path.is_absolute() or path.parent != root:
+        raise _runtime_lock_native_error(
+            "Native pthread cleanup refused a stream outside its fixed private root"
+        )
+    try:
+        current = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise _runtime_lock_native_error(
+            "Native pthread private stream cannot be inspected for cleanup"
+        ) from exc
+    if (
+        path.is_symlink()
+        or not stat.S_ISREG(current.st_mode)
+        or current.st_uid != os.geteuid()
+        or current.st_nlink != 1
+        or stat.S_IMODE(current.st_mode) != 0o600
+        or (
+            expected_metadata is not None
+            and _runtime_lock_file_identity(current)
+            != _runtime_lock_file_identity(expected_metadata)
+        )
+    ):
+        raise _runtime_lock_native_error(
+            "Native pthread private stream identity changed before cleanup"
+        )
+    try:
+        root_descriptor = os.open(root, os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY)
+        try:
+            os.unlink(path.name, dir_fd=root_descriptor)
+        finally:
+            os.close(root_descriptor)
+    except OSError as exc:
+        raise _runtime_lock_native_error(
+            "Native pthread private stream could not be removed safely"
+        ) from exc
+
+
+def _retain_native_runtime_lock_stream(
+    pinned: _PinnedRuntimeLockImport,
+    *,
+    private_root: Path,
+    max_retained_bytes: int,
+) -> Path:
+    """Quarantine one verified failed stream under a hash-bound private name."""
+
+    root = _validated_native_runtime_lock_private_root(private_root)
+    if max_retained_bytes <= 0:
+        raise _runtime_lock_native_retention_limit("Native pthread retention quota is invalid")
+    path = pinned.path
+    if not path.is_absolute() or path.parent != root or path.is_symlink():
+        raise _runtime_lock_native_error(
+            "Native pthread retention refused a stream outside its fixed private root"
+        )
+    try:
+        current = path.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise _runtime_lock_native_error(
+            "Native pthread retained stream cannot be inspected safely"
+        ) from exc
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or current.st_uid != os.geteuid()
+        or current.st_nlink != 1
+        or stat.S_IMODE(current.st_mode) != 0o600
+        or _runtime_lock_file_identity(current) != _runtime_lock_file_identity(pinned.metadata)
+        or len(pinned.source_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in pinned.source_sha256)
+    ):
+        raise _runtime_lock_native_error(
+            "Native pthread retained stream identity or hash binding is unsafe"
+        )
+    retained_bytes = _native_runtime_lock_retained_bytes(root, current_path=path)
+    if retained_bytes + current.st_size > max_retained_bytes:
+        raise _runtime_lock_native_retention_limit(
+            "Native pthread retained diagnostics exceed the private Session quota"
+        )
+
+    root_descriptor = -1
+    retained_name = ""
+    try:
+        root_descriptor = os.open(root, os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY)
+        for _ in range(8):
+            retained_name = (
+                f".retained-native-pthread-{pinned.source_sha256}-{os.urandom(8).hex()}.ndjson"
+            )
+            try:
+                os.link(
+                    path.name,
+                    retained_name,
+                    src_dir_fd=root_descriptor,
+                    dst_dir_fd=root_descriptor,
+                    follow_symlinks=False,
+                )
+                break
+            except FileExistsError:
+                continue
+        else:
+            raise _runtime_lock_native_error(
+                "Native pthread retained diagnostic name capacity is exhausted"
+            )
+        try:
+            os.unlink(path.name, dir_fd=root_descriptor)
+        except OSError:
+            with suppress(OSError):
+                os.unlink(retained_name, dir_fd=root_descriptor)
+            raise
+        retained = os.stat(retained_name, dir_fd=root_descriptor, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(retained.st_mode)
+            or retained.st_uid != os.geteuid()
+            or retained.st_nlink != 1
+            or retained.st_dev != current.st_dev
+            or retained.st_ino != current.st_ino
+            or retained.st_size != current.st_size
+            or stat.S_IMODE(retained.st_mode) != 0o600
+        ):
+            raise _runtime_lock_native_error(
+                "Native pthread retained diagnostic changed during quarantine"
+            )
+        return root / retained_name
+    except PerfLensError:
+        raise
+    except OSError as exc:
+        raise _runtime_lock_native_error(
+            "Native pthread diagnostic could not be retained safely"
+        ) from exc
+    finally:
+        if root_descriptor >= 0:
+            os.close(root_descriptor)
+
+
+def _native_runtime_lock_retained_bytes(root: Path, *, current_path: Path) -> int:
+    total = 0
+    try:
+        entries = tuple(os.scandir(root))
+    except OSError as exc:
+        raise _runtime_lock_native_error(
+            "Native pthread retained diagnostic quota cannot be inspected"
+        ) from exc
+    for entry in entries:
+        path = Path(entry.path)
+        if path == current_path:
+            continue
+        if not _is_native_runtime_lock_retained_name(entry.name):
+            raise _runtime_lock_native_error(
+                "Native pthread private root contains an unexpected diagnostic entry"
+            )
+        try:
+            metadata = entry.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise _runtime_lock_native_error(
+                "Native pthread retained diagnostic cannot be inspected"
+            ) from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise _runtime_lock_native_error(
+                "Native pthread retained diagnostic identity is unsafe"
+            )
+        total += metadata.st_size
+    return total
+
+
+def _cleanup_native_runtime_lock_retained_streams(private_root: Path) -> None:
+    """Remove only verified retained diagnostics during an orderly server shutdown."""
+
+    root = _validated_native_runtime_lock_private_root(private_root)
+    root_descriptor = -1
+    try:
+        root_descriptor = os.open(root, os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY)
+        for entry in tuple(os.scandir(root)):
+            if not _is_native_runtime_lock_retained_name(entry.name):
+                raise _runtime_lock_native_error(
+                    "Native pthread private root contains an unexpected cleanup entry"
+                )
+            metadata = entry.stat(follow_symlinks=False)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_nlink != 1
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+            ):
+                raise _runtime_lock_native_error(
+                    "Native pthread retained diagnostic is unsafe for cleanup"
+                )
+            os.unlink(entry.name, dir_fd=root_descriptor)
+    except PerfLensError:
+        raise
+    except OSError as exc:
+        raise _runtime_lock_native_error(
+            "Native pthread retained diagnostics could not be cleaned safely"
+        ) from exc
+    finally:
+        if root_descriptor >= 0:
+            os.close(root_descriptor)
+
+
+def _validated_native_runtime_lock_private_root(private_root: Path) -> Path:
+    try:
+        root = private_root.resolve(strict=True)
+        metadata = root.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise _runtime_lock_native_error(
+            "Native pthread private diagnostic root is unavailable"
+        ) from exc
+    if (
+        root != private_root
+        or private_root.is_symlink()
+        or not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise _runtime_lock_native_error(
+            "Native pthread private diagnostic root identity is unsafe"
+        )
+    return root
+
+
+def _is_native_runtime_lock_retained_name(name: str) -> bool:
+    prefix = ".retained-native-pthread-"
+    suffix = ".ndjson"
+    if not name.startswith(prefix) or not name.endswith(suffix):
+        return False
+    payload = name[len(prefix) : -len(suffix)]
+    digest, separator, nonce = payload.partition("-")
+    return bool(
+        separator
+        and len(digest) == 64
+        and len(nonce) == 16
+        and all(character in "0123456789abcdef" for character in digest + nonce)
+    )
+
+
+def _runtime_lock_native_retention_limit(message: str) -> PerfLensError:
+    return PerfLensError(
+        ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+        "runtime_lock_collection",
+        message,
+        recoverable=True,
+    )
+
+
+def _runtime_lock_native_error(message: str) -> PerfLensError:
+    return PerfLensError(
+        ErrorCode.PATH_SAFETY_VIOLATION,
+        "runtime_lock_collection",
+        message,
+        recoverable=True,
+    )
 
 
 def _validate_runtime_lock_import_session(

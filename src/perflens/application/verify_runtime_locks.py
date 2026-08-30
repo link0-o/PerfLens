@@ -91,7 +91,7 @@ def _verify_private_source_and_replay(
     evidence: public.RuntimeLockEvidenceArtifact,
     private_source_stream: BinaryIO,
     *,
-    replay_supported: bool,
+    replay_source_format: str | None,
 ) -> tuple[list[str], VerificationStatus, str]:
     """Hash retained source bytes before any format-specific conversion replay."""
 
@@ -125,22 +125,35 @@ def _verify_private_source_and_replay(
                     "failed",
                     "Private source conversion replay was blocked by an invalid source receipt.",
                 )
-            if not replay_supported:
+            if replay_source_format is None:
                 return (
                     failures,
                     "skipped",
                     "This source format has no Stage 1 private converter replay implementation.",
                 )
 
-            from perflens.runtime_locks import import_runtime_lock_ndjson
-
             retained.seek(0)
-            replayed_evidence = import_runtime_lock_ndjson(
-                cast(BinaryIO, retained),
-                created_at=evidence.created_at,
-                limits=evidence.limits,
-            )
-            if replayed_evidence != evidence:
+            retained_stream = cast(BinaryIO, retained)
+            if replay_source_format == "perflens_runtime_lock_ndjson_v1":
+                from perflens.runtime_locks import import_runtime_lock_ndjson
+
+                replay_matches = (
+                    import_runtime_lock_ndjson(
+                        retained_stream,
+                        created_at=evidence.created_at,
+                        limits=evidence.limits,
+                    )
+                    == evidence
+                )
+            elif replay_source_format == "native_interposer_ndjson_v1":
+                from perflens.runtime_locks.native_pthread_converter import (
+                    replay_native_pthread_probe,
+                )
+
+                replay_matches = replay_native_pthread_probe(evidence, retained_stream)
+            else:  # pragma: no cover - caller admits only registered formats
+                raise AssertionError("unregistered Runtime Lock replay source format")
+            if not replay_matches:
                 return (
                     failures,
                     "failed",
@@ -176,9 +189,12 @@ def verify_runtime_lock_analysis_artifact(
         for failure in evidence_failures
         if "fingerprint" in failure or "content" in failure or "source exceeds" in failure
     ]
-    source_replay_supported = (
-        evidence.schema_version == "1.1"
-        and evidence.source.source_format == "perflens_runtime_lock_ndjson_v1"
+    source_replay_format = (
+        evidence.source.source_format
+        if evidence.schema_version == "1.1"
+        and evidence.source.source_format
+        in {"perflens_runtime_lock_ndjson_v1", "native_interposer_ndjson_v1"}
+        else None
     )
     source_conversion_status: VerificationStatus = "skipped"
     source_conversion_detail = "Private source conversion replay was unavailable."
@@ -187,7 +203,7 @@ def verify_runtime_lock_analysis_artifact(
             _verify_private_source_and_replay(
                 evidence,
                 private_source_stream,
-                replay_supported=source_replay_supported,
+                replay_source_format=source_replay_format,
             )
         )
         source_failures.extend(raw_failures)
@@ -1577,7 +1593,15 @@ def _expected_coverage(page: domain.RuntimeProjectionPage) -> dict[str, int]:
 def _public_projection_rows(
     rows: tuple[public.RuntimeProjectionMetrics, ...],
 ) -> tuple[dict[str, object], ...]:
-    return tuple(row.model_dump(mode="json", exclude_none=True) for row in rows)
+    projected: list[dict[str, object]] = []
+    for row in rows:
+        payload = row.model_dump(mode="json", exclude_none=True)
+        if isinstance(row, public.RuntimeLockAggregate):
+            payload["lock_id"] = row.lock_id
+        if isinstance(row, public.RuntimeCallPathAggregate):
+            payload["stack_id"] = row.stack_id
+        projected.append(payload)
+    return tuple(projected)
 
 
 def _analysis_totals(

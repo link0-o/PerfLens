@@ -68,6 +68,76 @@
       },
       "title": "RuntimeLockSessionBudget",
       "type": "object"
+    },
+    "RuntimeLockWorkloadBinding": {
+      "additionalProperties": false,
+      "description": "Content identity for one explicitly reviewed project workload.\n\nPaths remain project-relative and the argument vector is shown in the\nauthorization Preview. Environment variables, absolute host paths and\ncredentials are intentionally absent.",
+      "properties": {
+        "adapter_id": {
+          "enum": [
+            "native_pthread",
+            "java_jfr",
+            "cpython_threading",
+            "go_pprof",
+            "generic_ndjson_import"
+          ],
+          "title": "Adapter Id",
+          "type": "string"
+        },
+        "arguments": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Arguments",
+          "type": "array"
+        },
+        "program": {
+          "title": "Program",
+          "type": "string"
+        },
+        "program_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Program Sha256",
+          "type": "string"
+        },
+        "program_size": {
+          "exclusiveMinimum": 0,
+          "maximum": 1073741824,
+          "title": "Program Size",
+          "type": "integer"
+        },
+        "working_directory": {
+          "default": ".",
+          "title": "Working Directory",
+          "type": "string"
+        },
+        "workload_identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Workload Identity Sha256",
+          "type": "string"
+        },
+        "workload_kind": {
+          "enum": [
+            "native_elf",
+            "java_archive",
+            "python_script",
+            "go_elf"
+          ],
+          "title": "Workload Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "adapter_id",
+        "workload_kind",
+        "program",
+        "program_sha256",
+        "program_size",
+        "workload_identity_sha256"
+      ],
+      "title": "RuntimeLockWorkloadBinding",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -197,6 +267,17 @@
       },
       "title": "Warnings",
       "type": "array"
+    },
+    "workload": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RuntimeLockWorkloadBinding"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

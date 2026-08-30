@@ -16,8 +16,10 @@ from perflens.contracts.runtime_lock_sessions import (
     RuntimeLockSessionBudget,
     RuntimeLockSessionEndReason,
     RuntimeLockSessionPreviewArtifact,
+    RuntimeLockWorkloadBinding,
     derive_runtime_lock_capability_id,
     derive_runtime_lock_run_id,
+    derive_runtime_lock_workload_identity,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.runtime_locks.session import (
@@ -38,6 +40,7 @@ CONFIG = "4" * 64
 OPERATION = "5" * 64
 TARGET = "6" * 64
 WORKLOAD = "7" * 64
+PROGRAM = "8" * 64
 
 
 @dataclass(slots=True)
@@ -120,6 +123,23 @@ def _preview(
     semantics: tuple[str, ...] = ("exact", "thresholded"),
     created_at: datetime = NOW,
 ):
+    workload = RuntimeLockWorkloadBinding(
+        adapter_id="native_pthread",
+        workload_kind="native_elf",
+        program="build/lock-workload",
+        program_sha256=PROGRAM,
+        program_size=4096,
+        arguments=("--rounds", "10"),
+        workload_identity_sha256=derive_runtime_lock_workload_identity(
+            "native_pthread",
+            "native_elf",
+            "build/lock-workload",
+            PROGRAM,
+            4096,
+            ".",
+            ("--rounds", "10"),
+        ),
+    )
     return build_runtime_lock_session_preview(
         capability or _capability(),
         client_connection_identity_sha256=CLIENT,
@@ -127,6 +147,7 @@ def _preview(
         target_scope="host_launched_workload",
         allowed_adapters=adapters,  # type: ignore[arg-type]
         allowed_semantics=semantics,  # type: ignore[arg-type]
+        workload=workload,
         budget=budget,
         planned_actions=("Launch one authorized workload and collect Runtime Lock evidence.",),
         created_at=created_at,
@@ -294,6 +315,22 @@ def test_preview_rejects_unavailable_adapter_and_unsupported_semantics() -> None
             allowed_adapters=("native_pthread",),
             allowed_semantics=("exact",),
             import_roots=("imports",),
+            workload=RuntimeLockWorkloadBinding(
+                adapter_id="native_pthread",
+                workload_kind="native_elf",
+                program="build/lock-workload",
+                program_sha256=PROGRAM,
+                program_size=4096,
+                workload_identity_sha256=derive_runtime_lock_workload_identity(
+                    "native_pthread",
+                    "native_elf",
+                    "build/lock-workload",
+                    PROGRAM,
+                    4096,
+                    ".",
+                    (),
+                ),
+            ),
             planned_actions=("Collect one bounded workload.",),
             created_at=NOW,
         )
@@ -690,3 +727,45 @@ def test_runtime_binds_preview_to_connection_and_revokes_on_close() -> None:
     assert revoked[0].state == "revoked"
     with pytest.raises(PerfLensError, match="runtime is closed"):
         runtime.snapshot(session.session_id)
+
+
+def test_runtime_rejects_a_run_for_a_different_preview_workload() -> None:
+    clock = _Clock()
+    runtime = RuntimeLockSessionRuntime(
+        project_identity_sha256=PROJECT,
+        project_policy_sha256=POLICY,
+        runtime_lock_config_sha256=CONFIG,
+        client_connection_identity_sha256=CLIENT,
+        wall_clock=clock.wall_now,
+        monotonic_clock=clock.monotonic_now,
+    )
+    workload = _preview().workload
+    assert workload is not None
+    preview = runtime.preview(
+        _capability(),
+        target_scope="host_launched_workload",
+        allowed_adapters=("native_pthread",),
+        allowed_semantics=("exact",),
+        workload=workload,
+        planned_actions=("Launch one exact Native pthread workload.",),
+    )
+    session = runtime.authorize(
+        preview_id=preview.preview_id,
+        preview_content_sha256=preview.content_sha256,
+        authorization_summary_sha256=preview.authorization_summary_sha256,
+        explicit_authorization=EXPLICIT_RUNTIME_LOCK_SESSION_AUTHORIZATION,
+    )
+
+    with pytest.raises(PerfLensError, match="differs from its authorized Preview"):
+        runtime.begin_run(
+            session.session_id,
+            adapter_id="native_pthread",
+            measurement_semantics="exact",
+            operation_identity_sha256=OPERATION,
+            target_identity_sha256=TARGET,
+            workload_identity_sha256="f" * 64,
+            reserve_active_seconds=3,
+            reserve_evidence_bytes=1024,
+            reserve_exact_events=10,
+        )
+    assert runtime.snapshot(session.session_id).workload_runs_used == 0

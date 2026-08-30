@@ -457,6 +457,7 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "inspect_runtime_lock_capability",
                 "preview_runtime_lock_session",
                 "authorize_runtime_lock_session",
+                "collect_runtime_lock_evidence",
                 "import_runtime_lock_evidence",
                 "revoke_runtime_lock_session",
                 "inspect_docker_capability",
@@ -669,6 +670,17 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["import_runtime_lock_evidence"].meta == {
                 "perflens/permission": "RUNTIME_LOCK_CONTROLLED_IMPORT"
             }
+            assert tools["collect_runtime_lock_evidence"].meta == {
+                "perflens/permission": "RUNTIME_LOCK_WORKLOAD_EXECUTION"
+            }
+            native_collection = tools["collect_runtime_lock_evidence"].input_schema["properties"]
+            assert not {
+                "executable",
+                "arguments",
+                "environment",
+                "probe_path",
+                "output_path",
+            }.intersection(native_collection)
             assert tools["revoke_runtime_lock_session"].meta == {
                 "perflens/permission": "RUNTIME_LOCK_AUTHORIZATION"
             }
@@ -1001,9 +1013,7 @@ def test_runtime_lock_preview_authorize_and_revoke_are_content_bound(
             assert capability["status"] == "available"
             adapters = {item["adapter_id"]: item for item in capability["adapters"]}
             assert adapters["generic_ndjson_import"]["availability"] == "available"
-            assert "controlled NDJSON import" in adapters["generic_ndjson_import"][
-                "limitations"
-            ][0]
+            assert "controlled NDJSON import" in adapters["generic_ndjson_import"]["limitations"][0]
             assert adapters["native_pthread"]["availability"] == "unavailable"
 
             previewed = await client.call_tool(
@@ -1271,12 +1281,8 @@ def test_runtime_lock_controlled_import_rejects_symlink_and_terminates_session(
                 {
                     "preview_id": preview["preview_id"],
                     "preview_content_sha256": preview["content_sha256"],
-                    "authorization_summary_sha256": preview[
-                        "authorization_summary_sha256"
-                    ],
-                    "authorization": (
-                        "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"
-                    ),
+                    "authorization_summary_sha256": preview["authorization_summary_sha256"],
+                    "authorization": ("I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"),
                 },
             )
             session_id = cast(str, _structured(authorized)["session_id"])

@@ -24,6 +24,7 @@ from perflens.contracts.runtime_lock_sessions import (
     RuntimeLockSessionEndReason,
     RuntimeLockSessionPreviewArtifact,
     RuntimeLockTargetScope,
+    RuntimeLockWorkloadBinding,
     derive_runtime_lock_preview_id,
     derive_runtime_lock_session_artifact_id,
 )
@@ -685,6 +686,7 @@ class RuntimeLockSessionRuntime:
         allowed_adapters: tuple[RuntimeLockAdapterId, ...],
         allowed_semantics: tuple[MeasurementSemantics, ...],
         import_roots: tuple[str, ...] = (),
+        workload: RuntimeLockWorkloadBinding | None = None,
         budget: RuntimeLockSessionBudget | None = None,
         planned_actions: tuple[str, ...],
         warnings: tuple[str, ...] = (),
@@ -714,6 +716,7 @@ class RuntimeLockSessionRuntime:
                 allowed_adapters=allowed_adapters,
                 allowed_semantics=allowed_semantics,
                 import_roots=import_roots,
+                workload=workload,
                 budget=budget,
                 planned_actions=planned_actions,
                 warnings=warnings,
@@ -773,6 +776,14 @@ class RuntimeLockSessionRuntime:
     ) -> RuntimeLockRunLease:
         with self._lock:
             session = self._require_session(session_id)
+            workload = session.pending.preview.workload
+            if workload is not None and not hmac.compare_digest(
+                workload_identity_sha256,
+                workload.workload_identity_sha256,
+            ):
+                raise _authorization_error(
+                    "Runtime Lock workload identity differs from its authorized Preview"
+                )
             return self._authority.begin_run(
                 session.access,
                 project_identity_sha256=self._project_identity,
@@ -902,6 +913,7 @@ def build_runtime_lock_session_preview(
     allowed_adapters: tuple[RuntimeLockAdapterId, ...],
     allowed_semantics: tuple[MeasurementSemantics, ...],
     import_roots: tuple[str, ...] = (),
+    workload: RuntimeLockWorkloadBinding | None = None,
     budget: RuntimeLockSessionBudget | None = None,
     planned_actions: tuple[str, ...],
     warnings: tuple[str, ...] = (),
@@ -945,6 +957,7 @@ def build_runtime_lock_session_preview(
         "allowed_adapters": adapters,
         "allowed_semantics": semantics,
         "import_roots": tuple(sorted(import_roots)),
+        "workload": workload,
         "budget": budget or RuntimeLockSessionBudget(),
         "planned_actions": planned_actions,
         "warnings": warnings,

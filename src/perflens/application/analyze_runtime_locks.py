@@ -372,7 +372,7 @@ def _identify_analysis(
     )
 
     fingerprint = compute_runtime_lock_analysis_fingerprint(provisional, evidence)
-    data = provisional.model_dump(mode="json", exclude_none=True)
+    data = _identity_payload(provisional)
     data.update(
         {
             "runtime_lock_analysis_id": f"runtime-lock-analysis-{fingerprint[:16]}",
@@ -387,7 +387,7 @@ def _identify_analysis(
         digest = compute_runtime_lock_analysis_content_sha256(candidate)
         final = public.RuntimeLockAnalysisArtifact.model_validate(
             {
-                **candidate.model_dump(mode="json", exclude_none=True),
+                **_identity_payload(candidate),
                 "content_sha256": digest,
             }
         )
@@ -407,3 +407,26 @@ def _identify_analysis(
         },
         suggested_actions=("Reduce the exported Runtime Lock projection limit and collect again.",),
     )
+
+
+def _identity_payload(
+    analysis: public.RuntimeLockAnalysisArtifact,
+) -> dict[str, object]:
+    """Preserve required nullable projection keys in canonical analysis payloads."""
+
+    payload = analysis.model_dump(mode="json", exclude_none=True)
+    lock_rows = payload.get("aggregates")
+    if isinstance(lock_rows, list):
+        typed_lock_rows = cast(list[dict[str, object]], lock_rows)
+        for dumped, source in zip(typed_lock_rows, analysis.aggregates, strict=True):
+            dumped["lock_id"] = source.lock_id
+    call_path_rows = payload.get("call_path_aggregates")
+    if isinstance(call_path_rows, list):
+        typed_call_path_rows = cast(list[dict[str, object]], call_path_rows)
+        for dumped, source in zip(
+            typed_call_path_rows,
+            analysis.call_path_aggregates,
+            strict=True,
+        ):
+            dumped["stack_id"] = source.stack_id
+    return payload

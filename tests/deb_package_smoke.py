@@ -8,12 +8,25 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
+from io import BytesIO
 from pathlib import Path
+from typing import Any, cast
+
+from elftools.elf.elffile import ELFFile
+from elftools.elf.sections import SymbolTableSection
 
 from perflens import __version__
 from perflens.distribution.debian import DEBIAN_PACKAGE_REVISION
 from perflens.docker.elf import validate_self_contained_elf
+from perflens.runtime_locks.native_pthread_abi import (
+    NATIVE_PTHREAD_PROBE_ABI_VERSION,
+    NATIVE_PTHREAD_PROBE_EXPORTS,
+    NATIVE_PTHREAD_PROBE_NEEDED_LIBRARIES,
+    NATIVE_PTHREAD_PROBE_PROTOCOL_VERSION,
+    NATIVE_PTHREAD_WRAPPER_LOCK_KINDS,
+)
 
 
 def main() -> None:
@@ -51,6 +64,7 @@ def main() -> None:
     assert _field(dpkg_deb, collector_package, "Version") == package_version
     main_dependencies = _field(dpkg_deb, main_package, "Depends")
     assert "docker" not in main_dependencies.lower()
+    assert "libc6 (>= 2.36)" in main_dependencies
     assert any(
         f"python3 (>= {abi})" in main_dependencies
         and f"python3 (<< 3.{int(abi.removeprefix('3.')) + 1})" in main_dependencies
@@ -83,8 +97,28 @@ def main() -> None:
         packaged_gate = Path("usr/lib/perflens/perflens-container-gate")
         assert (main_root / packaged_gate).is_file()
         assert not (collector_root / packaged_gate).exists()
+        packaged_probe = Path("usr/lib/perflens/libperflens-pthread-probe.so")
+        probe = main_root / packaged_probe
+        assert probe.is_file()
+        assert not probe.is_symlink()
+        assert stat.S_IMODE(probe.stat().st_mode) == 0o644
+        assert not (collector_root / packaged_probe).exists()
+        _assert_root_owned_archive_file(
+            dpkg_deb,
+            main_package,
+            packaged_probe,
+            expected_mode=0o644,
+        )
+        _assert_pthread_probe_hardening(probe)
         postinst_text = (main_control / "postinst").read_text(encoding="utf-8")
-        for forbidden in ("docker", "systemctl", "usermod", "groupadd", "/etc/perflens"):
+        for forbidden in (
+            "docker",
+            "systemctl",
+            "usermod",
+            "groupadd",
+            "setcap",
+            "/etc/perflens",
+        ):
             assert forbidden not in postinst_text
 
         binary_directory = root / "usr/bin"
@@ -213,6 +247,129 @@ def _assert_shared_libraries(root: Path) -> None:
             text=True,
         )
         assert "not found" not in completed.stdout
+
+
+def _assert_root_owned_archive_file(
+    dpkg_deb: str,
+    package: Path,
+    relative_path: Path,
+    *,
+    expected_mode: int,
+) -> None:
+    completed = subprocess.run(  # noqa: S603 - resolved dpkg-deb and fixed package operation
+        [dpkg_deb, "--fsys-tarfile", str(package)],
+        check=True,
+        capture_output=True,
+    )
+    with tarfile.open(fileobj=BytesIO(completed.stdout), mode="r:") as archive:
+        member = archive.getmember(f"./{relative_path.as_posix()}")
+        assert member.isfile()
+        assert member.uid == 0
+        assert member.gid == 0
+        assert stat.S_IMODE(member.mode) == expected_mode
+        assert not any("capability" in key.lower() for key in member.pax_headers)
+
+
+def _assert_pthread_probe_hardening(probe: Path) -> None:
+    with probe.open("rb") as handle:
+        elf = ELFFile(handle)
+        assert elf.elfclass == 64
+        assert elf.little_endian
+        assert elf["e_machine"] == "EM_X86_64"
+        assert elf["e_type"] == "ET_DYN"
+
+        has_relro = False
+        for segment in elf.iter_segments():
+            segment_type = segment["p_type"]
+            assert segment_type != "PT_INTERP"
+            if segment_type == "PT_GNU_RELRO":
+                has_relro = True
+            if segment_type == "PT_GNU_STACK":
+                assert int(segment["p_flags"]) & 1 == 0
+        assert has_relro
+
+        symbols: dict[str, Any] = {}
+        for section in elf.iter_sections():
+            if isinstance(section, SymbolTableSection) and section.name == ".dynsym":
+                symbols.update(
+                    (symbol.name, symbol)
+                    for symbol in section.iter_symbols()
+                    if symbol.name and symbol["st_shndx"] != "SHN_UNDEF"
+                )
+        assert frozenset(symbols) == NATIVE_PTHREAD_PROBE_EXPORTS
+        for name in NATIVE_PTHREAD_WRAPPER_LOCK_KINDS:
+            symbol = symbols[name]
+            assert symbol["st_info"]["type"] == "STT_FUNC"
+            assert symbol["st_info"]["bind"] == "STB_GLOBAL"
+            assert symbol["st_other"]["visibility"] == "STV_DEFAULT"
+            assert int(symbol["st_value"]) != 0
+            assert int(symbol["st_size"]) != 0
+            assert _elf_symbol_in_executable_load(elf, symbol)
+        abi_symbol = symbols["perflens_pthread_probe_abi_version"]
+        protocol_symbol = symbols["perflens_pthread_probe_protocol_version"]
+        for symbol in (abi_symbol, protocol_symbol):
+            assert symbol["st_info"]["bind"] == "STB_GLOBAL"
+            assert symbol["st_other"]["visibility"] == "STV_DEFAULT"
+        assert (
+            int.from_bytes(_elf_symbol_bytes(elf, abi_symbol, 4), byteorder="little")
+            == NATIVE_PTHREAD_PROBE_ABI_VERSION
+        )
+        assert (
+            _elf_symbol_bytes(elf, protocol_symbol, 4)
+            == NATIVE_PTHREAD_PROBE_PROTOCOL_VERSION.encode("ascii") + b"\x00"
+        )
+
+        dynamic = elf.get_section_by_name(".dynamic")
+        assert dynamic is not None
+        tags = tuple(cast(Any, dynamic).iter_tags())
+        tag_names = {str(tag.entry.d_tag) for tag in tags}
+        needed_libraries = frozenset(
+            str(tag.needed) for tag in tags if str(tag.entry.d_tag) == "DT_NEEDED"
+        )
+        assert needed_libraries == NATIVE_PTHREAD_PROBE_NEEDED_LIBRARIES
+        assert not {"DT_RPATH", "DT_RUNPATH", "DT_TEXTREL"} & tag_names
+        bind_now = (
+            "DT_BIND_NOW" in tag_names
+            or any(str(tag.entry.d_tag) == "DT_FLAGS" and int(tag.entry.d_val) & 8 for tag in tags)
+            or any(
+                str(tag.entry.d_tag) == "DT_FLAGS_1" and int(tag.entry.d_val) & 1 for tag in tags
+            )
+        )
+        assert bind_now
+
+
+def _elf_symbol_in_executable_load(elf: ELFFile, symbol: Any) -> bool:
+    symbol_address = int(symbol["st_value"])
+    symbol_size = int(symbol["st_size"])
+    return any(
+        segment["p_type"] == "PT_LOAD"
+        and int(segment["p_flags"]) & 1 != 0
+        and symbol_address >= int(segment["p_vaddr"])
+        and symbol_address + symbol_size <= int(segment["p_vaddr"]) + int(segment["p_filesz"])
+        for segment in elf.iter_segments()
+    )
+
+
+def _elf_symbol_bytes(elf: ELFFile, symbol: Any, size: int) -> bytes:
+    symbol_address = int(symbol["st_value"])
+    assert int(symbol["st_size"]) >= size
+    for segment in elf.iter_segments():
+        if segment["p_type"] != "PT_LOAD":
+            continue
+        segment_address = int(segment["p_vaddr"])
+        segment_size = int(segment["p_filesz"])
+        relative = symbol_address - segment_address
+        if relative < 0 or relative + size > segment_size:
+            continue
+        position = elf.stream.tell()
+        try:
+            elf.stream.seek(int(segment["p_offset"]) + relative)
+            data = elf.stream.read(size)
+        finally:
+            elf.stream.seek(position)
+        assert len(data) == size
+        return data
+    raise AssertionError("probe ABI marker is not backed by a loadable file segment")
 
 
 def _field(dpkg_deb: str, package: Path, field: str) -> str:

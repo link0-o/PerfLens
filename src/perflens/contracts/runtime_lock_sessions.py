@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
@@ -57,6 +58,25 @@ RuntimeLockSessionEndReason = Literal[
     "target_identity_changed",
     "workload_budget_exhausted",
 ]
+RuntimeLockWorkloadKind = Literal[
+    "native_elf",
+    "java_archive",
+    "python_script",
+    "go_elf",
+]
+
+_SENSITIVE_ARGUMENT = re.compile(
+    r"(?:^|[^A-Za-z0-9_])(?:password|passwd|pwd|token|secret|credentials?|"
+    r"authorization|api[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token|"
+    r"bearer[_-]?token|refresh[_-]?token)\s*(?:=|:\s+)",
+    re.IGNORECASE,
+)
+_SENSITIVE_ARGUMENT_FLAG = re.compile(
+    r"^(?:--?|/)(?:password|passwd|pwd|token|secret|credentials?|authorization|"
+    r"api[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token|"
+    r"bearer[_-]?token|refresh[_-]?token)$",
+    re.IGNORECASE,
+)
 
 
 def _timestamp(value: str, label: str) -> datetime:
@@ -88,6 +108,34 @@ def _relative_paths(values: tuple[str, ...], label: str) -> None:
             or ".." in path.parts
         ):
             raise ValueError(f"{label} must contain normalized project-relative paths")
+
+
+def _relative_path(value: str, label: str, *, allow_dot: bool = False) -> None:
+    path = PurePosixPath(value)
+    if (
+        not value
+        or value.startswith("/")
+        or "\x00" in value
+        or len(value.encode("utf-8")) > 4096
+        or str(path) != value
+        or (value in {".", ".."} and not (allow_dot and value == "."))
+        or ".." in path.parts
+    ):
+        raise ValueError(f"{label} must be a normalized project-relative path")
+
+
+def _workload_arguments(values: tuple[str, ...]) -> None:
+    if len(values) > 128 or sum(len(value.encode("utf-8")) for value in values) > 32 << 10:
+        raise ValueError("Runtime Lock workload arguments exceed their fixed bound")
+    for value in values:
+        if (
+            "\x00" in value
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+            or len(value.encode("utf-8")) > 4096
+            or _SENSITIVE_ARGUMENT.search(value) is not None
+            or _SENSITIVE_ARGUMENT_FLAG.fullmatch(value) is not None
+        ):
+            raise ValueError("Runtime Lock workload argument contains unsafe material")
 
 
 def _derived_id(prefix: str, domain: str, *values: str) -> str:
@@ -185,6 +233,30 @@ def derive_runtime_lock_comparison_id(
     )
 
 
+def derive_runtime_lock_workload_identity(
+    adapter_id: str,
+    workload_kind: str,
+    program: str,
+    program_sha256: str,
+    program_size: int,
+    working_directory: str,
+    arguments: tuple[str, ...],
+) -> str:
+    material = "\0".join(
+        (
+            "perflens-runtime-lock-workload-v1",
+            adapter_id,
+            workload_kind,
+            program,
+            program_sha256,
+            str(program_size),
+            working_directory,
+            *arguments,
+        )
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
 class RuntimeLockSessionBudget(ContractModel):
     max_workload_runs: int = Field(default=6, ge=1, le=6)
     max_active_seconds: int = Field(default=1200, ge=1, le=1200)
@@ -202,6 +274,46 @@ class RuntimeLockSessionBudget(ContractModel):
             raise ValueError("exact runtime-lock duration exceeds collection duration")
         if self.max_artifact_bytes > self.max_evidence_bytes:
             raise ValueError("runtime-lock Artifact limit exceeds Session evidence budget")
+        return self
+
+
+class RuntimeLockWorkloadBinding(ContractModel):
+    """Content identity for one explicitly reviewed project workload.
+
+    Paths remain project-relative and the argument vector is shown in the
+    authorization Preview. Environment variables, absolute host paths and
+    credentials are intentionally absent.
+    """
+
+    adapter_id: RuntimeLockAdapterId
+    workload_kind: RuntimeLockWorkloadKind
+    program: str
+    program_sha256: Sha256
+    program_size: int = Field(gt=0, le=1 << 30)
+    working_directory: str = "."
+    arguments: tuple[str, ...] = ()
+    workload_identity_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_workload(self) -> RuntimeLockWorkloadBinding:
+        _relative_path(self.program, "Runtime Lock workload program")
+        _relative_path(
+            self.working_directory,
+            "Runtime Lock workload directory",
+            allow_dot=True,
+        )
+        _workload_arguments(self.arguments)
+        expected = derive_runtime_lock_workload_identity(
+            self.adapter_id,
+            self.workload_kind,
+            self.program,
+            self.program_sha256,
+            self.program_size,
+            self.working_directory,
+            self.arguments,
+        )
+        if self.workload_identity_sha256 != expected:
+            raise ValueError("Runtime Lock workload identity differs from its content")
         return self
 
 
@@ -275,6 +387,7 @@ class RuntimeLockSessionPreviewArtifact(ContractModel):
     allowed_adapters: tuple[RuntimeLockAdapterId, ...]
     allowed_semantics: tuple[MeasurementSemantics, ...]
     import_roots: tuple[str, ...] = ()
+    workload: RuntimeLockWorkloadBinding | None = None
     budget: RuntimeLockSessionBudget
     planned_actions: tuple[str, ...]
     warnings: tuple[str, ...] = ()
@@ -296,6 +409,17 @@ class RuntimeLockSessionPreviewArtifact(ContractModel):
             raise ValueError("Runtime Lock Preview requires bounded planned actions")
         if self.target_scope == "controlled_import" and not self.import_roots:
             raise ValueError("controlled import requires a reviewed project-relative root")
+        if self.target_scope == "controlled_import" and self.workload is not None:
+            raise ValueError("controlled import cannot carry an executable workload")
+        if self.target_scope == "host_launched_workload":
+            if self.workload is None:
+                raise ValueError("host Runtime Lock Preview requires an exact workload")
+            if self.workload.adapter_id not in self.allowed_adapters:
+                raise ValueError("Runtime Lock workload Adapter is outside Preview scope")
+        if self.target_scope in {"managed_temporary_container", "docker_optimization"} and (
+            self.workload is not None
+        ):
+            raise ValueError("Docker Runtime Lock Preview must use Docker Artifact identity")
         expected = derive_runtime_lock_preview_id(
             self.project_identity_sha256,
             self.project_policy_sha256,

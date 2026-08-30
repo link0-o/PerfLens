@@ -14,15 +14,28 @@ import sys
 import tempfile
 import tomllib
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
+
+from elftools.common.exceptions import ELFError
+from elftools.elf.elffile import ELFFile
+from elftools.elf.sections import SymbolTableSection
 
 from perflens import __version__
 from perflens.distribution.debian import DEBIAN_PACKAGE_REVISION
 from perflens.docker.elf import validate_self_contained_elf
+from perflens.runtime_locks.native_pthread_abi import (
+    NATIVE_PTHREAD_PROBE_ABI_VERSION,
+    NATIVE_PTHREAD_PROBE_EXPORTS,
+    NATIVE_PTHREAD_PROBE_NEEDED_LIBRARIES,
+    NATIVE_PTHREAD_PROBE_PROTOCOL_VERSION,
+    NATIVE_PTHREAD_WRAPPER_LOCK_KINDS,
+)
 
 _SOURCE_DATE_EPOCH = 1_577_836_800  # 2020-01-01 UTC
+_MAIN_GLIBC_FLOOR = "2.36"
 _PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9+.-]+$")
 _ARCHITECTURE = re.compile(r"^[a-z0-9][a-z0-9-]+$")
+_PTHREAD_PROBE_MAX_BYTES = 64 << 20
 
 
 def main() -> None:
@@ -45,6 +58,11 @@ def main() -> None:
         "--container-gate-binary",
         type=Path,
         help="Prebuilt release perflens-container-gate binary.",
+    )
+    parser.add_argument(
+        "--pthread-probe-library",
+        type=Path,
+        help="Prebuilt hardened libperflens-pthread-probe.so.",
     )
     parser.add_argument(
         "--offline",
@@ -70,17 +88,25 @@ def main() -> None:
         "Rust Helper binary",
     )
     trace_helper_binary = _executable(
-        arguments.trace_helper_binary
-        or project_root / "target/release/perflens-trace-helper",
+        arguments.trace_helper_binary or project_root / "target/release/perflens-trace-helper",
         parser,
         "Rust Trace Helper binary",
     )
     container_gate_binary = _executable(
-        arguments.container_gate_binary
-        or project_root / "target/release/perflens-container-gate",
+        arguments.container_gate_binary or project_root / "target/release/perflens-container-gate",
         parser,
         "Rust container Gate binary",
     )
+    pthread_probe_library = _regular_input(
+        arguments.pthread_probe_library
+        or project_root / "build/native-pthread/libperflens-pthread-probe.so",
+        parser,
+        "Native pthread probe library",
+    )
+    try:
+        _validate_pthread_probe_library(pthread_probe_library)
+    except (OSError, ValueError) as exc:
+        parser.error(f"Native pthread probe library is unsafe: {exc}")
     try:
         with container_gate_binary.open("rb") as gate_stream:
             validate_self_contained_elf(
@@ -133,6 +159,7 @@ def main() -> None:
             python_abi=python_abi,
             offline=arguments.offline,
             container_gate_binary=container_gate_binary,
+            pthread_probe_library=pthread_probe_library,
         )
         _build_collector_tree(
             collector_root,
@@ -162,6 +189,7 @@ def _build_main_tree(
     python_abi: str,
     offline: bool,
     container_gate_binary: Path,
+    pthread_probe_library: Path,
 ) -> None:
     runtime = root / "usr/lib/perflens"
     runtime.mkdir(parents=True)
@@ -209,6 +237,9 @@ def _build_main_tree(
     container_gate = runtime / "perflens-container-gate"
     shutil.copyfile(container_gate_binary, container_gate)
     container_gate.chmod(0o755)
+    pthread_probe = runtime / "libperflens-pthread-probe.so"
+    shutil.copyfile(pthread_probe_library, pthread_probe)
+    pthread_probe.chmod(0o644)
     # This root-owned empty directory is the trust anchor for each Preview's private, writable
     # Buildx state. User plugins, credentials, contexts, and environment configuration are never
     # copied into that state. Empty directories are explicit DEB members even though they do not
@@ -227,7 +258,7 @@ def _build_main_tree(
         depends=(
             f"python3 (>= {python_abi})",
             f"python3 (<< {_next_minor(python_abi)})",
-            "libc6 (>= 2.17)",
+            f"libc6 (>= {_MAIN_GLIBC_FLOOR})",
             "libgcc-s1",
         ),
         installed_size=_tree_kib(root),
@@ -437,6 +468,128 @@ def _normalize_tree(root: Path) -> None:
     for path in sorted(root.rglob("*")):
         os.utime(path, (_SOURCE_DATE_EPOCH, _SOURCE_DATE_EPOCH), follow_symlinks=False)
     os.utime(root, (_SOURCE_DATE_EPOCH, _SOURCE_DATE_EPOCH))
+
+
+def _validate_pthread_probe_library(path: Path) -> None:
+    metadata = path.stat(follow_symlinks=False)
+    if not 1 <= metadata.st_size <= _PTHREAD_PROBE_MAX_BYTES:
+        raise ValueError("file size is outside the fixed probe bound")
+    with path.open("rb") as handle:
+        try:
+            elf = ELFFile(handle)
+        except ELFError as exc:
+            raise ValueError("probe is not a valid ELF shared object") from exc
+        if (
+            elf.elfclass != 64
+            or not elf.little_endian
+            or elf["e_machine"] != "EM_X86_64"
+            or elf["e_type"] != "ET_DYN"
+        ):
+            raise ValueError("probe must be a little-endian amd64 shared object")
+        has_relro = False
+        for segment in elf.iter_segments():
+            segment_type = segment["p_type"]
+            if segment_type == "PT_INTERP":
+                raise ValueError("probe shared object cannot carry an interpreter")
+            if segment_type == "PT_GNU_RELRO":
+                has_relro = True
+            if segment_type == "PT_GNU_STACK" and int(segment["p_flags"]) & 1:
+                raise ValueError("probe requests an executable stack")
+        if not has_relro:
+            raise ValueError("probe is missing GNU RELRO")
+        symbols: dict[str, Any] = {}
+        for section in elf.iter_sections():
+            if isinstance(section, SymbolTableSection) and section.name == ".dynsym":
+                symbols.update(
+                    (symbol.name, symbol)
+                    for symbol in section.iter_symbols()
+                    if symbol.name and symbol["st_shndx"] != "SHN_UNDEF"
+                )
+        if frozenset(symbols) != NATIVE_PTHREAD_PROBE_EXPORTS:
+            raise ValueError("probe exports differ from the reviewed ABI allowlist")
+        for name in NATIVE_PTHREAD_WRAPPER_LOCK_KINDS:
+            symbol = symbols[name]
+            if (
+                symbol["st_info"]["type"] != "STT_FUNC"
+                or symbol["st_info"]["bind"] != "STB_GLOBAL"
+                or symbol["st_other"]["visibility"] != "STV_DEFAULT"
+                or int(symbol["st_value"]) == 0
+                or int(symbol["st_size"]) == 0
+                or not _elf_symbol_in_executable_load(elf, symbol)
+            ):
+                raise ValueError("probe wrapper exports are not executable global functions")
+        abi_symbol = symbols["perflens_pthread_probe_abi_version"]
+        protocol_symbol = symbols["perflens_pthread_probe_protocol_version"]
+        for symbol in (abi_symbol, protocol_symbol):
+            if (
+                symbol["st_info"]["bind"] != "STB_GLOBAL"
+                or symbol["st_other"]["visibility"] != "STV_DEFAULT"
+            ):
+                raise ValueError("probe ABI marker symbols are not exported")
+        if (
+            int.from_bytes(_elf_symbol_bytes(elf, abi_symbol, 4), byteorder="little")
+            != NATIVE_PTHREAD_PROBE_ABI_VERSION
+            or _elf_symbol_bytes(elf, protocol_symbol, 4)
+            != NATIVE_PTHREAD_PROBE_PROTOCOL_VERSION.encode("ascii") + b"\x00"
+        ):
+            raise ValueError("probe ABI marker values do not match protocol 1.0")
+        dynamic = elf.get_section_by_name(".dynamic")
+        if dynamic is None:
+            raise ValueError("probe is missing its dynamic section")
+        tags = tuple(cast(Any, dynamic).iter_tags())
+        tag_names = {str(tag.entry.d_tag) for tag in tags}
+        needed_libraries = frozenset(
+            str(tag.needed) for tag in tags if str(tag.entry.d_tag) == "DT_NEEDED"
+        )
+        if needed_libraries != NATIVE_PTHREAD_PROBE_NEEDED_LIBRARIES:
+            raise ValueError("probe dependencies differ from the reviewed ABI allowlist")
+        if {"DT_RPATH", "DT_RUNPATH", "DT_TEXTREL"} & tag_names:
+            raise ValueError("probe contains an unsafe dynamic-loader directive")
+        bind_now = (
+            "DT_BIND_NOW" in tag_names
+            or any(str(tag.entry.d_tag) == "DT_FLAGS" and int(tag.entry.d_val) & 8 for tag in tags)
+            or any(
+                str(tag.entry.d_tag) == "DT_FLAGS_1" and int(tag.entry.d_val) & 1 for tag in tags
+            )
+        )
+        if not bind_now:
+            raise ValueError("probe is missing immediate relocation binding")
+
+
+def _elf_symbol_in_executable_load(elf: ELFFile, symbol: Any) -> bool:
+    symbol_address = int(symbol["st_value"])
+    symbol_size = int(symbol["st_size"])
+    for segment in elf.iter_segments():
+        if segment["p_type"] != "PT_LOAD" or int(segment["p_flags"]) & 1 == 0:
+            continue
+        relative = symbol_address - int(segment["p_vaddr"])
+        if relative >= 0 and relative + symbol_size <= int(segment["p_filesz"]):
+            return True
+    return False
+
+
+def _elf_symbol_bytes(elf: ELFFile, symbol: Any, size: int) -> bytes:
+    symbol_address = int(symbol["st_value"])
+    if int(symbol["st_size"]) < size:
+        raise ValueError("probe ABI marker has an invalid size")
+    for segment in elf.iter_segments():
+        if segment["p_type"] != "PT_LOAD":
+            continue
+        segment_address = int(segment["p_vaddr"])
+        segment_size = int(segment["p_filesz"])
+        relative = symbol_address - segment_address
+        if relative < 0 or relative + size > segment_size:
+            continue
+        position = elf.stream.tell()
+        try:
+            elf.stream.seek(int(segment["p_offset"]) + relative)
+            data = elf.stream.read(size)
+        finally:
+            elf.stream.seek(position)
+        if len(data) != size:
+            raise ValueError("probe ABI marker cannot be read completely")
+        return data
+    raise ValueError("probe ABI marker is not backed by a loadable file segment")
 
 
 def _remove_nondeterministic_uv_metadata(runtime: Path) -> None:
