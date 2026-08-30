@@ -85,6 +85,14 @@ from perflens.contracts.docker_build import (
     DockerOptimizationPreviewArtifact,
     DockerOptimizationSessionArtifact,
 )
+from perflens.contracts.runtime_lock_sessions import (
+    RuntimeLockCapabilityArtifact,
+    RuntimeLockComparisonArtifact,
+    RuntimeLockRunArtifact,
+    RuntimeLockSessionArtifact,
+    RuntimeLockSessionBudget,
+    RuntimeLockSessionPreviewArtifact,
+)
 from perflens.contracts.runtime_locks import (
     RuntimeAdapterCapabilityArtifact,
     RuntimeExecutionContext,
@@ -173,6 +181,12 @@ MODELS = {
     "runtime-lock-analysis.schema.json": RuntimeLockAnalysisArtifact,
     "runtime-lock-analysis-verification.schema.json": (RuntimeLockAnalysisVerificationArtifact),
     "runtime-lock-import-header.schema.json": RuntimeLockImportHeader,
+    "runtime-lock-capability.schema.json": RuntimeLockCapabilityArtifact,
+    "runtime-lock-session-budget.schema.json": RuntimeLockSessionBudget,
+    "runtime-lock-session-preview.schema.json": RuntimeLockSessionPreviewArtifact,
+    "runtime-lock-session.schema.json": RuntimeLockSessionArtifact,
+    "runtime-lock-run.schema.json": RuntimeLockRunArtifact,
+    "runtime-lock-comparison.schema.json": RuntimeLockComparisonArtifact,
     "docker-runtime-capability.schema.json": DockerRuntimeCapabilityArtifact,
     "docker-build-capability.schema.json": DockerBuildCapabilityArtifact,
     "docker-build-recipe.schema.json": DockerBuildRecipeArtifact,

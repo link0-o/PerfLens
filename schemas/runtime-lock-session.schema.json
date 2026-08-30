@@ -1,0 +1,323 @@
+{
+  "$defs": {
+    "RuntimeLockSessionBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "hard_expiry_seconds": {
+          "default": 3600,
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Hard Expiry Seconds",
+          "type": "integer"
+        },
+        "max_active_seconds": {
+          "default": 1200,
+          "maximum": 1200,
+          "minimum": 1,
+          "title": "Max Active Seconds",
+          "type": "integer"
+        },
+        "max_adapter_concurrency": {
+          "const": 1,
+          "default": 1,
+          "title": "Max Adapter Concurrency",
+          "type": "integer"
+        },
+        "max_artifact_bytes": {
+          "default": 67108864,
+          "maximum": 67108864,
+          "minimum": 1,
+          "title": "Max Artifact Bytes",
+          "type": "integer"
+        },
+        "max_collection_duration_seconds": {
+          "default": 30,
+          "maximum": 30,
+          "minimum": 1,
+          "title": "Max Collection Duration Seconds",
+          "type": "integer"
+        },
+        "max_evidence_bytes": {
+          "default": 536870912,
+          "maximum": 536870912,
+          "minimum": 1,
+          "title": "Max Evidence Bytes",
+          "type": "integer"
+        },
+        "max_exact_duration_seconds": {
+          "default": 3,
+          "maximum": 3,
+          "minimum": 1,
+          "title": "Max Exact Duration Seconds",
+          "type": "integer"
+        },
+        "max_exact_events": {
+          "default": 20000,
+          "maximum": 20000,
+          "minimum": 1,
+          "title": "Max Exact Events",
+          "type": "integer"
+        },
+        "max_workload_runs": {
+          "default": 6,
+          "maximum": 6,
+          "minimum": 1,
+          "title": "Max Workload Runs",
+          "type": "integer"
+        }
+      },
+      "title": "RuntimeLockSessionBudget",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "active_seconds_used": {
+      "default": 0,
+      "maximum": 1200,
+      "minimum": 0,
+      "title": "Active Seconds Used",
+      "type": "integer"
+    },
+    "allowed_adapters": {
+      "items": {
+        "enum": [
+          "native_pthread",
+          "java_jfr",
+          "cpython_threading",
+          "go_pprof",
+          "generic_ndjson_import"
+        ],
+        "type": "string"
+      },
+      "title": "Allowed Adapters",
+      "type": "array"
+    },
+    "allowed_semantics": {
+      "items": {
+        "enum": [
+          "exact",
+          "thresholded",
+          "sampled",
+          "cumulative"
+        ],
+        "type": "string"
+      },
+      "title": "Allowed Semantics",
+      "type": "array"
+    },
+    "authorization_receipt_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Authorization Receipt Sha256",
+      "type": "string"
+    },
+    "budget": {
+      "$ref": "#/$defs/RuntimeLockSessionBudget"
+    },
+    "capability_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Capability Content Sha256",
+      "type": "string"
+    },
+    "capability_id": {
+      "pattern": "^runtime-lock-capability-[a-f0-9]{20}$",
+      "title": "Capability Id",
+      "type": "string"
+    },
+    "client_connection_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Client Connection Identity Sha256",
+      "type": "string"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "evidence_bytes_used": {
+      "default": 0,
+      "maximum": 536870912,
+      "minimum": 0,
+      "title": "Evidence Bytes Used",
+      "type": "integer"
+    },
+    "exact_events_used": {
+      "default": 0,
+      "maximum": 120000,
+      "minimum": 0,
+      "title": "Exact Events Used",
+      "type": "integer"
+    },
+    "expires_at": {
+      "title": "Expires At",
+      "type": "string"
+    },
+    "invalidation_reason": {
+      "anyOf": [
+        {
+          "enum": [
+            "adapter_output_invalid",
+            "adapter_unavailable",
+            "correctness_failed",
+            "explicitly_revoked",
+            "hard_expiry_reached",
+            "identity_or_policy_changed",
+            "internal_collection_error",
+            "operation_lease_expired",
+            "operation_reservation_exceeded",
+            "resource_limit_exceeded",
+            "run_artifact_mismatch",
+            "session_budget_exhausted",
+            "target_exited",
+            "target_identity_changed",
+            "workload_budget_exhausted"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Invalidation Reason"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "preview_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Preview Content Sha256",
+      "type": "string"
+    },
+    "preview_id": {
+      "pattern": "^runtime-lock-preview-[a-f0-9]{20}$",
+      "title": "Preview Id",
+      "type": "string"
+    },
+    "previous_session_artifact_content_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Previous Session Artifact Content Sha256"
+    },
+    "previous_session_artifact_id": {
+      "anyOf": [
+        {
+          "pattern": "^runtime-lock-session-state-[a-f0-9]{20}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Previous Session Artifact Id"
+    },
+    "project_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Project Identity Sha256",
+      "type": "string"
+    },
+    "project_policy_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Project Policy Sha256",
+      "type": "string"
+    },
+    "revision": {
+      "minimum": 0,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "runtime_lock_config_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Runtime Lock Config Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "session_artifact_id": {
+      "pattern": "^runtime-lock-session-state-[a-f0-9]{20}$",
+      "title": "Session Artifact Id",
+      "type": "string"
+    },
+    "session_id": {
+      "pattern": "^runtime-lock-session-[a-f0-9]{20}$",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "active",
+        "revoked",
+        "expired",
+        "exhausted",
+        "failed"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "target_scope": {
+      "enum": [
+        "host_launched_workload",
+        "managed_temporary_container",
+        "docker_optimization",
+        "controlled_import"
+      ],
+      "title": "Target Scope",
+      "type": "string"
+    },
+    "updated_at": {
+      "title": "Updated At",
+      "type": "string"
+    },
+    "workload_runs_used": {
+      "default": 0,
+      "maximum": 6,
+      "minimum": 0,
+      "title": "Workload Runs Used",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "session_artifact_id",
+    "session_id",
+    "revision",
+    "created_at",
+    "updated_at",
+    "expires_at",
+    "state",
+    "project_identity_sha256",
+    "client_connection_identity_sha256",
+    "project_policy_sha256",
+    "capability_id",
+    "capability_content_sha256",
+    "runtime_lock_config_sha256",
+    "preview_id",
+    "preview_content_sha256",
+    "authorization_receipt_sha256",
+    "target_scope",
+    "allowed_adapters",
+    "allowed_semantics",
+    "budget",
+    "content_sha256"
+  ],
+  "title": "RuntimeLockSessionArtifact",
+  "type": "object"
+}

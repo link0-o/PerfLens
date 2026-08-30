@@ -22,12 +22,16 @@ from perflens.collector_broker.client import CollectorBrokerClient
 from perflens.contracts.artifacts import (
     CollectionCapabilityArtifact,
     CollectorHealthArtifact,
+    RuntimeLockAdapterRuntimeStatus,
     RuntimeStatusArtifact,
     SetupArtifact,
 )
 from perflens.distribution.codex import validate_mcp_executable
 from perflens.distribution.skill import recorded_project_skill_path
+from perflens.docker.workload import inspect_managed_project_root
 from perflens.domain.errors import ErrorCode, PerfLensError
+from perflens.runtime_locks.capability import inspect_runtime_lock_capability
+from perflens.runtime_locks.project_config import load_runtime_lock_project_policy
 
 _MAX_SETUP_BYTES = 1 << 20
 SetupStatus = Literal["missing", "incomplete", "ready"]
@@ -87,9 +91,7 @@ def inspect_runtime_status(
     capabilities = inspect_collection_capabilities(perf_path)
     host_status = _host_collection_status(capabilities)
     requested_feature_profile = (
-        setup_artifact.collector_feature_profile
-        if setup_artifact is not None
-        else "cpu_only"
+        setup_artifact.collector_feature_profile if setup_artifact is not None else "cpu_only"
     )
     feature_profile = (
         health.artifact.feature_profile
@@ -102,6 +104,39 @@ def inspect_runtime_status(
     docker_optimization_enabled = bool(
         setup_artifact is not None and setup_artifact.docker_optimization_enabled
     )
+    runtime_locks_enabled = bool(
+        setup_artifact is not None and setup_artifact.runtime_locks_enabled
+    )
+    runtime_lock_policy_status: Literal["not_configured", "enabled", "disabled", "invalid"] = (
+        "not_configured"
+    )
+    runtime_lock_adapter_statuses: tuple[RuntimeLockAdapterRuntimeStatus, ...] = ()
+    runtime_lock_limitations: tuple[str, ...] = ()
+    if runtime_locks_enabled:
+        try:
+            runtime_lock_policy = load_runtime_lock_project_policy(
+                setup / "runtime-locks.toml",
+                allowed_roots=(project,),
+            )
+            runtime_lock_policy_status = "enabled" if runtime_lock_policy.enabled else "disabled"
+            runtime_lock_capability = inspect_runtime_lock_capability(
+                runtime_lock_policy,
+                project_identity_sha256=inspect_managed_project_root(project).identity_sha256,
+            ).capability
+            runtime_lock_adapter_statuses = tuple(
+                RuntimeLockAdapterRuntimeStatus(
+                    adapter_id=item.adapter_id,
+                    availability=item.availability,
+                    limitations=item.limitations,
+                )
+                for item in runtime_lock_capability.adapters
+            )
+            runtime_lock_limitations = runtime_lock_capability.limitations
+        except PerfLensError:
+            runtime_lock_policy_status = "invalid"
+            runtime_lock_limitations = (
+                "Runtime Lock project policy or capability could not be inspected safely.",
+            )
     trace_modes_ready = health.artifact is not None and {
         "sched",
         "off_cpu",
@@ -126,10 +161,7 @@ def inspect_runtime_status(
         issues.append(f"collector_group_{group_status}")
     if health.issue is not None:
         issues.append(health.issue)
-    if (
-        health.artifact is not None
-        and health.artifact.feature_profile != requested_feature_profile
-    ):
+    if health.artifact is not None and health.artifact.feature_profile != requested_feature_profile:
         issues.append("collector_feature_profile_mismatch")
     if feature_profile == "full_diagnostics" and trace_backend_status != "available":
         issues.append("collector_trace_backend_unavailable")
@@ -163,6 +195,12 @@ def inspect_runtime_status(
             str(automatic_requested),
             str(docker_runtime_enabled),
             str(docker_optimization_enabled),
+            str(runtime_locks_enabled),
+            runtime_lock_policy_status,
+            ",".join(
+                f"{item.adapter_id}:{item.availability}" for item in runtime_lock_adapter_statuses
+            ),
+            "|".join(runtime_lock_limitations),
             assets_status,
             socket_status,
             group_status,
@@ -191,6 +229,10 @@ def inspect_runtime_status(
         automatic_collection_requested=automatic_requested,
         docker_runtime_enabled=docker_runtime_enabled,
         docker_optimization_enabled=docker_optimization_enabled,
+        runtime_locks_enabled=runtime_locks_enabled,
+        runtime_lock_policy_status=runtime_lock_policy_status,
+        runtime_lock_adapter_statuses=runtime_lock_adapter_statuses,
+        runtime_lock_limitations=runtime_lock_limitations,
         collector_assets_status=assets_status,
         collector_socket=str(collector_socket),
         collector_socket_status=socket_status,
@@ -301,6 +343,24 @@ def _inspect_setup(
             ("setup_identity_mismatch",),
             artifact,
         )
+    if artifact.runtime_locks_enabled:
+        expected_policy = setup / "runtime-locks.toml"
+        if artifact.runtime_lock_config_path != str(expected_policy):
+            return (
+                "incomplete",
+                artifact.automatic_collection_enabled,
+                ("runtime_lock_project_policy_invalid",),
+                artifact,
+            )
+        try:
+            load_runtime_lock_project_policy(expected_policy, allowed_roots=(project,))
+        except PerfLensError:
+            return (
+                "incomplete",
+                artifact.automatic_collection_enabled,
+                ("runtime_lock_project_policy_invalid",),
+                artifact,
+            )
     return "ready", artifact.automatic_collection_enabled, (), artifact
 
 

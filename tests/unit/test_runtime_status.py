@@ -43,8 +43,47 @@ def test_runtime_status_reports_missing_setup_without_mutation(tmp_path: Path) -
     assert artifact.skill_status == "missing"
     assert artifact.mcp_config_status == "missing"
     assert artifact.automatic_collection_status == "not_configured"
+    assert artifact.runtime_lock_policy_status == "not_configured"
+    assert artifact.runtime_lock_adapter_statuses == ()
     assert "setup_missing" in artifact.issues
     assert not (tmp_path / "perflens-setup").exists()
+
+
+def test_runtime_status_reports_runtime_lock_project_activation(tmp_path: Path) -> None:
+    run_project_setup(
+        tmp_path,
+        enable_runtime_locks=True,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+
+    artifact = inspect_runtime_status(
+        tmp_path,
+        collector_socket=tmp_path / "missing.sock",
+        perf_path=Path("/bin/true"),
+    )
+
+    assert artifact.setup_status == "ready"
+    assert artifact.runtime_locks_enabled is True
+    assert artifact.runtime_lock_policy_status == "enabled"
+    adapter_status = {item.adapter_id: item for item in artifact.runtime_lock_adapter_statuses}
+    assert adapter_status["generic_ndjson_import"].availability == "available"
+    assert "controlled NDJSON import" in adapter_status[
+        "generic_ndjson_import"
+    ].limitations[0]
+    assert adapter_status["native_pthread"].availability == "unavailable"
+    assert adapter_status["native_pthread"].limitations
+
+    (tmp_path / "perflens-setup/runtime-locks.toml").unlink()
+    incomplete = inspect_runtime_status(
+        tmp_path,
+        collector_socket=tmp_path / "missing.sock",
+        perf_path=Path("/bin/true"),
+    )
+    assert incomplete.setup_status == "incomplete"
+    assert incomplete.runtime_lock_policy_status == "invalid"
+    assert incomplete.runtime_lock_limitations
+    assert "runtime_lock_project_policy_invalid" in incomplete.issues
 
 
 def test_runtime_status_artifact_accepts_pre_health_fields_payload(tmp_path: Path) -> None:
@@ -467,6 +506,8 @@ def test_runtime_status_requires_dedicated_collector_service_user(
     assert artifact.collector_health_error_code == ErrorCode.PATH_SAFETY_VIOLATION.value
     assert artifact.automatic_collection_status == "collector_unavailable"
     assert "collector_service_user_missing" in artifact.issues
+
+
 @pytest.mark.parametrize("client", ["opencode", "copilot"])
 def test_runtime_status_checks_explicit_local_clients(tmp_path: Path, client: str) -> None:
     project = tmp_path / client

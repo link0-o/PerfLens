@@ -61,6 +61,10 @@ from perflens.docker.project_config import (
     render_default_docker_project_policy,
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
+from perflens.runtime_locks.project_config import (
+    load_runtime_lock_project_policy,
+    render_default_runtime_lock_project_policy,
+)
 
 _MAX_GUIDE_BYTES = 256 << 10
 _MAX_SETUP_JSON_BYTES = 1 << 20
@@ -72,6 +76,7 @@ _HELPER_SPOOL_ROOT = Path("/var/lib/perflens-helper")
 _DEPLOYED_COLLECTOR_CONFIG = Path("/etc/perflens/collector.toml")
 _DEPLOYED_FEATURE_PROFILE = Path("/etc/perflens/profile.toml")
 _DOCKER_PROJECT_CONFIG_NAME = "container-workload.toml"
+_RUNTIME_LOCK_PROJECT_CONFIG_NAME = "runtime-locks.toml"
 
 
 def configured_project_clients(
@@ -124,6 +129,7 @@ def run_project_setup(
     perf_path: Path = Path("/usr/bin/perf"),
     collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] | None = None,
     enable_docker: bool = False,
+    enable_runtime_locks: bool = False,
     update_existing: bool = False,
 ) -> SetupArtifact:
     """Create a bounded onboarding bundle inside one selected project."""
@@ -166,6 +172,15 @@ def run_project_setup(
         ).optimization.enabled
     )
     docker_project_config = output / _DOCKER_PROJECT_CONFIG_NAME
+    runtime_locks_enabled = enable_runtime_locks or bool(
+        previous_artifact is not None and previous_artifact.runtime_locks_enabled
+    )
+    previous_runtime_lock_config = _previous_runtime_lock_config(
+        project,
+        previous_artifact,
+        enabled=runtime_locks_enabled,
+    )
+    runtime_lock_project_config = output / _RUNTIME_LOCK_PROJECT_CONFIG_NAME
     selected_automatic_modes = (
         automatic_modes
         if automatic_modes is not None
@@ -297,6 +312,10 @@ def run_project_setup(
         allow_docker_targets=docker_runtime_enabled,
         allow_docker_optimization=docker_optimization_enabled,
         docker_project_config=(docker_project_config if docker_runtime_enabled else None),
+        allow_runtime_locks=runtime_locks_enabled,
+        runtime_lock_project_config=(
+            runtime_lock_project_config if runtime_locks_enabled else None
+        ),
         collector_spool_root=collector_spool_root,
         mcp_command=mcp_command,
     )
@@ -317,6 +336,10 @@ def run_project_setup(
         allow_docker_targets=docker_runtime_enabled,
         allow_docker_optimization=docker_optimization_enabled,
         docker_project_config=(docker_project_config if docker_runtime_enabled else None),
+        allow_runtime_locks=runtime_locks_enabled,
+        runtime_lock_project_config=(
+            runtime_lock_project_config if runtime_locks_enabled else None
+        ),
         collector_spool_root=collector_spool_root,
         mcp_command=mcp_command,
     )
@@ -333,6 +356,10 @@ def run_project_setup(
         "allow_docker_targets": docker_runtime_enabled,
         "allow_docker_optimization": docker_optimization_enabled,
         "docker_project_config": docker_project_config if docker_runtime_enabled else None,
+        "allow_runtime_locks": runtime_locks_enabled,
+        "runtime_lock_project_config": (
+            runtime_lock_project_config if runtime_locks_enabled else None
+        ),
         "collector_spool_root": collector_spool_root,
         "mcp_command": mcp_command,
     }
@@ -433,6 +460,12 @@ def run_project_setup(
             "Review container-workload.toml, restart the selected client, then inspect Docker "
             "capability before authorizing a container workload.",
         )
+    if runtime_locks_enabled:
+        next_steps = (
+            *next_steps,
+            "Review runtime-locks.toml, restart the selected client, then inspect each "
+            "Runtime Lock Adapter before authorizing instrumentation or import.",
+        )
 
     backup = _setup_backup_path(output) if previous_artifact is not None else None
     created = False
@@ -445,6 +478,7 @@ def run_project_setup(
     applied_copilot_vscode_config = False
     moved_collector_assets = False
     moved_docker_config = False
+    moved_runtime_lock_config = False
     try:
         if backup is not None:
             output.rename(backup)
@@ -460,6 +494,11 @@ def run_project_setup(
         preserved_docker_config = (
             backup / _DOCKER_PROJECT_CONFIG_NAME
             if backup is not None and previous_docker_config is not None
+            else None
+        )
+        preserved_runtime_lock_config = (
+            backup / _RUNTIME_LOCK_PROJECT_CONFIG_NAME
+            if backup is not None and previous_runtime_lock_config is not None
             else None
         )
         mcp_config_path = output / "codex-mcp.toml"
@@ -492,6 +531,7 @@ def run_project_setup(
                 copilot_enabled,
                 collector_privilege_mode,
                 docker_runtime_enabled,
+                runtime_locks_enabled,
             ),
             chinese_guide_path,
             max_output_bytes=_MAX_GUIDE_BYTES,
@@ -516,6 +556,7 @@ def run_project_setup(
                 copilot_enabled,
                 collector_privilege_mode,
                 docker_runtime_enabled,
+                runtime_locks_enabled,
             ),
             english_guide_path,
             max_output_bytes=_MAX_GUIDE_BYTES,
@@ -552,6 +593,18 @@ def run_project_setup(
                 write_text_atomic(
                     render_default_docker_project_policy(),
                     docker_project_config,
+                    max_output_bytes=_MAX_GUIDE_BYTES,
+                )
+        if runtime_locks_enabled:
+            if preserved_runtime_lock_config is not None:
+                preserved_runtime_lock_config.rename(runtime_lock_project_config)
+                moved_runtime_lock_config = True
+            else:
+                write_text_atomic(
+                    render_default_runtime_lock_project_policy(
+                        docker_enabled=docker_runtime_enabled
+                    ),
+                    runtime_lock_project_config,
                     max_output_bytes=_MAX_GUIDE_BYTES,
                 )
 
@@ -599,6 +652,8 @@ def run_project_setup(
         ]
         if docker_runtime_enabled:
             generated.append(docker_project_config)
+        if runtime_locks_enabled:
+            generated.append(runtime_lock_project_config)
         if codex_plan is not None and codex_plan.status != "existing":
             generated.append(codex_plan.path)
         if claude_plan is not None and claude_plan.status != "existing":
@@ -705,6 +760,10 @@ def run_project_setup(
             container_workload_config_path=(
                 str(docker_project_config) if docker_runtime_enabled else None
             ),
+            runtime_locks_enabled=runtime_locks_enabled,
+            runtime_lock_config_path=(
+                str(runtime_lock_project_config) if runtime_locks_enabled else None
+            ),
             collection_status=collection_status,
             blocked_modes=blocked_modes,
             generated_files=tuple(str(path) for path in generated),
@@ -777,6 +836,12 @@ def run_project_setup(
             (output / "collector-assets").rename(backup / "collector-assets")
         if moved_docker_config and backup is not None and docker_project_config.is_file():
             docker_project_config.rename(backup / _DOCKER_PROJECT_CONFIG_NAME)
+        if (
+            moved_runtime_lock_config
+            and backup is not None
+            and runtime_lock_project_config.is_file()
+        ):
+            runtime_lock_project_config.rename(backup / _RUNTIME_LOCK_PROJECT_CONFIG_NAME)
         if created:
             shutil.rmtree(output, ignore_errors=True)
         if backup is not None and backup.exists() and not output.exists():
@@ -997,6 +1062,7 @@ def _validate_setup_update_contents(output: Path) -> None:
         "codex-mcp.toml",
         "collection-capabilities.json",
         _DOCKER_PROJECT_CONFIG_NAME,
+        _RUNTIME_LOCK_PROJECT_CONFIG_NAME,
         "collector-assets",
         "setup.json",
         "opencode-mcp.json",
@@ -1080,6 +1146,57 @@ def _previous_docker_config(
             "Recorded Docker project policy is unsafe",
             details={"path": str(path)},
         )
+    return path
+
+
+def _previous_runtime_lock_config(
+    project: Path,
+    artifact: SetupArtifact | None,
+    *,
+    enabled: bool,
+) -> Path | None:
+    if artifact is None:
+        return None
+    path = Path(artifact.output_directory) / _RUNTIME_LOCK_PROJECT_CONFIG_NAME
+    recorded = artifact.runtime_lock_config_path
+    if not artifact.runtime_locks_enabled:
+        if path.exists() or path.is_symlink():
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "setup",
+                "Unowned Runtime Lock project policy was preserved",
+                details={"path": str(path)},
+            )
+        return None
+    if not enabled or recorded != str(path) or not path.is_relative_to(project):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Recorded Runtime Lock project policy ownership is invalid",
+            details={"path": str(path)},
+        )
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Recorded Runtime Lock project policy is missing",
+            details={"path": str(path)},
+        ) from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o022
+        or metadata.st_size > _MAX_GUIDE_BYTES
+    ):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "setup",
+            "Recorded Runtime Lock project policy is unsafe",
+            details={"path": str(path)},
+        )
+    load_runtime_lock_project_policy(path, allowed_roots=(project,))
     return path
 
 
@@ -1544,6 +1661,7 @@ def _chinese_guide(
     copilot_selected: bool = False,
     collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon",
     docker_runtime_enabled: bool = False,
+    runtime_locks_enabled: bool = False,
 ) -> str:
     layout_note = _chinese_layout_note(admin_command, collector_command)
     policy_path = output / "collector-assets" / "collector.toml"
@@ -1642,6 +1760,22 @@ PID 并交给 Collector。用户不需要查找或输入 PID。
 
 本项目没有启用 Docker 目标。需要时运行 `perflens init --docker --update`；该命令只
 生成项目策略，不会操作容器。
+"""
+    )
+    runtime_lock_section = (
+        f"""
+## 10. 用户态锁诊断
+
+已生成 `{output / _RUNTIME_LOCK_PROJECT_CONFIG_NAME}`。初始化只启用能力发现和安全后端，
+没有插桩、附加、导入或采集。重启所选客户端后，先只读检查各 Adapter，再展示内容
+绑定的 `bounded_runtime_lock_session` 摘要；未经一次明确确认不会启动工作负载或读取导入证据。
+"""
+        if runtime_locks_enabled
+        else """
+## 10. 用户态锁诊断
+
+本项目没有启用 Runtime Lock。需要时运行 `perflens init --runtime-locks --update`；该命令
+只生成安全策略，不执行插桩、附加、导入或采集。
 """
     )
     codex_section = (
@@ -1768,13 +1902,14 @@ Copilot CLI 使用 `{copilot_plan.path}`，VS Code Copilot Agent 使用
 
 {project_section}
 {docker_section}
-## 10. 采集时长
+{runtime_lock_section}
+## 11. 采集时长
 
 实时采集不是固定 10 秒。自动计划默认 10 秒，用户可以在请求中调整，
 但 MCP 和 Collector 都会执行各自的时长上限；当前默认上限是 30 秒。
 `accept-collector` 使用内置测试负载完成部署验收，不需要输入 PID；默认 1 秒且最多 5 秒。
 
-## 11. 获取帮助
+## 12. 获取帮助
 
 ```bash
 perflens --help
@@ -1844,6 +1979,7 @@ def _english_guide(
     copilot_selected: bool = False,
     collector_privilege_mode: Literal["cap_perfmon", "paranoid3_helper"] = "cap_perfmon",
     docker_runtime_enabled: bool = False,
+    runtime_locks_enabled: bool = False,
 ) -> str:
     status_command = _status_command(project, output)
     layout = (
@@ -1897,6 +2033,15 @@ def _english_guide(
         else "Local Docker targeting is disabled. Run `perflens init --docker --update` to "
         "generate a project policy without operating a container."
     )
+    runtime_locks = (
+        "Runtime Lock capability discovery is enabled by the project policy at "
+        f"`{output / _RUNTIME_LOCK_PROJECT_CONFIG_NAME}`. Initialization did not instrument, "
+        "attach, import, or collect. Restart the client, inspect each Adapter, and review the "
+        "content-bound bounded-session summary before authorizing execution."
+        if runtime_locks_enabled
+        else "Runtime Lock discovery is disabled. Run `perflens init --runtime-locks --update` "
+        "to generate a safe project policy without executing a workload."
+    )
     opencode = (
         f"OpenCode MCP is {opencode_plan.status} at `{opencode_plan.path}` and reuses "
         f"`.agents/skills/{SKILL_NAME}`."
@@ -1930,6 +2075,7 @@ Project: `{project}`
 9. Recheck this exact onboarding bundle with `{status_command}`. Keep
    `--setup-directory` when a custom output directory was used; the command is read-only.
 10. {docker}
+11. {runtime_locks}
 
 Run `perflens --help`, `perflens doctor`, `perflens init --help`,
 `perflens client-defaults`, or

@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import math
+import os
+import stat
 import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from mcp.server import MCPServer
@@ -18,16 +21,34 @@ from mcp_types import ToolAnnotations
 
 from perflens import __version__
 from perflens.application.analyze import analyze_folded, analyze_perf_data, analyze_perf_script
+from perflens.application.analyze_runtime_locks import build_runtime_lock_analysis
 from perflens.application.analyze_trace import build_trace_analysis
-from perflens.application.evidence import build_collection_evidence_provenance
+from perflens.application.evidence import (
+    build_collection_evidence_provenance,
+    contract_content_sha256,
+)
+from perflens.application.runtime_lock_queries import (
+    build_runtime_lock_diagnosis_bundle as create_runtime_lock_diagnosis,
+)
+from perflens.application.runtime_lock_queries import (
+    get_runtime_lock_call_paths as query_runtime_lock_call_paths,
+)
+from perflens.application.runtime_lock_queries import (
+    list_runtime_lock_hotspots as query_runtime_lock_hotspots,
+)
 from perflens.application.symbols import get_source_context as resolve_source_context
 from perflens.application.symbols import resolve_source as resolve_module_source
 from perflens.application.trace_evidence import canonical_trace_json_sha256
 from perflens.application.verify_analysis import verify_analysis_artifact
+from perflens.application.verify_runtime_locks import (
+    require_usable_runtime_lock_analysis,
+    verify_runtime_lock_analysis_artifact,
+)
 from perflens.application.verify_trace import (
     require_usable_trace_analysis,
     verify_trace_analysis_artifact,
 )
+from perflens.artifacts.filesystem import serialize_json
 from perflens.benchmarks.adapters import load_benchmark
 from perflens.classification.engine import build_diagnosis_bundle as create_diagnosis
 from perflens.collection.capabilities import inspect_collection_capabilities
@@ -85,6 +106,21 @@ from perflens.contracts.docker_build import (
     OptimizationCollectionMode,
     OptimizationEvaluationReason,
 )
+from perflens.contracts.runtime_lock_sessions import (
+    RuntimeLockAdapterId,
+    RuntimeLockCapabilityArtifact,
+    RuntimeLockRunArtifact,
+    RuntimeLockSessionArtifact,
+    RuntimeLockSessionPreviewArtifact,
+    RuntimeLockTargetScope,
+    derive_runtime_lock_run_id,
+)
+from perflens.contracts.runtime_locks import (
+    RuntimeLockAnalysisVerificationArtifact,
+    RuntimeLockCallPathPage,
+    RuntimeLockHotspotPage,
+    RuntimeLockResourceLimits,
+)
 from perflens.contracts.trace import (
     LockAnalysisArtifact,
     OffCpuAnalysisArtifact,
@@ -134,9 +170,20 @@ from perflens.docker.treatment import (
     assert_treatment_snapshot_current,
     capture_treatment_snapshot,
 )
-from perflens.docker.workload import inspect_managed_project_root
+from perflens.docker.workload import assert_managed_project_current, inspect_managed_project_root
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.storage import ArtifactStore, PathPolicy
+from perflens.runtime_locks import import_runtime_lock_ndjson
+from perflens.runtime_locks.capability import (
+    RuntimeLockCapabilityInspection,
+    inspect_runtime_lock_capability,
+)
+from perflens.runtime_locks.project_config import (
+    RuntimeLockProjectPolicy,
+    assert_runtime_lock_project_policy_current,
+    load_runtime_lock_project_policy,
+)
+from perflens.runtime_locks.session import RuntimeLockSessionRuntime
 from perflens.workloads.project import (
     ProjectWorkloadRequest,
     collect_project_workload,
@@ -186,7 +233,9 @@ class ServerConfig:
     allow_project_execution: bool = False
     allow_docker_targets: bool = False
     allow_docker_optimization: bool = False
+    allow_runtime_locks: bool = False
     docker_project_config: Path | None = None
+    runtime_lock_project_config: Path | None = None
     docker_runtime_root: Path | None = None
     docker_builder_policy: Path | None = None
     docker_gate_path: Path = Path("/usr/lib/perflens/perflens-container-gate")
@@ -197,6 +246,8 @@ class ServerConfig:
     perf_path: Path | None = None
     max_artifact_bytes: int = 128 << 20
     docker_optimization_runtime_factory: Callable[[], DockerOptimizationRuntime] | None = None
+    runtime_lock_runtime_factory: Callable[[], RuntimeLockSessionRuntime] | None = None
+    runtime_lock_capability_factory: Callable[[], RuntimeLockCapabilityInspection] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +258,15 @@ class _ExecutedBrokerPlan:
     output_sha256: str
     evidence_bytes: int
     active_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class _PinnedRuntimeLockImport:
+    descriptor: int
+    path: Path
+    project_relative_path: str
+    source_sha256: str
+    metadata: os.stat_result
 
 
 def create_server(config: ServerConfig) -> MCPServer[None]:
@@ -244,6 +304,19 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         and config.docker_optimization_runtime_factory is not None
     ):
         raise ValueError("Docker optimization runtime factory requires Docker optimization")
+    if config.allow_runtime_locks and (
+        config.runtime_lock_project_config is None or not config.allow_writes
+    ):
+        raise ValueError("Runtime Lock sessions require writes and one project policy path")
+    if not config.allow_runtime_locks and config.runtime_lock_project_config is not None:
+        raise ValueError(
+            "Runtime Lock project policy cannot be set while Runtime Lock sessions are disabled"
+        )
+    if not config.allow_runtime_locks and (
+        config.runtime_lock_runtime_factory is not None
+        or config.runtime_lock_capability_factory is not None
+    ):
+        raise ValueError("Runtime Lock factories require Runtime Lock sessions")
     docker_policy = (
         load_docker_project_policy(
             config.docker_project_config,
@@ -264,6 +337,19 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         if docker_policy is not None
         else None
     )
+    runtime_lock_policy = (
+        load_runtime_lock_project_policy(
+            config.runtime_lock_project_config,
+            allowed_roots=config.allowed_roots,
+        )
+        if config.runtime_lock_project_config is not None
+        else None
+    )
+    runtime_lock_project = (
+        inspect_managed_project_root(runtime_lock_policy.path.parent.parent)
+        if runtime_lock_policy is not None
+        else None
+    )
     policy = PathPolicy(config.allowed_roots)
     store = ArtifactStore(
         config.artifact_root,
@@ -272,6 +358,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         max_artifact_bytes=config.max_artifact_bytes,
     )
     docker_optimization_runtime: DockerOptimizationRuntime | None = None
+    runtime_lock_runtime: RuntimeLockSessionRuntime | None = None
 
     @asynccontextmanager
     async def server_lifespan(_server: MCPServer[None]) -> AsyncGenerator[None]:
@@ -280,6 +367,13 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         finally:
             if docker_optimization_runtime is not None:
                 docker_optimization_runtime.close()
+            if runtime_lock_runtime is not None:
+                for terminal_session in runtime_lock_runtime.close():
+                    store.save(
+                        terminal_session,
+                        terminal_session.session_artifact_id,
+                        "runtime-lock-session",
+                    )
 
     server: MCPServer[None] = MCPServer(
         "perflens",
@@ -337,6 +431,38 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             collector_modes=config.automatic_collection_policy.allowed_modes,
         )
         return docker_optimization_runtime
+
+    def inspect_runtime_lock_session_capability() -> RuntimeLockCapabilityInspection:
+        _require_runtime_locks(config)
+        assert runtime_lock_policy is not None
+        assert runtime_lock_project is not None
+        assert_runtime_lock_project_policy_current(
+            runtime_lock_policy,
+            allowed_roots=config.allowed_roots,
+        )
+        if config.runtime_lock_capability_factory is not None:
+            return config.runtime_lock_capability_factory()
+        return inspect_runtime_lock_capability(
+            runtime_lock_policy,
+            project_identity_sha256=runtime_lock_project.identity_sha256,
+        )
+
+    def get_runtime_lock_session_runtime() -> RuntimeLockSessionRuntime:
+        nonlocal runtime_lock_runtime
+        _require_runtime_locks(config)
+        if runtime_lock_runtime is not None:
+            return runtime_lock_runtime
+        if config.runtime_lock_runtime_factory is not None:
+            runtime_lock_runtime = config.runtime_lock_runtime_factory()
+            return runtime_lock_runtime
+        assert runtime_lock_policy is not None
+        assert runtime_lock_project is not None
+        runtime_lock_runtime = RuntimeLockSessionRuntime(
+            project_identity_sha256=runtime_lock_project.identity_sha256,
+            project_policy_sha256=runtime_lock_policy.sha256,
+            runtime_lock_config_sha256=runtime_lock_policy.sha256,
+        )
+        return runtime_lock_runtime
 
     def capture_module_snapshot(
         executed: _ExecutedBrokerPlan,
@@ -457,6 +583,398 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         return inspect_collection_capabilities(config.perf_path)
 
     @server.tool(
+        name="inspect_runtime_lock_capability",
+        description=(
+            "Inspect project policy and implemented Runtime Lock adapters without importing, "
+            "instrumenting, attaching to, or executing a target."
+        ),
+        annotations=READ_ONLY,
+        meta={"perflens/permission": "READ_ONLY"},
+        structured_output=True,
+    )
+    async def inspect_runtime_lock_capability_tool() -> RuntimeLockCapabilityArtifact:
+        return inspect_runtime_lock_session_capability().capability
+
+    @server.tool(
+        name="preview_runtime_lock_session",
+        description=(
+            "Create the exact content-bound Runtime Lock Session summary. This does not import, "
+            "instrument, attach, launch, or collect; the user must confirm this exact Preview."
+        ),
+        annotations=WRITES_ARTIFACTS,
+        meta={"perflens/permission": "READ_ONLY_CONTEXT_SNAPSHOT"},
+        structured_output=True,
+    )
+    async def preview_runtime_lock_session(
+        target_scope: RuntimeLockTargetScope,
+        allowed_adapters: tuple[RuntimeLockAdapterId, ...],
+        allowed_semantics: tuple[Literal["exact", "thresholded", "sampled", "cumulative"], ...],
+    ) -> RuntimeLockSessionPreviewArtifact:
+        _require_runtime_locks(config)
+        assert runtime_lock_policy is not None
+        _validate_runtime_lock_preview_policy(
+            runtime_lock_policy,
+            target_scope=target_scope,
+            allowed_adapters=allowed_adapters,
+            allowed_semantics=allowed_semantics,
+        )
+        inspection = inspect_runtime_lock_session_capability()
+        runtime = get_runtime_lock_session_runtime()
+        preview = runtime.preview(
+            inspection.capability,
+            target_scope=target_scope,
+            allowed_adapters=allowed_adapters,
+            allowed_semantics=allowed_semantics,
+            import_roots=(
+                runtime_lock_policy.import_roots if target_scope == "controlled_import" else ()
+            ),
+            budget=runtime_lock_policy.budget,
+            planned_actions=_runtime_lock_planned_actions(target_scope),
+            warnings=(
+                ("Only generic controlled import is implemented in the current milestone.",)
+                if target_scope != "controlled_import"
+                else ()
+            ),
+            expires_in_seconds=runtime_lock_policy.preview_ttl_seconds,
+        )
+        for adapter in inspection.adapter_capabilities:
+            store.save(
+                adapter,
+                adapter.capability_id,
+                "runtime-adapter-capability",
+            )
+        store.save(
+            inspection.capability,
+            inspection.capability.capability_id,
+            "runtime-lock-capability",
+        )
+        store.save(preview, preview.preview_id, "runtime-lock-preview")
+        return preview
+
+    @server.tool(
+        name="authorize_runtime_lock_session",
+        description=(
+            "Authorize one exact Runtime Lock Preview. The process-local token is never stored; "
+            "this call itself does not import, instrument, attach, launch, or collect."
+        ),
+        annotations=AUTHORIZES_DOCKER,
+        meta={"perflens/permission": "RUNTIME_LOCK_AUTHORIZATION"},
+        structured_output=True,
+    )
+    async def authorize_runtime_lock_session(
+        preview_id: str,
+        preview_content_sha256: str,
+        authorization_summary_sha256: str,
+        authorization: Literal["I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"],
+    ) -> RuntimeLockSessionArtifact:
+        _require_runtime_locks(config)
+        assert runtime_lock_policy is not None
+        assert_runtime_lock_project_policy_current(
+            runtime_lock_policy,
+            allowed_roots=config.allowed_roots,
+        )
+        runtime = get_runtime_lock_session_runtime()
+        session = runtime.authorize(
+            preview_id=preview_id,
+            preview_content_sha256=preview_content_sha256,
+            authorization_summary_sha256=authorization_summary_sha256,
+            explicit_authorization=authorization,
+        )
+        store.save(
+            session,
+            session.session_artifact_id,
+            "runtime-lock-session",
+        )
+        return session
+
+    @server.tool(
+        name="import_runtime_lock_evidence",
+        description=(
+            "Consume one authorized, same-UID, immutable controlled-import NDJSON source; "
+            "normalize, analyze, privately replay, persist only redacted Artifacts, and consume "
+            "one single-use Runtime Lock lease. This never launches or attaches to a target."
+        ),
+        annotations=WRITES_ARTIFACTS,
+        meta={"perflens/permission": "RUNTIME_LOCK_CONTROLLED_IMPORT"},
+        structured_output=True,
+    )
+    async def import_runtime_lock_evidence_tool(
+        session_id: str,
+        source_path: str,
+        measurement_semantics: Literal["exact", "thresholded", "sampled", "cumulative"],
+    ) -> ArtifactReference:
+        _require_runtime_locks(config)
+        assert runtime_lock_policy is not None
+        assert runtime_lock_project is not None
+        runtime = get_runtime_lock_session_runtime()
+        lease = None
+        pinned: _PinnedRuntimeLockImport | None = None
+        started_monotonic = time.monotonic()
+        actual_evidence_bytes = 0
+        actual_exact_events = 0
+        run_finished = False
+        try:
+            assert_runtime_lock_project_policy_current(
+                runtime_lock_policy,
+                allowed_roots=config.allowed_roots,
+            )
+            assert_managed_project_current(runtime_lock_project)
+            session = runtime.snapshot(session_id)
+            preview = store.load_runtime_lock_preview(session.preview_id)
+            _validate_runtime_lock_import_session(
+                session,
+                preview,
+                runtime_lock_policy,
+                measurement_semantics=measurement_semantics,
+            )
+            pinned = _pin_runtime_lock_import_source(
+                runtime_lock_project.path,
+                source_path,
+                import_roots=preview.import_roots,
+                max_source_bytes=session.budget.max_artifact_bytes,
+            )
+            operation_identity = _runtime_lock_import_identity(
+                "operation",
+                session.session_id,
+                pinned.project_relative_path,
+                pinned.source_sha256,
+                str(pinned.metadata.st_dev),
+                str(pinned.metadata.st_ino),
+                str(pinned.metadata.st_size),
+                str(pinned.metadata.st_mtime_ns),
+            )
+            target_identity = _runtime_lock_import_identity(
+                "target",
+                session.project_identity_sha256,
+                pinned.source_sha256,
+            )
+            workload_identity = _runtime_lock_import_identity(
+                "workload",
+                session.project_identity_sha256,
+                pinned.source_sha256,
+                measurement_semantics,
+            )
+            reserve_active_seconds = (
+                session.budget.max_exact_duration_seconds
+                if measurement_semantics == "exact"
+                else session.budget.max_collection_duration_seconds
+            )
+            reserve_exact_events = (
+                session.budget.max_exact_events if measurement_semantics == "exact" else 0
+            )
+            lease = runtime.begin_run(
+                session_id,
+                adapter_id="generic_ndjson_import",
+                measurement_semantics=measurement_semantics,
+                operation_identity_sha256=operation_identity,
+                target_identity_sha256=target_identity,
+                workload_identity_sha256=workload_identity,
+                reserve_active_seconds=reserve_active_seconds,
+                reserve_evidence_bytes=session.budget.max_artifact_bytes,
+                reserve_exact_events=reserve_exact_events,
+            )
+            reserved_session = runtime.snapshot(session_id)
+            store.save(
+                reserved_session,
+                reserved_session.session_artifact_id,
+                "runtime-lock-session",
+            )
+            limits = RuntimeLockResourceLimits(
+                max_source_bytes=session.budget.max_artifact_bytes,
+                max_input_records=(
+                    session.budget.max_exact_events if measurement_semantics == "exact" else 100_000
+                ),
+                max_output_bytes=session.budget.max_artifact_bytes,
+            )
+            started_wall = datetime.now(tz=UTC)
+            started_at = started_wall.isoformat()
+            with os.fdopen(os.dup(pinned.descriptor), "rb") as source:
+                os.lseek(source.fileno(), 0, os.SEEK_SET)
+                evidence = import_runtime_lock_ndjson(
+                    source,
+                    limits=limits,
+                    created_at=started_at,
+                )
+            _assert_runtime_lock_import_unchanged(pinned)
+            if (
+                evidence.source.source_sha256 != pinned.source_sha256
+                or evidence.source.source_bytes != pinned.metadata.st_size
+                or evidence.source.measurement_semantics != measurement_semantics
+                or evidence.target.target_kind != "host"
+                or evidence.target.target_uid != os.geteuid()
+            ):
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_import",
+                    "Runtime Lock source identity, semantics, or same-UID host scope changed",
+                    recoverable=True,
+                )
+            analysis = build_runtime_lock_analysis(evidence)
+            with os.fdopen(os.dup(pinned.descriptor), "rb") as private_source:
+                os.lseek(private_source.fileno(), 0, os.SEEK_SET)
+                private_verification = verify_runtime_lock_analysis_artifact(
+                    analysis,
+                    evidence,
+                    private_source_stream=private_source,
+                )
+            _assert_runtime_lock_import_unchanged(pinned)
+            require_usable_runtime_lock_analysis(private_verification)
+            verification = verify_runtime_lock_analysis_artifact(analysis, evidence)
+            require_usable_runtime_lock_analysis(verification)
+            actual_evidence_bytes = len(serialize_json(evidence))
+            actual_exact_events = len(evidence.events) if measurement_semantics == "exact" else 0
+            finished_wall = datetime.now(tz=UTC)
+            duration_seconds = math.ceil((finished_wall - started_wall).total_seconds())
+            if duration_seconds > reserve_active_seconds:
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "runtime_lock_import",
+                    "Runtime Lock controlled import exceeded its authorized active-time budget",
+                    recoverable=True,
+                )
+            finished_at = finished_wall.isoformat()
+            provisional_run = RuntimeLockRunArtifact(
+                schema_version="1.0",
+                perflens_version=__version__,
+                run_id=derive_runtime_lock_run_id(
+                    session_id,
+                    "generic_ndjson_import",
+                    evidence.content_sha256,
+                    started_at,
+                ),
+                created_at=finished_at,
+                started_at=started_at,
+                finished_at=finished_at,
+                session_id=session_id,
+                session_artifact_id=lease.session_artifact_id,
+                session_artifact_content_sha256=lease.session_artifact_content_sha256,
+                session_revision=lease.session_revision,
+                target_scope="controlled_import",
+                operation_identity_sha256=operation_identity,
+                target_identity_sha256=target_identity,
+                adapter_id="generic_ndjson_import",
+                measurement_semantics=measurement_semantics,
+                workload_identity_sha256=workload_identity,
+                runtime_lock_evidence_id=evidence.runtime_lock_evidence_id,
+                runtime_lock_evidence_content_sha256=evidence.content_sha256,
+                runtime_lock_analysis_id=analysis.runtime_lock_analysis_id,
+                runtime_lock_analysis_content_sha256=analysis.content_sha256,
+                runtime_lock_verification_id=verification.runtime_lock_verification_id,
+                runtime_lock_verification_content_sha256=verification.content_sha256,
+                duration_seconds=duration_seconds,
+                evidence_bytes=actual_evidence_bytes,
+                event_count=len(evidence.events),
+                correctness_status="unavailable",
+                quality_status=analysis.quality_status,
+                warnings=evidence.quality.limitations,
+                allowed_conclusions=analysis.allowed_conclusions,
+                forbidden_conclusions=analysis.forbidden_conclusions,
+                content_sha256="0" * 64,
+            )
+            run = provisional_run.model_copy(
+                update={
+                    "content_sha256": contract_content_sha256(
+                        provisional_run,
+                        exclude={"content_sha256"},
+                    )
+                }
+            )
+            for artifact, artifact_id, artifact_type in (
+                (
+                    evidence,
+                    evidence.runtime_lock_evidence_id,
+                    "runtime-lock-evidence",
+                ),
+                (
+                    analysis,
+                    analysis.runtime_lock_analysis_id,
+                    "runtime-lock-analysis",
+                ),
+                (
+                    verification,
+                    verification.runtime_lock_verification_id,
+                    "runtime-lock-verification",
+                ),
+                (run, run.run_id, "runtime-lock-run"),
+            ):
+                store.save(artifact, artifact_id, artifact_type)
+            final_session = runtime.finish_run(session_id, lease, run)
+            run_finished = True
+            store.save(
+                final_session,
+                final_session.session_artifact_id,
+                "runtime-lock-session",
+            )
+            return ArtifactReference(
+                artifact_id=run.run_id,
+                artifact_type="runtime-lock-run",
+                uri=store.uri(run.run_id, "runtime-lock-run"),
+                summary={
+                    "session_id": session_id,
+                    "adapter_id": run.adapter_id,
+                    "runtime": analysis.runtime,
+                    "measurement_semantics": run.measurement_semantics,
+                    "runtime_lock_evidence_id": run.runtime_lock_evidence_id,
+                    "runtime_lock_analysis_id": run.runtime_lock_analysis_id,
+                    "runtime_lock_verification_id": run.runtime_lock_verification_id,
+                    "private_source_replay_status": private_verification.verification_status,
+                    "quality_status": run.quality_status,
+                    "event_count": run.event_count,
+                    "evidence_bytes": run.evidence_bytes,
+                    "session_state": final_session.state,
+                },
+            )
+        except Exception:
+            if lease is not None and not run_finished:
+                with suppress(PerfLensError):
+                    terminal = runtime.fail_run(
+                        session_id,
+                        lease,
+                        actual_active_seconds=time.monotonic() - started_monotonic,
+                        actual_evidence_bytes=actual_evidence_bytes,
+                        actual_exact_events=actual_exact_events,
+                        reason="internal_collection_error",
+                    )
+                    store.save(
+                        terminal,
+                        terminal.session_artifact_id,
+                        "runtime-lock-session",
+                    )
+            elif lease is None:
+                with suppress(PerfLensError):
+                    terminal = runtime.revoke(session_id)
+                    store.save(
+                        terminal,
+                        terminal.session_artifact_id,
+                        "runtime-lock-session",
+                    )
+            raise
+        finally:
+            if pinned is not None:
+                os.close(pinned.descriptor)
+
+    @server.tool(
+        name="revoke_runtime_lock_session",
+        description=(
+            "Revoke one Runtime Lock authorization held by this MCP connection and prevent all "
+            "subsequent operations."
+        ),
+        annotations=REVOKES_DOCKER,
+        meta={"perflens/permission": "RUNTIME_LOCK_AUTHORIZATION"},
+        structured_output=True,
+    )
+    async def revoke_runtime_lock_session(
+        session_id: str,
+    ) -> RuntimeLockSessionArtifact:
+        session = get_runtime_lock_session_runtime().revoke(session_id)
+        store.save(
+            session,
+            session.session_artifact_id,
+            "runtime-lock-session",
+        )
+        return session
+
+    @server.tool(
         name="inspect_docker_capability",
         description=(
             "Inspect the fixed local Docker endpoint and cgroup-v2 support without starting, "
@@ -534,9 +1052,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         preview_id: str,
         preview_content_sha256: str,
         authorization_summary_sha256: str,
-        authorization: Literal[
-            "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
-        ],
+        authorization: Literal["I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"],
     ) -> DockerOptimizationSessionArtifact:
         runtime = get_docker_optimization_runtime()
         session = runtime.authorize(
@@ -1655,9 +2171,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "kernel_context_self_percent": (
                     analysis.evidence_quality.kernel_context_self_percent
                 ),
-                "user_context_self_percent": (
-                    analysis.evidence_quality.user_context_self_percent
-                ),
+                "user_context_self_percent": (analysis.evidence_quality.user_context_self_percent),
                 "unknown_context_self_percent": (
                     analysis.evidence_quality.unknown_context_self_percent
                 ),
@@ -1720,6 +2234,180 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         )
 
     @server.tool(
+        name="analyze_runtime_lock_evidence",
+        description=(
+            "Deterministically analyze one stored, normalized Runtime Lock Evidence artifact, "
+            "independently verify every projection, and persist both immutable results."
+        ),
+        annotations=WRITES_ARTIFACTS,
+        meta={"perflens/permission": "WRITES_ARTIFACTS"},
+        structured_output=True,
+    )
+    async def analyze_runtime_lock_evidence(
+        runtime_lock_evidence_id: str,
+    ) -> ArtifactReference:
+        evidence = store.load_runtime_lock_evidence(runtime_lock_evidence_id)
+        analysis = build_runtime_lock_analysis(evidence)
+        verification = verify_runtime_lock_analysis_artifact(analysis, evidence)
+        require_usable_runtime_lock_analysis(verification)
+        store.save(
+            analysis,
+            analysis.runtime_lock_analysis_id,
+            "runtime-lock-analysis",
+        )
+        store.save(
+            verification,
+            verification.runtime_lock_verification_id,
+            "runtime-lock-verification",
+        )
+        return ArtifactReference(
+            artifact_id=analysis.runtime_lock_analysis_id,
+            artifact_type="runtime-lock-analysis",
+            uri=store.uri(
+                analysis.runtime_lock_analysis_id,
+                "runtime-lock-analysis",
+            ),
+            summary={
+                "runtime": analysis.runtime,
+                "measurement_semantics": analysis.measurement_semantics,
+                "quality_status": analysis.quality_status,
+                "runtime_lock_evidence_id": analysis.runtime_lock_evidence_id,
+                "verification_status": verification.verification_status,
+                "verification_id": verification.runtime_lock_verification_id,
+                "lock_hotspot_count": len(analysis.aggregates),
+                "call_path_count": len(analysis.call_path_aggregates),
+                "total_observed_or_estimated_wait_ns": (
+                    analysis.total_observed_or_estimated_wait_ns
+                ),
+                "omitted_lock_count": analysis.omitted_lock_count,
+            },
+        )
+
+    @server.tool(
+        name="verify_runtime_lock_analysis",
+        description=(
+            "Independently replay a stored Runtime Lock Analysis from its bound Evidence before "
+            "Agent interpretation."
+        ),
+        annotations=READ_ONLY,
+        meta={"perflens/permission": "READ_ONLY"},
+        structured_output=True,
+    )
+    async def verify_runtime_lock_analysis(
+        runtime_lock_analysis_id: str,
+    ) -> RuntimeLockAnalysisVerificationArtifact:
+        analysis, evidence, _ = store.load_runtime_lock_analysis(runtime_lock_analysis_id)
+        return verify_runtime_lock_analysis_artifact(analysis, evidence)
+
+    @server.tool(
+        name="list_runtime_lock_hotspots",
+        description=(
+            "Return one bounded page from a verified Runtime Lock lock/context/path/outcome/kind "
+            "projection without mixing measurement semantics."
+        ),
+        annotations=READ_ONLY,
+        meta={"perflens/permission": "READ_ONLY"},
+        structured_output=True,
+    )
+    async def list_runtime_lock_hotspots(
+        runtime_lock_analysis_id: str,
+        projection: Literal[
+            "lock",
+            "execution_context",
+            "call_path",
+            "wait_outcome",
+            "lock_kind",
+        ] = "lock",
+        sort_by: Literal[
+            "observed_or_estimated_wait_ns",
+            "exact_wait_count",
+            "thresholded_wait_count",
+            "sampled_observation_count",
+            "cumulative_observation_count",
+            "exact_hold_ns",
+            "owner_observed_count",
+        ] = "observed_or_estimated_wait_ns",
+        cursor: int = 0,
+        limit: int = 30,
+    ) -> RuntimeLockHotspotPage:
+        analysis, _, _ = store.load_runtime_lock_analysis(runtime_lock_analysis_id)
+        return query_runtime_lock_hotspots(
+            analysis,
+            projection=projection,
+            sort_by=sort_by,
+            cursor=cursor,
+            limit=limit,
+        )
+
+    @server.tool(
+        name="get_runtime_lock_call_paths",
+        description=(
+            "Return a bounded verified Runtime Lock call-path page joined only to redacted "
+            "public stack frames."
+        ),
+        annotations=READ_ONLY,
+        meta={"perflens/permission": "READ_ONLY"},
+        structured_output=True,
+    )
+    async def get_runtime_lock_call_paths(
+        runtime_lock_analysis_id: str,
+        cursor: int = 0,
+        limit: int = 20,
+    ) -> RuntimeLockCallPathPage:
+        analysis, evidence, _ = store.load_runtime_lock_analysis(runtime_lock_analysis_id)
+        return query_runtime_lock_call_paths(
+            analysis,
+            evidence,
+            cursor=cursor,
+            limit=limit,
+        )
+
+    @server.tool(
+        name="build_runtime_lock_diagnosis_bundle",
+        description=(
+            "Build and store one bounded evidence-constrained Runtime Lock diagnosis; it never "
+            "upgrades an observation to a root cause or Verified Improvement."
+        ),
+        annotations=WRITES_ARTIFACTS,
+        meta={"perflens/permission": "WRITES_ARTIFACTS"},
+        structured_output=True,
+    )
+    async def build_runtime_lock_diagnosis_bundle(
+        runtime_lock_analysis_id: str,
+    ) -> ArtifactReference:
+        analysis, evidence, verification = store.load_runtime_lock_analysis(
+            runtime_lock_analysis_id
+        )
+        diagnosis = create_runtime_lock_diagnosis(
+            analysis,
+            evidence,
+            verification,
+        )
+        store.save(
+            diagnosis,
+            diagnosis.runtime_lock_diagnosis_id,
+            "runtime-lock-diagnosis",
+        )
+        return ArtifactReference(
+            artifact_id=diagnosis.runtime_lock_diagnosis_id,
+            artifact_type="runtime-lock-diagnosis",
+            uri=store.uri(
+                diagnosis.runtime_lock_diagnosis_id,
+                "runtime-lock-diagnosis",
+            ),
+            summary={
+                "runtime_lock_analysis_id": diagnosis.runtime_lock_analysis_id,
+                "runtime": diagnosis.runtime,
+                "measurement_semantics": diagnosis.measurement_semantics,
+                "quality_status": diagnosis.quality_status,
+                "observation_count": len(diagnosis.observations),
+                "limitation_count": len(diagnosis.limitations),
+                "top_lock_count": len(diagnosis.top_lock_ids),
+                "top_call_path_count": len(diagnosis.top_stack_ids),
+            },
+        )
+
+    @server.tool(
         name="verify_trace_analysis",
         description=(
             "Replay and verify a stored sched/off-CPU/lock analysis before Agent interpretation."
@@ -1769,9 +2457,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "kernel_context_self_percent": (
                     analysis.evidence_quality.kernel_context_self_percent
                 ),
-                "user_context_self_percent": (
-                    analysis.evidence_quality.user_context_self_percent
-                ),
+                "user_context_self_percent": (analysis.evidence_quality.user_context_self_percent),
                 "unknown_context_self_percent": (
                     analysis.evidence_quality.unknown_context_self_percent
                 ),
@@ -2006,6 +2692,15 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "scheduler-analysis",
             "off-cpu-analysis",
             "lock-analysis",
+            "runtime-lock-capability",
+            "runtime-lock-preview",
+            "runtime-lock-evidence",
+            "runtime-lock-analysis",
+            "runtime-lock-verification",
+            "runtime-lock-diagnosis",
+            "runtime-lock-session",
+            "runtime-lock-run",
+            "runtime-lock-comparison",
             "container-resource-context",
             "container-run",
             "container-workload-spec",
@@ -2303,21 +2998,19 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             candidate_benchmark=candidate_benchmark,
             benchmark_comparison=benchmark_comparison,
         )
-        iteration: DockerOptimizationIterationArtifact = (
-            compare_docker_optimization_iteration(
-                session=session,
-                baseline_build=baseline_build,
-                candidate_build=candidate_build,
-                baseline_measurement=baseline_measurement,
-                candidate_measurement=candidate_measurement,
-                baseline_analysis=baseline_analysis,
-                candidate_analysis=candidate_analysis,
-                profile_comparison=profile_comparison,
-                baseline_benchmark=baseline_benchmark,
-                candidate_benchmark=candidate_benchmark,
-                benchmark_comparison=benchmark_comparison,
-                source_container_comparison=source_comparison,
-            )
+        iteration: DockerOptimizationIterationArtifact = compare_docker_optimization_iteration(
+            session=session,
+            baseline_build=baseline_build,
+            candidate_build=candidate_build,
+            baseline_measurement=baseline_measurement,
+            candidate_measurement=candidate_measurement,
+            baseline_analysis=baseline_analysis,
+            candidate_analysis=candidate_analysis,
+            profile_comparison=profile_comparison,
+            baseline_benchmark=baseline_benchmark,
+            candidate_benchmark=candidate_benchmark,
+            benchmark_comparison=benchmark_comparison,
+            source_container_comparison=source_comparison,
         )
         store.save(profile_comparison, profile_comparison.comparison_id, "profile-comparison")
         store.save(
@@ -2344,9 +3037,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 profile_comparable=profile_comparison.comparable,
                 benchmark_comparable=benchmark_comparison.comparable,
                 source_environment_match=source_comparison.environment_match,
-                baseline_profile_quality_status=(
-                    baseline_analysis.evidence_quality.quality_status
-                ),
+                baseline_profile_quality_status=(baseline_analysis.evidence_quality.quality_status),
                 candidate_profile_quality_status=(
                     candidate_analysis.evidence_quality.quality_status
                 ),
@@ -2375,9 +3066,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         iteration_id: str | None = None,
         candidate_build_id: str | None = None,
         evaluation_reason: OptimizationEvaluationReason | None = None,
-        authorization: Literal[
-            "I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE"
-        ]
+        authorization: Literal["I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE"]
         | None = None,
     ) -> ArtifactReference:
         iteration = (
@@ -2860,6 +3549,245 @@ def _require_docker_optimization(config: ServerConfig) -> None:
         )
 
 
+def _validate_runtime_lock_preview_policy(
+    policy: RuntimeLockProjectPolicy,
+    *,
+    target_scope: RuntimeLockTargetScope,
+    allowed_adapters: tuple[RuntimeLockAdapterId, ...],
+    allowed_semantics: tuple[Literal["exact", "thresholded", "sampled", "cumulative"], ...],
+) -> None:
+    if not policy.enabled:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "runtime_lock_authorization",
+            "Runtime Lock sessions are disabled by project policy",
+            recoverable=True,
+        )
+    if target_scope not in policy.target_scopes:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "runtime_lock_authorization",
+            "Runtime Lock target scope is outside project policy",
+            recoverable=True,
+        )
+    if (
+        not allowed_adapters
+        or len(allowed_adapters) != len(set(allowed_adapters))
+        or any(adapter not in policy.allowed_adapters for adapter in allowed_adapters)
+        or not allowed_semantics
+        or len(allowed_semantics) != len(set(allowed_semantics))
+        or any(semantics not in policy.allowed_semantics for semantics in allowed_semantics)
+    ):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "runtime_lock_authorization",
+            "Runtime Lock Adapter or semantics scope exceeds project policy",
+            recoverable=True,
+        )
+    covered_semantics: set[str] = set()
+    for adapter_id in allowed_adapters:
+        adapter = policy.adapter_policy(adapter_id)
+        selected_semantics = set(adapter.allowed_semantics) & set(allowed_semantics)
+        if (
+            not adapter.enabled
+            or not selected_semantics
+            or (target_scope == "controlled_import" and not adapter.controlled_import_allowed)
+            or (target_scope != "controlled_import" and not adapter.launch_instrumentation_allowed)
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "runtime_lock_authorization",
+                "Runtime Lock Adapter entry point or semantics is outside project policy",
+                recoverable=True,
+            )
+        covered_semantics.update(selected_semantics)
+    if covered_semantics != set(allowed_semantics):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "runtime_lock_authorization",
+            "Runtime Lock semantics are not covered by the selected Adapter policies",
+            recoverable=True,
+        )
+
+
+def _validate_runtime_lock_import_session(
+    session: RuntimeLockSessionArtifact,
+    preview: RuntimeLockSessionPreviewArtifact,
+    policy: RuntimeLockProjectPolicy,
+    *,
+    measurement_semantics: Literal["exact", "thresholded", "sampled", "cumulative"],
+) -> None:
+    if (
+        session.state != "active"
+        or session.target_scope != "controlled_import"
+        or preview.target_scope != session.target_scope
+        or preview.content_sha256 != session.preview_content_sha256
+        or preview.runtime_lock_config_sha256 != policy.sha256
+        or session.runtime_lock_config_sha256 != policy.sha256
+        or "generic_ndjson_import" not in session.allowed_adapters
+        or measurement_semantics not in session.allowed_semantics
+    ):
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "runtime_lock_import",
+            "Runtime Lock controlled import is outside the authorized Session",
+            recoverable=True,
+        )
+    _validate_runtime_lock_preview_policy(
+        policy,
+        target_scope="controlled_import",
+        allowed_adapters=("generic_ndjson_import",),
+        allowed_semantics=(measurement_semantics,),
+    )
+
+
+def _pin_runtime_lock_import_source(
+    project_root: Path,
+    source_path: str,
+    *,
+    import_roots: tuple[str, ...],
+    max_source_bytes: int,
+) -> _PinnedRuntimeLockImport:
+    if (
+        not source_path
+        or "\x00" in source_path
+        or "\\" in source_path
+        or len(source_path.encode("utf-8")) > 4096
+    ):
+        raise _runtime_lock_import_error("Runtime Lock import path is invalid")
+    relative = PurePosixPath(source_path)
+    if (
+        relative.is_absolute()
+        or str(relative) != source_path
+        or relative in {PurePosixPath("."), PurePosixPath("..")}
+        or ".." in relative.parts
+        or not any(relative.is_relative_to(PurePosixPath(root)) for root in import_roots)
+    ):
+        raise _runtime_lock_import_error(
+            "Runtime Lock source is outside the authorized project import roots"
+        )
+    candidate = project_root.joinpath(*relative.parts)
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise _runtime_lock_import_error("Runtime Lock source cannot be resolved safely") from exc
+    if resolved != candidate or not resolved.is_relative_to(project_root):
+        raise _runtime_lock_import_error(
+            "Runtime Lock source path contains a symlink or escapes the project"
+        )
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            resolved,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+        )
+        metadata = os.fstat(descriptor)
+        current = resolved.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) & 0o022
+            or not 1 <= metadata.st_size <= max_source_bytes
+            or _runtime_lock_file_identity(metadata) != _runtime_lock_file_identity(current)
+        ):
+            raise _runtime_lock_import_error(
+                "Runtime Lock source owner, type, links, mode, size, or identity is unsafe"
+            )
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 1 << 20):
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        if _runtime_lock_file_identity(metadata) != _runtime_lock_file_identity(after):
+            raise _runtime_lock_import_error("Runtime Lock source changed while it was hashed")
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        return _PinnedRuntimeLockImport(
+            descriptor=descriptor,
+            path=resolved,
+            project_relative_path=source_path,
+            source_sha256=digest.hexdigest(),
+            metadata=metadata,
+        )
+    except PerfLensError:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+    except OSError as exc:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise _runtime_lock_import_error("Runtime Lock source cannot be opened safely") from exc
+
+
+def _assert_runtime_lock_import_unchanged(source: _PinnedRuntimeLockImport) -> None:
+    try:
+        descriptor = os.fstat(source.descriptor)
+        current = source.path.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise _runtime_lock_import_error("Runtime Lock source identity became unavailable") from exc
+    if _runtime_lock_file_identity(source.metadata) != _runtime_lock_file_identity(
+        descriptor
+    ) or _runtime_lock_file_identity(descriptor) != _runtime_lock_file_identity(current):
+        raise _runtime_lock_import_error("Runtime Lock source changed during controlled import")
+
+
+def _runtime_lock_file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+        stat.S_IMODE(metadata.st_mode),
+    )
+
+
+def _runtime_lock_import_identity(domain: str, *values: str) -> str:
+    material = "\0".join((f"perflens-runtime-lock-import-{domain}-v1", *values))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _runtime_lock_import_error(message: str) -> PerfLensError:
+    return PerfLensError(
+        ErrorCode.PATH_SAFETY_VIOLATION,
+        "runtime_lock_import",
+        message,
+        recoverable=True,
+    )
+
+
+def _require_runtime_locks(config: ServerConfig) -> None:
+    if not config.allow_runtime_locks or config.runtime_lock_project_config is None:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "authorization",
+            "Runtime Lock sessions are disabled by project MCP policy",
+            recoverable=True,
+            suggested_actions=(
+                "Run perflens init --runtime-locks in this project and restart the client.",
+            ),
+        )
+
+
+def _runtime_lock_planned_actions(
+    target_scope: RuntimeLockTargetScope,
+) -> tuple[str, ...]:
+    if target_scope == "controlled_import":
+        return (
+            "Authorize this exact bounded Runtime Lock Session Preview.",
+            "Import only a versioned source inside one reviewed project-relative import root.",
+            "Normalize, analyze, and independently verify the redacted Runtime Lock evidence.",
+            "Expose only bounded verified hotspots, call paths, and evidence limitations.",
+            "Revoke the in-memory Session authorization when the evidence workflow ends.",
+        )
+    return (
+        "Authorize this exact bounded Runtime Lock Session Preview.",
+        "Launch only the fixed project workload through its reviewed Runtime Lock Adapter.",
+        "Capture one bounded Runtime Lock evidence stream without attaching to an existing PID.",
+        "Analyze and independently verify the redacted Runtime Lock evidence.",
+        "Revoke the in-memory Session authorization when the evidence workflow ends.",
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the PerfLens MCP server over stdio")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -2873,7 +3801,9 @@ def main() -> None:
     parser.add_argument("--allow-project-execution", action="store_true")
     parser.add_argument("--allow-docker-targets", action="store_true")
     parser.add_argument("--allow-docker-optimization", action="store_true")
+    parser.add_argument("--allow-runtime-locks", action="store_true")
     parser.add_argument("--docker-project-config", type=Path)
+    parser.add_argument("--runtime-lock-project-config", type=Path)
     parser.add_argument("--docker-runtime-root", type=Path)
     parser.add_argument("--docker-builder-policy", type=Path)
     parser.add_argument(
@@ -2911,7 +3841,9 @@ def main() -> None:
             allow_project_execution=arguments.allow_project_execution,
             allow_docker_targets=arguments.allow_docker_targets,
             allow_docker_optimization=arguments.allow_docker_optimization,
+            allow_runtime_locks=arguments.allow_runtime_locks,
             docker_project_config=arguments.docker_project_config,
+            runtime_lock_project_config=arguments.runtime_lock_project_config,
             docker_runtime_root=arguments.docker_runtime_root,
             docker_builder_policy=arguments.docker_builder_policy,
             docker_gate_path=arguments.docker_gate_path,

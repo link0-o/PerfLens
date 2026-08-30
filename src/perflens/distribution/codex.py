@@ -315,6 +315,8 @@ def render_codex_config(
     allow_docker_targets: bool = False,
     allow_docker_optimization: bool = False,
     docker_project_config: Path | None = None,
+    allow_runtime_locks: bool = False,
+    runtime_lock_project_config: Path | None = None,
     mcp_command: Path | None = None,
 ) -> str:
     """Return a project-scoped TOML snippet for the installed MCP executable."""
@@ -335,6 +337,8 @@ def render_codex_config(
         allow_docker_targets=allow_docker_targets,
         allow_docker_optimization=allow_docker_optimization,
         docker_project_config=docker_project_config,
+        allow_runtime_locks=allow_runtime_locks,
+        runtime_lock_project_config=runtime_lock_project_config,
         mcp_command=mcp_command,
     )
     formatted_arguments = ",\n".join(f"  {_toml_string(value)}" for value in launch.arguments)
@@ -369,6 +373,8 @@ def build_mcp_launch_configuration(
     allow_docker_targets: bool = False,
     allow_docker_optimization: bool = False,
     docker_project_config: Path | None = None,
+    allow_runtime_locks: bool = False,
+    runtime_lock_project_config: Path | None = None,
     mcp_command: Path | None = None,
 ) -> McpLaunchConfiguration:
     """Build one client-neutral, project-bounded MCP launch configuration."""
@@ -404,6 +410,12 @@ def build_mcp_launch_configuration(
             ErrorCode.INVALID_INPUT,
             "codex_config",
             "Docker optimization requires Docker target support",
+        )
+    if allow_runtime_locks != (runtime_lock_project_config is not None):
+        raise PerfLensError(
+            ErrorCode.INVALID_INPUT,
+            "codex_config",
+            "Runtime Lock support requires exactly one project policy path",
         )
     arguments = [
         "--allowed-root",
@@ -479,10 +491,24 @@ def build_mcp_launch_configuration(
             )
             if allow_docker_optimization:
                 arguments.append("--allow-docker-optimization")
+    if allow_runtime_locks:
+        assert runtime_lock_project_config is not None
+        safe_runtime_lock_config = _project_policy_path(
+            safe_workspace,
+            runtime_lock_project_config,
+            label="Runtime Lock",
+        )
+        arguments.extend(
+            (
+                "--allow-runtime-locks",
+                "--runtime-lock-project-config",
+                str(safe_runtime_lock_config),
+            )
+        )
     return McpLaunchConfiguration(safe_command, tuple(arguments))
 
 
-def _project_policy_path(workspace: Path, path: Path) -> Path:
+def _project_policy_path(workspace: Path, path: Path, *, label: str = "Docker") -> Path:
     candidate = path if path.is_absolute() else workspace / path
     try:
         resolved = candidate.expanduser().resolve(strict=False)
@@ -490,13 +516,13 @@ def _project_policy_path(workspace: Path, path: Path) -> Path:
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
             "codex_config",
-            "Docker project policy path cannot be resolved safely",
+            f"{label} project policy path cannot be resolved safely",
         ) from exc
     if not resolved.is_relative_to(workspace) or resolved == workspace:
         raise PerfLensError(
             ErrorCode.PATH_SAFETY_VIOLATION,
             "codex_config",
-            "Docker project policy must be a file inside the selected workspace",
+            f"{label} project policy must be a file inside the selected workspace",
         )
     return resolved
 

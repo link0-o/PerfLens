@@ -168,6 +168,91 @@ def test_setup_rejects_docker_runtime_without_automatic_collection(tmp_path: Pat
     assert not (project / "perflens-setup").exists()
 
 
+def test_setup_enables_runtime_lock_policy_without_executing_or_expanding_docker(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    artifact = run_project_setup(
+        project,
+        enable_runtime_locks=True,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+
+    policy = project / "perflens-setup/runtime-locks.toml"
+    assert artifact.runtime_locks_enabled is True
+    assert artifact.runtime_lock_config_path == str(policy)
+    assert policy.stat().st_mode & 0o777 == 0o600
+    rendered = policy.read_text(encoding="utf-8")
+    assert "enabled = true" in rendered
+    assert 'target_scopes = ["controlled_import", "host_launched_workload"]' in rendered
+    assert "docker_optimization" not in rendered
+    codex_config = (project / ".codex/config.toml").read_text(encoding="utf-8")
+    assert '"--allow-runtime-locks"' in codex_config
+    assert '"--runtime-lock-project-config"' in codex_config
+    assert str(policy) in codex_config
+    assert "runtime-locks.toml" in (project / "perflens-setup/NEXT_STEPS.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_setup_runtime_lock_update_preserves_reviewed_policy_without_expansion(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    first = run_project_setup(
+        project,
+        enable_runtime_locks=True,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+    policy = Path(first.runtime_lock_config_path or "")
+    reviewed = policy.read_text(encoding="utf-8").replace(
+        "preview_ttl_seconds = 600",
+        "preview_ttl_seconds = 300",
+    )
+    policy.write_text(reviewed + "\n# project owner reviewed\n", encoding="utf-8")
+    policy.chmod(0o600)
+
+    updated = run_project_setup(
+        project,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+        update_existing=True,
+    )
+
+    assert updated.runtime_locks_enabled is True
+    assert updated.runtime_lock_config_path == str(policy)
+    assert policy.read_text(encoding="utf-8").endswith("# project owner reviewed\n")
+    assert '"--allow-runtime-locks"' in (project / ".codex/config.toml").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_setup_runtime_lock_update_rejects_unowned_policy(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    artifact = run_project_setup(
+        project,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+    policy = Path(artifact.output_directory) / "runtime-locks.toml"
+    policy.write_text("schema_version = \"1.0\"\n", encoding="utf-8")
+
+    with pytest.raises(PerfLensError, match="Unowned Runtime Lock"):
+        run_project_setup(
+            project,
+            enable_runtime_locks=True,
+            mcp_command=Path(sys.executable),
+            perf_path=Path("/bin/true"),
+            update_existing=True,
+        )
+
+
 def test_setup_uses_trusted_native_package_layout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import stat
@@ -16,8 +17,18 @@ from perflens.application.evidence import (
     contract_content_sha256,
     verify_collection_artifact,
 )
+from perflens.application.runtime_lock_evidence import (
+    validate_runtime_lock_evidence_invariants,
+)
+from perflens.application.runtime_lock_queries import (
+    build_runtime_lock_diagnosis_bundle,
+)
 from perflens.application.trace_evidence import validate_trace_evidence_invariants
 from perflens.application.verify_analysis import verify_analysis_artifact
+from perflens.application.verify_runtime_locks import (
+    require_usable_runtime_lock_analysis,
+    verify_runtime_lock_analysis_artifact,
+)
 from perflens.application.verify_trace import (
     require_usable_trace_analysis,
     verify_trace_analysis_artifact,
@@ -51,6 +62,20 @@ from perflens.contracts.docker_build import (
     DockerOptimizationIterationArtifact,
     DockerOptimizationSessionArtifact,
 )
+from perflens.contracts.runtime_lock_sessions import (
+    RuntimeLockCapabilityArtifact,
+    RuntimeLockComparisonArtifact,
+    RuntimeLockRunArtifact,
+    RuntimeLockSessionArtifact,
+    RuntimeLockSessionPreviewArtifact,
+)
+from perflens.contracts.runtime_locks import (
+    RuntimeAdapterCapabilityArtifact,
+    RuntimeLockAnalysisArtifact,
+    RuntimeLockAnalysisVerificationArtifact,
+    RuntimeLockDiagnosisBundleArtifact,
+    RuntimeLockEvidenceArtifact,
+)
 from perflens.contracts.trace import (
     LockAnalysisArtifact,
     OffCpuAnalysisArtifact,
@@ -70,6 +95,14 @@ from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.security.paths import validate_new_output_file
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_MAX_RUNTIME_LOCK_SESSION_REVISIONS = 32
+_RUNTIME_LOCK_ADAPTER_SOURCE_FORMATS = {
+    "cpython_threading": "native_interposer_ndjson_v1",
+    "generic_ndjson_import": "perflens_runtime_lock_ndjson_v1",
+    "go_pprof": "pprof_text_v1",
+    "java_jfr": "jfr_json_v1",
+    "native_pthread": "native_interposer_ndjson_v1",
+}
 ModelT = TypeVar("ModelT", bound=BaseModel)
 type TraceAnalysisArtifact = (
     SchedulerAnalysisArtifact | OffCpuAnalysisArtifact | LockAnalysisArtifact
@@ -250,9 +283,7 @@ class ArtifactStore:
         replayed = compare_benchmarks(
             self.load_benchmark(comparison.baseline_benchmark_id),
             self.load_benchmark(comparison.candidate_benchmark_id),
-            minimum_practical_impact_percent=(
-                comparison.minimum_practical_impact_percent
-            ),
+            minimum_practical_impact_percent=(comparison.minimum_practical_impact_percent),
         )
         if replayed != comparison:
             raise self._identity_error(comparison_id, "benchmark-comparison")
@@ -274,6 +305,500 @@ class ArtifactStore:
         )
         validate_trace_evidence_invariants(evidence)
         return evidence
+
+    def load_runtime_lock_evidence(
+        self,
+        runtime_lock_evidence_id: str,
+    ) -> RuntimeLockEvidenceArtifact:
+        evidence = self._load(
+            runtime_lock_evidence_id,
+            "runtime-lock-evidence",
+            RuntimeLockEvidenceArtifact,
+        )
+        self._require_embedded_id(
+            evidence.runtime_lock_evidence_id,
+            runtime_lock_evidence_id,
+            "runtime-lock-evidence",
+        )
+        validate_runtime_lock_evidence_invariants(evidence)
+        return evidence
+
+    def load_runtime_adapter_capability(
+        self,
+        capability_id: str,
+    ) -> RuntimeAdapterCapabilityArtifact:
+        capability = self._load(
+            capability_id,
+            "runtime-adapter-capability",
+            RuntimeAdapterCapabilityArtifact,
+        )
+        self._require_embedded_id(
+            capability.capability_id,
+            capability_id,
+            "runtime-adapter-capability",
+        )
+        self._verify_contract_content(
+            capability,
+            capability.content_sha256,
+            capability_id,
+            "runtime-adapter-capability",
+        )
+        return capability
+
+    def load_runtime_lock_capability(
+        self,
+        capability_id: str,
+    ) -> RuntimeLockCapabilityArtifact:
+        capability = self._load(
+            capability_id,
+            "runtime-lock-capability",
+            RuntimeLockCapabilityArtifact,
+        )
+        self._require_embedded_id(
+            capability.capability_id,
+            capability_id,
+            "runtime-lock-capability",
+        )
+        self._verify_contract_content(
+            capability,
+            capability.content_sha256,
+            capability_id,
+            "runtime-lock-capability",
+        )
+        for reference in capability.adapters:
+            adapter = self.load_runtime_adapter_capability(reference.capability_id)
+            if (
+                adapter.adapter_id != reference.adapter_id
+                or adapter.content_sha256 != reference.capability_content_sha256
+                or adapter.availability != reference.availability
+                or adapter.measurement_semantics != reference.supported_semantics
+                or adapter.limitations != reference.limitations
+            ):
+                raise self._identity_error(capability_id, "runtime-lock-capability")
+        return capability
+
+    def load_runtime_lock_preview(
+        self,
+        preview_id: str,
+    ) -> RuntimeLockSessionPreviewArtifact:
+        preview = self._load(
+            preview_id,
+            "runtime-lock-preview",
+            RuntimeLockSessionPreviewArtifact,
+        )
+        self._require_embedded_id(
+            preview.preview_id,
+            preview_id,
+            "runtime-lock-preview",
+        )
+        self._verify_contract_content(
+            preview,
+            preview.content_sha256,
+            preview_id,
+            "runtime-lock-preview",
+        )
+        expected_summary = contract_content_sha256(
+            preview,
+            exclude={"authorization_summary_sha256", "content_sha256"},
+        )
+        capability = self.load_runtime_lock_capability(preview.capability_id)
+        if (
+            preview.authorization_summary_sha256 != expected_summary
+            or preview.capability_content_sha256 != capability.content_sha256
+            or preview.project_identity_sha256 != capability.project_identity_sha256
+            or preview.project_policy_sha256 != capability.project_policy_sha256
+        ):
+            raise self._identity_error(preview_id, "runtime-lock-preview")
+        return preview
+
+    def load_runtime_lock_analysis(
+        self,
+        runtime_lock_analysis_id: str,
+    ) -> tuple[
+        RuntimeLockAnalysisArtifact,
+        RuntimeLockEvidenceArtifact,
+        RuntimeLockAnalysisVerificationArtifact,
+    ]:
+        analysis = self._load(
+            runtime_lock_analysis_id,
+            "runtime-lock-analysis",
+            RuntimeLockAnalysisArtifact,
+        )
+        self._require_embedded_id(
+            analysis.runtime_lock_analysis_id,
+            runtime_lock_analysis_id,
+            "runtime-lock-analysis",
+        )
+        evidence = self.load_runtime_lock_evidence(analysis.runtime_lock_evidence_id)
+        verification = verify_runtime_lock_analysis_artifact(analysis, evidence)
+        require_usable_runtime_lock_analysis(verification)
+        return analysis, evidence, verification
+
+    def load_runtime_lock_verification(
+        self,
+        runtime_lock_verification_id: str,
+    ) -> RuntimeLockAnalysisVerificationArtifact:
+        verification = self._load(
+            runtime_lock_verification_id,
+            "runtime-lock-verification",
+            RuntimeLockAnalysisVerificationArtifact,
+        )
+        self._require_embedded_id(
+            verification.runtime_lock_verification_id,
+            runtime_lock_verification_id,
+            "runtime-lock-verification",
+        )
+        self._verify_contract_content(
+            verification,
+            verification.content_sha256,
+            runtime_lock_verification_id,
+            "runtime-lock-verification",
+        )
+        analysis, evidence, replayed = self.load_runtime_lock_analysis(
+            verification.runtime_lock_analysis_id
+        )
+        if (
+            replayed != verification
+            or verification.runtime_lock_analysis_content_sha256 != analysis.content_sha256
+            or verification.runtime_lock_evidence_id != evidence.runtime_lock_evidence_id
+            or verification.runtime_lock_evidence_content_sha256 != evidence.content_sha256
+        ):
+            raise self._identity_error(
+                runtime_lock_verification_id,
+                "runtime-lock-verification",
+            )
+        return verification
+
+    def load_runtime_lock_diagnosis(
+        self,
+        runtime_lock_diagnosis_id: str,
+    ) -> RuntimeLockDiagnosisBundleArtifact:
+        diagnosis = self._load(
+            runtime_lock_diagnosis_id,
+            "runtime-lock-diagnosis",
+            RuntimeLockDiagnosisBundleArtifact,
+        )
+        self._require_embedded_id(
+            diagnosis.runtime_lock_diagnosis_id,
+            runtime_lock_diagnosis_id,
+            "runtime-lock-diagnosis",
+        )
+        self._verify_contract_content(
+            diagnosis,
+            diagnosis.content_sha256,
+            runtime_lock_diagnosis_id,
+            "runtime-lock-diagnosis",
+        )
+        analysis, evidence, verification = self.load_runtime_lock_analysis(
+            diagnosis.runtime_lock_analysis_id
+        )
+        replayed = build_runtime_lock_diagnosis_bundle(
+            analysis,
+            evidence,
+            verification,
+        )
+        if replayed != diagnosis:
+            raise self._identity_error(
+                runtime_lock_diagnosis_id,
+                "runtime-lock-diagnosis",
+            )
+        return diagnosis
+
+    def load_runtime_lock_session(
+        self,
+        session_artifact_id: str,
+    ) -> RuntimeLockSessionArtifact:
+        return self._load_runtime_lock_session_chain(session_artifact_id, seen=set())
+
+    def _load_runtime_lock_session_chain(
+        self,
+        session_artifact_id: str,
+        *,
+        seen: set[str],
+    ) -> RuntimeLockSessionArtifact:
+        if session_artifact_id in seen:
+            raise self._identity_error(session_artifact_id, "runtime-lock-session")
+        seen.add(session_artifact_id)
+        session = self._load(
+            session_artifact_id,
+            "runtime-lock-session",
+            RuntimeLockSessionArtifact,
+        )
+        self._require_embedded_id(
+            session.session_artifact_id,
+            session_artifact_id,
+            "runtime-lock-session",
+        )
+        self._verify_contract_content(
+            session,
+            session.content_sha256,
+            session_artifact_id,
+            "runtime-lock-session",
+        )
+        if session.revision > _MAX_RUNTIME_LOCK_SESSION_REVISIONS:
+            raise self._identity_error(session_artifact_id, "runtime-lock-session")
+        preview = self.load_runtime_lock_preview(session.preview_id)
+        created = datetime.fromisoformat(session.created_at)
+        if (
+            session.preview_content_sha256 != preview.content_sha256
+            or session.project_identity_sha256 != preview.project_identity_sha256
+            or session.client_connection_identity_sha256
+            != preview.client_connection_identity_sha256
+            or session.project_policy_sha256 != preview.project_policy_sha256
+            or session.capability_id != preview.capability_id
+            or session.capability_content_sha256 != preview.capability_content_sha256
+            or session.runtime_lock_config_sha256 != preview.runtime_lock_config_sha256
+            or session.target_scope != preview.target_scope
+            or session.allowed_adapters != preview.allowed_adapters
+            or session.allowed_semantics != preview.allowed_semantics
+            or session.budget != preview.budget
+            or created < datetime.fromisoformat(preview.created_at)
+            or created > datetime.fromisoformat(preview.expires_at)
+            or (
+                datetime.fromisoformat(session.expires_at) - created
+            ).total_seconds()
+            != session.budget.hard_expiry_seconds
+        ):
+            raise self._identity_error(session_artifact_id, "runtime-lock-session")
+        if session.revision == 0:
+            if (
+                session.state != "active"
+                or session.workload_runs_used != 0
+                or session.active_seconds_used != 0
+                or session.evidence_bytes_used != 0
+                or session.exact_events_used != 0
+            ):
+                raise self._identity_error(session_artifact_id, "runtime-lock-session")
+        else:
+            assert session.previous_session_artifact_id is not None
+            assert session.previous_session_artifact_content_sha256 is not None
+            previous = self._load_runtime_lock_session_chain(
+                session.previous_session_artifact_id,
+                seen=seen,
+            )
+            immutable_fields = (
+                "session_id",
+                "created_at",
+                "expires_at",
+                "project_identity_sha256",
+                "client_connection_identity_sha256",
+                "project_policy_sha256",
+                "capability_id",
+                "capability_content_sha256",
+                "runtime_lock_config_sha256",
+                "preview_id",
+                "preview_content_sha256",
+                "authorization_receipt_sha256",
+                "target_scope",
+                "allowed_adapters",
+                "allowed_semantics",
+                "budget",
+            )
+            workload_delta = session.workload_runs_used - previous.workload_runs_used
+            previous_usage = (
+                previous.active_seconds_used,
+                previous.evidence_bytes_used,
+                previous.exact_events_used,
+            )
+            current_usage = (
+                session.active_seconds_used,
+                session.evidence_bytes_used,
+                session.exact_events_used,
+            )
+            usage_transition_valid = (
+                workload_delta == 1
+                and session.state == "active"
+                and current_usage[0] > previous_usage[0]
+                and current_usage[1] > previous_usage[1]
+                and current_usage[2] >= previous_usage[2]
+            ) or (
+                workload_delta == 0
+                and all(
+                    current <= prior
+                    for current, prior in zip(current_usage, previous_usage, strict=True)
+                )
+            )
+            if (
+                previous.content_sha256
+                != session.previous_session_artifact_content_sha256
+                or previous.revision + 1 != session.revision
+                or previous.state != "active"
+                or not usage_transition_valid
+                or datetime.fromisoformat(previous.updated_at)
+                > datetime.fromisoformat(session.updated_at)
+                or any(
+                    getattr(previous, field) != getattr(session, field)
+                    for field in immutable_fields
+                )
+            ):
+                raise self._identity_error(session_artifact_id, "runtime-lock-session")
+        return session
+
+    def load_runtime_lock_run(self, run_id: str) -> RuntimeLockRunArtifact:
+        run = self._load(run_id, "runtime-lock-run", RuntimeLockRunArtifact)
+        self._require_embedded_id(run.run_id, run_id, "runtime-lock-run")
+        self._verify_contract_content(
+            run,
+            run.content_sha256,
+            run_id,
+            "runtime-lock-run",
+        )
+        session = self.load_runtime_lock_session(run.session_artifact_id)
+        analysis, evidence, _ = self.load_runtime_lock_analysis(run.runtime_lock_analysis_id)
+        verification = self.load_runtime_lock_verification(
+            run.runtime_lock_verification_id
+        )
+        run_started = datetime.fromisoformat(run.started_at)
+        run_created = datetime.fromisoformat(run.created_at)
+        if (
+            run.session_id != session.session_id
+            or run.session_artifact_content_sha256 != session.content_sha256
+            or run.session_revision != session.revision
+            or session.state != "active"
+            or run.target_scope != session.target_scope
+            or run.adapter_id not in session.allowed_adapters
+            or run.measurement_semantics not in session.allowed_semantics
+            or run.runtime_lock_evidence_id != evidence.runtime_lock_evidence_id
+            or run.runtime_lock_evidence_content_sha256 != evidence.content_sha256
+            or run.runtime_lock_analysis_content_sha256 != analysis.content_sha256
+            or run.runtime_lock_verification_id != verification.runtime_lock_verification_id
+            or run.runtime_lock_verification_content_sha256 != verification.content_sha256
+            or run.measurement_semantics != analysis.measurement_semantics
+            or run.measurement_semantics != evidence.source.measurement_semantics
+            or evidence.source.source_format
+            != _RUNTIME_LOCK_ADAPTER_SOURCE_FORMATS[run.adapter_id]
+            or run.quality_status != analysis.quality_status
+            or run.allowed_conclusions != analysis.allowed_conclusions
+            or run.forbidden_conclusions != analysis.forbidden_conclusions
+            or run.event_count != len(evidence.events)
+            or run.evidence_bytes != len(serialize_json(evidence))
+            or run_started < datetime.fromisoformat(session.updated_at)
+            or run_created > datetime.fromisoformat(session.expires_at)
+            or not self._runtime_lock_target_scope_matches(run, evidence, session)
+        ):
+            raise self._identity_error(run_id, "runtime-lock-run")
+        return run
+
+    def load_runtime_lock_comparison(
+        self,
+        comparison_id: str,
+    ) -> RuntimeLockComparisonArtifact:
+        comparison = self._load(
+            comparison_id,
+            "runtime-lock-comparison",
+            RuntimeLockComparisonArtifact,
+        )
+        self._require_embedded_id(
+            comparison.comparison_id,
+            comparison_id,
+            "runtime-lock-comparison",
+        )
+        self._verify_contract_content(
+            comparison,
+            comparison.content_sha256,
+            comparison_id,
+            "runtime-lock-comparison",
+        )
+        baseline = self.load_runtime_lock_run(comparison.baseline_run_id)
+        candidate = self.load_runtime_lock_run(comparison.candidate_run_id)
+        _, baseline_evidence, _ = self.load_runtime_lock_analysis(
+            baseline.runtime_lock_analysis_id
+        )
+        _, candidate_evidence, _ = self.load_runtime_lock_analysis(
+            candidate.runtime_lock_analysis_id
+        )
+        expected_correctness = (
+            "failed"
+            if "failed" in {baseline.correctness_status, candidate.correctness_status}
+            else (
+                "passed"
+                if baseline.correctness_status == candidate.correctness_status == "passed"
+                else "unavailable"
+            )
+        )
+        threshold_or_sampling_match = self._runtime_lock_measurement_controls(
+            baseline_evidence
+        ) == self._runtime_lock_measurement_controls(candidate_evidence)
+        if (
+            baseline.content_sha256 != comparison.baseline_run_content_sha256
+            or candidate.content_sha256 != comparison.candidate_run_content_sha256
+            or baseline.session_id != comparison.session_id
+            or candidate.session_id != comparison.session_id
+            or comparison.adapter_match != (baseline.adapter_id == candidate.adapter_id)
+            or comparison.semantics_match
+            != (baseline.measurement_semantics == candidate.measurement_semantics)
+            or comparison.workload_match
+            != (baseline.workload_identity_sha256 == candidate.workload_identity_sha256)
+            or comparison.threshold_or_sampling_match != threshold_or_sampling_match
+            or comparison.resource_environment_match
+            or comparison.baseline_quality_status != baseline.quality_status
+            or comparison.candidate_quality_status != candidate.quality_status
+            or comparison.correctness_status != expected_correctness
+            or not comparison.deterministic_replay_passed
+            or comparison.resource_transfer_status != "incomplete"
+            or comparison.comparable
+            or comparison.conclusion != "not_comparable"
+            or comparison.improved_metrics
+            or comparison.regressed_metrics
+            or "verified_improvement" in comparison.allowed_conclusions
+            or "verified_improvement" not in comparison.forbidden_conclusions
+        ):
+            raise self._identity_error(comparison_id, "runtime-lock-comparison")
+        return comparison
+
+    @staticmethod
+    def _runtime_lock_target_scope_matches(
+        run: RuntimeLockRunArtifact,
+        evidence: RuntimeLockEvidenceArtifact,
+        session: RuntimeLockSessionArtifact,
+    ) -> bool:
+        if run.target_scope == "controlled_import":
+            expected_target = hashlib.sha256(
+                "\0".join(
+                    (
+                        "perflens-runtime-lock-import-target-v1",
+                        session.project_identity_sha256,
+                        evidence.source.source_sha256,
+                    )
+                ).encode("utf-8")
+            ).hexdigest()
+            expected_workload = hashlib.sha256(
+                "\0".join(
+                    (
+                        "perflens-runtime-lock-import-workload-v1",
+                        session.project_identity_sha256,
+                        evidence.source.source_sha256,
+                        evidence.source.measurement_semantics,
+                    )
+                ).encode("utf-8")
+            ).hexdigest()
+            return (
+                evidence.source.target_scope == "verified_import"
+                and run.target_identity_sha256 == expected_target
+                and run.workload_identity_sha256 == expected_workload
+            )
+        if evidence.source.target_scope != "bound_pid":
+            return False
+        container = evidence.target.container_reference
+        if run.target_scope in {"managed_temporary_container", "docker_optimization"}:
+            return (
+                evidence.target.target_kind == "docker"
+                and container is not None
+                and container.target_identity_sha256 == run.target_identity_sha256
+            )
+        return evidence.target.target_kind == "host" and container is None
+
+    @staticmethod
+    def _runtime_lock_measurement_controls(
+        evidence: RuntimeLockEvidenceArtifact,
+    ) -> tuple[int | None, int | None, int | None, int | None]:
+        source = evidence.source
+        return (
+            source.duration_threshold_ns,
+            source.sampling_period,
+            source.sampling_fraction,
+            source.block_profile_rate_ns,
+        )
 
     def load_container_resource_context(
         self,
@@ -507,20 +1032,14 @@ class ArtifactStore:
         session = self.load_docker_optimization_session(iteration.session_artifact_id)
         baseline_build = self.load_docker_build(iteration.baseline_build_id)
         candidate_build = self.load_docker_build(iteration.candidate_build_id)
-        baseline_measurement = self.load_container_measurement(
-            iteration.baseline_measurement_id
-        )
-        candidate_measurement = self.load_container_measurement(
-            iteration.candidate_measurement_id
-        )
+        baseline_measurement = self.load_container_measurement(iteration.baseline_measurement_id)
+        candidate_measurement = self.load_container_measurement(iteration.candidate_measurement_id)
         baseline_analysis = self.load_analysis(iteration.baseline_analysis_id)
         candidate_analysis = self.load_analysis(iteration.candidate_analysis_id)
         profile_comparison = self.load_profile_comparison(iteration.profile_comparison_id)
         baseline_benchmark = self.load_benchmark(iteration.baseline_benchmark_id)
         candidate_benchmark = self.load_benchmark(iteration.candidate_benchmark_id)
-        benchmark_comparison = self.load_benchmark_comparison(
-            iteration.benchmark_comparison_id
-        )
+        benchmark_comparison = self.load_benchmark_comparison(iteration.benchmark_comparison_id)
         source_comparison = self.load_container_matched_comparison(
             iteration.source_container_comparison_id
         )
@@ -569,8 +1088,7 @@ class ArtifactStore:
             iteration_mismatch = (
                 iteration.content_sha256 != disposition.iteration_content_sha256
                 or iteration.conclusion != disposition.iteration_conclusion
-                or iteration.session_artifact_id
-                != disposition.source_session_artifact_id
+                or iteration.session_artifact_id != disposition.source_session_artifact_id
                 or iteration.session_artifact_content_sha256
                 != disposition.source_session_artifact_content_sha256
                 or iteration.baseline_build_id != disposition.baseline_build_id
@@ -585,9 +1103,7 @@ class ArtifactStore:
         source_session = self.load_docker_optimization_session(
             disposition.source_session_artifact_id
         )
-        final_session = self.load_docker_optimization_session(
-            disposition.final_session_artifact_id
-        )
+        final_session = self.load_docker_optimization_session(disposition.final_session_artifact_id)
         baseline = self.load_docker_build(disposition.baseline_build_id)
         candidate = self.load_docker_build(disposition.candidate_build_id)
         selected = candidate if disposition.disposition == "retain_candidate" else baseline
@@ -595,14 +1111,11 @@ class ArtifactStore:
             iteration_mismatch
             or source_session.session_id != disposition.session_id
             or source_session.state != "active"
-            or source_session.content_sha256
-            != disposition.source_session_artifact_content_sha256
+            or source_session.content_sha256 != disposition.source_session_artifact_content_sha256
             or final_session.session_id != disposition.session_id
             or final_session.state != "revoked"
-            or final_session.content_sha256
-            != disposition.final_session_artifact_content_sha256
-            or source_session.project_identity_sha256
-            != final_session.project_identity_sha256
+            or final_session.content_sha256 != disposition.final_session_artifact_content_sha256
+            or source_session.project_identity_sha256 != final_session.project_identity_sha256
             or source_session.client_connection_identity_sha256
             != final_session.client_connection_identity_sha256
             or source_session.project_policy_sha256 != final_session.project_policy_sha256
@@ -621,14 +1134,12 @@ class ArtifactStore:
             or source_session.workload_active_seconds_used
             != final_session.workload_active_seconds_used
             or source_session.evidence_bytes_used != final_session.evidence_bytes_used
-            or source_session.temporary_image_bytes_used
-            != final_session.temporary_image_bytes_used
+            or source_session.temporary_image_bytes_used != final_session.temporary_image_bytes_used
             or baseline.content_sha256 != disposition.baseline_build_content_sha256
             or candidate.content_sha256 != disposition.candidate_build_content_sha256
             or selected.build_id != disposition.selected_build_id
             or selected.content_sha256 != disposition.selected_build_content_sha256
-            or selected.treatment_manifest_sha256
-            != disposition.selected_treatment_manifest_sha256
+            or selected.treatment_manifest_sha256 != disposition.selected_treatment_manifest_sha256
         ):
             raise self._identity_error(
                 disposition_id,
@@ -684,6 +1195,16 @@ class ArtifactStore:
             "scheduler-analysis",
             "off-cpu-analysis",
             "lock-analysis",
+            "runtime-adapter-capability",
+            "runtime-lock-capability",
+            "runtime-lock-preview",
+            "runtime-lock-evidence",
+            "runtime-lock-analysis",
+            "runtime-lock-verification",
+            "runtime-lock-diagnosis",
+            "runtime-lock-session",
+            "runtime-lock-run",
+            "runtime-lock-comparison",
             "container-resource-context",
             "container-run",
             "container-workload-spec",
@@ -748,6 +1269,117 @@ class ArtifactStore:
                 artifact_type,
             )
             validate_trace_evidence_invariants(evidence)
+            return
+        if artifact_type == "runtime-adapter-capability":
+            capability = RuntimeAdapterCapabilityArtifact.model_validate_json(payload)
+            self._require_embedded_id(
+                capability.capability_id,
+                artifact_id,
+                artifact_type,
+            )
+            if self.load_runtime_adapter_capability(artifact_id) != capability:
+                raise self._identity_error(artifact_id, artifact_type)
+            return
+        if artifact_type == "runtime-lock-capability":
+            capability = RuntimeLockCapabilityArtifact.model_validate_json(payload)
+            self._require_embedded_id(
+                capability.capability_id,
+                artifact_id,
+                artifact_type,
+            )
+            if self.load_runtime_lock_capability(artifact_id) != capability:
+                raise self._identity_error(artifact_id, artifact_type)
+            return
+        if artifact_type == "runtime-lock-preview":
+            preview = RuntimeLockSessionPreviewArtifact.model_validate_json(payload)
+            self._require_embedded_id(preview.preview_id, artifact_id, artifact_type)
+            if self.load_runtime_lock_preview(artifact_id) != preview:
+                raise self._identity_error(artifact_id, artifact_type)
+            return
+        if artifact_type == "runtime-lock-evidence":
+            evidence = RuntimeLockEvidenceArtifact.model_validate_json(payload)
+            self._require_embedded_id(
+                evidence.runtime_lock_evidence_id,
+                artifact_id,
+                artifact_type,
+            )
+            validate_runtime_lock_evidence_invariants(evidence)
+            tool = evidence.source.tool
+            if tool is not None and tool.path is not None and tool.path.startswith("/"):
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_evidence",
+                    "Legacy Runtime Lock evidence contains a private absolute tool path",
+                )
+            return
+        if artifact_type == "runtime-lock-analysis":
+            analysis = RuntimeLockAnalysisArtifact.model_validate_json(payload)
+            self._require_embedded_id(
+                analysis.runtime_lock_analysis_id,
+                artifact_id,
+                artifact_type,
+            )
+            evidence = self.load_runtime_lock_evidence(analysis.runtime_lock_evidence_id)
+            verification = verify_runtime_lock_analysis_artifact(analysis, evidence)
+            require_usable_runtime_lock_analysis(verification)
+            return
+        if artifact_type == "runtime-lock-verification":
+            verification = RuntimeLockAnalysisVerificationArtifact.model_validate_json(payload)
+            self._require_embedded_id(
+                verification.runtime_lock_verification_id,
+                artifact_id,
+                artifact_type,
+            )
+            if self.load_runtime_lock_verification(artifact_id) != verification:
+                raise self._identity_error(artifact_id, artifact_type)
+            return
+        if artifact_type == "runtime-lock-diagnosis":
+            diagnosis = RuntimeLockDiagnosisBundleArtifact.model_validate_json(payload)
+            self._require_embedded_id(
+                diagnosis.runtime_lock_diagnosis_id,
+                artifact_id,
+                artifact_type,
+            )
+            self._verify_contract_content(
+                diagnosis,
+                diagnosis.content_sha256,
+                artifact_id,
+                artifact_type,
+            )
+            analysis, evidence, verification = self.load_runtime_lock_analysis(
+                diagnosis.runtime_lock_analysis_id
+            )
+            if (
+                build_runtime_lock_diagnosis_bundle(
+                    analysis,
+                    evidence,
+                    verification,
+                )
+                != diagnosis
+            ):
+                raise self._identity_error(artifact_id, artifact_type)
+            return
+        if artifact_type == "runtime-lock-session":
+            session = RuntimeLockSessionArtifact.model_validate_json(payload)
+            self._require_embedded_id(
+                session.session_artifact_id,
+                artifact_id,
+                artifact_type,
+            )
+            if self.load_runtime_lock_session(artifact_id) != session:
+                raise self._identity_error(artifact_id, artifact_type)
+            return
+        if artifact_type == "runtime-lock-run":
+            run = RuntimeLockRunArtifact.model_validate_json(payload)
+            self._require_embedded_id(run.run_id, artifact_id, artifact_type)
+            if self.load_runtime_lock_run(artifact_id) != run:
+                raise self._identity_error(artifact_id, artifact_type)
+            return
+        if artifact_type == "runtime-lock-comparison":
+            comparison = RuntimeLockComparisonArtifact.model_validate_json(payload)
+            self._require_embedded_id(comparison.comparison_id, artifact_id, artifact_type)
+            if self.load_runtime_lock_comparison(artifact_id) != comparison:
+                raise self._identity_error(artifact_id, artifact_type)
             return
         if artifact_type in _TRACE_ANALYSIS_TYPES:
             model, id_attribute = _TRACE_ANALYSIS_TYPES[artifact_type]
@@ -897,9 +1529,7 @@ class ArtifactStore:
             replayed = compare_benchmarks(
                 self.load_benchmark(model.baseline_benchmark_id),
                 self.load_benchmark(model.candidate_benchmark_id),
-                minimum_practical_impact_percent=(
-                    model.minimum_practical_impact_percent
-                ),
+                minimum_practical_impact_percent=(model.minimum_practical_impact_percent),
             )
             if replayed != model:
                 raise self._identity_error(artifact_id, artifact_type)
@@ -908,6 +1538,19 @@ class ArtifactStore:
         self._require_embedded_id(embedded_id, artifact_id, artifact_type)
 
     def _verify_docker_content(
+        self,
+        model: BaseModel,
+        content_sha256: str,
+        artifact_id: str,
+        artifact_type: str,
+    ) -> None:
+        if content_sha256 != contract_content_sha256(
+            model,
+            exclude={"content_sha256"},
+        ):
+            raise self._identity_error(artifact_id, artifact_type)
+
+    def _verify_contract_content(
         self,
         model: BaseModel,
         content_sha256: str,
@@ -950,10 +1593,7 @@ class ArtifactStore:
         )
         if measurement.source_benchmark_id is not None:
             benchmark = self.load_benchmark(measurement.source_benchmark_id)
-            if (
-                contract_content_sha256(benchmark)
-                != measurement.source_benchmark_content_sha256
-            ):
+            if contract_content_sha256(benchmark) != measurement.source_benchmark_content_sha256:
                 raise self._identity_error(measurement_id, "container-measurement")
         replayed = build_container_measurement(
             collection,
@@ -981,23 +1621,16 @@ class ArtifactStore:
             comparison_id,
             "container-matched-comparison",
         )
-        baseline_measurement = self.load_container_measurement(
-            comparison.baseline_measurement_id
-        )
-        candidate_measurement = self.load_container_measurement(
-            comparison.candidate_measurement_id
-        )
+        baseline_measurement = self.load_container_measurement(comparison.baseline_measurement_id)
+        candidate_measurement = self.load_container_measurement(comparison.candidate_measurement_id)
         baseline_analysis = self.load_analysis(comparison.baseline_analysis_id)
         candidate_analysis = self.load_analysis(comparison.candidate_analysis_id)
         profile_comparison = self.load_profile_comparison(comparison.profile_comparison_id)
         baseline_benchmark = self.load_benchmark(comparison.baseline_benchmark_id)
         candidate_benchmark = self.load_benchmark(comparison.candidate_benchmark_id)
-        benchmark_comparison = self.load_benchmark_comparison(
-            comparison.benchmark_comparison_id
-        )
+        benchmark_comparison = self.load_benchmark_comparison(comparison.benchmark_comparison_id)
         if (
-            comparison.baseline_measurement_content_sha256
-            != baseline_measurement.content_sha256
+            comparison.baseline_measurement_content_sha256 != baseline_measurement.content_sha256
             or comparison.candidate_measurement_content_sha256
             != candidate_measurement.content_sha256
             or comparison.baseline_analysis_content_sha256 != baseline_analysis.content_sha256
@@ -1048,13 +1681,10 @@ class ArtifactStore:
                 details={"analysis_id": analysis.analysis_id},
             )
         if diagnosis.container_symbol_context_id is not None:
-            context = self.load_container_symbol_context(
-                diagnosis.container_symbol_context_id
-            )
+            context = self.load_container_symbol_context(diagnosis.container_symbol_context_id)
             if (
                 context.source_analysis_id != analysis.analysis_id
-                or context.content_sha256
-                != diagnosis.container_symbol_context_content_sha256
+                or context.content_sha256 != diagnosis.container_symbol_context_content_sha256
                 or context.quality_status != diagnosis.container_symbol_quality_status
             ):
                 raise self._identity_error(

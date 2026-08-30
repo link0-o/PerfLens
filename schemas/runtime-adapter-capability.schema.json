@@ -2,7 +2,7 @@
   "$defs": {
     "RuntimeToolIdentity": {
       "additionalProperties": false,
-      "description": "Identity of one optional external tool discovered without executing a workload.",
+      "description": "Public tool identity with legacy absolute-path read compatibility.",
       "properties": {
         "binary_sha256": {
           "anyOf": [
@@ -81,6 +81,41 @@
     }
   },
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.1"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tools": {
+            "items": {
+              "properties": {
+                "path": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "pattern": "^[A-Za-z0-9_.+-]{1,128}$",
+                      "type": "string"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "description": "Read-only capability result for one runtime adapter/backend pair.",
   "properties": {
     "adapter_id": {

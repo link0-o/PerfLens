@@ -1,0 +1,192 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "adapter_match": {
+      "title": "Adapter Match",
+      "type": "boolean"
+    },
+    "allowed_conclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Conclusions",
+      "type": "array"
+    },
+    "baseline_quality_status": {
+      "enum": [
+        "complete",
+        "partial"
+      ],
+      "title": "Baseline Quality Status",
+      "type": "string"
+    },
+    "baseline_run_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Baseline Run Content Sha256",
+      "type": "string"
+    },
+    "baseline_run_id": {
+      "pattern": "^runtime-lock-run-[a-f0-9]{20}$",
+      "title": "Baseline Run Id",
+      "type": "string"
+    },
+    "candidate_quality_status": {
+      "enum": [
+        "complete",
+        "partial"
+      ],
+      "title": "Candidate Quality Status",
+      "type": "string"
+    },
+    "candidate_run_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Candidate Run Content Sha256",
+      "type": "string"
+    },
+    "candidate_run_id": {
+      "pattern": "^runtime-lock-run-[a-f0-9]{20}$",
+      "title": "Candidate Run Id",
+      "type": "string"
+    },
+    "comparable": {
+      "title": "Comparable",
+      "type": "boolean"
+    },
+    "comparison_id": {
+      "pattern": "^runtime-lock-comparison-[a-f0-9]{20}$",
+      "title": "Comparison Id",
+      "type": "string"
+    },
+    "conclusion": {
+      "enum": [
+        "verified_improvement",
+        "candidate_improvement",
+        "candidate_regression",
+        "no_material_change",
+        "not_comparable"
+      ],
+      "title": "Conclusion",
+      "type": "string"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "correctness_status": {
+      "enum": [
+        "passed",
+        "failed",
+        "unavailable"
+      ],
+      "title": "Correctness Status",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "deterministic_replay_passed": {
+      "title": "Deterministic Replay Passed",
+      "type": "boolean"
+    },
+    "forbidden_conclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Forbidden Conclusions",
+      "type": "array"
+    },
+    "improved_metrics": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Improved Metrics",
+      "type": "array"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "regressed_metrics": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Regressed Metrics",
+      "type": "array"
+    },
+    "resource_environment_match": {
+      "title": "Resource Environment Match",
+      "type": "boolean"
+    },
+    "resource_transfer_status": {
+      "enum": [
+        "no_observed_regression",
+        "regression",
+        "incomplete"
+      ],
+      "title": "Resource Transfer Status",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "semantics_match": {
+      "title": "Semantics Match",
+      "type": "boolean"
+    },
+    "session_id": {
+      "pattern": "^runtime-lock-session-[a-f0-9]{20}$",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "threshold_or_sampling_match": {
+      "title": "Threshold Or Sampling Match",
+      "type": "boolean"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    },
+    "workload_match": {
+      "title": "Workload Match",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "comparison_id",
+    "created_at",
+    "session_id",
+    "baseline_run_id",
+    "baseline_run_content_sha256",
+    "candidate_run_id",
+    "candidate_run_content_sha256",
+    "adapter_match",
+    "semantics_match",
+    "threshold_or_sampling_match",
+    "workload_match",
+    "resource_environment_match",
+    "baseline_quality_status",
+    "candidate_quality_status",
+    "correctness_status",
+    "deterministic_replay_passed",
+    "resource_transfer_status",
+    "comparable",
+    "conclusion",
+    "allowed_conclusions",
+    "forbidden_conclusions",
+    "content_sha256"
+  ],
+  "title": "RuntimeLockComparisonArtifact",
+  "type": "object"
+}

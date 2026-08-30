@@ -1,0 +1,152 @@
+{
+  "$defs": {
+    "RuntimeLockAdapterCapabilityReference": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_id": {
+          "enum": [
+            "native_pthread",
+            "java_jfr",
+            "cpython_threading",
+            "go_pprof",
+            "generic_ndjson_import"
+          ],
+          "title": "Adapter Id",
+          "type": "string"
+        },
+        "availability": {
+          "enum": [
+            "available",
+            "partial",
+            "unavailable",
+            "disabled"
+          ],
+          "title": "Availability",
+          "type": "string"
+        },
+        "capability_content_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Capability Content Sha256",
+          "type": "string"
+        },
+        "capability_id": {
+          "pattern": "^[a-z][a-z0-9-]*-[a-f0-9]{16,64}$",
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "limitations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "supported_semantics": {
+          "default": [],
+          "items": {
+            "enum": [
+              "exact",
+              "thresholded",
+              "sampled",
+              "cumulative"
+            ],
+            "type": "string"
+          },
+          "title": "Supported Semantics",
+          "type": "array"
+        }
+      },
+      "required": [
+        "adapter_id",
+        "capability_id",
+        "capability_content_sha256",
+        "availability"
+      ],
+      "title": "RuntimeLockAdapterCapabilityReference",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "adapters": {
+      "items": {
+        "$ref": "#/$defs/RuntimeLockAdapterCapabilityReference"
+      },
+      "title": "Adapters",
+      "type": "array"
+    },
+    "capability_id": {
+      "pattern": "^runtime-lock-capability-[a-f0-9]{20}$",
+      "title": "Capability Id",
+      "type": "string"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "limitations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "next_steps": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "project_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Project Identity Sha256",
+      "type": "string"
+    },
+    "project_policy_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Project Policy Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "available",
+        "partial",
+        "unavailable",
+        "disabled"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "capability_id",
+    "created_at",
+    "project_identity_sha256",
+    "project_policy_sha256",
+    "status",
+    "adapters",
+    "content_sha256"
+  ],
+  "title": "RuntimeLockCapabilityArtifact",
+  "type": "object"
+}

@@ -1060,6 +1060,45 @@
               ]
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "tool": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "properties": {
+                      "path": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "pattern": "^[A-Za-z0-9_.+-]{1,128}$",
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  }
+                ]
+              }
+            }
+          }
         }
       ],
       "description": "Versioned identity and semantics of one normalized input source.",
@@ -1445,7 +1484,7 @@
     },
     "RuntimeToolIdentity": {
       "additionalProperties": false,
-      "description": "Identity of one optional external tool discovered without executing a workload.",
+      "description": "Public tool identity with legacy absolute-path read compatibility.",
       "properties": {
         "binary_sha256": {
           "anyOf": [

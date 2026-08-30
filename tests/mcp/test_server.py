@@ -6,6 +6,7 @@ import json
 import os
 import stat
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal, cast
@@ -57,6 +58,10 @@ from perflens.mcp.server import (
     create_server,
 )
 from perflens.mcp.storage import ArtifactStore, PathPolicy
+from perflens.runtime_locks import import_runtime_lock_ndjson
+from perflens.runtime_locks.project_config import (
+    render_default_runtime_lock_project_policy,
+)
 
 
 def _docker_target() -> ContainerTargetArtifact:
@@ -391,9 +396,7 @@ def test_docker_optimization_summary_identifies_its_exact_comparison_chain() -> 
         candidate_profile_quality_status="verified",
         baseline_profile_sample_count=210,
         candidate_profile_sample_count=35,
-        profile_metadata_differences={
-            "baseline_quality_status": ("partial", "verified")
-        },
+        profile_metadata_differences={"baseline_quality_status": ("partial", "verified")},
     )
 
     assert summary["profile_comparison_id"] == iteration.profile_comparison_id
@@ -406,9 +409,7 @@ def test_docker_optimization_summary_identifies_its_exact_comparison_chain() -> 
     assert summary["candidate_analysis_id"] == iteration.candidate_analysis_id
     assert summary["baseline_benchmark_id"] == iteration.baseline_benchmark_id
     assert summary["candidate_benchmark_id"] == iteration.candidate_benchmark_id
-    assert summary["source_container_comparison_id"] == (
-        iteration.source_container_comparison_id
-    )
+    assert summary["source_container_comparison_id"] == (iteration.source_container_comparison_id)
     assert summary["profile_comparable"] is False
     assert summary["baseline_profile_quality_status"] == "partial"
     assert summary["candidate_profile_quality_status"] == "verified"
@@ -453,6 +454,11 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "finalize_docker_optimization_candidate",
                 "collect_profile",
                 "inspect_collection_capabilities",
+                "inspect_runtime_lock_capability",
+                "preview_runtime_lock_session",
+                "authorize_runtime_lock_session",
+                "import_runtime_lock_evidence",
+                "revoke_runtime_lock_session",
                 "inspect_docker_capability",
                 "inspect_docker_optimization_capability",
                 "preview_docker_optimization_session",
@@ -473,6 +479,11 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "analyze_collection",
                 "analyze_trace_evidence",
                 "verify_trace_analysis",
+                "analyze_runtime_lock_evidence",
+                "verify_runtime_lock_analysis",
+                "list_runtime_lock_hotspots",
+                "get_runtime_lock_call_paths",
+                "build_runtime_lock_diagnosis_bundle",
             }
             for tool in tools.values():
                 assert tool.input_schema["type"] == "object"
@@ -518,9 +529,7 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["authorize_managed_docker_session"].meta == {
                 "perflens/permission": "DOCKER_AUTHORIZATION"
             }
-            existing_authorization_annotations = tools[
-                "authorize_docker_session"
-            ].annotations
+            existing_authorization_annotations = tools["authorize_docker_session"].annotations
             managed_authorization_annotations = tools[
                 "authorize_managed_docker_session"
             ].annotations
@@ -560,18 +569,19 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert managed_authorization["authorization"]["const"] == (
                 "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_PERFORMANCE_SESSION"
             )
-            assert "allowed_modes" in tools[
-                "authorize_managed_docker_session"
-            ].input_schema["required"]
+            assert (
+                "allowed_modes"
+                in tools["authorize_managed_docker_session"].input_schema["required"]
+            )
             optimization_authorization = tools[
                 "authorize_docker_optimization_session"
             ].input_schema["properties"]
             assert optimization_authorization["authorization"]["const"] == (
                 "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
             )
-            optimization_build = tools[
-                "build_docker_optimization_candidate"
-            ].input_schema["properties"]
+            optimization_build = tools["build_docker_optimization_candidate"].input_schema[
+                "properties"
+            ]
             assert not {
                 "image",
                 "dockerfile",
@@ -591,9 +601,9 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "docker_options",
                 "treatment_paths",
             }.intersection(managed_collection)
-            optimization_collection = tools[
-                "collect_docker_optimization_workload"
-            ].input_schema["properties"]
+            optimization_collection = tools["collect_docker_optimization_workload"].input_schema[
+                "properties"
+            ]
             assert not {
                 "image",
                 "entrypoint",
@@ -603,9 +613,9 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "docker_options",
                 "source_path",
             }.intersection(optimization_collection)
-            optimization_comparison = tools[
-                "compare_docker_optimization_iterations"
-            ].input_schema["properties"]
+            optimization_comparison = tools["compare_docker_optimization_iterations"].input_schema[
+                "properties"
+            ]
             assert not {
                 "image",
                 "dockerfile",
@@ -615,12 +625,11 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "docker_options",
                 "source_path",
             }.intersection(optimization_comparison)
-            optimization_disposition = tools[
-                "finalize_docker_optimization_candidate"
-            ].input_schema["properties"]
+            optimization_disposition = tools["finalize_docker_optimization_candidate"].input_schema[
+                "properties"
+            ]
             assert any(
-                option.get("const")
-                == "I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE"
+                option.get("const") == "I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE"
                 for option in optimization_disposition["authorization"]["anyOf"]
             )
             assert not {
@@ -641,6 +650,34 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "perflens/permission": "WRITES_ARTIFACTS"
             }
             assert tools["verify_trace_analysis"].meta == {"perflens/permission": "READ_ONLY"}
+            assert tools["analyze_runtime_lock_evidence"].meta == {
+                "perflens/permission": "WRITES_ARTIFACTS"
+            }
+            assert tools["verify_runtime_lock_analysis"].meta == {
+                "perflens/permission": "READ_ONLY"
+            }
+            assert tools["list_runtime_lock_hotspots"].meta == {"perflens/permission": "READ_ONLY"}
+            assert tools["inspect_runtime_lock_capability"].meta == {
+                "perflens/permission": "READ_ONLY"
+            }
+            assert tools["preview_runtime_lock_session"].meta == {
+                "perflens/permission": "READ_ONLY_CONTEXT_SNAPSHOT"
+            }
+            assert tools["authorize_runtime_lock_session"].meta == {
+                "perflens/permission": "RUNTIME_LOCK_AUTHORIZATION"
+            }
+            assert tools["import_runtime_lock_evidence"].meta == {
+                "perflens/permission": "RUNTIME_LOCK_CONTROLLED_IMPORT"
+            }
+            assert tools["revoke_runtime_lock_session"].meta == {
+                "perflens/permission": "RUNTIME_LOCK_AUTHORIZATION"
+            }
+            runtime_lock_authorization = tools["authorize_runtime_lock_session"].input_schema[
+                "properties"
+            ]["authorization"]
+            assert runtime_lock_authorization["const"] == (
+                "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"
+            )
 
     asyncio.run(exercise())
 
@@ -907,6 +944,369 @@ def test_docker_optimization_requires_separate_project_opt_in(tmp_path: Path) ->
     asyncio.run(exercise())
 
 
+def test_runtime_lock_preview_authorize_and_revoke_are_content_bound(
+    tmp_path: Path,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    setup_root = tmp_path / "perflens-setup"
+    setup_root.mkdir()
+    policy = setup_root / "runtime-locks.toml"
+    policy.write_text(
+        render_default_runtime_lock_project_policy(),
+        encoding="utf-8",
+    )
+    policy.chmod(0o600)
+
+    with pytest.raises(ValueError, match="Runtime Lock sessions require writes"):
+        create_server(
+            ServerConfig(
+                (tmp_path,),
+                artifact_root,
+                allow_runtime_locks=True,
+                runtime_lock_project_config=policy,
+            )
+        )
+    denied_server = create_server(ServerConfig((tmp_path,), artifact_root))
+    server = create_server(
+        ServerConfig(
+            (tmp_path,),
+            artifact_root,
+            allow_writes=True,
+            allow_runtime_locks=True,
+            runtime_lock_project_config=policy,
+        )
+    )
+
+    async def exercise() -> None:
+        async with Client(denied_server) as client:
+            denied = await client.call_tool("inspect_runtime_lock_capability", {})
+            assert denied.is_error
+            assert "disabled by project MCP policy" in str(denied.content)
+            denied_preview = await client.call_tool(
+                "preview_runtime_lock_session",
+                {
+                    "target_scope": "controlled_import",
+                    "allowed_adapters": ["generic_ndjson_import"],
+                    "allowed_semantics": ["exact"],
+                },
+            )
+            assert denied_preview.is_error
+            assert "disabled by project MCP policy" in str(denied_preview.content)
+
+        async with Client(server) as client:
+            inspected = await client.call_tool("inspect_runtime_lock_capability", {})
+            assert not inspected.is_error
+            capability = _structured(inspected)
+            assert capability["status"] == "available"
+            adapters = {item["adapter_id"]: item for item in capability["adapters"]}
+            assert adapters["generic_ndjson_import"]["availability"] == "available"
+            assert "controlled NDJSON import" in adapters["generic_ndjson_import"][
+                "limitations"
+            ][0]
+            assert adapters["native_pthread"]["availability"] == "unavailable"
+
+            previewed = await client.call_tool(
+                "preview_runtime_lock_session",
+                {
+                    "target_scope": "controlled_import",
+                    "allowed_adapters": ["generic_ndjson_import"],
+                    "allowed_semantics": ["exact"],
+                },
+            )
+            assert not previewed.is_error
+            preview = _structured(previewed)
+            assert preview["target_scope"] == "controlled_import"
+            assert preview["allowed_adapters"] == ["generic_ndjson_import"]
+            assert preview["allowed_semantics"] == ["exact"]
+            assert preview["import_roots"] == ["perflens-runtime-locks"]
+            assert not preview["warnings"]
+            stored_capability_page = await client.call_tool(
+                "read_artifact_page",
+                {
+                    "artifact_id": preview["capability_id"],
+                    "artifact_type": "runtime-lock-capability",
+                },
+            )
+            assert not stored_capability_page.is_error
+            assert preview["capability_id"] in cast(
+                str,
+                _structured(stored_capability_page)["text"],
+            )
+            for artifact_id, artifact_type in ((preview["preview_id"], "runtime-lock-preview"),):
+                page = await client.call_tool(
+                    "read_artifact_page",
+                    {
+                        "artifact_id": artifact_id,
+                        "artifact_type": artifact_type,
+                    },
+                )
+                assert not page.is_error, (artifact_type, page.content)
+                assert artifact_id in cast(str, _structured(page)["text"])
+
+            rejected = await client.call_tool(
+                "authorize_runtime_lock_session",
+                {
+                    "preview_id": preview["preview_id"],
+                    "preview_content_sha256": "0" * 64,
+                    "authorization_summary_sha256": preview["authorization_summary_sha256"],
+                    "authorization": ("I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"),
+                },
+            )
+            assert rejected.is_error
+            assert "summary changed" in str(rejected.content)
+
+            authorized = await client.call_tool(
+                "authorize_runtime_lock_session",
+                {
+                    "preview_id": preview["preview_id"],
+                    "preview_content_sha256": preview["content_sha256"],
+                    "authorization_summary_sha256": preview["authorization_summary_sha256"],
+                    "authorization": ("I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"),
+                },
+            )
+            assert not authorized.is_error
+            session = _structured(authorized)
+            assert session["state"] == "active"
+            assert "authorization" not in session
+
+            replayed = await client.call_tool(
+                "authorize_runtime_lock_session",
+                {
+                    "preview_id": preview["preview_id"],
+                    "preview_content_sha256": preview["content_sha256"],
+                    "authorization_summary_sha256": preview["authorization_summary_sha256"],
+                    "authorization": ("I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"),
+                },
+            )
+            assert replayed.is_error
+            assert "missing or consumed" in str(replayed.content)
+
+            second_previewed = await client.call_tool(
+                "preview_runtime_lock_session",
+                {
+                    "target_scope": "controlled_import",
+                    "allowed_adapters": ["generic_ndjson_import"],
+                    "allowed_semantics": ["exact"],
+                },
+            )
+            assert not second_previewed.is_error
+            second_preview = _structured(second_previewed)
+            policy.write_text(
+                render_default_runtime_lock_project_policy() + "\n# changed after authorization\n",
+                encoding="utf-8",
+            )
+            policy.chmod(0o600)
+            stale_authorization = await client.call_tool(
+                "authorize_runtime_lock_session",
+                {
+                    "preview_id": second_preview["preview_id"],
+                    "preview_content_sha256": second_preview["content_sha256"],
+                    "authorization_summary_sha256": second_preview["authorization_summary_sha256"],
+                    "authorization": ("I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"),
+                },
+            )
+            assert stale_authorization.is_error
+            assert "changed after MCP startup" in str(stale_authorization.content)
+            revoked = await client.call_tool(
+                "revoke_runtime_lock_session",
+                {"session_id": session["session_id"]},
+            )
+            assert not revoked.is_error
+            assert _structured(revoked)["state"] == "revoked"
+
+    asyncio.run(exercise())
+    assert list(artifact_root.glob("*.runtime-lock-preview.json"))
+    assert len(list(artifact_root.glob("*.runtime-lock-session.json"))) == 2
+
+
+def test_runtime_lock_controlled_import_consumes_lease_and_closes_session(
+    tmp_path: Path,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    setup_root = tmp_path / "perflens-setup"
+    setup_root.mkdir()
+    policy = setup_root / "runtime-locks.toml"
+    policy.write_text(
+        render_default_runtime_lock_project_policy().replace(
+            "preview_ttl_seconds = 600",
+            "preview_ttl_seconds = 120",
+        ),
+        encoding="utf-8",
+    )
+    policy.chmod(0o600)
+    import_root = tmp_path / "perflens-runtime-locks"
+    import_root.mkdir()
+    source = import_root / "exact.ndjson"
+    fixture = Path(__file__).parents[1] / "fixtures/runtime_locks/valid-v1.1.ndjson"
+    source.write_bytes(fixture.read_bytes())
+    source.chmod(0o600)
+    server = create_server(
+        ServerConfig(
+            (tmp_path,),
+            artifact_root,
+            allow_writes=True,
+            allow_runtime_locks=True,
+            runtime_lock_project_config=policy,
+        )
+    )
+    session_id = ""
+
+    async def exercise() -> None:
+        nonlocal session_id
+        async with Client(server) as client:
+            wrong_entry = await client.call_tool(
+                "preview_runtime_lock_session",
+                {
+                    "target_scope": "host_launched_workload",
+                    "allowed_adapters": ["generic_ndjson_import"],
+                    "allowed_semantics": ["exact"],
+                },
+            )
+            assert wrong_entry.is_error
+            assert "entry point" in str(wrong_entry.content)
+
+            previewed = await client.call_tool(
+                "preview_runtime_lock_session",
+                {
+                    "target_scope": "controlled_import",
+                    "allowed_adapters": ["generic_ndjson_import"],
+                    "allowed_semantics": ["exact"],
+                },
+            )
+            assert not previewed.is_error
+            preview = _structured(previewed)
+            preview_lifetime = datetime.fromisoformat(
+                preview["expires_at"]
+            ) - datetime.fromisoformat(preview["created_at"])
+            assert preview_lifetime.total_seconds() == 120
+            authorized = await client.call_tool(
+                "authorize_runtime_lock_session",
+                {
+                    "preview_id": preview["preview_id"],
+                    "preview_content_sha256": preview["content_sha256"],
+                    "authorization_summary_sha256": preview["authorization_summary_sha256"],
+                    "authorization": ("I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"),
+                },
+            )
+            assert not authorized.is_error
+            session_id = cast(str, _structured(authorized)["session_id"])
+            imported = await client.call_tool(
+                "import_runtime_lock_evidence",
+                {
+                    "session_id": session_id,
+                    "source_path": "perflens-runtime-locks/exact.ndjson",
+                    "measurement_semantics": "exact",
+                },
+            )
+            assert not imported.is_error, imported.content
+            reference = _structured(imported)
+            assert reference["artifact_type"] == "runtime-lock-run"
+            assert reference["summary"]["private_source_replay_status"] == "verified"
+            assert reference["summary"]["event_count"] == 4
+            run_page = await client.call_tool(
+                "read_artifact_page",
+                {
+                    "artifact_id": reference["artifact_id"],
+                    "artifact_type": "runtime-lock-run",
+                },
+            )
+            assert not run_page.is_error, run_page.content
+            assert '"target_scope": "controlled_import"' in cast(
+                str,
+                _structured(run_page)["text"],
+            )
+
+    asyncio.run(exercise())
+    states = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in artifact_root.glob("*.runtime-lock-session.json")
+    ]
+    assert any(item["session_id"] == session_id and item["state"] == "revoked" for item in states)
+
+
+def test_runtime_lock_controlled_import_rejects_symlink_and_terminates_session(
+    tmp_path: Path,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    setup_root = tmp_path / "perflens-setup"
+    setup_root.mkdir()
+    policy = setup_root / "runtime-locks.toml"
+    policy.write_text(render_default_runtime_lock_project_policy(), encoding="utf-8")
+    policy.chmod(0o600)
+    import_root = tmp_path / "perflens-runtime-locks"
+    import_root.mkdir()
+    fixture = Path(__file__).parents[1] / "fixtures/runtime_locks/valid-v1.1.ndjson"
+    outside = tmp_path / "outside.ndjson"
+    outside.write_bytes(fixture.read_bytes())
+    outside.chmod(0o600)
+    (import_root / "link.ndjson").symlink_to(outside)
+    server = create_server(
+        ServerConfig(
+            (tmp_path,),
+            artifact_root,
+            allow_writes=True,
+            allow_runtime_locks=True,
+            runtime_lock_project_config=policy,
+        )
+    )
+    session_id = ""
+
+    async def exercise() -> None:
+        nonlocal session_id
+        async with Client(server) as client:
+            previewed = await client.call_tool(
+                "preview_runtime_lock_session",
+                {
+                    "target_scope": "controlled_import",
+                    "allowed_adapters": ["generic_ndjson_import"],
+                    "allowed_semantics": ["exact"],
+                },
+            )
+            preview = _structured(previewed)
+            authorized = await client.call_tool(
+                "authorize_runtime_lock_session",
+                {
+                    "preview_id": preview["preview_id"],
+                    "preview_content_sha256": preview["content_sha256"],
+                    "authorization_summary_sha256": preview[
+                        "authorization_summary_sha256"
+                    ],
+                    "authorization": (
+                        "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"
+                    ),
+                },
+            )
+            session_id = cast(str, _structured(authorized)["session_id"])
+            rejected = await client.call_tool(
+                "import_runtime_lock_evidence",
+                {
+                    "session_id": session_id,
+                    "source_path": "perflens-runtime-locks/link.ndjson",
+                    "measurement_semantics": "exact",
+                },
+            )
+            assert rejected.is_error
+            assert "symlink or escapes" in str(rejected.content)
+            second_revoke = await client.call_tool(
+                "revoke_runtime_lock_session",
+                {"session_id": session_id},
+            )
+            assert second_revoke.is_error
+            assert "not bound to this connection" in str(second_revoke.content)
+
+    asyncio.run(exercise())
+    states = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in artifact_root.glob("*.runtime-lock-session.json")
+    ]
+    assert any(item["session_id"] == session_id and item["state"] == "revoked" for item in states)
+    assert not list(artifact_root.glob("*.runtime-lock-evidence.json"))
+    assert not list(artifact_root.glob("*.runtime-lock-run.json"))
+
+
 def test_docker_optimization_preview_authorize_build_and_revoke_are_bound(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -955,9 +1355,7 @@ def test_docker_optimization_preview_authorize_build_and_revoke_are_bound(
                 {
                     "preview_id": preview["preview_id"],
                     "preview_content_sha256": preview["content_sha256"],
-                    "authorization_summary_sha256": preview[
-                        "authorization_summary_sha256"
-                    ],
+                    "authorization_summary_sha256": preview["authorization_summary_sha256"],
                     "authorization": (
                         "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
                     ),
@@ -999,6 +1397,7 @@ def test_docker_optimization_preview_authorize_build_and_revoke_are_bound(
                     cast(str, candidate["artifact_id"]),
                 ).artifact,
             )
+
             def load_iteration(
                 _store: ArtifactStore,
                 iteration_id: str,
@@ -1027,9 +1426,7 @@ def test_docker_optimization_preview_authorize_build_and_revoke_are_bound(
                     "session_id": session["session_id"],
                     "iteration_id": iteration.iteration_id,
                     "disposition": "retain_candidate",
-                    "authorization": (
-                        "I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE"
-                    ),
+                    "authorization": ("I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE"),
                 },
             )
             assert not finalized_result.is_error
@@ -1087,9 +1484,7 @@ def test_docker_optimization_can_finalize_candidate_without_an_iteration(
                     {
                         "preview_id": preview["preview_id"],
                         "preview_content_sha256": preview["content_sha256"],
-                        "authorization_summary_sha256": preview[
-                            "authorization_summary_sha256"
-                        ],
+                        "authorization_summary_sha256": preview["authorization_summary_sha256"],
                         "authorization": (
                             "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
                         ),
@@ -1123,9 +1518,7 @@ def test_docker_optimization_can_finalize_candidate_without_an_iteration(
                     "candidate_build_id": candidate["artifact_id"],
                     "evaluation_reason": "user_stopped",
                     "disposition": "retain_candidate",
-                    "authorization": (
-                        "I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE"
-                    ),
+                    "authorization": ("I_EXPLICITLY_ACCEPT_THIS_UNVERIFIED_DOCKER_CANDIDATE"),
                 },
             )
             assert not finalized_result.is_error
@@ -1197,9 +1590,7 @@ def test_docker_optimization_collection_failure_is_charged_and_stops_session(
                     {
                         "preview_id": preview["preview_id"],
                         "preview_content_sha256": preview["content_sha256"],
-                        "authorization_summary_sha256": preview[
-                            "authorization_summary_sha256"
-                        ],
+                        "authorization_summary_sha256": preview["authorization_summary_sha256"],
                         "authorization": (
                             "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
                         ),
@@ -2303,9 +2694,7 @@ def test_optimization_workload_charges_managed_evidence_bytes(tmp_path: Path) ->
         preview_id=preview.preview.preview_id,
         preview_content_sha256=preview.preview.content_sha256,
         authorization_summary_sha256=preview.preview.authorization_summary_sha256,
-        explicit_authorization=(
-            "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
-        ),
+        explicit_authorization=("I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"),
     )
     baseline = runtime.build(
         authorized.session_id,
@@ -2391,6 +2780,101 @@ def test_trace_evidence_is_analyzed_verified_and_paged_without_a_raw_path(
             assert '"scheduler_analysis_id"' in cast(str, page["text"])
             assert "private scheduler trace" not in cast(str, page["text"])
             assert "/var/lib/perflens-trace" not in cast(str, page["text"])
+
+    asyncio.run(exercise())
+
+
+def test_runtime_lock_evidence_is_analyzed_queried_and_diagnosed_without_raw_input(
+    tmp_path: Path,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    store = ArtifactStore(
+        artifact_root,
+        PathPolicy((tmp_path,)),
+        allow_writes=True,
+    )
+    fixture = Path(__file__).parents[1] / "fixtures/runtime_locks/valid-v1.1.ndjson"
+    with fixture.open("rb") as source:
+        evidence = import_runtime_lock_ndjson(source)
+    store.save(
+        evidence,
+        evidence.runtime_lock_evidence_id,
+        "runtime-lock-evidence",
+    )
+    server = create_server(ServerConfig((tmp_path,), artifact_root, allow_writes=True))
+
+    async def exercise() -> None:
+        async with Client(server, raise_exceptions=True) as client:
+            analyzed = _structured(
+                await client.call_tool(
+                    "analyze_runtime_lock_evidence",
+                    {"runtime_lock_evidence_id": evidence.runtime_lock_evidence_id},
+                )
+            )
+            assert analyzed["artifact_type"] == "runtime-lock-analysis"
+            summary = cast(dict[str, Any], analyzed["summary"])
+            assert summary["runtime"] == "python"
+            assert summary["measurement_semantics"] == "exact"
+            assert summary["verification_status"] == "partial"
+            analysis_id = cast(str, analyzed["artifact_id"])
+
+            verification = _structured(
+                await client.call_tool(
+                    "verify_runtime_lock_analysis",
+                    {"runtime_lock_analysis_id": analysis_id},
+                )
+            )
+            assert verification["verification_status"] == "partial"
+            assert all(
+                check["status"] != "failed"
+                for check in cast(list[dict[str, Any]], verification["checks"])
+            )
+
+            hotspots = _structured(
+                await client.call_tool(
+                    "list_runtime_lock_hotspots",
+                    {
+                        "runtime_lock_analysis_id": analysis_id,
+                        "projection": "lock",
+                        "limit": 1,
+                    },
+                )
+            )
+            assert hotspots["total_items"] == 1
+            assert len(cast(list[object], hotspots["items"])) == 1
+            assert hotspots["coverage"]["omitted_row_count"] == 0
+
+            paths = _structured(
+                await client.call_tool(
+                    "get_runtime_lock_call_paths",
+                    {"runtime_lock_analysis_id": analysis_id, "limit": 1},
+                )
+            )
+            assert paths["total_items"] == 1
+            assert paths["items"][0]["stack_id"] == paths["stacks"][0]["stack_id"]
+            assert not paths["stacks"][0]["frames"][0]["source_file"].startswith("/")
+
+            diagnosis = _structured(
+                await client.call_tool(
+                    "build_runtime_lock_diagnosis_bundle",
+                    {"runtime_lock_analysis_id": analysis_id},
+                )
+            )
+            assert diagnosis["artifact_type"] == "runtime-lock-diagnosis"
+            diagnosis_id = cast(str, diagnosis["artifact_id"])
+
+            page = _structured(
+                await client.call_tool(
+                    "read_artifact_page",
+                    {
+                        "artifact_id": diagnosis_id,
+                        "artifact_type": "runtime-lock-diagnosis",
+                    },
+                )
+            )
+            assert '"runtime_lock_diagnosis_id"' in cast(str, page["text"])
+            assert "pthread_mutex_t" not in cast(str, page["text"])
+            assert "/home/" not in cast(str, page["text"])
 
     asyncio.run(exercise())
 

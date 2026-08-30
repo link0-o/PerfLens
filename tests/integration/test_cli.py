@@ -244,9 +244,54 @@ def test_init_docker_generates_project_policy_without_touching_a_container(
     assert f"Docker 项目策略: {policy}" in initialized.output
     assert policy.is_file()
     assert 'default_authorization_mode = "per_run"' in policy.read_text(encoding="utf-8")
-    assert "--allow-docker-targets" in (project / ".codex/config.toml").read_text(
+    assert "--allow-docker-targets" in (project / ".codex/config.toml").read_text(encoding="utf-8")
+
+
+def test_init_runtime_locks_generates_policy_without_instrumenting(tmp_path: Path) -> None:
+    project = tmp_path / "runtime-lock-project"
+    project.mkdir()
+
+    initialized = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--runtime-locks",
+            "--client",
+            "codex",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+    assert initialized.exit_code == 0, initialized.output
+    policy = project / "perflens-setup/runtime-locks.toml"
+    assert "Runtime Lock: 已启用" in initialized.output
+    assert f"Runtime Lock 项目策略: {policy}" in initialized.output
+    assert policy.is_file()
+    assert 'target_scopes = ["controlled_import", "host_launched_workload"]' in policy.read_text(
         encoding="utf-8"
     )
+    config = (project / ".codex/config.toml").read_text(encoding="utf-8")
+    assert '"--allow-runtime-locks"' in config
+    assert str(policy) in config
+    status = runner.invoke(
+        app,
+        [
+            "status",
+            "--project",
+            str(project),
+            "--collector-socket",
+            str(project / "missing.sock"),
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+    assert status.exit_code == 0, status.output
+    assert "Runtime Lock 策略状态: enabled" in status.output
+    assert "Runtime Lock Adapter generic_ndjson_import: available" in status.output
+    assert "Runtime Lock Adapter native_pthread: unavailable" in status.output
 
 
 def test_init_activates_selected_clients_only_inside_the_project(tmp_path: Path) -> None:
@@ -308,9 +353,7 @@ def test_init_explicit_opencode_uses_shared_skill_and_local_mcp(tmp_path: Path) 
     assert not (project / ".codex").exists()
     assert not (project / ".claude").exists()
     payload = json.loads((project / ".opencode/opencode.json").read_text(encoding="utf-8"))
-    assert payload["mcp"]["perflens"]["command"][0] == str(
-        Path(sys.executable).resolve()
-    )
+    assert payload["mcp"]["perflens"]["command"][0] == str(Path(sys.executable).resolve())
 
 
 def test_init_explicit_copilot_configures_cli_and_vscode_agent(tmp_path: Path) -> None:
@@ -339,9 +382,7 @@ def test_init_explicit_copilot_configures_cli_and_vscode_agent(tmp_path: Path) -
     cli = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))
     vscode = json.loads((project / ".vscode/mcp.json").read_text(encoding="utf-8"))
     assert cli["mcpServers"]["perflens"]["command"] == str(Path(sys.executable).resolve())
-    assert vscode["servers"]["perflens"]["command"] == str(
-        Path(sys.executable).resolve()
-    )
+    assert vscode["servers"]["perflens"]["command"] == str(Path(sys.executable).resolve())
     setup = json.loads((project / "perflens-setup/setup.json").read_text(encoding="utf-8"))
     assert setup["selected_clients"] == ["copilot"]
 
@@ -816,11 +857,9 @@ def test_cli_analyzes_and_replays_normalized_trace_evidence(tmp_path: Path) -> N
     assert verified.exit_code == 0, verified.output
     verification = json.loads(verification_path.read_text(encoding="utf-8"))
     assert verification["verification_status"] == "partial"
-    assert {
-        check["name"]
-        for check in verification["checks"]
-        if check["status"] == "skipped"
-    } == {"raw_evidence_identity"}
+    assert {check["name"] for check in verification["checks"] if check["status"] == "skipped"} == {
+        "raw_evidence_identity"
+    }
 
     analysis["analysis_fingerprint"] = "f" * 64
     analysis_path.write_text(json.dumps(analysis), encoding="utf-8")
@@ -829,6 +868,129 @@ def test_cli_analyzes_and_replays_normalized_trace_evidence(tmp_path: Path) -> N
         app,
         [
             "verify-trace-analysis",
+            "--analysis",
+            str(analysis_path),
+            "--evidence",
+            str(evidence_path),
+            "--output",
+            str(failed_path),
+        ],
+    )
+    assert rejected.exit_code == 3
+    assert failed_path.exists()
+    failed = json.loads(failed_path.read_text(encoding="utf-8"))
+    assert failed["verification_status"] == "failed"
+
+
+def test_cli_imports_analyzes_and_privately_replays_runtime_lock_evidence(
+    tmp_path: Path,
+) -> None:
+    source_path = Path(__file__).parents[1] / "fixtures/runtime_locks/valid-v1.1.ndjson"
+    evidence_path = tmp_path / "runtime-lock-evidence.json"
+    analysis_path = tmp_path / "runtime-lock-analysis.json"
+    verification_path = tmp_path / "runtime-lock-verification.json"
+
+    imported = runner.invoke(
+        app,
+        [
+            "import-runtime-lock-evidence",
+            "--input",
+            str(source_path),
+            "--output",
+            str(evidence_path),
+        ],
+    )
+    assert imported.exit_code == 0, imported.output
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert evidence["schema_version"] == "1.1"
+    assert evidence["quality"]["emitted_event_count"] == 4
+    assert "/home/" not in evidence_path.read_text(encoding="utf-8")
+    evidence_bytes = evidence_path.read_bytes()
+    duplicate_import = runner.invoke(
+        app,
+        [
+            "import-runtime-lock-evidence",
+            "--input",
+            str(source_path),
+            "--output",
+            str(evidence_path),
+        ],
+    )
+    assert duplicate_import.exit_code != 0
+    assert evidence_path.read_bytes() == evidence_bytes
+
+    analyzed = runner.invoke(
+        app,
+        [
+            "analyze-runtime-lock-evidence",
+            "--input",
+            str(evidence_path),
+            "--output",
+            str(analysis_path),
+        ],
+    )
+    assert analyzed.exit_code == 0, analyzed.output
+    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    assert analysis["runtime_lock_evidence_id"] == evidence["runtime_lock_evidence_id"]
+    assert analysis["measurement_semantics"] == "exact"
+    assert analysis["total_exact_wait_ns"] == 50
+    analysis_bytes = analysis_path.read_bytes()
+    duplicate_analysis = runner.invoke(
+        app,
+        [
+            "analyze-runtime-lock-evidence",
+            "--input",
+            str(evidence_path),
+            "--output",
+            str(analysis_path),
+        ],
+    )
+    assert duplicate_analysis.exit_code != 0
+    assert analysis_path.read_bytes() == analysis_bytes
+
+    verified = runner.invoke(
+        app,
+        [
+            "verify-runtime-lock-analysis",
+            "--analysis",
+            str(analysis_path),
+            "--evidence",
+            str(evidence_path),
+            "--source",
+            str(source_path),
+            "--output",
+            str(verification_path),
+        ],
+    )
+    assert verified.exit_code == 0, verified.output
+    verification = json.loads(verification_path.read_text(encoding="utf-8"))
+    assert verification["verification_status"] == "verified"
+    assert all(check["status"] == "passed" for check in verification["checks"])
+    verification_bytes = verification_path.read_bytes()
+    duplicate_verification = runner.invoke(
+        app,
+        [
+            "verify-runtime-lock-analysis",
+            "--analysis",
+            str(analysis_path),
+            "--evidence",
+            str(evidence_path),
+            "--source",
+            str(source_path),
+            "--output",
+            str(verification_path),
+        ],
+    )
+    assert duplicate_verification.exit_code != 0
+    assert verification_path.read_bytes() == verification_bytes
+
+    analysis["analysis_fingerprint"] = "f" * 64
+    analysis_path.write_text(json.dumps(analysis), encoding="utf-8")
+    failed_path = tmp_path / "failed-runtime-lock-verification.json"
+    rejected = runner.invoke(
+        app,
+        [
+            "verify-runtime-lock-analysis",
             "--analysis",
             str(analysis_path),
             "--evidence",

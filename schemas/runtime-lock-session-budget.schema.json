@@ -1,0 +1,69 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "hard_expiry_seconds": {
+      "default": 3600,
+      "maximum": 3600,
+      "minimum": 1,
+      "title": "Hard Expiry Seconds",
+      "type": "integer"
+    },
+    "max_active_seconds": {
+      "default": 1200,
+      "maximum": 1200,
+      "minimum": 1,
+      "title": "Max Active Seconds",
+      "type": "integer"
+    },
+    "max_adapter_concurrency": {
+      "const": 1,
+      "default": 1,
+      "title": "Max Adapter Concurrency",
+      "type": "integer"
+    },
+    "max_artifact_bytes": {
+      "default": 67108864,
+      "maximum": 67108864,
+      "minimum": 1,
+      "title": "Max Artifact Bytes",
+      "type": "integer"
+    },
+    "max_collection_duration_seconds": {
+      "default": 30,
+      "maximum": 30,
+      "minimum": 1,
+      "title": "Max Collection Duration Seconds",
+      "type": "integer"
+    },
+    "max_evidence_bytes": {
+      "default": 536870912,
+      "maximum": 536870912,
+      "minimum": 1,
+      "title": "Max Evidence Bytes",
+      "type": "integer"
+    },
+    "max_exact_duration_seconds": {
+      "default": 3,
+      "maximum": 3,
+      "minimum": 1,
+      "title": "Max Exact Duration Seconds",
+      "type": "integer"
+    },
+    "max_exact_events": {
+      "default": 20000,
+      "maximum": 20000,
+      "minimum": 1,
+      "title": "Max Exact Events",
+      "type": "integer"
+    },
+    "max_workload_runs": {
+      "default": 6,
+      "maximum": 6,
+      "minimum": 1,
+      "title": "Max Workload Runs",
+      "type": "integer"
+    }
+  },
+  "title": "RuntimeLockSessionBudget",
+  "type": "object"
+}

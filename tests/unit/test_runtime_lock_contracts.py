@@ -68,7 +68,7 @@ def _container_reference() -> dict[str, str]:
 def _tool() -> dict[str, Any]:
     return {
         "name": "python3",
-        "path": "/usr/bin/python3",
+        "path": "python3",
         "version": "Python 3.13.5",
         "binary_sha256": ZERO_SHA,
         "status": "available",
@@ -316,12 +316,53 @@ def test_unavailable_capability_cannot_advertise_active_events() -> None:
         )
 
 
-def test_available_tool_identity_is_complete_and_absolute() -> None:
+def test_available_tool_identity_is_complete_and_uses_a_safe_public_name() -> None:
     assert RuntimeToolIdentity.model_validate(_tool()).status == "available"
     invalid = _tool()
-    invalid["path"] = "python3"
-    with pytest.raises(ValidationError, match="absolute"):
+    invalid["path"] = "../python3"
+    with pytest.raises(ValidationError, match="safe basename"):
         RuntimeToolIdentity.model_validate(invalid)
+
+
+def test_schema_1_1_tool_identity_rejects_absolute_paths_but_legacy_reads_them() -> None:
+    capability_payload = {
+        "schema_version": "1.1",
+        "capability_id": "runtime-capability-" + "a" * 16,
+        "created_at": "2026-08-16T00:00:00+00:00",
+        "runtime": "python",
+        "runtime_name": "CPython",
+        "adapter_id": "cpython-locks",
+        "adapter_version": "runtime-lock-adapter-v1",
+        "backend_id": "usdt-import",
+        "availability": "available",
+        "supported_event_kinds": ["wait_begin", "wait_end"],
+        "measurement_semantics": ["exact"],
+        "fast_path_visibility": "partial",
+        "owner_visibility": "unavailable",
+        "hold_time_visibility": "unavailable",
+        "launch_instrumentation_required": False,
+        "attach_required": False,
+        "privileged_backend_required": False,
+        "tools": [{**_tool(), "path": "/usr/bin/python3"}],
+        "content_sha256": ZERO_SHA,
+    }
+    with pytest.raises(ValidationError, match="cannot expose absolute tool paths"):
+        RuntimeAdapterCapabilityArtifact.model_validate(capability_payload)
+    with pytest.raises(JsonSchemaValidationError):
+        _validate_json_schema(
+            RuntimeAdapterCapabilityArtifact.model_json_schema(),
+            capability_payload,
+        )
+
+    capability_payload["schema_version"] = "1.0"
+    legacy = RuntimeAdapterCapabilityArtifact.model_validate(capability_payload)
+    assert legacy.tools[0].path == "/usr/bin/python3"
+
+    source_payload = _source(tool={**_tool(), "path": "/usr/bin/python3"})
+    with pytest.raises(ValidationError, match="cannot expose an absolute tool path"):
+        RuntimeSourceManifest.model_validate(source_payload)
+    with pytest.raises(JsonSchemaValidationError):
+        _validate_json_schema(RuntimeSourceManifest.model_json_schema(), source_payload)
 
 
 @pytest.mark.parametrize(

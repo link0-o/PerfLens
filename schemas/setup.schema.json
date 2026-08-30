@@ -328,6 +328,23 @@
       "title": "Project Root",
       "type": "string"
     },
+    "runtime_lock_config_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Lock Config Path"
+    },
+    "runtime_locks_enabled": {
+      "default": false,
+      "title": "Runtime Locks Enabled",
+      "type": "boolean"
+    },
     "schema_version": {
       "const": "1.0",
       "default": "1.0",

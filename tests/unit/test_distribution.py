@@ -1031,6 +1031,56 @@ def test_project_clients_enable_docker_only_with_an_in_project_policy(tmp_path: 
         )
 
 
+def test_project_clients_enable_runtime_locks_only_with_an_in_project_policy(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    policy = workspace / "perflens-setup/runtime-locks.toml"
+
+    codex = render_codex_config(
+        workspace,
+        allow_runtime_locks=True,
+        runtime_lock_project_config=policy,
+        mcp_command=Path(sys.executable),
+    )
+    claude = json.loads(
+        render_claude_config(
+            workspace,
+            allow_runtime_locks=True,
+            runtime_lock_project_config=policy,
+            mcp_command=Path(sys.executable),
+        )
+    )["mcpServers"]["perflens"]["args"]
+
+    assert '  "--allow-runtime-locks"' in codex
+    assert '  "--runtime-lock-project-config"' in codex
+    assert f'  "{policy}"' in codex
+    assert "--allow-runtime-locks" in claude
+    assert str(policy) in claude
+
+    with pytest.raises(PerfLensError):
+        render_codex_config(
+            workspace,
+            allow_runtime_locks=True,
+            mcp_command=Path(sys.executable),
+        )
+    with pytest.raises(PerfLensError):
+        render_codex_config(
+            workspace,
+            runtime_lock_project_config=policy,
+            mcp_command=Path(sys.executable),
+        )
+    with pytest.raises(PerfLensError) as captured:
+        render_codex_config(
+            workspace,
+            allow_runtime_locks=True,
+            runtime_lock_project_config=tmp_path / "outside.toml",
+            mcp_command=Path(sys.executable),
+        )
+    assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+
+
 def test_claude_config_reuses_the_same_bounded_mcp_policy(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

@@ -12,6 +12,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from perflens import __version__
 from perflens.application.analyze import analyze_folded, analyze_perf_data, analyze_perf_script
+from perflens.application.analyze_runtime_locks import build_runtime_lock_analysis
 from perflens.application.analyze_trace import build_trace_analysis
 from perflens.application.compare import (
     compare_analysis_files,
@@ -19,9 +20,16 @@ from perflens.application.compare import (
     normalize_benchmark,
 )
 from perflens.application.diagnose import classify_analysis, load_analysis, report_analysis
+from perflens.application.runtime_lock_evidence import (
+    validate_runtime_lock_evidence_invariants,
+)
 from perflens.application.symbols import get_source_context, inspect_elf, resolve_source
 from perflens.application.trace_evidence import validate_trace_evidence_invariants
 from perflens.application.verify_analysis import verify_analysis_artifact
+from perflens.application.verify_runtime_locks import (
+    require_usable_runtime_lock_analysis,
+    verify_runtime_lock_analysis_artifact,
+)
 from perflens.application.verify_trace import (
     require_usable_trace_analysis,
     verify_trace_analysis_artifact,
@@ -55,6 +63,11 @@ from perflens.contracts.artifacts import (
     ProjectDetachmentArtifact,
     RuntimeStatusArtifact,
 )
+from perflens.contracts.runtime_locks import (
+    RuntimeLockAnalysisArtifact,
+    RuntimeLockEvidenceArtifact,
+    RuntimeLockResourceLimits,
+)
 from perflens.contracts.trace import (
     LockAnalysisArtifact,
     OffCpuAnalysisArtifact,
@@ -85,6 +98,7 @@ from perflens.error_presentation import (
     render_error_chinese,
 )
 from perflens.reporting.diff import render_benchmark_comparison, render_profile_comparison
+from perflens.runtime_locks import import_runtime_lock_ndjson
 from perflens.security.paths import (
     validate_input_file,
     validate_new_output_file,
@@ -455,6 +469,13 @@ def init_command(
             ),
         ),
     ] = False,
+    enable_runtime_locks: Annotated[
+        bool,
+        typer.Option(
+            "--runtime-locks",
+            help=("为当前项目生成用户态锁能力与有界会话策略; 不会执行插桩、附加、导入或采集。"),
+        ),
+    ] = False,
     collector_privilege_mode: Annotated[
         Literal["cap_perfmon", "paranoid3_helper"] | None,
         typer.Option(
@@ -504,9 +525,7 @@ def init_command(
                 defaults = load_client_defaults(client_config)
                 selected_clients = defaults.clients
                 client_source = (
-                    f"用户默认配置 {defaults.path}"
-                    if defaults.configured
-                    else "内置默认值"
+                    f"用户默认配置 {defaults.path}" if defaults.configured else "内置默认值"
                 )
         codex_selected = "codex" in selected_clients
         claude_selected = "claude-code" in selected_clients
@@ -540,6 +559,7 @@ def init_command(
             perf_path=perf_path,
             collector_privilege_mode=collector_privilege_mode,
             enable_docker=enable_docker,
+            enable_runtime_locks=enable_runtime_locks,
             update_existing=update_existing,
         )
     except PerfLensError as exc:
@@ -573,6 +593,9 @@ def init_command(
         )
     if artifact.container_workload_config_path is not None:
         typer.echo(f"Docker 项目策略: {artifact.container_workload_config_path}")
+    typer.echo(f"Runtime Lock: {'已启用' if artifact.runtime_locks_enabled else '未启用'}")
+    if artifact.runtime_lock_config_path is not None:
+        typer.echo(f"Runtime Lock 项目策略: {artifact.runtime_lock_config_path}")
     typer.echo(f"自动采集: {'已启用 (仍需每次工作负载授权)' if automatic_collection else '未启用'}")
     typer.echo(f"中文下一步: {Path(artifact.output_directory) / '下一步.zh-CN.md'}")
 
@@ -1440,6 +1463,194 @@ def verify_trace_analysis_command(
     typer.echo(str(safe_output))
 
 
+@app.command("import-runtime-lock-evidence")
+def import_runtime_lock_evidence_command(
+    input_path: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            exists=False,
+            dir_okay=False,
+            help="版本化 Runtime Lock NDJSON 输入。",
+        ),
+    ],
+    output_path: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="脱敏 Runtime Lock Evidence JSON。"),
+    ],
+    max_input_bytes: Annotated[
+        int,
+        typer.Option(min=1, max=64 << 20, help="原始输入最大字节数。"),
+    ] = 64 << 20,
+    max_input_records: Annotated[
+        int,
+        typer.Option(min=1, max=100_000, help="原始事件和栈记录最大数量。"),
+    ] = 100_000,
+    max_exported_rows: Annotated[
+        int,
+        typer.Option(min=1, max=100_000, help="每类分析投影最多导出的行数。"),
+    ] = 10_000,
+) -> None:
+    """严格流式导入受控 Runtime Lock NDJSON, 不执行或附加目标。"""
+
+    try:
+        safe_input = validate_input_file(input_path)
+        limits = RuntimeLockResourceLimits(
+            max_source_bytes=max_input_bytes,
+            max_input_records=max_input_records,
+            max_exported_locks=max_exported_rows,
+        )
+        try:
+            with safe_input.open("rb") as source:
+                evidence = import_runtime_lock_ndjson(source, limits=limits)
+        except OSError as exc:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "runtime_lock_import",
+                "Runtime Lock source cannot be read",
+                details={"path": str(safe_input)},
+            ) from exc
+        safe_output = validate_new_output_file(output_path)
+        write_json_new_atomic(
+            evidence,
+            safe_output,
+            max_output_bytes=evidence.limits.max_output_bytes,
+        )
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(str(safe_output))
+
+
+@app.command("analyze-runtime-lock-evidence")
+def analyze_runtime_lock_evidence_command(
+    input_path: Annotated[
+        Path,
+        typer.Option("--input", exists=False, dir_okay=False, help="Runtime Lock Evidence JSON。"),
+    ],
+    output_path: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="确定性 Runtime Lock Analysis JSON。"),
+    ],
+    max_input_bytes: Annotated[
+        int,
+        typer.Option(min=1, max=64 << 20, help="Evidence JSON 最大字节数。"),
+    ] = 64 << 20,
+) -> None:
+    """分析并独立校验一份脱敏 Runtime Lock Evidence。"""
+
+    try:
+        payload, _safe_input = _read_bounded_json(
+            input_path,
+            max_input_bytes=max_input_bytes,
+            artifact_label="Runtime Lock Evidence",
+        )
+        try:
+            evidence = RuntimeLockEvidenceArtifact.model_validate_json(payload)
+        except ValidationError as exc:
+            raise _invalid_runtime_lock_json("Evidence", exc) from exc
+        validate_runtime_lock_evidence_invariants(evidence)
+        analysis = build_runtime_lock_analysis(evidence)
+        verification = verify_runtime_lock_analysis_artifact(analysis, evidence)
+        require_usable_runtime_lock_analysis(verification)
+        safe_output = validate_new_output_file(output_path)
+        write_json_new_atomic(
+            analysis,
+            safe_output,
+            max_output_bytes=evidence.limits.max_output_bytes,
+        )
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(str(safe_output))
+
+
+@app.command("verify-runtime-lock-analysis")
+def verify_runtime_lock_analysis_command(
+    analysis_path: Annotated[
+        Path,
+        typer.Option(
+            "--analysis", exists=False, dir_okay=False, help="Runtime Lock Analysis JSON。"
+        ),
+    ],
+    evidence_path: Annotated[
+        Path,
+        typer.Option(
+            "--evidence", exists=False, dir_okay=False, help="源 Runtime Lock Evidence JSON。"
+        ),
+    ],
+    output_path: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="独立 Runtime Lock 校验结果 JSON。"),
+    ],
+    source_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--source",
+            exists=False,
+            dir_okay=False,
+            help="可选私有原始 NDJSON, 用于来源哈希和转换重放。",
+        ),
+    ] = None,
+    max_input_bytes: Annotated[
+        int,
+        typer.Option(min=1, max=64 << 20, help="每个输入允许的最大字节数。"),
+    ] = 64 << 20,
+) -> None:
+    """重放并校验 Runtime Lock Analysis; 原始输入始终保持私有。"""
+
+    try:
+        evidence_payload, _safe_evidence = _read_bounded_json(
+            evidence_path,
+            max_input_bytes=max_input_bytes,
+            artifact_label="Runtime Lock Evidence",
+        )
+        analysis_payload, _safe_analysis = _read_bounded_json(
+            analysis_path,
+            max_input_bytes=max_input_bytes,
+            artifact_label="Runtime Lock Analysis",
+        )
+        try:
+            evidence = RuntimeLockEvidenceArtifact.model_validate_json(evidence_payload)
+            analysis = RuntimeLockAnalysisArtifact.model_validate_json(analysis_payload)
+        except ValidationError as exc:
+            raise _invalid_runtime_lock_json("Analysis or Evidence", exc) from exc
+        validate_runtime_lock_evidence_invariants(evidence)
+        safe_source = validate_input_file(source_path) if source_path is not None else None
+        try:
+            if safe_source is None:
+                verification = verify_runtime_lock_analysis_artifact(analysis, evidence)
+            else:
+                if safe_source.stat().st_size > max_input_bytes:
+                    raise PerfLensError(
+                        ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                        "runtime_lock_verification",
+                        "Runtime Lock private source exceeds max_input_bytes",
+                        details={"max_input_bytes": max_input_bytes},
+                    )
+                with safe_source.open("rb") as source:
+                    verification = verify_runtime_lock_analysis_artifact(
+                        analysis,
+                        evidence,
+                        private_source_stream=source,
+                    )
+        except OSError as exc:
+            raise PerfLensError(
+                ErrorCode.INVALID_INPUT,
+                "runtime_lock_verification",
+                "Runtime Lock private source cannot be read",
+                details={"path": str(safe_source)},
+            ) from exc
+        safe_output = validate_new_output_file(output_path)
+        write_json_new_atomic(
+            verification,
+            safe_output,
+            max_output_bytes=evidence.limits.max_output_bytes,
+        )
+        require_usable_runtime_lock_analysis(verification)
+    except PerfLensError as exc:
+        _fail(exc)
+    typer.echo(str(safe_output))
+
+
 @app.command("inspect-elf")
 def inspect_elf_command(
     input_path: Annotated[
@@ -2085,6 +2296,9 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
         ),
         "host_collection_conditional": "本机普通用户 perf 权限仍需真实验收。",
         "host_collection_blocked": "本机普通用户 perf 权限诊断为受阻; Collector 权限需另行验收。",
+        "runtime_lock_project_policy_invalid": (
+            "Runtime Lock 项目策略缺失、越界、权限不安全或内容无效。"
+        ),
     }
     typer.echo("PerfLens 状态检查 (只读)")
     typer.echo(f"项目: {artifact.project_root}")
@@ -2115,6 +2329,15 @@ def _render_status_chinese(artifact: RuntimeStatusArtifact) -> None:
             "Docker 单次授权自动优化: "
             f"{'已启用' if artifact.docker_optimization_enabled else '未启用'}"
         )
+    typer.echo(f"Runtime Lock: {'已启用' if artifact.runtime_locks_enabled else '未启用'}")
+    if artifact.runtime_locks_enabled:
+        typer.echo(f"Runtime Lock 策略状态: {artifact.runtime_lock_policy_status}")
+        for adapter in artifact.runtime_lock_adapter_statuses:
+            typer.echo(f"Runtime Lock Adapter {adapter.adapter_id}: {adapter.availability}")
+            for limitation in adapter.limitations:
+                typer.echo(f"  - {limitation}")
+        for limitation in artifact.runtime_lock_limitations:
+            typer.echo(f"Runtime Lock 限制: {limitation}")
     issues = artifact.issues
     if issues:
         typer.echo("问题与提示:")
@@ -2214,9 +2437,7 @@ def _render_detachment_chinese(
     typer.echo(f"OpenCode MCP: {config_labels[artifact.opencode_config_status]}")
     typer.echo(f"OpenCode Skill: {skill_labels[artifact.opencode_skill_status]}")
     typer.echo(f"Copilot CLI MCP: {config_labels[artifact.copilot_config_status]}")
-    typer.echo(
-        f"VS Code Copilot MCP: {config_labels[artifact.copilot_vscode_config_status]}"
-    )
+    typer.echo(f"VS Code Copilot MCP: {config_labels[artifact.copilot_vscode_config_status]}")
     typer.echo(f"Copilot Skill: {skill_labels[artifact.copilot_skill_status]}")
     typer.echo("保留边界: 不删除引导目录、分析结果或系统 Collector 数据。")
     if artifact.removed_paths:
@@ -2242,9 +2463,7 @@ def _render_detachment_chinese(
         artifact.copilot_skill_status,
     }:
         selected_client = (
-            "all"
-            if len(artifact.selected_clients) != 1
-            else artifact.selected_clients[0]
+            "all" if len(artifact.selected_clients) != 1 else artifact.selected_clients[0]
         )
         command_parts = [
             "perflens",
@@ -2439,6 +2658,15 @@ def _invalid_trace_json(label: str, error: ValidationError) -> PerfLensError:
         ErrorCode.INVALID_INPUT,
         "artifact",
         f"Input is not a valid PerfLens {label} artifact",
+        details={"validation_errors": error.error_count()},
+    )
+
+
+def _invalid_runtime_lock_json(label: str, error: ValidationError) -> PerfLensError:
+    return PerfLensError(
+        ErrorCode.INVALID_INPUT,
+        "runtime_lock_artifact",
+        f"Input is not a valid PerfLens Runtime Lock {label} artifact",
         details={"validation_errors": error.error_count()},
     )
 

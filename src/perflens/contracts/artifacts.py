@@ -1234,6 +1234,18 @@ class CollectorSpoolPruneArtifact(ContractModel):
     next_steps: tuple[str, ...] = ()
 
 
+class RuntimeLockAdapterRuntimeStatus(ContractModel):
+    adapter_id: Literal[
+        "native_pthread",
+        "java_jfr",
+        "cpython_threading",
+        "go_pprof",
+        "generic_ndjson_import",
+    ]
+    availability: Literal["available", "partial", "unavailable", "disabled"]
+    limitations: tuple[str, ...] = ()
+
+
 class RuntimeStatusArtifact(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     perflens_version: str
@@ -1241,15 +1253,19 @@ class RuntimeStatusArtifact(ContractModel):
     checked_at: str
     project_root: str
     setup_directory: str
-    selected_clients: tuple[
-        Literal["codex", "claude-code", "opencode", "copilot"], ...
-    ] = ()
+    selected_clients: tuple[Literal["codex", "claude-code", "opencode", "copilot"], ...] = ()
     setup_status: Literal["missing", "incomplete", "ready"]
     skill_status: Literal["missing", "incomplete", "ready"]
     mcp_config_status: Literal["missing", "incomplete", "ready"]
     automatic_collection_requested: bool
     docker_runtime_enabled: bool = False
     docker_optimization_enabled: bool = False
+    runtime_locks_enabled: bool = False
+    runtime_lock_policy_status: Literal["not_configured", "enabled", "disabled", "invalid"] = (
+        "not_configured"
+    )
+    runtime_lock_adapter_statuses: tuple[RuntimeLockAdapterRuntimeStatus, ...] = ()
+    runtime_lock_limitations: tuple[str, ...] = ()
     collector_assets_status: Literal["not_requested", "missing", "incomplete", "ready"]
     collector_socket: str
     collector_socket_status: Literal["missing", "invalid", "inaccessible", "ready"]
@@ -1283,9 +1299,7 @@ class SetupArtifact(ContractModel):
     perflens_version: str
     project_root: str
     output_directory: str
-    selected_clients: tuple[
-        Literal["codex", "claude-code", "opencode", "copilot"], ...
-    ] = ()
+    selected_clients: tuple[Literal["codex", "claude-code", "opencode", "copilot"], ...] = ()
     skill_status: Literal["installed", "updated", "existing", "skipped"]
     skill_path: str | None = None
     skill_fingerprint: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
@@ -1301,21 +1315,21 @@ class SetupArtifact(ContractModel):
     claude_project_config_managed: bool = False
     opencode_mcp_config_path: str | None = None
     opencode_project_config_path: str | None = None
-    opencode_project_config_status: Literal[
-        "installed", "updated", "existing", "skipped"
-    ] = "skipped"
+    opencode_project_config_status: Literal["installed", "updated", "existing", "skipped"] = (
+        "skipped"
+    )
     opencode_project_config_managed: bool = False
     copilot_mcp_config_path: str | None = None
     copilot_project_config_path: str | None = None
-    copilot_project_config_status: Literal[
-        "installed", "updated", "existing", "skipped"
-    ] = "skipped"
+    copilot_project_config_status: Literal["installed", "updated", "existing", "skipped"] = (
+        "skipped"
+    )
     copilot_project_config_managed: bool = False
     copilot_vscode_mcp_config_path: str | None = None
     copilot_vscode_project_config_path: str | None = None
-    copilot_vscode_project_config_status: Literal[
-        "installed", "updated", "existing", "skipped"
-    ] = "skipped"
+    copilot_vscode_project_config_status: Literal["installed", "updated", "existing", "skipped"] = (
+        "skipped"
+    )
     copilot_vscode_project_config_managed: bool = False
     capability_report_path: str
     collector_assets_path: str | None = None
@@ -1325,6 +1339,8 @@ class SetupArtifact(ContractModel):
     docker_runtime_enabled: bool = False
     docker_optimization_enabled: bool = False
     container_workload_config_path: str | None = None
+    runtime_locks_enabled: bool = False
+    runtime_lock_config_path: str | None = None
     collection_status: Literal["available", "conditional", "blocked"]
     blocked_modes: tuple[str, ...] = ()
     generated_files: tuple[str, ...]
@@ -1338,6 +1354,8 @@ class SetupArtifact(ContractModel):
             )
         if self.docker_optimization_enabled and not self.docker_runtime_enabled:
             raise ValueError("Docker optimization requires the Docker target runtime")
+        if self.runtime_locks_enabled != (self.runtime_lock_config_path is not None):
+            raise ValueError("Runtime Lock onboarding requires exactly one managed project policy")
         return self
 
 
@@ -1347,9 +1365,9 @@ class ProjectDetachmentArtifact(ContractModel):
     detachment_id: str = Field(pattern=r"^detachment-[a-f0-9]{16}$")
     project_root: str
     dry_run: bool
-    selected_clients: tuple[
-        Literal["codex", "claude-code", "opencode", "copilot"], ...
-    ] = ("codex",)
+    selected_clients: tuple[Literal["codex", "claude-code", "opencode", "copilot"], ...] = (
+        "codex",
+    )
     remove_skills: bool = False
     setup_directory: str | None = None
     codex_config_path: str
@@ -1361,9 +1379,7 @@ class ProjectDetachmentArtifact(ContractModel):
     copilot_config_path: str | None = None
     copilot_config_status: Literal["not_found", "planned", "removed", "skipped"] = "skipped"
     copilot_vscode_config_path: str | None = None
-    copilot_vscode_config_status: Literal[
-        "not_found", "planned", "removed", "skipped"
-    ] = "skipped"
+    copilot_vscode_config_status: Literal["not_found", "planned", "removed", "skipped"] = "skipped"
     codex_skill_path: str | None = None
     codex_skill_status: Literal["not_found", "planned", "removed", "preserved", "skipped"] = (
         "skipped"
@@ -1373,13 +1389,13 @@ class ProjectDetachmentArtifact(ContractModel):
         "skipped"
     )
     opencode_skill_path: str | None = None
-    opencode_skill_status: Literal[
-        "not_found", "planned", "removed", "preserved", "skipped"
-    ] = "skipped"
+    opencode_skill_status: Literal["not_found", "planned", "removed", "preserved", "skipped"] = (
+        "skipped"
+    )
     copilot_skill_path: str | None = None
-    copilot_skill_status: Literal[
-        "not_found", "planned", "removed", "preserved", "skipped"
-    ] = "skipped"
+    copilot_skill_status: Literal["not_found", "planned", "removed", "preserved", "skipped"] = (
+        "skipped"
+    )
     removed_paths: tuple[str, ...] = ()
     preserved_paths: tuple[str, ...] = ()
     next_steps: tuple[str, ...] = ()

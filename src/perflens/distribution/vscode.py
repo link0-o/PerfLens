@@ -84,6 +84,8 @@ def render_vscode_copilot_config(
     allow_docker_targets: bool = False,
     allow_docker_optimization: bool = False,
     docker_project_config: Path | None = None,
+    allow_runtime_locks: bool = False,
+    runtime_lock_project_config: Path | None = None,
     mcp_command: Path | None = None,
 ) -> str:
     """Return VS Code's project-local stdio MCP document for Copilot Agent."""
@@ -104,6 +106,8 @@ def render_vscode_copilot_config(
         allow_docker_targets=allow_docker_targets,
         allow_docker_optimization=allow_docker_optimization,
         docker_project_config=docker_project_config,
+        allow_runtime_locks=allow_runtime_locks,
+        runtime_lock_project_config=runtime_lock_project_config,
         mcp_command=mcp_command,
     )
     return _render_document(

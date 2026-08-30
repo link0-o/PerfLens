@@ -49,6 +49,13 @@ def _legacy_schema_condition() -> dict[str, object]:
     }
 
 
+def _schema_1_1_condition() -> dict[str, object]:
+    return {
+        "properties": {"schema_version": {"const": RUNTIME_LOCK_SCHEMA_VERSION}},
+        "required": ["schema_version"],
+    }
+
+
 def _forbid_present_json_schema(*fields: str) -> dict[str, object]:
     return {"not": {"anyOf": [{"required": [field]} for field in fields]}}
 
@@ -111,6 +118,7 @@ _RUNTIME_PUBLIC_CREDENTIAL = re.compile(
 _RUNTIME_PUBLIC_URI_USERINFO = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://[^/@\s]+@")
 _RUNTIME_PUBLIC_PRIVATE_KEY = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
 _RUNTIME_PUBLIC_LABEL_JSON_PATTERN = r"^(?!/|\\\\|//|[A-Za-z]:[\\/]).+$"
+_RUNTIME_TOOL_BASENAME_JSON_PATTERN = r"^[A-Za-z0-9_.+-]{1,128}$"
 
 RuntimeFamily = Literal["c_cpp", "java", "python", "go", "custom"]
 MeasurementSemantics = Literal["exact", "thresholded", "sampled", "cumulative"]
@@ -160,6 +168,10 @@ def is_safe_runtime_public_label(value: str) -> bool:
         or _RUNTIME_PUBLIC_URI_USERINFO.search(normalized)
         or _RUNTIME_PUBLIC_PRIVATE_KEY.search(normalized)
     )
+
+
+def _is_safe_runtime_tool_basename(value: str) -> bool:
+    return re.fullmatch(_RUNTIME_TOOL_BASENAME_JSON_PATTERN, value) is not None
 
 
 def derive_runtime_lock_id(
@@ -427,7 +439,7 @@ class RuntimeExecutionContext(ContractModel):
 
 
 class RuntimeToolIdentity(ContractModel):
-    """Identity of one optional external tool discovered without executing a workload."""
+    """Public tool identity with legacy absolute-path read compatibility."""
 
     name: str = Field(pattern=r"^[A-Za-z0-9_.+-]{1,64}$")
     path: str | None = None
@@ -438,8 +450,10 @@ class RuntimeToolIdentity(ContractModel):
 
     @model_validator(mode="after")
     def validate_identity(self) -> RuntimeToolIdentity:
-        if self.path is not None and not self.path.startswith("/"):
-            raise ValueError("runtime tool path must be absolute")
+        if self.path is not None and not (
+            self.path.startswith("/") or _is_safe_runtime_tool_basename(self.path)
+        ):
+            raise ValueError("runtime tool path must be a legacy absolute path or safe basename")
         if self.status == "available":
             if self.path is None or self.version is None or self.binary_sha256 is None:
                 raise ValueError("available runtime tools require path, version, and digest")
@@ -452,6 +466,42 @@ class RuntimeToolIdentity(ContractModel):
 
 class RuntimeAdapterCapabilityArtifact(ContractModel):
     """Read-only capability result for one runtime adapter/backend pair."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        allow_inf_nan=False,
+        json_schema_extra=_json_schema_extra(
+            {
+                "allOf": [
+                    {
+                        "if": _schema_1_1_condition(),
+                        "then": {
+                            "properties": {
+                                "tools": {
+                                    "items": {
+                                        "properties": {
+                                            "path": {
+                                                "anyOf": [
+                                                    {"type": "null"},
+                                                    {
+                                                        "type": "string",
+                                                        "pattern": (
+                                                            _RUNTIME_TOOL_BASENAME_JSON_PATTERN
+                                                        ),
+                                                    },
+                                                ]
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                    }
+                ]
+            }
+        ),
+    )
 
     schema_version: RuntimeLockSchemaVersion = LEGACY_RUNTIME_LOCK_SCHEMA_VERSION
     capability_id: ArtifactId
@@ -501,6 +551,11 @@ class RuntimeAdapterCapabilityArtifact(ContractModel):
         names = tuple(tool.name for tool in self.tools)
         if len(set(names)) != len(names) or tuple(sorted(names)) != names:
             raise ValueError("runtime capability tools must be unique and sorted")
+        if self.schema_version == "1.1" and any(
+            tool.path is not None and not _is_safe_runtime_tool_basename(tool.path)
+            for tool in self.tools
+        ):
+            raise ValueError("schema 1.1 runtime capability cannot expose absolute tool paths")
         if self.availability == "available":
             if not self.supported_event_kinds or not self.measurement_semantics:
                 raise ValueError("available runtime adapter must declare observable semantics")
@@ -546,7 +601,35 @@ class RuntimeSourceManifest(ContractModel):
                         "if": _legacy_schema_condition(),
                         "then": {"not": {"required": ["converter_version"]}},
                         "else": {"required": ["converter_version"]},
-                    }
+                    },
+                    {
+                        "if": _schema_1_1_condition(),
+                        "then": {
+                            "properties": {
+                                "tool": {
+                                    "anyOf": [
+                                        {"type": "null"},
+                                        {
+                                            "type": "object",
+                                            "properties": {
+                                                "path": {
+                                                    "anyOf": [
+                                                        {"type": "null"},
+                                                        {
+                                                            "type": "string",
+                                                            "pattern": (
+                                                                _RUNTIME_TOOL_BASENAME_JSON_PATTERN
+                                                            ),
+                                                        },
+                                                    ]
+                                                }
+                                            },
+                                        },
+                                    ]
+                                }
+                            }
+                        },
+                    },
                 ]
             }
         ),
@@ -589,6 +672,13 @@ class RuntimeSourceManifest(ContractModel):
             raise ValueError("schema 1.1 runtime source requires a converter version")
         if self.schema_version == "1.0" and "converter_version" in self.model_fields_set:
             raise ValueError("schema 1.0 runtime source cannot carry converter_version")
+        if (
+            self.schema_version == "1.1"
+            and self.tool is not None
+            and self.tool.path is not None
+            and not _is_safe_runtime_tool_basename(self.tool.path)
+        ):
+            raise ValueError("schema 1.1 runtime source cannot expose an absolute tool path")
         _validate_measurement_controls(
             self.measurement_semantics,
             duration_threshold_ns=self.duration_threshold_ns,
@@ -1925,4 +2015,180 @@ class RuntimeLockAnalysisVerificationArtifact(ContractModel):
         )
         if self.verification_status != expected:
             raise ValueError("runtime verification status contradicts its checks")
+        return self
+
+
+RuntimeLockProjectionName = Literal[
+    "lock",
+    "execution_context",
+    "call_path",
+    "wait_outcome",
+    "lock_kind",
+]
+RuntimeLockProjectionItem = (
+    RuntimeLockAggregate
+    | RuntimeExecutionContextAggregate
+    | RuntimeCallPathAggregate
+    | RuntimeWaitOutcomeAggregate
+    | RuntimeLockKindAggregate
+)
+
+
+class RuntimeLockHotspotPage(ContractModel):
+    """One bounded page from exactly one independently conserved projection."""
+
+    schema_version: RuntimeLockSchemaVersion
+    runtime_lock_analysis_id: ArtifactId
+    runtime_lock_evidence_id: ArtifactId
+    projection: RuntimeLockProjectionName
+    measurement_semantics: MeasurementSemantics
+    quality_status: EvidenceStatus
+    items: tuple[RuntimeLockProjectionItem, ...]
+    cursor: int = Field(ge=0)
+    next_cursor: int | None = Field(default=None, ge=0)
+    total_items: int = Field(ge=0)
+    coverage: RuntimeProjectionCoverage | None = None
+    allowed_conclusions: tuple[str, ...]
+    forbidden_conclusions: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def validate_page(self) -> RuntimeLockHotspotPage:
+        expected_type: dict[RuntimeLockProjectionName, type[RuntimeProjectionMetrics]] = {
+            "lock": RuntimeLockAggregate,
+            "execution_context": RuntimeExecutionContextAggregate,
+            "call_path": RuntimeCallPathAggregate,
+            "wait_outcome": RuntimeWaitOutcomeAggregate,
+            "lock_kind": RuntimeLockKindAggregate,
+        }
+        if any(not isinstance(item, expected_type[self.projection]) for item in self.items):
+            raise ValueError("runtime hotspot page contains another projection type")
+        if self.cursor + len(self.items) > self.total_items:
+            raise ValueError("runtime hotspot page exceeds its total item count")
+        expected_next = (
+            self.cursor + len(self.items)
+            if self.cursor + len(self.items) < self.total_items
+            else None
+        )
+        if self.next_cursor != expected_next:
+            raise ValueError("runtime hotspot page next cursor is inconsistent")
+        if self.schema_version == "1.1":
+            if self.coverage is None:
+                raise ValueError("schema 1.1 runtime hotspot page requires coverage")
+            if self.coverage.exported_row_count != self.total_items:
+                raise ValueError("runtime hotspot page total differs from projection coverage")
+        elif self.coverage is not None:
+            raise ValueError("schema 1.0 runtime hotspot page cannot carry coverage")
+        if set(self.allowed_conclusions) & set(self.forbidden_conclusions):
+            raise ValueError("runtime hotspot page conclusion sets overlap")
+        return self
+
+
+class RuntimeLockCallPathPage(ContractModel):
+    """Call-path projections joined to their bounded, redacted public stacks."""
+
+    schema_version: RuntimeLockSchemaVersion
+    runtime_lock_analysis_id: ArtifactId
+    runtime_lock_evidence_id: ArtifactId
+    measurement_semantics: MeasurementSemantics
+    quality_status: EvidenceStatus
+    items: tuple[RuntimeCallPathAggregate, ...]
+    stacks: tuple[RuntimeStack | None, ...]
+    cursor: int = Field(ge=0)
+    next_cursor: int | None = Field(default=None, ge=0)
+    total_items: int = Field(ge=0)
+    coverage: RuntimeProjectionCoverage | None = None
+    allowed_conclusions: tuple[str, ...]
+    forbidden_conclusions: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def validate_page(self) -> RuntimeLockCallPathPage:
+        if len(self.items) != len(self.stacks):
+            raise ValueError("runtime call-path rows and stacks must have equal length")
+        if any(
+            (item.stack_id is None) != (stack is None)
+            or (stack is not None and item.stack_id != stack.stack_id)
+            for item, stack in zip(self.items, self.stacks, strict=True)
+        ):
+            raise ValueError("runtime call-path rows do not match their public stacks")
+        if self.cursor + len(self.items) > self.total_items:
+            raise ValueError("runtime call-path page exceeds its total item count")
+        expected_next = (
+            self.cursor + len(self.items)
+            if self.cursor + len(self.items) < self.total_items
+            else None
+        )
+        if self.next_cursor != expected_next:
+            raise ValueError("runtime call-path page next cursor is inconsistent")
+        if self.schema_version == "1.1":
+            if self.coverage is None:
+                raise ValueError("schema 1.1 runtime call-path page requires coverage")
+            if self.coverage.exported_row_count != self.total_items:
+                raise ValueError("runtime call-path total differs from projection coverage")
+        elif self.coverage is not None:
+            raise ValueError("schema 1.0 runtime call-path page cannot carry coverage")
+        if set(self.allowed_conclusions) & set(self.forbidden_conclusions):
+            raise ValueError("runtime call-path page conclusion sets overlap")
+        return self
+
+
+def derive_runtime_lock_diagnosis_id(
+    runtime_lock_analysis_id: str,
+    runtime_lock_analysis_content_sha256: str,
+    runtime_lock_verification_content_sha256: str,
+) -> str:
+    material = "\0".join(
+        (
+            "perflens-runtime-lock-diagnosis-v1",
+            runtime_lock_analysis_id,
+            runtime_lock_analysis_content_sha256,
+            runtime_lock_verification_content_sha256,
+        )
+    )
+    return f"runtime-lock-diagnosis-{hashlib.sha256(material.encode()).hexdigest()[:20]}"
+
+
+class RuntimeLockDiagnosisBundleArtifact(ContractModel):
+    """Bounded Agent-facing summary whose facts remain bound to verified evidence."""
+
+    schema_version: RuntimeLockSchemaVersion
+    runtime_lock_diagnosis_id: ArtifactId
+    runtime_lock_analysis_id: ArtifactId
+    runtime_lock_analysis_content_sha256: Sha256
+    runtime_lock_evidence_id: ArtifactId
+    runtime_lock_evidence_content_sha256: Sha256
+    runtime_lock_verification_id: ArtifactId
+    runtime_lock_verification_content_sha256: Sha256
+    created_at: str
+    runtime: RuntimeFamily
+    measurement_semantics: MeasurementSemantics
+    quality_status: EvidenceStatus
+    observations: tuple[str, ...] = Field(max_length=32)
+    limitations: tuple[str, ...] = Field(max_length=64)
+    top_lock_ids: tuple[LockId, ...] = Field(max_length=32)
+    top_execution_context_ids: tuple[ExecutionContextId, ...] = Field(max_length=32)
+    top_stack_ids: tuple[StackId, ...] = Field(max_length=32)
+    allowed_conclusions: tuple[str, ...]
+    forbidden_conclusions: tuple[str, ...]
+    content_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_bundle(self) -> RuntimeLockDiagnosisBundleArtifact:
+        expected = derive_runtime_lock_diagnosis_id(
+            self.runtime_lock_analysis_id,
+            self.runtime_lock_analysis_content_sha256,
+            self.runtime_lock_verification_content_sha256,
+        )
+        if self.runtime_lock_diagnosis_id != expected:
+            raise ValueError("runtime diagnosis ID differs from its verified Analysis")
+        for values, label in (
+            (self.top_lock_ids, "lock"),
+            (self.top_execution_context_ids, "execution-context"),
+            (self.top_stack_ids, "stack"),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"runtime diagnosis {label} IDs must be unique")
+        if any(not item.strip() for item in (*self.observations, *self.limitations)):
+            raise ValueError("runtime diagnosis text cannot be blank")
+        if set(self.allowed_conclusions) & set(self.forbidden_conclusions):
+            raise ValueError("runtime diagnosis conclusion sets overlap")
         return self

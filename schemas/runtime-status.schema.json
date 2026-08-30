@@ -1,4 +1,46 @@
 {
+  "$defs": {
+    "RuntimeLockAdapterRuntimeStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_id": {
+          "enum": [
+            "native_pthread",
+            "java_jfr",
+            "cpython_threading",
+            "go_pprof",
+            "generic_ndjson_import"
+          ],
+          "title": "Adapter Id",
+          "type": "string"
+        },
+        "availability": {
+          "enum": [
+            "available",
+            "partial",
+            "unavailable",
+            "disabled"
+          ],
+          "title": "Availability",
+          "type": "string"
+        },
+        "limitations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "adapter_id",
+        "availability"
+      ],
+      "title": "RuntimeLockAdapterRuntimeStatus",
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "automatic_collection_requested": {
@@ -199,6 +241,38 @@
     "project_root": {
       "title": "Project Root",
       "type": "string"
+    },
+    "runtime_lock_adapter_statuses": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RuntimeLockAdapterRuntimeStatus"
+      },
+      "title": "Runtime Lock Adapter Statuses",
+      "type": "array"
+    },
+    "runtime_lock_limitations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Runtime Lock Limitations",
+      "type": "array"
+    },
+    "runtime_lock_policy_status": {
+      "default": "not_configured",
+      "enum": [
+        "not_configured",
+        "enabled",
+        "disabled",
+        "invalid"
+      ],
+      "title": "Runtime Lock Policy Status",
+      "type": "string"
+    },
+    "runtime_locks_enabled": {
+      "default": false,
+      "title": "Runtime Locks Enabled",
+      "type": "boolean"
     },
     "schema_version": {
       "const": "1.0",
