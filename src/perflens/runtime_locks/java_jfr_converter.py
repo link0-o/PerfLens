@@ -77,6 +77,7 @@ def _validate_execution_binding(
         tools["jfr"].version != binding.runtime_version
     ):
         raise _invalid("JFR tool versions differ from the authorized runtime")
+    assert binding.duration_threshold_ns is not None
     return jdk_major, binding.duration_threshold_ns, tools["jfr"]
 
 

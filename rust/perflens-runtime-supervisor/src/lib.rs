@@ -34,6 +34,8 @@ const MAX_NATIVE_PROBE_BYTES: u64 = 64 << 20;
 const MAX_JAVA_JAR_BYTES: u64 = 512 << 20;
 const MAX_JFR_PROFILE_BYTES: u64 = 1 << 20;
 const MAX_JFR_RECORDING_BYTES: u64 = 64 << 20;
+const MAX_CPYTHON_BOOTSTRAP_BYTES: u64 = 1 << 20;
+const MAX_CPYTHON_SCRIPT_BYTES: u64 = 64 << 20;
 const MAX_SUPERVISOR_BYTES: u64 = 64 << 20;
 static SUPERVISOR_ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -114,6 +116,15 @@ pub enum AdapterRequest {
         recording_name: String,
         recording: FileIdentity,
         output: WritableFileIdentity,
+    },
+    CpythonThreading {
+        bootstrap: FileIdentity,
+        script: FileIdentity,
+        script_label: String,
+        output: WritableFileIdentity,
+        semantics: NativeSemantics,
+        threshold_ns: Option<u64>,
+        max_events: u32,
     },
 }
 
@@ -438,6 +449,51 @@ fn validate_request(
                 redirect_stdout: true,
             }
         }
+        AdapterRequest::CpythonThreading {
+            bootstrap,
+            script,
+            script_label,
+            output,
+            semantics,
+            threshold_ns,
+            max_events,
+        } => {
+            validate_regular_file(bootstrap, false, MAX_CPYTHON_BOOTSTRAP_BYTES)?;
+            validate_regular_file(script, false, MAX_CPYTHON_SCRIPT_BYTES)?;
+            validate_writable_file(output)?;
+            for descriptor in [bootstrap.descriptor, script.descriptor, output.descriptor] {
+                insert_unique(&mut descriptors, descriptor)?;
+            }
+            validate_cpython_controls(
+                *semantics,
+                *threshold_ns,
+                *max_events,
+                request.timeout_milliseconds,
+            )?;
+            validate_cpython_script_label(script_label)?;
+            retained.extend([bootstrap.descriptor, script.descriptor]);
+            executable_arguments.extend(strings_to_c(&[
+                "python".to_owned(),
+                "-I".to_owned(),
+                "-B".to_owned(),
+                format!("/proc/self/fd/{}", bootstrap.descriptor),
+                script.descriptor.to_string(),
+                script_label.clone(),
+                match semantics {
+                    NativeSemantics::Exact => "exact".to_owned(),
+                    NativeSemantics::Thresholded => "thresholded".to_owned(),
+                },
+                threshold_ns.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                max_events.to_string(),
+            ])?);
+            executable_arguments.extend(strings_to_c(&request.arguments)?);
+            EvidenceOutput::BoundedStream {
+                destination_fd: output.descriptor,
+                maximum_size: output.maximum_size,
+                native_environment_fd: true,
+                redirect_stdout: false,
+            }
+        }
     };
     retained.sort_unstable();
     retained.dedup();
@@ -449,6 +505,48 @@ fn validate_request(
         retained_child_fds: retained,
         evidence_output,
     })
+}
+
+fn validate_cpython_controls(
+    semantics: NativeSemantics,
+    threshold_ns: Option<u64>,
+    max_events: u32,
+    timeout_milliseconds: u64,
+) -> Result<(), SupervisorError> {
+    if max_events == 0 || max_events > 20_000 {
+        return Err(SupervisorError::new(
+            "resource_limit_exceeded",
+            "CPython event budget exceeds 20,000",
+        ));
+    }
+    match (semantics, threshold_ns) {
+        (NativeSemantics::Exact, None) if timeout_milliseconds <= 3_000 => Ok(()),
+        (NativeSemantics::Thresholded, Some(10_000)) => Ok(()),
+        _ => Err(SupervisorError::new(
+            "invalid_request",
+            "CPython threshold or exact duration is inconsistent",
+        )),
+    }
+}
+
+fn validate_cpython_script_label(label: &str) -> Result<(), SupervisorError> {
+    if label.is_empty()
+        || label.len() > 4096
+        || label.starts_with('/')
+        || label.contains('\\')
+        || label
+            .chars()
+            .any(|character| character.is_control() || character == '\u{7f}')
+        || label
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return Err(SupervisorError::new(
+            "invalid_request",
+            "CPython script label must be one safe project-relative path",
+        ));
+    }
+    Ok(())
 }
 
 fn insert_unique(set: &mut BTreeSet<RawFd>, descriptor: RawFd) -> Result<(), SupervisorError> {
@@ -917,6 +1015,7 @@ mod tests {
         AdapterRequest, ControlDescriptors, DirectoryIdentity, FileIdentity, NativeSemantics,
         SupervisorError, SupervisorReceipt, SupervisorRequest, TerminationReason,
         WritableFileIdentity, accounted_active_seconds, run_supervisor, validate_adapter_arguments,
+        validate_cpython_controls, validate_cpython_script_label,
     };
     use sha2::{Digest, Sha256};
     use std::fs::{self, File, OpenOptions};
@@ -953,6 +1052,7 @@ mod tests {
     fn shared_protocol_goldens_are_strict() {
         for valid in [
             include_str!("../../../tests/fixtures/runtime_supervisor/valid-native-request.json"),
+            include_str!("../../../tests/fixtures/runtime_supervisor/valid-cpython-request.json"),
             include_str!(
                 "../../../tests/fixtures/runtime_supervisor/valid-java-workload-request.json"
             ),
@@ -1006,6 +1106,41 @@ mod tests {
         let error = validate_adapter_arguments(&invalid.request, &invalid.arguments)
             .expect_err("Java print arguments must be rejected");
         assert_eq!(error.code, "invalid_request");
+    }
+
+    #[test]
+    fn cpython_controls_enforce_exact_threshold_duration_and_event_bounds() {
+        validate_cpython_controls(NativeSemantics::Exact, None, 20_000, 3_000)
+            .expect("bounded exact controls");
+        validate_cpython_controls(NativeSemantics::Thresholded, Some(10_000), 20_000, 30_000)
+            .expect("fixed thresholded controls");
+
+        for (semantics, threshold, events, timeout) in [
+            (NativeSemantics::Exact, Some(10_000), 20_000, 3_000),
+            (NativeSemantics::Exact, None, 20_000, 3_001),
+            (NativeSemantics::Thresholded, Some(9_999), 20_000, 30_000),
+            (NativeSemantics::Thresholded, Some(10_000), 0, 30_000),
+            (NativeSemantics::Thresholded, Some(10_000), 20_001, 30_000),
+        ] {
+            validate_cpython_controls(semantics, threshold, events, timeout)
+                .expect_err("unsafe CPython controls must fail");
+        }
+    }
+
+    #[test]
+    fn cpython_script_label_rejects_host_paths_and_traversal() {
+        validate_cpython_script_label("workloads/locks.py").expect("safe project-relative label");
+        for label in [
+            "",
+            "/etc/passwd",
+            "../escape.py",
+            "workloads/../escape.py",
+            "workloads//locks.py",
+            "workloads\\locks.py",
+            "workloads/locks.py\nsecret",
+        ] {
+            validate_cpython_script_label(label).expect_err("unsafe source label must fail");
+        }
     }
 
     #[test]

@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Literal, cast
 
 from mcp.server import MCPServer
 from mcp_types import ToolAnnotations
@@ -186,6 +186,24 @@ from perflens.runtime_locks.capability import (
     RuntimeLockCapabilityInspection,
     inspect_runtime_lock_capability,
 )
+from perflens.runtime_locks.cpython_adapter import (
+    CpythonAdapterBridge,
+    CpythonLaunchPolicy,
+    build_cpython_adapter_bridge,
+    discover_cpython_adapter_bridge,
+    inspect_cpython_installation,
+)
+from perflens.runtime_locks.cpython_converter import (
+    convert_cpython_threading_stream,
+    verify_cpython_threading_replay,
+)
+from perflens.runtime_locks.cpython_launcher import (
+    CpythonLaunchRequest,
+    CpythonLaunchResult,
+    CpythonThreadingLauncher,
+    cleanup_cpython_launch_result,
+    open_cpython_private_stream,
+)
 from perflens.runtime_locks.java_jfr_adapter import (
     JavaJfrAdapterBridge,
     discover_java_jfr_adapter_bridge,
@@ -302,6 +320,10 @@ class ServerConfig:
     runtime_lock_java_launcher_factory: (
         Callable[[Path, Path, JavaJfrLaunchPolicy], JavaJfrLauncher] | None
     ) = None
+    runtime_lock_cpython_bridge_factory: Callable[[], CpythonAdapterBridge] | None = None
+    runtime_lock_cpython_launcher_factory: (
+        Callable[[Path, Path, CpythonLaunchPolicy], CpythonThreadingLauncher] | None
+    ) = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,11 +394,14 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         or config.runtime_lock_native_launcher_factory is not None
         or config.runtime_lock_java_bridge_factory is not None
         or config.runtime_lock_java_launcher_factory is not None
+        or config.runtime_lock_cpython_bridge_factory is not None
+        or config.runtime_lock_cpython_launcher_factory is not None
     ):
         raise ValueError("Runtime Lock factories require Runtime Lock sessions")
     if (
         config.runtime_lock_native_launcher_factory is not None
         or config.runtime_lock_java_launcher_factory is not None
+        or config.runtime_lock_cpython_launcher_factory is not None
     ) and not config.allow_process_execution:
         raise ValueError("Runtime Lock workload launcher requires process execution")
     docker_policy = (
@@ -428,6 +453,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     runtime_lock_java_private_root: Path | None = None
     runtime_lock_java_artifact_lease: JavaJfrArtifactRootLease | None = None
     runtime_lock_java_retained_results: list[JavaJfrPrivateEvidence] = []
+    runtime_lock_cpython_bridge: CpythonAdapterBridge | None = None
+    runtime_lock_cpython_launcher: CpythonThreadingLauncher | None = None
+    runtime_lock_cpython_private_root: Path | None = None
+    runtime_lock_cpython_retained_results: list[CpythonLaunchResult] = []
 
     @asynccontextmanager
     async def server_lifespan(_server: MCPServer[None]) -> AsyncGenerator[None]:
@@ -456,6 +485,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 finally:
                     with suppress(OSError, PerfLensError):
                         release_java_jfr_artifact_root_lease(runtime_lock_java_artifact_lease)
+            if runtime_lock_cpython_private_root is not None:
+                with suppress(OSError):
+                    runtime_lock_cpython_private_root.rmdir()
 
     server: MCPServer[None] = MCPServer(
         "perflens",
@@ -532,6 +564,25 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         runtime_lock_java_bridge = bridge
         return bridge
 
+    def get_runtime_lock_cpython_bridge() -> CpythonAdapterBridge:
+        nonlocal runtime_lock_cpython_bridge
+        _require_runtime_locks(config)
+        if runtime_lock_cpython_bridge is not None:
+            return runtime_lock_cpython_bridge
+        assert runtime_lock_policy is not None
+        if config.runtime_lock_cpython_bridge_factory is not None:
+            bridge = config.runtime_lock_cpython_bridge_factory()
+        elif config.allow_process_execution:
+            bridge = discover_cpython_adapter_bridge(runtime_lock_policy)
+        else:
+            bridge = build_cpython_adapter_bridge(
+                runtime_lock_policy,
+                inspect_cpython_installation(trusted_owner_uids=()),
+                supervisor_available=False,
+            )
+        runtime_lock_cpython_bridge = bridge
+        return bridge
+
     def inspect_runtime_lock_session_capability() -> RuntimeLockCapabilityInspection:
         _require_runtime_locks(config)
         assert runtime_lock_policy is not None
@@ -567,6 +618,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             project_identity_sha256=runtime_lock_project.identity_sha256,
             native_pthread_capability=native_capability,
             java_jfr_bridge=get_runtime_lock_java_bridge(),
+            cpython_bridge=get_runtime_lock_cpython_bridge(),
         )
 
     def get_runtime_lock_session_runtime() -> RuntimeLockSessionRuntime:
@@ -696,6 +748,53 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         runtime_lock_java_launcher = launcher
         return launcher
 
+    def get_runtime_lock_cpython_launcher() -> CpythonThreadingLauncher:
+        nonlocal runtime_lock_cpython_launcher, runtime_lock_cpython_private_root
+        _require_runtime_locks(config)
+        if not config.allow_process_execution:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "runtime_lock_authorization",
+                "CPython Runtime Lock workload execution is disabled by project MCP policy",
+                recoverable=True,
+            )
+        if runtime_lock_cpython_launcher is not None:
+            return runtime_lock_cpython_launcher
+        assert runtime_lock_project is not None
+        bridge = get_runtime_lock_cpython_bridge()
+        if bridge.launch_policy is None:
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_FAILED,
+                "runtime_lock_capability",
+                "The trusted CPython launch bridge is unavailable",
+                recoverable=True,
+                details={"limitations": bridge.capability.limitations},
+            )
+        private_root = Path(
+            tempfile.mkdtemp(prefix=".runtime-lock-cpython-", dir=config.artifact_root)
+        )
+        private_root.chmod(0o700)
+        try:
+            if config.runtime_lock_cpython_launcher_factory is not None:
+                launcher = config.runtime_lock_cpython_launcher_factory(
+                    runtime_lock_project.path,
+                    private_root,
+                    bridge.launch_policy,
+                )
+            else:
+                launcher = CpythonThreadingLauncher(
+                    project_root=runtime_lock_project.path,
+                    private_output_root=private_root,
+                    policy=bridge.launch_policy,
+                )
+        except Exception:
+            with suppress(OSError):
+                private_root.rmdir()
+            raise
+        runtime_lock_cpython_private_root = private_root
+        runtime_lock_cpython_launcher = launcher
+        return launcher
+
     def capture_module_snapshot(
         executed: _ExecutedBrokerPlan,
         *,
@@ -801,6 +900,284 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             active_seconds=active_seconds,
         )
 
+    async def collect_cpython_runtime_lock_evidence(
+        session_id: str,
+        measurement_semantics: Literal["exact", "thresholded"],
+        duration_seconds: int,
+        max_events: int,
+    ) -> ArtifactReference:
+        assert runtime_lock_policy is not None
+        assert runtime_lock_project is not None
+        runtime = get_runtime_lock_session_runtime()
+        lease = None
+        launch_result: CpythonLaunchResult | None = None
+        actual_active_seconds = duration_seconds
+        actual_evidence_bytes = 0
+        actual_exact_events = 0
+        run_finished = False
+        retain_private_stream = False
+        failure_reason: Literal[
+            "adapter_output_invalid",
+            "correctness_failed",
+            "identity_or_policy_changed",
+            "internal_collection_error",
+            "resource_limit_exceeded",
+            "target_exited",
+            "target_identity_changed",
+        ] = "internal_collection_error"
+        try:
+            assert_runtime_lock_project_policy_current(
+                runtime_lock_policy, allowed_roots=config.allowed_roots
+            )
+            assert_managed_project_current(runtime_lock_project)
+            session = runtime.snapshot(session_id)
+            preview = store.load_runtime_lock_preview(session.preview_id)
+            bridge = get_runtime_lock_cpython_bridge()
+            binding = bridge.binding_for(measurement_semantics)
+            if binding is None:
+                raise _runtime_lock_native_error(
+                    "CPython execution binding is unavailable for the selected semantics"
+                )
+            workload = _validate_cpython_runtime_lock_session(
+                session,
+                preview,
+                runtime_lock_policy,
+                execution_binding=binding,
+                measurement_semantics=measurement_semantics,
+                duration_seconds=duration_seconds,
+                max_events=max_events,
+            )
+            launcher = get_runtime_lock_cpython_launcher()
+            script_path = _runtime_lock_project_executable(
+                runtime_lock_project.path, workload.program
+            )
+            target = launcher.inspect_target(script_path)
+            if (
+                target.project_relative_path != workload.program
+                or target.script_sha256 != workload.program_sha256
+                or target.size != workload.program_size
+            ):
+                failure_reason = "target_identity_changed"
+                raise _runtime_lock_native_error(
+                    "CPython workload differs from the authorized Preview"
+                )
+            threshold = 10_000 if measurement_semantics == "thresholded" else None
+            operation_identity = _runtime_lock_cpython_operation_identity(
+                session,
+                target.identity_sha256,
+                measurement_semantics,
+                duration_seconds,
+                max_events,
+                binding.execution_identity_sha256,
+            )
+            lease = runtime.begin_run(
+                session_id,
+                adapter_id="cpython_threading",
+                measurement_semantics=measurement_semantics,
+                operation_identity_sha256=operation_identity,
+                target_identity_sha256=target.identity_sha256,
+                workload_identity_sha256=workload.workload_identity_sha256,
+                reserve_active_seconds=duration_seconds,
+                reserve_evidence_bytes=session.budget.max_artifact_bytes,
+                reserve_exact_events=(max_events if measurement_semantics == "exact" else 0),
+            )
+            reserved = runtime.snapshot(session_id)
+            store.save(reserved, reserved.session_artifact_id, "runtime-lock-session")
+            launch_result = launcher.launch(
+                script_path,
+                CpythonLaunchRequest(
+                    arguments=workload.arguments,
+                    semantics=measurement_semantics,
+                    threshold_ns=threshold,
+                    duration_seconds=duration_seconds,
+                    max_events=max_events,
+                ),
+                expected_target_identity_sha256=target.identity_sha256,
+            )
+            actual_active_seconds = launch_result.accounted_active_seconds
+            actual_evidence_bytes = launch_result.stream_size
+            if launch_result.termination_reason == "duration_limit":
+                failure_reason = "resource_limit_exceeded"
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "runtime_lock_collection",
+                    "CPython workload exceeded its authorized duration",
+                    recoverable=True,
+                )
+            if launch_result.exit_code is None:
+                failure_reason = "target_exited"
+                raise _runtime_lock_native_error("CPython workload exit status is unavailable")
+            if launch_result.exit_code != 0:
+                failure_reason = "correctness_failed"
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "runtime_lock_collection",
+                    "CPython workload exited unsuccessfully",
+                    recoverable=True,
+                    details={"exit_code": launch_result.exit_code},
+                )
+            failure_reason = "adapter_output_invalid"
+            retain_private_stream = True
+            source_fd = open_cpython_private_stream(launch_result)
+            try:
+                with os.fdopen(os.dup(source_fd), "rb") as source:
+                    receipt = convert_cpython_threading_stream(
+                        source,
+                        execution_binding=binding,
+                        limits=RuntimeLockResourceLimits(
+                            max_source_bytes=session.budget.max_artifact_bytes,
+                            max_input_records=max_events,
+                            max_output_bytes=session.budget.max_artifact_bytes,
+                        ),
+                        created_at=launch_result.started_at,
+                    )
+            finally:
+                os.close(source_fd)
+            # Reopen and revalidate because ``dup`` shares the original
+            # open-file offset and the first streaming conversion ends at EOF.
+            replay_fd = open_cpython_private_stream(launch_result)
+            try:
+                with os.fdopen(os.dup(replay_fd), "rb") as replay:
+                    if not verify_cpython_threading_replay(
+                        receipt.evidence, replay, execution_binding=binding
+                    ):
+                        raise _runtime_lock_native_error(
+                            "CPython private evidence replay differs from the public Artifact"
+                        )
+            finally:
+                os.close(replay_fd)
+            evidence = receipt.evidence
+            identity_warnings = _assert_cpython_runtime_lock_evidence_identity(
+                evidence,
+                launch_result=launch_result,
+                expected_target_identity_sha256=target.identity_sha256,
+                execution_binding=binding,
+                max_events=max_events,
+            )
+            analysis = build_runtime_lock_analysis(evidence)
+            verification = verify_runtime_lock_analysis_artifact(analysis, evidence)
+            require_usable_runtime_lock_analysis(verification)
+            actual_evidence_bytes = len(serialize_json(evidence))
+            actual_exact_events = len(evidence.events) if measurement_semantics == "exact" else 0
+            warnings = tuple(
+                dict.fromkeys(
+                    (*preview.warnings, *evidence.quality.limitations, *identity_warnings)
+                )
+            )
+            quality, allowed, forbidden = derive_runtime_lock_run_boundaries(
+                adapter_id="cpython_threading",
+                analysis_quality_status=analysis.quality_status,
+                analysis_allowed_conclusions=analysis.allowed_conclusions,
+                analysis_forbidden_conclusions=analysis.forbidden_conclusions,
+                warnings=warnings,
+            )
+            provisional_run = RuntimeLockRunArtifact(
+                schema_version=preview.schema_version,
+                perflens_version=__version__,
+                run_id=derive_runtime_lock_run_id(
+                    session_id,
+                    "cpython_threading",
+                    evidence.content_sha256,
+                    launch_result.started_at,
+                ),
+                created_at=launch_result.finished_at,
+                started_at=launch_result.started_at,
+                finished_at=launch_result.finished_at,
+                session_id=session_id,
+                session_artifact_id=lease.session_artifact_id,
+                session_artifact_content_sha256=lease.session_artifact_content_sha256,
+                session_revision=lease.session_revision,
+                target_scope="host_launched_workload",
+                operation_identity_sha256=operation_identity,
+                target_identity_sha256=target.identity_sha256,
+                adapter_id="cpython_threading",
+                adapter_execution_identity_sha256=binding.execution_identity_sha256,
+                measurement_semantics=measurement_semantics,
+                workload_identity_sha256=workload.workload_identity_sha256,
+                runtime_lock_evidence_id=evidence.runtime_lock_evidence_id,
+                runtime_lock_evidence_content_sha256=evidence.content_sha256,
+                runtime_lock_analysis_id=analysis.runtime_lock_analysis_id,
+                runtime_lock_analysis_content_sha256=analysis.content_sha256,
+                runtime_lock_verification_id=verification.runtime_lock_verification_id,
+                runtime_lock_verification_content_sha256=verification.content_sha256,
+                duration_seconds=actual_active_seconds,
+                evidence_bytes=actual_evidence_bytes,
+                event_count=len(evidence.events),
+                correctness_status="passed",
+                quality_status=quality,
+                warnings=warnings,
+                allowed_conclusions=allowed,
+                forbidden_conclusions=forbidden,
+                content_sha256="0" * 64,
+            )
+            run = provisional_run.model_copy(
+                update={
+                    "content_sha256": contract_content_sha256(
+                        provisional_run, exclude={"content_sha256"}
+                    )
+                }
+            )
+            cleanup_cpython_launch_result(launch_result)
+            retain_private_stream = False
+            for artifact, artifact_id, artifact_type in (
+                (evidence, evidence.runtime_lock_evidence_id, "runtime-lock-evidence"),
+                (analysis, analysis.runtime_lock_analysis_id, "runtime-lock-analysis"),
+                (
+                    verification,
+                    verification.runtime_lock_verification_id,
+                    "runtime-lock-verification",
+                ),
+                (run, run.run_id, "runtime-lock-run"),
+            ):
+                store.save(artifact, artifact_id, artifact_type)
+            settlement = runtime.finish_run(session_id, lease, run)
+            run_finished = True
+            _persist_runtime_lock_settlement(runtime, session_id, store, settlement)
+            return ArtifactReference(
+                artifact_id=run.run_id,
+                artifact_type="runtime-lock-run",
+                uri=store.uri(run.run_id, "runtime-lock-run"),
+                summary={
+                    "session_id": session_id,
+                    "adapter_id": "cpython_threading",
+                    "runtime": analysis.runtime,
+                    "measurement_semantics": measurement_semantics,
+                    "runtime_lock_evidence_id": evidence.runtime_lock_evidence_id,
+                    "runtime_lock_analysis_id": analysis.runtime_lock_analysis_id,
+                    "runtime_lock_verification_id": verification.runtime_lock_verification_id,
+                    "private_source_replay_status": "passed",
+                    "quality_status": run.quality_status,
+                    "event_count": run.event_count,
+                    "target_pid": launch_result.target_pid,
+                    "exit_code": launch_result.exit_code,
+                    "session_state": settlement.session.state,
+                },
+            )
+        except Exception:
+            if launch_result is not None:
+                if retain_private_stream:
+                    if launch_result not in runtime_lock_cpython_retained_results:
+                        runtime_lock_cpython_retained_results.append(launch_result)
+                else:
+                    with suppress(OSError, PerfLensError):
+                        cleanup_cpython_launch_result(launch_result)
+            if lease is not None and not run_finished:
+                with suppress(PerfLensError):
+                    terminal = runtime.fail_run(
+                        session_id,
+                        lease,
+                        actual_active_seconds=actual_active_seconds,
+                        actual_evidence_bytes=actual_evidence_bytes,
+                        actual_exact_events=actual_exact_events,
+                        reason=failure_reason,
+                    )
+                    _persist_runtime_lock_settlement(runtime, session_id, store, terminal)
+            elif lease is None:
+                with suppress(PerfLensError):
+                    terminal = runtime.revoke(session_id)
+                    store.save(terminal, terminal.session_artifact_id, "runtime-lock-session")
+            raise
+
     @server.tool(
         name="inspect_collection_capabilities",
         description=(
@@ -860,7 +1237,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         if target_scope == "host_launched_workload":
             if (
                 len(allowed_adapters) != 1
-                or allowed_adapters[0] not in {"native_pthread", "java_jfr"}
+                or allowed_adapters[0] not in {"native_pthread", "java_jfr", "cpython_threading"}
                 or executable is None
             ):
                 raise PerfLensError(
@@ -895,6 +1272,35 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 assert bridge.execution_binding is not None
                 execution_bindings = (bridge.execution_binding,)
                 preview_warnings = bridge.capability.limitations
+                program_sha256 = target.binary_sha256
+            elif adapter_id == "cpython_threading":
+                if len(allowed_semantics) != 1 or allowed_semantics[0] not in {
+                    "exact",
+                    "thresholded",
+                }:
+                    raise PerfLensError(
+                        ErrorCode.PATH_SAFETY_VIOLATION,
+                        "runtime_lock_authorization",
+                        "CPython host collection requires one exact or thresholded semantics",
+                        recoverable=True,
+                    )
+                launcher = get_runtime_lock_cpython_launcher()
+                target = launcher.inspect_target(executable_path)
+                workload_kind = "python_script"
+                bridge = get_runtime_lock_cpython_bridge()
+                binding = bridge.binding_for(
+                    cast(Literal["exact", "thresholded"], allowed_semantics[0])
+                )
+                if binding is None:
+                    raise PerfLensError(
+                        ErrorCode.EXTERNAL_TOOL_FAILED,
+                        "runtime_lock_capability",
+                        "The selected CPython execution binding is unavailable",
+                        recoverable=True,
+                    )
+                execution_bindings = (binding,)
+                preview_warnings = bridge.capability.limitations
+                program_sha256 = target.script_sha256
             else:
                 launcher = get_runtime_lock_native_launcher()
                 target = launcher.inspect_target(executable_path)
@@ -912,6 +1318,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                         details={"limitations": target_capability.limitations},
                     )
                 workload_kind = "native_elf"
+                program_sha256 = target.binary_sha256
                 preview_warnings = tuple(
                     dict.fromkeys(
                         (*target_capability.limitations, NATIVE_PTHREAD_PROVENANCE_LIMITATION)
@@ -921,7 +1328,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 adapter_id,
                 workload_kind,
                 target.project_relative_path,
-                target.binary_sha256,
+                program_sha256,
                 target.size,
                 ".",
                 arguments,
@@ -930,7 +1337,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 adapter_id=adapter_id,
                 workload_kind=workload_kind,
                 program=target.project_relative_path,
-                program_sha256=target.binary_sha256,
+                program_sha256=program_sha256,
                 program_size=target.size,
                 working_directory=".",
                 arguments=arguments,
@@ -1415,7 +1822,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     @server.tool(
         name="collect_runtime_lock_evidence",
         description=(
-            "Execute only the exact Native pthread or startup-time Java JFR host workload "
+            "Execute only the exact Native pthread, startup-time Java JFR, or startup-time "
+            "CPython threading host workload "
             "bound into an authorized Runtime Lock Preview. The fixed Adapter, environment, "
             "private output, duration, event count, and one single-use lease remain "
             "independently bounded."
@@ -1446,6 +1854,16 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 )
             return await collect_java_jfr_runtime_lock_evidence(
                 session_id,
+                duration_seconds,
+                max_events,
+            )
+        if (
+            candidate_preview.workload is not None
+            and candidate_preview.workload.adapter_id == "cpython_threading"
+        ):
+            return await collect_cpython_runtime_lock_evidence(
+                session_id,
+                measurement_semantics,
                 duration_seconds,
                 max_events,
             )
@@ -4987,6 +5405,136 @@ def _runtime_lock_java_operation_identity(
         )
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _validate_cpython_runtime_lock_session(
+    session: RuntimeLockSessionArtifact,
+    preview: RuntimeLockSessionPreviewArtifact,
+    policy: RuntimeLockProjectPolicy,
+    *,
+    execution_binding: RuntimeLockAdapterExecutionBinding,
+    measurement_semantics: Literal["exact", "thresholded"],
+    duration_seconds: int,
+    max_events: int,
+) -> RuntimeLockWorkloadBinding:
+    workload = preview.workload
+    if (
+        session.state != "active"
+        or session.target_scope != "host_launched_workload"
+        or preview.target_scope != session.target_scope
+        or preview.content_sha256 != session.preview_content_sha256
+        or preview.runtime_lock_config_sha256 != policy.sha256
+        or session.runtime_lock_config_sha256 != policy.sha256
+        or session.allowed_adapters != ("cpython_threading",)
+        or session.allowed_semantics != (measurement_semantics,)
+        or workload is None
+        or workload.adapter_id != "cpython_threading"
+        or workload.workload_kind != "python_script"
+        or preview.adapter_execution_bindings != (execution_binding,)
+        or isinstance(duration_seconds, bool)
+        or not 1 <= duration_seconds <= session.budget.max_collection_duration_seconds
+        or isinstance(max_events, bool)
+        or not 1 <= max_events <= session.budget.max_exact_events
+        or (
+            measurement_semantics == "exact"
+            and duration_seconds > session.budget.max_exact_duration_seconds
+        )
+    ):
+        raise _runtime_lock_native_error(
+            "CPython collection is outside the authorized Runtime Lock Session"
+        )
+    _validate_runtime_lock_preview_policy(
+        policy,
+        target_scope="host_launched_workload",
+        allowed_adapters=("cpython_threading",),
+        allowed_semantics=(measurement_semantics,),
+    )
+    adapter_policy = policy.adapter_policy("cpython_threading")
+    if (
+        measurement_semantics == "exact" and not adapter_policy.exact_enabled
+    ) or execution_binding.duration_threshold_ns != (
+        10_000 if measurement_semantics == "thresholded" else None
+    ):
+        raise _runtime_lock_native_error(
+            "CPython execution binding differs from the current project policy"
+        )
+    return workload
+
+
+def _runtime_lock_cpython_operation_identity(
+    session: RuntimeLockSessionArtifact,
+    target_identity_sha256: str,
+    measurement_semantics: str,
+    duration_seconds: int,
+    max_events: int,
+    execution_identity_sha256: str,
+) -> str:
+    material = "\0".join(
+        (
+            "perflens-runtime-lock-cpython-operation-v1",
+            session.session_id,
+            str(session.revision),
+            str(session.workload_runs_used + 1),
+            target_identity_sha256,
+            measurement_semantics,
+            str(duration_seconds),
+            str(max_events),
+            execution_identity_sha256,
+        )
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _assert_cpython_runtime_lock_evidence_identity(
+    evidence: RuntimeLockEvidenceArtifact,
+    *,
+    launch_result: CpythonLaunchResult,
+    expected_target_identity_sha256: str,
+    execution_binding: RuntimeLockAdapterExecutionBinding,
+    max_events: int,
+) -> tuple[str, ...]:
+    source = evidence.source
+    target = evidence.target
+    bound_python = execution_binding.tools[0] if execution_binding.tools else None
+    evidence_tids = set(target.observed_target_tids)
+    if (
+        launch_result.target_identity_sha256 != expected_target_identity_sha256
+        or target.target_kind != "host"
+        or target.target_pid != launch_result.target_pid
+        or target.target_uid != launch_result.target_uid
+        or target.target_start_time_ticks != launch_result.target_start_ticks
+        or launch_result.target_uid != os.geteuid()
+        or launch_result.target_pid not in evidence_tids
+        or source.runtime != "python"
+        or source.adapter_id != "cpython_threading"
+        or source.backend_id != "threading-bootstrap"
+        or source.source_format != "cpython_threading_ndjson_v1"
+        or source.target_scope != "bound_pid"
+        or source.source_sha256 != launch_result.stream_sha256
+        or source.source_bytes != launch_result.stream_size
+        or source.configuration_sha256 != launch_result.bootstrap_sha256
+        or source.adapter_execution_identity_sha256 != execution_binding.execution_identity_sha256
+        or source.metadata_sha256 != execution_binding.metadata_sha256
+        or bound_python is None
+        or bound_python.binary_sha256 != launch_result.interpreter_sha256
+        or source.tool is None
+        or source.tool.name != "python"
+        or source.tool.path != "python"
+        or source.tool.binary_sha256 != launch_result.interpreter_sha256
+        or len(evidence.events) > max_events
+    ):
+        raise _runtime_lock_native_error(
+            "CPython target, source, tool, or execution identity changed during collection"
+        )
+    if any(
+        context.target_pid != launch_result.target_pid
+        or (context.target_tid is not None and context.target_tid not in evidence_tids)
+        for context in evidence.execution_contexts
+    ):
+        raise _runtime_lock_native_error(
+            "CPython execution context escaped the bound target process"
+        )
+    return ()
 
 
 def _assert_java_runtime_lock_evidence_identity(

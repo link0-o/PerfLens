@@ -53,6 +53,7 @@ def test_python_models_accept_every_shared_valid_request_fixture() -> None:
         path for path in sorted(_FIXTURES.glob("valid-*.json")) if "receipt" not in path.name
     )
     assert {path.name for path in fixtures} == {
+        "valid-cpython-request.json",
         "valid-java-print-request.json",
         "valid-java-workload-request.json",
         "valid-native-request.json",
@@ -99,6 +100,7 @@ def test_checked_supervisor_schemas_match_models_and_shared_goldens() -> None:
     request_validator = cast(_JsonSchemaValidator, Draft202012Validator(request_schema))
     receipt_validator = cast(_JsonSchemaValidator, Draft202012Validator(receipt_schema))
     for name in (
+        "valid-cpython-request.json",
         "valid-native-request.json",
         "valid-java-workload-request.json",
         "valid-java-print-request.json",
@@ -140,6 +142,25 @@ def test_supervisor_request_schema_requires_wire_defaults_and_semantic_pairing()
     }
     with pytest.raises(JsonSchemaValidationError):
         validator.validate(thresholded)
+
+    cpython = _load_fixture("valid-cpython-request.json")
+    cpython_request = cast(dict[str, Any], cpython["request"])
+    invalid_cpython = {
+        **cpython,
+        "request": {**cpython_request, "semantics": "thresholded", "threshold_ns": 9_999},
+    }
+    with pytest.raises(JsonSchemaValidationError):
+        validator.validate(invalid_cpython)
+    with pytest.raises(ValueError, match="fixed 10 us"):
+        RuntimeSupervisorRequest.model_validate(invalid_cpython)
+
+    for label in ("/etc/passwd", "../escape.py", "nested/../escape.py", "bad\\path.py"):
+        invalid_label = {
+            **cpython,
+            "request": {**cpython_request, "script_label": label},
+        }
+        with pytest.raises(ValueError, match="project-relative"):
+            RuntimeSupervisorRequest.model_validate(invalid_label)
 
     java_print = _load_fixture("invalid-java-print-arguments.json")
     with pytest.raises(JsonSchemaValidationError):

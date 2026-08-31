@@ -250,6 +250,12 @@ def _build_main_tree(
     runtime_supervisor = runtime / "perflens-runtime-supervisor"
     shutil.copyfile(runtime_supervisor_binary, runtime_supervisor)
     runtime_supervisor.chmod(0o755)
+    cpython_bootstrap = runtime / "cpython-threading-bootstrap.py"
+    shutil.copyfile(
+        project_root / "src/perflens/runtime_locks/cpython/cpython_threading_bootstrap.py",
+        cpython_bootstrap,
+    )
+    cpython_bootstrap.chmod(0o644)
     pthread_probe = runtime / "libperflens-pthread-probe.so"
     shutil.copyfile(pthread_probe_library, pthread_probe)
     pthread_probe.chmod(0o644)

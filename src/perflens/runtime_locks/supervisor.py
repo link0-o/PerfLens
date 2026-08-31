@@ -113,10 +113,38 @@ class RuntimeSupervisorJavaJfrPrintRequest(_StrictSupervisorModel):
     output: RuntimeSupervisorWritableFileIdentity
 
 
+class RuntimeSupervisorCpythonThreadingRequest(_StrictSupervisorModel):
+    adapter: Literal["cpython_threading"] = "cpython_threading"
+    bootstrap: RuntimeSupervisorFileIdentity
+    script: RuntimeSupervisorFileIdentity
+    script_label: str = Field(min_length=1, max_length=4096)
+    output: RuntimeSupervisorWritableFileIdentity
+    semantics: Literal["exact", "thresholded"]
+    threshold_ns: int | None = Field(default=None, ge=1, le=1_000_000_000)
+    max_events: int = Field(ge=1, le=20_000)
+
+    @model_validator(mode="after")
+    def validate_semantics(self) -> RuntimeSupervisorCpythonThreadingRequest:
+        parts = self.script_label.split("/")
+        if (
+            self.script_label.startswith("/")
+            or "\\" in self.script_label
+            or any(not part or part in {".", ".."} for part in parts)
+            or any(ord(character) < 32 or ord(character) == 127 for character in self.script_label)
+        ):
+            raise ValueError("CPython script label must be one safe project-relative path")
+        if self.semantics == "exact" and self.threshold_ns is not None:
+            raise ValueError("exact CPython supervision cannot set a threshold")
+        if self.semantics == "thresholded" and self.threshold_ns != 10_000:
+            raise ValueError("thresholded CPython supervision requires the fixed 10 us threshold")
+        return self
+
+
 RuntimeSupervisorAdapterRequest = Annotated[
     RuntimeSupervisorNativePthreadRequest
     | RuntimeSupervisorJavaJfrWorkloadRequest
-    | RuntimeSupervisorJavaJfrPrintRequest,
+    | RuntimeSupervisorJavaJfrPrintRequest
+    | RuntimeSupervisorCpythonThreadingRequest,
     Field(discriminator="adapter"),
 ]
 
@@ -171,6 +199,12 @@ class RuntimeSupervisorRequest(_StrictSupervisorModel):
             and self.timeout_milliseconds > 3_000
         ):
             raise ValueError("exact Native supervision exceeds three seconds")
+        if (
+            self.request.adapter == "cpython_threading"
+            and self.request.semantics == "exact"
+            and self.timeout_milliseconds > 3_000
+        ):
+            raise ValueError("exact CPython supervision exceeds three seconds")
         if self.request.adapter == "java_jfr_print" and self.arguments:
             raise ValueError("Java JFR print does not accept workload arguments")
         return self
@@ -299,7 +333,11 @@ class RuntimeSupervisorClient:
                     executable=f"/proc/self/fd/{supervisor_fd}",
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    # The fixed supervisor emits only bounded, implementation-owned
+                    # diagnostics.  Keep that stream private so protocol failures can
+                    # be reported without exposing workload stderr (the supervisor
+                    # redirects the workload's stderr to /dev/null independently).
+                    stderr=subprocess.PIPE,
                     shell=False,
                     close_fds=True,
                     pass_fds=pass_fds,
@@ -366,6 +404,9 @@ class RuntimeSupervisorClient:
                 # the orphan race this boundary is designed to eliminate.
                 with suppress(OSError, subprocess.TimeoutExpired):
                     process.wait(timeout=3.0)
+            if process is not None and process.stderr is not None:
+                with suppress(OSError):
+                    process.stderr.close()
 
 
 def discover_runtime_supervisor_policy(
@@ -453,13 +494,17 @@ def runtime_supervisor_request_descriptors(request: RuntimeSupervisorRequest) ->
         descriptors.extend(
             (adapter.jar.descriptor, adapter.profile.descriptor, adapter.recording.descriptor)
         )
-    else:
+    elif adapter.adapter == "java_jfr_print":
         descriptors.extend(
             (
                 adapter.recording_directory.descriptor,
                 adapter.recording.descriptor,
                 adapter.output.descriptor,
             )
+        )
+    else:
+        descriptors.extend(
+            (adapter.bootstrap.descriptor, adapter.script.descriptor, adapter.output.descriptor)
         )
     return tuple(descriptors)
 
@@ -515,6 +560,7 @@ def runtime_supervisor_request_schema() -> dict[str, Any]:
         "RuntimeSupervisorNativePthreadRequest",
         "RuntimeSupervisorJavaJfrWorkloadRequest",
         "RuntimeSupervisorJavaJfrPrintRequest",
+        "RuntimeSupervisorCpythonThreadingRequest",
     ):
         required = cast(list[str], definitions[name]["required"])
         definitions[name]["required"] = ["adapter", *required]
@@ -528,6 +574,18 @@ def runtime_supervisor_request_schema() -> dict[str, Any]:
             },
             "then": {"properties": {"threshold_ns": {"type": "null"}}},
             "else": {"properties": {"threshold_ns": {"type": "integer"}}},
+        }
+    ]
+    cpython = definitions["RuntimeSupervisorCpythonThreadingRequest"]
+    cpython["required"] = [*cast(list[str], cpython["required"]), "threshold_ns"]
+    cpython["allOf"] = [
+        {
+            "if": {
+                "properties": {"semantics": {"const": "exact"}},
+                "required": ["semantics"],
+            },
+            "then": {"properties": {"threshold_ns": {"type": "null"}}},
+            "else": {"properties": {"threshold_ns": {"const": 10_000}}},
         }
     ]
     schema["allOf"] = [
@@ -788,12 +846,20 @@ def _read_exact_with_process(
         chunk = os.read(descriptor, size - len(output))
         if not chunk:
             exit_code = process.poll()
+            details: dict[str, object] = {"supervisor_exit_code": exit_code}
+            if process.stderr is not None:
+                diagnostic = process.stderr.read(4097)
+                if diagnostic:
+                    details["supervisor_diagnostic"] = diagnostic[:4096].decode(
+                        "utf-8", errors="replace"
+                    )
+                    details["supervisor_diagnostic_truncated"] = len(diagnostic) > 4096
             raise PerfLensError(
                 ErrorCode.EXTERNAL_TOOL_FAILED,
                 "runtime_supervisor",
                 "Runtime supervisor exited without a complete receipt",
                 recoverable=True,
-                details={"supervisor_exit_code": exit_code},
+                details=details,
             )
         output.extend(chunk)
     return bytes(output)

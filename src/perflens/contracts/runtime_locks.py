@@ -660,6 +660,29 @@ class RuntimeSourceManifest(ContractModel):
                             },
                         },
                     },
+                    {
+                        "if": {
+                            "properties": {
+                                "source_format": {"const": "cpython_threading_ndjson_v1"}
+                            },
+                            "required": ["source_format"],
+                        },
+                        "then": {
+                            "required": [
+                                "adapter_execution_identity_sha256",
+                                "configuration_sha256",
+                                "metadata_sha256",
+                                "tool",
+                            ],
+                            "properties": {
+                                "schema_version": {"const": "1.1"},
+                                "runtime": {"const": "python"},
+                                "adapter_id": {"const": "cpython_threading"},
+                                "backend_id": {"const": "threading-bootstrap"},
+                                "target_scope": {"const": "bound_pid"},
+                            },
+                        },
+                    },
                 ]
             }
         ),
@@ -677,6 +700,7 @@ class RuntimeSourceManifest(ContractModel):
         "jfr_json_v1",
         "pprof_text_v1",
         "native_interposer_ndjson_v1",
+        "cpython_threading_ndjson_v1",
     ]
     # The importer/converter version is PerfLens-controlled.  Adapter/backend
     # versions may originate in an imported header and therefore cannot by
@@ -739,6 +763,19 @@ class RuntimeSourceManifest(ContractModel):
             or self.tool.status != "available"
         ):
             raise ValueError("JFR source lacks its bound Adapter execution identity")
+        if self.source_format == "cpython_threading_ndjson_v1" and (
+            self.schema_version != "1.1"
+            or self.runtime != "python"
+            or self.adapter_id != "cpython_threading"
+            or self.backend_id != "threading-bootstrap"
+            or self.target_scope != "bound_pid"
+            or any(value is None for value in execution_fields)
+            or self.tool is None
+            or self.tool.name != "python"
+            or self.tool.path != "python"
+            or self.tool.status != "available"
+        ):
+            raise ValueError("CPython source lacks its bound Adapter execution identity")
         return self
 
 

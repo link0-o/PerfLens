@@ -376,7 +376,7 @@ def derive_runtime_lock_adapter_execution_identity(
     runtime_version: str,
     profile: str,
     measurement_semantics: str,
-    duration_threshold_ns: int,
+    duration_threshold_ns: int | None,
     toolchain_identity_sha256: str,
     configuration_sha256: str,
     metadata_sha256: str,
@@ -390,7 +390,7 @@ def derive_runtime_lock_adapter_execution_identity(
         runtime_version,
         profile,
         measurement_semantics,
-        str(duration_threshold_ns),
+        str(duration_threshold_ns) if duration_threshold_ns is not None else "none",
         toolchain_identity_sha256,
         configuration_sha256,
         metadata_sha256,
@@ -498,7 +498,17 @@ class RuntimeLockAdapterExecutionBinding(ContractModel):
                         "required": ["tools", "runtime_payload_identity_sha256"],
                         "properties": {"tools": {"minItems": 2, "maxItems": 2}},
                     },
-                }
+                },
+                {
+                    "if": {
+                        "properties": {"adapter_id": {"const": "cpython_threading"}},
+                        "required": ["adapter_id"],
+                    },
+                    "then": {
+                        "required": ["tools", "runtime_payload_identity_sha256"],
+                        "properties": {"tools": {"minItems": 1, "maxItems": 1}},
+                    },
+                },
             ]
         }
     )
@@ -509,7 +519,7 @@ class RuntimeLockAdapterExecutionBinding(ContractModel):
     runtime_version: str = Field(min_length=1, max_length=128)
     profile: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     measurement_semantics: MeasurementSemantics
-    duration_threshold_ns: int = Field(ge=1, le=10**12)
+    duration_threshold_ns: int | None = Field(default=None, ge=1, le=10**12)
     tools: tuple[RuntimeLockAdapterToolBinding, ...] = Field(default=(), max_length=16)
     toolchain_identity_sha256: Sha256
     configuration_sha256: Sha256
@@ -536,6 +546,18 @@ class RuntimeLockAdapterExecutionBinding(ContractModel):
             expected_threshold = 10_000_000 if self.profile == "balanced" else 1_000_000
             if self.duration_threshold_ns != expected_threshold:
                 raise ValueError("Java JFR profile and execution threshold disagree")
+        if self.adapter_id == "cpython_threading":
+            expected_threshold = 10_000 if self.measurement_semantics == "thresholded" else None
+            if (
+                self.backend_id != "threading-bootstrap"
+                or self.profile not in {"exact", "thresholded"}
+                or self.measurement_semantics not in {"exact", "thresholded"}
+                or self.profile != self.measurement_semantics
+                or tool_names != ("python",)
+                or self.runtime_payload_identity_sha256 is None
+                or self.duration_threshold_ns != expected_threshold
+            ):
+                raise ValueError("CPython threading execution binding has unsupported controls")
         if self.tools and self.toolchain_identity_sha256 != derive_runtime_lock_toolchain_identity(
             self.tools
         ):
@@ -625,14 +647,31 @@ class RuntimeLockSessionPreviewArtifact(ContractModel):
                 },
                 {
                     "if": {
-                        "properties": {
-                            "workload": {
-                                "type": "object",
-                                "properties": {"adapter_id": {"const": "java_jfr"}},
-                                "required": ["adapter_id"],
-                            }
-                        },
-                        "required": ["workload"],
+                        "anyOf": [
+                            {
+                                "properties": {
+                                    "workload": {
+                                        "type": "object",
+                                        "properties": {"adapter_id": {"const": "java_jfr"}},
+                                        "required": ["adapter_id"],
+                                    }
+                                },
+                                "required": ["workload"],
+                            },
+                            {
+                                "properties": {
+                                    "schema_version": {"const": "1.1"},
+                                    "workload": {
+                                        "type": "object",
+                                        "properties": {
+                                            "adapter_id": {"const": "cpython_threading"}
+                                        },
+                                        "required": ["adapter_id"],
+                                    },
+                                },
+                                "required": ["schema_version", "workload"],
+                            },
+                        ]
                     },
                     "then": {
                         "required": ["adapter_execution_bindings"],
@@ -707,8 +746,16 @@ class RuntimeLockSessionPreviewArtifact(ContractModel):
                 raise ValueError("Runtime Lock workload Adapter is outside Preview scope")
             if binding_ids and binding_ids != (self.workload.adapter_id,):
                 raise ValueError("Runtime Lock workload and execution binding disagree")
-            if self.workload.adapter_id == "java_jfr" and binding_ids != ("java_jfr",):
-                raise ValueError("Java JFR workload requires one exact execution binding")
+            if (
+                self.workload.adapter_id == "java_jfr"
+                or (
+                    self.schema_version == "1.1"
+                    and self.workload.adapter_id == "cpython_threading"
+                )
+            ) and binding_ids != (
+                self.workload.adapter_id,
+            ):
+                raise ValueError("Managed runtime workload requires one exact execution binding")
         if self.target_scope in {"managed_temporary_container", "docker_optimization"} and (
             self.workload is not None
         ):
@@ -838,8 +885,19 @@ class RuntimeLockRunArtifact(ContractModel):
                 },
                 {
                     "if": {
-                        "properties": {"adapter_id": {"const": "java_jfr"}},
-                        "required": ["adapter_id"],
+                        "anyOf": [
+                            {
+                                "properties": {"adapter_id": {"const": "java_jfr"}},
+                                "required": ["adapter_id"],
+                            },
+                            {
+                                "properties": {
+                                    "schema_version": {"const": "1.1"},
+                                    "adapter_id": {"const": "cpython_threading"},
+                                },
+                                "required": ["schema_version", "adapter_id"],
+                            },
+                        ]
                     },
                     "then": {
                         "required": ["adapter_execution_identity_sha256"],
@@ -918,8 +976,13 @@ class RuntimeLockRunArtifact(ContractModel):
             raise ValueError("exact Runtime Lock Run exceeds its hard evidence bound")
         if self.schema_version == "1.0" and self.adapter_execution_identity_sha256 is not None:
             raise ValueError("Runtime Lock Run 1.0 cannot carry an Adapter execution identity")
-        if self.adapter_id == "java_jfr" and self.adapter_execution_identity_sha256 is None:
-            raise ValueError("Java JFR Run requires its authorized execution identity")
+        if (
+            self.adapter_id == "java_jfr"
+            or (self.schema_version == "1.1" and self.adapter_id == "cpython_threading")
+        ) and (
+            self.adapter_execution_identity_sha256 is None
+        ):
+            raise ValueError("Managed runtime Run requires its authorized execution identity")
         expected = derive_runtime_lock_run_id(
             self.session_id,
             self.adapter_id,

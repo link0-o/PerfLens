@@ -19,6 +19,7 @@ from perflens.contracts.runtime_locks import (
     RuntimeAdapterCapabilityArtifact,
     RuntimeFamily,
 )
+from perflens.runtime_locks.cpython_adapter import CpythonAdapterBridge
 from perflens.runtime_locks.java_jfr_adapter import (
     JavaJfrAdapterBridge,
     build_java_jfr_adapter_bridge,
@@ -89,6 +90,7 @@ def inspect_runtime_lock_capability(
     native_pthread_capability: NativeLaunchCapability | None = None,
     java_jfr_capability: JavaJfrCapability | None = None,
     java_jfr_bridge: JavaJfrAdapterBridge | None = None,
+    cpython_bridge: CpythonAdapterBridge | None = None,
     created_at: datetime | None = None,
 ) -> RuntimeLockCapabilityInspection:
     """Report only implemented and policy-enabled backends; never execute a target."""
@@ -105,6 +107,7 @@ def inspect_runtime_lock_capability(
             native_pthread_capability=native_pthread_capability,
             java_jfr_capability=java_jfr_capability,
             java_jfr_bridge=java_jfr_bridge,
+            cpython_bridge=cpython_bridge,
         )
         for adapter_id in policy.allowed_adapters
     )
@@ -134,6 +137,10 @@ def inspect_runtime_lock_capability(
         (item for item in references if item.adapter_id == "java_jfr"),
         None,
     )
+    cpython_reference = next(
+        (item for item in references if item.adapter_id == "cpython_threading"),
+        None,
+    )
     if native_reference is not None and native_reference.availability == "available":
         limitations = (
             "Native pthread launch instrumentation is available only for the safely discovered "
@@ -145,6 +152,15 @@ def inspect_runtime_lock_capability(
             "Native pthread launch instrumentation has partial coverage; its Adapter limitations "
             "must be retained in every result.",
             NATIVE_PTHREAD_ACTIVE_SCOPE_LIMITATION,
+        )
+    elif cpython_reference is not None and cpython_reference.availability in {
+        "available",
+        "partial",
+    }:
+        limitations = (
+            "CPython startup instrumentation is limited to public threading constructors; "
+            "GIL, internal, C-extension, and direct _thread locks remain outside coverage.",
+            *cpython_reference.limitations,
         )
     elif java_reference is not None and java_reference.availability in {
         "available",
@@ -169,6 +185,11 @@ def inspect_runtime_lock_capability(
         next_steps = (
             "Preview one bounded Native pthread launch Session for an explicit workload.",
         )
+    elif cpython_reference is not None and cpython_reference.availability in {
+        "available",
+        "partial",
+    }:
+        next_steps = ("Preview one bounded CPython threading launch Session.",)
     elif java_reference is not None and java_reference.availability in {
         "available",
         "partial",
@@ -219,6 +240,7 @@ def _adapter_capability(
     native_pthread_capability: NativeLaunchCapability | None,
     java_jfr_capability: JavaJfrCapability | None,
     java_jfr_bridge: JavaJfrAdapterBridge | None,
+    cpython_bridge: CpythonAdapterBridge | None,
 ) -> RuntimeAdapterCapabilityArtifact:
     if adapter_id == "native_pthread":
         return _native_adapter_capability(
@@ -234,6 +256,8 @@ def _adapter_capability(
             java_jfr_capability,
             created_at=created_at,
         ).capability
+    if adapter_id == "cpython_threading" and cpython_bridge is not None:
+        return cpython_bridge.capability
     adapter_policy = policy.adapter_policy(adapter_id)
     implemented = adapter_id == "generic_ndjson_import"
     enabled = policy.enabled and adapter_policy.enabled

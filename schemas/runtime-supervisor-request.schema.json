@@ -1,5 +1,99 @@
 {
   "$defs": {
+    "RuntimeSupervisorCpythonThreadingRequest": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "threshold_ns": {
+                "const": 10000
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "semantics": {
+                "const": "exact"
+              }
+            },
+            "required": [
+              "semantics"
+            ]
+          },
+          "then": {
+            "properties": {
+              "threshold_ns": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "adapter": {
+          "const": "cpython_threading",
+          "default": "cpython_threading",
+          "title": "Adapter",
+          "type": "string"
+        },
+        "bootstrap": {
+          "$ref": "#/$defs/RuntimeSupervisorFileIdentity"
+        },
+        "max_events": {
+          "maximum": 20000,
+          "minimum": 1,
+          "title": "Max Events",
+          "type": "integer"
+        },
+        "output": {
+          "$ref": "#/$defs/RuntimeSupervisorWritableFileIdentity"
+        },
+        "script": {
+          "$ref": "#/$defs/RuntimeSupervisorFileIdentity"
+        },
+        "script_label": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Script Label",
+          "type": "string"
+        },
+        "semantics": {
+          "enum": [
+            "exact",
+            "thresholded"
+          ],
+          "title": "Semantics",
+          "type": "string"
+        },
+        "threshold_ns": {
+          "anyOf": [
+            {
+              "maximum": 1000000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threshold Ns"
+        }
+      },
+      "required": [
+        "adapter",
+        "bootstrap",
+        "script",
+        "script_label",
+        "output",
+        "semantics",
+        "max_events",
+        "threshold_ns"
+      ],
+      "title": "RuntimeSupervisorCpythonThreadingRequest",
+      "type": "object"
+    },
     "RuntimeSupervisorDirectoryIdentity": {
       "additionalProperties": false,
       "properties": {
@@ -368,6 +462,7 @@
     "request": {
       "discriminator": {
         "mapping": {
+          "cpython_threading": "#/$defs/RuntimeSupervisorCpythonThreadingRequest",
           "java_jfr_print": "#/$defs/RuntimeSupervisorJavaJfrPrintRequest",
           "java_jfr_workload": "#/$defs/RuntimeSupervisorJavaJfrWorkloadRequest",
           "native_pthread": "#/$defs/RuntimeSupervisorNativePthreadRequest"
@@ -383,6 +478,9 @@
         },
         {
           "$ref": "#/$defs/RuntimeSupervisorJavaJfrPrintRequest"
+        },
+        {
+          "$ref": "#/$defs/RuntimeSupervisorCpythonThreadingRequest"
         }
       ],
       "title": "Request"

@@ -101,7 +101,7 @@ from perflens.security.paths import validate_new_output_file
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _MAX_RUNTIME_LOCK_SESSION_REVISIONS = 32
 _RUNTIME_LOCK_ADAPTER_SOURCE_FORMATS = {
-    "cpython_threading": "native_interposer_ndjson_v1",
+    "cpython_threading": "cpython_threading_ndjson_v1",
     "generic_ndjson_import": "perflens_runtime_lock_ndjson_v1",
     "go_pprof": "pprof_text_v1",
     "java_jfr": "jfr_json_v1",
@@ -873,6 +873,27 @@ class ArtifactStore:
                 and source_tool.name == bound_jfr.name
                 and source_tool.version == bound_jfr.version
                 and source_tool.binary_sha256 == bound_jfr.binary_sha256
+            )
+        if execution_binding is not None and run.adapter_id == "cpython_threading":
+            source_tool = evidence.source.tool
+            bound_tools = {tool.name: tool for tool in execution_binding.tools}
+            bound_python = bound_tools.get("python")
+            execution_binding_matches = execution_binding_matches and (
+                evidence.source.schema_version == preview.schema_version
+                and evidence.source.runtime == "python"
+                and evidence.source.adapter_id == execution_binding.adapter_id
+                and evidence.source.adapter_version == execution_binding.adapter_version
+                and evidence.source.backend_id == execution_binding.backend_id
+                and evidence.source.backend_version == execution_binding.runtime_version
+                and evidence.source.adapter_execution_identity_sha256
+                == execution_binding.execution_identity_sha256
+                and evidence.source.configuration_sha256 == execution_binding.configuration_sha256
+                and evidence.source.metadata_sha256 == execution_binding.metadata_sha256
+                and source_tool is not None
+                and bound_python is not None
+                and source_tool.name == bound_python.name
+                and source_tool.version == bound_python.version
+                and source_tool.binary_sha256 == bound_python.binary_sha256
             )
         run_started = datetime.fromisoformat(run.started_at)
         run_created = datetime.fromisoformat(run.created_at)

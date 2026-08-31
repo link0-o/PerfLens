@@ -1155,6 +1155,43 @@
               "tool"
             ]
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_format": {
+                "const": "cpython_threading_ndjson_v1"
+              }
+            },
+            "required": [
+              "source_format"
+            ]
+          },
+          "then": {
+            "properties": {
+              "adapter_id": {
+                "const": "cpython_threading"
+              },
+              "backend_id": {
+                "const": "threading-bootstrap"
+              },
+              "runtime": {
+                "const": "python"
+              },
+              "schema_version": {
+                "const": "1.1"
+              },
+              "target_scope": {
+                "const": "bound_pid"
+              }
+            },
+            "required": [
+              "adapter_execution_identity_sha256",
+              "configuration_sha256",
+              "metadata_sha256",
+              "tool"
+            ]
+          }
         }
       ],
       "description": "Versioned identity and semantics of one normalized input source.",
@@ -1352,7 +1389,8 @@
             "perflens_runtime_lock_ndjson_v1",
             "jfr_json_v1",
             "pprof_text_v1",
-            "native_interposer_ndjson_v1"
+            "native_interposer_ndjson_v1",
+            "cpython_threading_ndjson_v1"
           ],
           "title": "Source Format",
           "type": "string"
