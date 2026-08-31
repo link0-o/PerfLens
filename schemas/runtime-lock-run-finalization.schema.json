@@ -1,0 +1,215 @@
+{
+  "additionalProperties": false,
+  "description": "Commit marker written after a Run and its reconciled Session revision.\n\nThe marker ID is operation-stable, while its content binds both immutable\nartifacts.  Consequently a Run saved before Session settlement remains\ndeliberately unreadable until this marker is written last.",
+  "properties": {
+    "accounted_active_seconds": {
+      "maximum": 30,
+      "minimum": 0,
+      "title": "Accounted Active Seconds",
+      "type": "integer"
+    },
+    "accounted_evidence_bytes": {
+      "maximum": 536870912,
+      "minimum": 0,
+      "title": "Accounted Evidence Bytes",
+      "type": "integer"
+    },
+    "accounted_exact_events": {
+      "maximum": 20000,
+      "minimum": 0,
+      "title": "Accounted Exact Events",
+      "type": "integer"
+    },
+    "adapter_id": {
+      "enum": [
+        "native_pthread",
+        "java_jfr",
+        "cpython_threading",
+        "go_pprof",
+        "generic_ndjson_import"
+      ],
+      "title": "Adapter Id",
+      "type": "string"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "failure_reason": {
+      "anyOf": [
+        {
+          "enum": [
+            "adapter_output_invalid",
+            "adapter_unavailable",
+            "correctness_failed",
+            "explicitly_revoked",
+            "hard_expiry_reached",
+            "identity_or_policy_changed",
+            "internal_collection_error",
+            "operation_lease_expired",
+            "operation_reservation_exceeded",
+            "resource_limit_exceeded",
+            "run_artifact_mismatch",
+            "session_budget_exhausted",
+            "target_exited",
+            "target_identity_changed",
+            "workload_budget_exhausted"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Failure Reason"
+    },
+    "final_session_artifact_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Final Session Artifact Content Sha256",
+      "type": "string"
+    },
+    "final_session_artifact_id": {
+      "pattern": "^runtime-lock-session-state-[a-f0-9]{20}$",
+      "title": "Final Session Artifact Id",
+      "type": "string"
+    },
+    "final_session_revision": {
+      "minimum": 2,
+      "title": "Final Session Revision",
+      "type": "integer"
+    },
+    "finalization_id": {
+      "pattern": "^runtime-lock-run-finalization-[a-f0-9]{20}$",
+      "title": "Finalization Id",
+      "type": "string"
+    },
+    "measurement_semantics": {
+      "enum": [
+        "exact",
+        "thresholded",
+        "sampled",
+        "cumulative"
+      ],
+      "title": "Measurement Semantics",
+      "type": "string"
+    },
+    "operation_identity_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Operation Identity Sha256",
+      "type": "string"
+    },
+    "outcome": {
+      "enum": [
+        "completed",
+        "failed"
+      ],
+      "title": "Outcome",
+      "type": "string"
+    },
+    "perflens_version": {
+      "title": "Perflens Version",
+      "type": "string"
+    },
+    "reserved_active_seconds": {
+      "maximum": 30,
+      "minimum": 1,
+      "title": "Reserved Active Seconds",
+      "type": "integer"
+    },
+    "reserved_evidence_bytes": {
+      "maximum": 536870912,
+      "minimum": 1,
+      "title": "Reserved Evidence Bytes",
+      "type": "integer"
+    },
+    "reserved_exact_events": {
+      "maximum": 20000,
+      "minimum": 0,
+      "title": "Reserved Exact Events",
+      "type": "integer"
+    },
+    "reserved_session_artifact_content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Reserved Session Artifact Content Sha256",
+      "type": "string"
+    },
+    "reserved_session_artifact_id": {
+      "pattern": "^runtime-lock-session-state-[a-f0-9]{20}$",
+      "title": "Reserved Session Artifact Id",
+      "type": "string"
+    },
+    "reserved_session_revision": {
+      "minimum": 1,
+      "title": "Reserved Session Revision",
+      "type": "integer"
+    },
+    "run_content_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Content Sha256"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "pattern": "^runtime-lock-run-[a-f0-9]{20}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Id"
+    },
+    "schema_version": {
+      "const": "1.1",
+      "default": "1.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "session_id": {
+      "pattern": "^runtime-lock-session-[a-f0-9]{20}$",
+      "title": "Session Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "perflens_version",
+    "finalization_id",
+    "created_at",
+    "session_id",
+    "operation_identity_sha256",
+    "outcome",
+    "adapter_id",
+    "measurement_semantics",
+    "reserved_session_artifact_id",
+    "reserved_session_artifact_content_sha256",
+    "reserved_session_revision",
+    "final_session_artifact_id",
+    "final_session_artifact_content_sha256",
+    "final_session_revision",
+    "reserved_active_seconds",
+    "reserved_evidence_bytes",
+    "reserved_exact_events",
+    "accounted_active_seconds",
+    "accounted_evidence_bytes",
+    "accounted_exact_events",
+    "content_sha256"
+  ],
+  "title": "RuntimeLockRunFinalizationArtifact",
+  "type": "object"
+}

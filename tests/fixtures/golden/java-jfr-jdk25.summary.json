@@ -1,0 +1,17 @@
+{
+  "content_sha256": "53e636471cbbd5d30f95e9ad620ff29ba3d640108bfe20671b2a9fde596a1f9f",
+  "context_count": 3,
+  "event_count": 4,
+  "evidence_id": "runtime-lock-evidence-3a4a477f1ad1f73fdafc49f8",
+  "kinds": ["condition", "mutex", "park"],
+  "outcomes": [
+    {"lock_kind": "condition", "outcome": "notified"},
+    {"lock_kind": "condition", "outcome": "timed_out"},
+    {"lock_kind": "mutex", "outcome": "acquired"},
+    {"lock_kind": "park", "outcome": "unknown"}
+  ],
+  "quality": "complete",
+  "raw_bytes": 22801,
+  "raw_sha256": "bfd7d73bbf6542d547806118e07d15a2b7b5dc80bf447f354073a312c332cea5",
+  "stack_count": 4
+}

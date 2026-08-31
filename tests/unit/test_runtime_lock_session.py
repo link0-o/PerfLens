@@ -347,13 +347,34 @@ def test_exact_run_reserves_reconciles_and_rejects_replay() -> None:
     assert reserved.exact_events_used == 20
 
     completed = authority.finish_run(authorized.access, lease, _run(lease))
-    assert completed.active_seconds_used == 2
-    assert completed.evidence_bytes_used == 800
-    assert completed.exact_events_used == 10
+    assert completed.session.active_seconds_used == 2
+    assert completed.session.evidence_bytes_used == 800
+    assert completed.session.exact_events_used == 10
+    assert completed.session.settlement_finalization_id == completed.finalization.finalization_id
+    assert completed.finalization.outcome == "completed"
+    assert completed.finalization.reserved_active_seconds == 3
+    assert completed.finalization.accounted_active_seconds == 2
+    assert completed.finalization.reserved_evidence_bytes == 1000
+    assert completed.finalization.accounted_evidence_bytes == 800
+    assert completed.finalization.reserved_exact_events == 20
+    assert completed.finalization.accounted_exact_events == 10
     with pytest.raises(PerfLensError, match="invalid or consumed"):
         authority.finish_run(authorized.access, lease, _run(lease))
     with pytest.raises(PerfLensError, match="already consumed"):
         _begin(authority, authorized)
+
+
+def test_unpublished_settlement_destroys_process_local_authorization() -> None:
+    authority, _ = _authority()
+    authorized = _authorize(authority)
+    lease = _begin(authority, authorized)
+    settlement = authority.finish_run(authorized.access, lease, _run(lease))
+    assert settlement.session.state == "active"
+
+    authority.abandon_unpublished(authorized.access)
+
+    with pytest.raises(PerfLensError, match="access is invalid"):
+        authority.snapshot(authorized.access)
 
 
 def test_mutated_lease_and_tampered_run_are_rejected_without_consuming_real_lease() -> None:
@@ -369,7 +390,7 @@ def test_mutated_lease_and_tampered_run_are_rejected_without_consuming_real_leas
     tampered = _run(lease).model_copy(update={"warnings": ("changed",)})
     with pytest.raises(PerfLensError, match="content digest"):
         authority.finish_run(authorized.access, lease, tampered)
-    assert authority.finish_run(authorized.access, lease, _run(lease)).state == "active"
+    assert authority.finish_run(authorized.access, lease, _run(lease)).session.state == "active"
 
 
 @pytest.mark.parametrize(
@@ -532,10 +553,17 @@ def test_failed_run_consumes_operation_and_ends_session_without_retry() -> None:
         actual_exact_events=1,
         reason="adapter_output_invalid",
     )
-    assert failed.state == "failed"
-    assert failed.active_seconds_used == 1
-    assert failed.evidence_bytes_used == 10
-    assert failed.exact_events_used == 1
+    assert failed.session.state == "failed"
+    assert failed.session.active_seconds_used == 1
+    assert failed.session.evidence_bytes_used == 10
+    assert failed.session.exact_events_used == 1
+    assert failed.session.settlement_finalization_id == failed.finalization.finalization_id
+    assert failed.finalization.outcome == "failed"
+    assert failed.finalization.run_id is None
+    assert failed.finalization.failure_reason == "adapter_output_invalid"
+    assert failed.finalization.accounted_active_seconds == 1
+    assert failed.finalization.accounted_evidence_bytes == 10
+    assert failed.finalization.accounted_exact_events == 1
     with pytest.raises(PerfLensError, match="no longer active"):
         _begin(authority, authorized, operation="a" * 64)
 
@@ -561,7 +589,7 @@ def test_failed_run_rejects_arbitrary_public_reason_without_consuming_lease() ->
         actual_evidence_bytes=0,
         reason="adapter_output_invalid",
     )
-    assert failed.invalidation_reason == "adapter_output_invalid"
+    assert failed.session.invalidation_reason == "adapter_output_invalid"
 
 
 def test_non_exact_failed_run_rejects_invented_exact_event_usage() -> None:

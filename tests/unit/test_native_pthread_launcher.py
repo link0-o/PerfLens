@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import errno
-import fcntl
 import hashlib
+import math
 import os
 import shutil
-import signal
 import stat
 import subprocess
-import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -28,6 +25,12 @@ from perflens.runtime_locks.native_launcher import (
     inspect_native_pthread_probe,
 )
 from perflens.runtime_locks.native_pthread_converter import convert_native_pthread_probe
+from perflens.runtime_locks.supervisor import (
+    RuntimeSupervisorClient,
+    RuntimeSupervisorDiscovery,
+    RuntimeSupervisorReceipt,
+    RuntimeSupervisorRequest,
+)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _PROBE_SOURCE = _PROJECT_ROOT / "native/pthread_probe/perflens_pthread_probe.c"
@@ -59,6 +62,22 @@ int main(int argc, char **argv) {
     return 0;
 }
 """
+
+
+@pytest.fixture(autouse=True)
+def use_test_runtime_supervisor(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_supervisor_client: RuntimeSupervisorClient,
+) -> None:
+    monkeypatch.setattr(
+        native,
+        "discover_runtime_supervisor_policy",
+        lambda: RuntimeSupervisorDiscovery(
+            "available",
+            runtime_supervisor_client.policy,
+            (),
+        ),
+    )
 
 
 @pytest.fixture
@@ -127,24 +146,36 @@ def _managed_target(**updates: object) -> NativeManagedPthreadTarget:
     return NativeManagedPthreadTarget(**values)  # type: ignore[arg-type]
 
 
-def _proc_pid_is_running(pid: int) -> bool:
-    try:
-        raw = Path(f"/proc/{pid}/stat").read_bytes()
-    except OSError:
-        return False
-    closing = raw.rfind(b")")
-    if closing < 0:
-        return False
-    fields = raw[closing + 2 :].split()
-    return bool(fields and fields[0] != b"Z")
-
-
 def test_wheel_only_installation_reports_active_launcher_unavailable() -> None:
     capability = inspect_native_pthread_installation(None)
 
     assert capability.availability == "unavailable"
     assert capability.supported_semantics == ()
     assert "main DEB" in capability.limitations[0]
+
+
+def test_launcher_never_falls_back_when_fixed_supervisor_is_unavailable(
+    native_files: tuple[Path, Path, Path, NativePthreadProbePolicy],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project, output, _target, policy = native_files
+    monkeypatch.setattr(
+        native,
+        "discover_runtime_supervisor_policy",
+        lambda: RuntimeSupervisorDiscovery(
+            "unavailable",
+            None,
+            ("fixed supervisor missing",),
+        ),
+    )
+
+    with pytest.raises(PerfLensError, match="fixed Runtime Lock supervisor is unavailable"):
+        NativePthreadLauncher(
+            project_root=project,
+            private_output_root=output,
+            probe_policy=policy,
+            runtime_glibc_version="2.41",
+        )
 
 
 def test_probe_discovery_hashes_the_identity_pinned_fd(
@@ -219,18 +250,15 @@ def test_launcher_uses_pinned_fds_fixed_environment_and_private_stream(
         runtime_glibc_version="2.41",
     )
     target = launcher.inspect_target(target_path)
-    real_popen = subprocess.Popen
-    captured: dict[str, Any] = {}
+    captured: list[RuntimeSupervisorRequest] = []
+    supervisor = launcher._supervisor  # pyright: ignore[reportPrivateUsage]
+    real_execute = supervisor.execute
 
-    def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
-        captured.update(kwargs)
-        executable = cast(str, kwargs["executable"])
-        executable_fd = int(executable.rsplit("/", maxsplit=1)[-1])
-        captured["executable_link"] = os.readlink(executable)
-        captured["executable_seals"] = fcntl.fcntl(executable_fd, fcntl.F_GET_SEALS)
-        return real_popen(*args, **kwargs)  # type: ignore[call-overload]
+    def recording_execute(request: RuntimeSupervisorRequest) -> RuntimeSupervisorReceipt:
+        captured.append(request)
+        return real_execute(request)
 
-    monkeypatch.setattr(native.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(supervisor, "execute", recording_execute)
     monkeypatch.setenv("LEAK_ME", "must-not-reach-target")
 
     result = launcher.launch(
@@ -250,27 +278,13 @@ def test_launcher_uses_pinned_fds_fixed_environment_and_private_stream(
     assert result.stream_path.parent == output
     assert stat.S_IMODE(result.stream_path.stat().st_mode) == 0o600
     assert result.stream_sha256 == hashlib.sha256(result.stream_path.read_bytes()).hexdigest()
-    assert str(captured["executable"]).startswith("/proc/self/fd/")
-    assert str(captured["executable_link"]).startswith("/memfd:perflens-native-pthread-target")
-    assert (
-        cast(int, captured["executable_seals"]) & native._MEMFD_REQUIRED_SEALS  # pyright: ignore[reportPrivateUsage]
-        == native._MEMFD_REQUIRED_SEALS  # pyright: ignore[reportPrivateUsage]
-    )
-    environment = cast(dict[str, str], captured["env"])
-    assert set(environment) == {
-        "LANG",
-        "LC_ALL",
-        "PATH",
-        "LD_PRELOAD",
-        "PERFLENS_RUNTIME_LOCK_FD",
-        "PERFLENS_RUNTIME_LOCK_MAX_EVENTS",
-        "PERFLENS_RUNTIME_LOCK_MODE",
-        "PERFLENS_RUNTIME_LOCK_THRESHOLD_NS",
-    }
-    assert "LEAK_ME" not in environment
-    assert str(environment["LD_PRELOAD"]).startswith("/proc/self/fd/")
-    assert captured["shell"] is False
-    assert captured["start_new_session"] is True
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.request.adapter == "native_pthread"
+    assert request.arguments == ("80",)
+    assert request.expected_parent_pid == os.getpid()
+    assert request.expected_supervisor_sha256 == supervisor.policy.sha256
+    assert result.accounted_active_seconds == math.ceil(result.duration_seconds)
 
 
 def test_real_packaged_probe_launcher_stream_converts_end_to_end(
@@ -330,160 +344,11 @@ def test_duration_limit_terminates_the_workload_group_and_preserves_stream(
     )
 
     assert result.termination_reason == "duration_limit"
-    assert result.exit_code is not None
+    # The supervisor reports the kernel termination signal directly.  It must
+    # not invent a conventional shell-style exit status for a SIGKILL timeout.
+    assert result.exit_code is None
     assert result.stream_path.exists()
     assert result.footer_observed is False
-
-
-def test_group_cleanup_precedes_reaping_and_rejects_reused_identity(
-    native_files: tuple[Path, Path, Path, NativePthreadProbePolicy],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project, _output, target_path, policy = native_files
-    launcher = NativePthreadLauncher(
-        project_root=project,
-        private_output_root=_output,
-        probe_policy=policy,
-        runtime_glibc_version="2.41",
-    )
-    target = launcher.inspect_target(target_path)
-    order: list[str] = []
-    real_cleanup = native._cleanup_bound_process_group  # pyright: ignore[reportPrivateUsage]
-    real_wait = cast(Any, subprocess.Popen.wait)  # pyright: ignore[reportUnknownMemberType]
-
-    def recording_cleanup(leader_pid: int, pidfd: int, start_ticks: int) -> None:
-        order.append("cleanup")
-        real_cleanup(leader_pid, pidfd, start_ticks)
-
-    def recording_wait(
-        process: subprocess.Popen[bytes],
-        timeout: float | None = None,
-    ) -> int:
-        order.append("wait")
-        return real_wait(process, timeout=timeout)
-
-    monkeypatch.setattr(native, "_cleanup_bound_process_group", recording_cleanup)
-    monkeypatch.setattr(subprocess.Popen, "wait", recording_wait)
-    result = launcher.launch(
-        target_path,
-        NativeLaunchRequest(arguments=("20",), duration_seconds=1),
-        expected_target_identity_sha256=target.identity_sha256,
-    )
-    assert result.exit_code == 0
-    assert order.index("cleanup") < order.index("wait")
-
-    signaled: list[tuple[int, int]] = []
-
-    def reused_identity(_pid: int) -> native._ProcessIdentity:  # pyright: ignore[reportPrivateUsage]
-        return native._ProcessIdentity(  # pyright: ignore[reportPrivateUsage]
-            start_ticks=999,
-            process_group_id=123,
-            session_id=123,
-            state="Z",
-        )
-
-    def record_killpg(pid: int, requested_signal: int) -> None:
-        signaled.append((pid, requested_signal))
-
-    def bound_pidfd(_pidfd: int) -> int:
-        return 123
-
-    monkeypatch.setattr(native, "_read_proc_process_identity", reused_identity)
-    monkeypatch.setattr(native, "_read_pidfd_target", bound_pidfd)
-    monkeypatch.setattr(native.os, "killpg", record_killpg)
-    with pytest.raises(PerfLensError, match="identity changed"):
-        native._signal_bound_process_group(  # pyright: ignore[reportPrivateUsage]
-            123,
-            77,
-            1000,
-            signal.SIGKILL,
-        )
-    assert signaled == []
-
-
-def test_exception_path_cleans_bound_group_before_pidfd_leader_fallback(
-    native_files: tuple[Path, Path, Path, NativePthreadProbePolicy],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project, output, target_path, policy = native_files
-    launcher = NativePthreadLauncher(
-        project_root=project,
-        private_output_root=output,
-        probe_policy=policy,
-        runtime_glibc_version="2.41",
-    )
-    target = launcher.inspect_target(target_path)
-    order: list[str] = []
-    real_cleanup = native._cleanup_bound_process_group  # pyright: ignore[reportPrivateUsage]
-    real_pidfd_signal = native._signal_pidfd  # pyright: ignore[reportPrivateUsage]
-
-    def recording_cleanup(leader_pid: int, pidfd: int, start_ticks: int) -> None:
-        order.append("group")
-        real_cleanup(leader_pid, pidfd, start_ticks)
-
-    def recording_pidfd(pidfd: int, requested_signal: signal.Signals) -> None:
-        order.append("leader")
-        real_pidfd_signal(pidfd, requested_signal)
-
-    def fail_tid_poll(_pid: int) -> tuple[int, ...]:
-        raise RuntimeError("forced post-launch failure")
-
-    monkeypatch.setattr(native, "_cleanup_bound_process_group", recording_cleanup)
-    monkeypatch.setattr(native, "_signal_pidfd", recording_pidfd)
-    monkeypatch.setattr(native, "_read_proc_tids", fail_tid_poll)
-    with pytest.raises(RuntimeError, match="forced post-launch failure"):
-        launcher.launch(
-            target_path,
-            NativeLaunchRequest(arguments=("5000",), duration_seconds=1),
-            expected_target_identity_sha256=target.identity_sha256,
-        )
-    assert order.index("group") < order.index("leader")
-    assert list(output.iterdir()) == []
-
-
-def test_pidfd_open_failure_cleans_actual_same_group_child(
-    native_files: tuple[Path, Path, Path, NativePthreadProbePolicy],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project, output, target_path, policy = native_files
-    launcher = NativePthreadLauncher(
-        project_root=project,
-        private_output_root=output,
-        probe_policy=policy,
-        runtime_glibc_version="2.41",
-    )
-    target = launcher.inspect_target(target_path)
-    child_pids: list[int] = []
-
-    def fail_after_child_started(pid: int, _flags: int = 0) -> int:
-        deadline = time.monotonic() + 1.0
-        children_path = Path(f"/proc/{pid}/task/{pid}/children")
-        while time.monotonic() < deadline:
-            try:
-                values = children_path.read_text(encoding="ascii").split()
-            except OSError:
-                values = []
-            if values:
-                child_pids.extend(int(value) for value in values)
-                break
-            time.sleep(0.01)
-        raise OSError(errno.EMFILE, "forced pidfd exhaustion")
-
-    monkeypatch.setattr(native.os, "pidfd_open", fail_after_child_started)
-    with pytest.raises(PerfLensError, match=r"pidfd.*cleanup may be incomplete"):
-        launcher.launch(
-            target_path,
-            NativeLaunchRequest(arguments=("5000", "fork-child"), duration_seconds=1),
-            expected_target_identity_sha256=target.identity_sha256,
-        )
-    assert child_pids
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline:
-        if all(not _proc_pid_is_running(pid) for pid in child_pids):
-            break
-        time.sleep(0.01)
-    assert all(not _proc_pid_is_running(pid) for pid in child_pids)
-    assert list(output.iterdir()) == []
 
 
 def test_launcher_removes_private_stream_when_receipt_inspection_fails(

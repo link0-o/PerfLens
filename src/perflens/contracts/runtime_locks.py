@@ -450,6 +450,10 @@ class RuntimeToolIdentity(ContractModel):
 
     @model_validator(mode="after")
     def validate_identity(self) -> RuntimeToolIdentity:
+        if self.version is not None and any(
+            ord(character) < 32 or ord(character) == 127 for character in self.version
+        ):
+            raise ValueError("runtime tool version cannot contain control characters")
         if self.path is not None and not (
             self.path.startswith("/") or _is_safe_runtime_tool_basename(self.path)
         ):
@@ -599,7 +603,12 @@ class RuntimeSourceManifest(ContractModel):
                 "allOf": [
                     {
                         "if": _legacy_schema_condition(),
-                        "then": {"not": {"required": ["converter_version"]}},
+                        "then": _forbid_present_json_schema(
+                            "converter_version",
+                            "adapter_execution_identity_sha256",
+                            "configuration_sha256",
+                            "metadata_sha256",
+                        ),
                         "else": {"required": ["converter_version"]},
                     },
                     {
@@ -628,6 +637,27 @@ class RuntimeSourceManifest(ContractModel):
                                     ]
                                 }
                             }
+                        },
+                    },
+                    {
+                        "if": {
+                            "properties": {"source_format": {"const": "jfr_json_v1"}},
+                            "required": ["source_format"],
+                        },
+                        "then": {
+                            "required": [
+                                "adapter_execution_identity_sha256",
+                                "configuration_sha256",
+                                "metadata_sha256",
+                                "tool",
+                            ],
+                            "properties": {
+                                "schema_version": {"const": "1.1"},
+                                "runtime": {"const": "java"},
+                                "adapter_id": {"const": "java_jfr"},
+                                "backend_id": {"const": "jfr"},
+                                "target_scope": {"const": "bound_pid"},
+                            },
                         },
                     },
                 ]
@@ -665,6 +695,9 @@ class RuntimeSourceManifest(ContractModel):
     hold_time_is_source_observed: bool
     target_scope: Literal["bound_pid", "verified_import"]
     tool: RuntimeToolIdentity | None = None
+    adapter_execution_identity_sha256: Sha256 | None = None
+    configuration_sha256: Sha256 | None = None
+    metadata_sha256: Sha256 | None = None
 
     @model_validator(mode="after")
     def validate_semantics(self) -> RuntimeSourceManifest:
@@ -672,6 +705,13 @@ class RuntimeSourceManifest(ContractModel):
             raise ValueError("schema 1.1 runtime source requires a converter version")
         if self.schema_version == "1.0" and "converter_version" in self.model_fields_set:
             raise ValueError("schema 1.0 runtime source cannot carry converter_version")
+        execution_fields = (
+            self.adapter_execution_identity_sha256,
+            self.configuration_sha256,
+            self.metadata_sha256,
+        )
+        if self.schema_version == "1.0" and any(value is not None for value in execution_fields):
+            raise ValueError("schema 1.0 runtime source cannot carry Adapter execution identity")
         if (
             self.schema_version == "1.1"
             and self.tool is not None
@@ -686,6 +726,19 @@ class RuntimeSourceManifest(ContractModel):
             sampling_fraction=self.sampling_fraction,
             block_profile_rate_ns=self.block_profile_rate_ns,
         )
+        if self.source_format == "jfr_json_v1" and (
+            self.schema_version != "1.1"
+            or self.runtime != "java"
+            or self.adapter_id != "java_jfr"
+            or self.backend_id != "jfr"
+            or self.target_scope != "bound_pid"
+            or any(value is None for value in execution_fields)
+            or self.tool is None
+            or self.tool.name != "jfr"
+            or self.tool.path != "jfr"
+            or self.tool.status != "available"
+        ):
+            raise ValueError("JFR source lacks its bound Adapter execution identity")
         return self
 
 
@@ -1445,6 +1498,10 @@ class RuntimeLockEvidenceArtifact(ContractModel):
             self.forbidden_conclusions
         ):
             raise ValueError("runtime evidence without owner data must forbid owner conclusions")
+        if self.source.adapter_id == "java_jfr" and "exact_owner_relationship" not in (
+            self.forbidden_conclusions
+        ):
+            raise ValueError("Java JFR evidence must forbid exact owner conclusions")
         if not self.source.hold_time_is_source_observed and "exact_hold_time" not in (
             self.forbidden_conclusions
         ):
@@ -1546,7 +1603,7 @@ class RuntimeProjectionMetrics(ContractModel):
 
 
 class RuntimeLockAggregate(RuntimeProjectionMetrics):
-    lock_id: LockId | None
+    lock_id: LockId | None = None
     lock_kind: LockKind
     # waiter_thread_count is retained solely for strict schema 1.0 loading.
     waiter_thread_count: int | None = Field(default=None, ge=0)
@@ -1570,7 +1627,7 @@ class RuntimeExecutionContextAggregate(RuntimeProjectionMetrics):
 
 
 class RuntimeCallPathAggregate(RuntimeProjectionMetrics):
-    stack_id: StackId | None
+    stack_id: StackId | None = None
     lock_count: int | None = Field(default=None, ge=0)
     execution_context_count: int = Field(ge=0)
 
@@ -1939,6 +1996,22 @@ class RuntimeLockVerificationCheck(ContractModel):
     detail: str = Field(min_length=1, max_length=1024)
 
 
+class RuntimeLockSourceReplayReceipt(ContractModel):
+    """Path-free attestation that retained raw input reproduced one Evidence."""
+
+    status: Literal["passed"] = "passed"
+    source_format: str = Field(min_length=1, max_length=128)
+    raw_source_sha256: Sha256
+    raw_source_bytes: int = Field(ge=0, le=64 << 20)
+    normalized_source_sha256: Sha256
+    normalized_source_bytes: int = Field(ge=0, le=64 << 20)
+    converter_version: str = Field(min_length=1, max_length=128)
+    conversion_fingerprint: Sha256
+    adapter_execution_identity_sha256: Sha256 | None = None
+    runtime_lock_evidence_id: ArtifactId
+    runtime_lock_evidence_content_sha256: Sha256
+
+
 class RuntimeLockAnalysisVerificationArtifact(ContractModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -1951,7 +2024,8 @@ class RuntimeLockAnalysisVerificationArtifact(ContractModel):
                         "if": _legacy_schema_condition(),
                         "then": {
                             "properties": {
-                                "verifier_version": {"const": "runtime-lock-verifier-v1"}
+                                "source_replay_receipt": {"type": "null"},
+                                "verifier_version": {"const": "runtime-lock-verifier-v1"},
                             }
                         },
                         "else": {
@@ -1974,6 +2048,7 @@ class RuntimeLockAnalysisVerificationArtifact(ContractModel):
     created_at: str
     verification_status: Literal["verified", "partial", "failed"]
     checks: tuple[RuntimeLockVerificationCheck, ...] = Field(min_length=1)
+    source_replay_receipt: RuntimeLockSourceReplayReceipt | None = None
     verifier_version: Literal[
         "runtime-lock-verifier-v1",
         "runtime-lock-verifier-v2",
@@ -2004,6 +2079,14 @@ class RuntimeLockAnalysisVerificationArtifact(ContractModel):
         )
         if self.verifier_version != expected_verifier:
             raise ValueError("runtime verifier version contradicts its schema version")
+        if self.schema_version == "1.0" and self.source_replay_receipt is not None:
+            raise ValueError("schema 1.0 verification cannot carry a source replay receipt")
+        if self.source_replay_receipt is not None and (
+            self.source_replay_receipt.runtime_lock_evidence_id != self.runtime_lock_evidence_id
+            or self.source_replay_receipt.runtime_lock_evidence_content_sha256
+            != self.runtime_lock_evidence_content_sha256
+        ):
+            raise ValueError("source replay receipt differs from verified Runtime Lock evidence")
         statuses = {check.status for check in self.checks}
         names = tuple(check.name for check in self.checks)
         if len(set(names)) != len(names):

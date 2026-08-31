@@ -1234,6 +1234,33 @@ def test_verifier_version_defaults_and_json_schema_follow_the_artifact_schema() 
         == "runtime-lock-verifier-v2"
     )
 
+    replay_receipt = {
+        "status": "passed",
+        "source_format": "jfr_json_v1",
+        "raw_source_sha256": "2" * 64,
+        "raw_source_bytes": 128,
+        "normalized_source_sha256": "3" * 64,
+        "normalized_source_bytes": 96,
+        "converter_version": "java-jfr-converter-v1",
+        "conversion_fingerprint": "4" * 64,
+        "adapter_execution_identity_sha256": "5" * 64,
+        "runtime_lock_evidence_id": common["runtime_lock_evidence_id"],
+        "runtime_lock_evidence_content_sha256": common["runtime_lock_evidence_content_sha256"],
+    }
+    current_with_receipt = {**current, "source_replay_receipt": replay_receipt}
+    _validate_json_schema(schema, current_with_receipt)
+    RuntimeLockAnalysisVerificationArtifact.model_validate(current_with_receipt)
+
+    legacy_with_receipt = {
+        **common,
+        "schema_version": "1.0",
+        "source_replay_receipt": replay_receipt,
+    }
+    with pytest.raises(JsonSchemaValidationError):
+        _validate_json_schema(schema, legacy_with_receipt)
+    with pytest.raises(ValidationError, match="cannot carry a source replay receipt"):
+        RuntimeLockAnalysisVerificationArtifact.model_validate(legacy_with_receipt)
+
     for payload in (
         {**common, "schema_version": "1.0", "verifier_version": "runtime-lock-verifier-v2"},
         {**common, "schema_version": "1.1", "verifier_version": "runtime-lock-verifier-v1"},

@@ -24,6 +24,10 @@ _validate_pthread_probe_library = cast(
     Callable[[Path], None],
     runpy.run_path(str(_SCRIPT))["_validate_pthread_probe_library"],
 )
+_validate_static_runtime_boundary = cast(
+    Callable[[Path], None],
+    runpy.run_path(str(_SCRIPT))["_validate_static_runtime_boundary"],
+)
 _MAIN_GLIBC_FLOOR = cast(str, runpy.run_path(str(_SCRIPT))["_MAIN_GLIBC_FLOOR"])
 
 
@@ -135,6 +139,79 @@ def _compile_probe(
         text=True,
     )
     return output
+
+
+def _compile_runtime_boundary(
+    tmp_path: Path,
+    *,
+    name: str,
+    link_flags: tuple[str, ...],
+) -> Path:
+    compiler = shutil.which("gcc")
+    if compiler is None:
+        pytest.skip("gcc is required for the Runtime Supervisor DEB validation test")
+    source = tmp_path / f"{name}.c"
+    source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    output = tmp_path / name
+    subprocess.run(  # noqa: S603 - fixed compiler and test-owned source/output
+        [compiler, str(source), *link_flags, "-o", str(output)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return output
+
+
+def test_deb_builder_accepts_only_hardened_static_runtime_boundaries(tmp_path: Path) -> None:
+    hardened = _compile_runtime_boundary(
+        tmp_path,
+        name="hardened-static-pie",
+        link_flags=("-static-pie", "-Wl,-z,relro,-z,now,-z,noexecstack"),
+    )
+    _validate_static_runtime_boundary(hardened)
+
+    dynamic = _compile_runtime_boundary(
+        tmp_path,
+        name="dynamic-pie",
+        link_flags=("-Wl,-z,relro,-z,now,-z,noexecstack",),
+    )
+    with pytest.raises(ValueError):
+        _validate_static_runtime_boundary(dynamic)
+
+    executable_stack = _compile_runtime_boundary(
+        tmp_path,
+        name="static-executable-stack",
+        link_flags=("-static-pie", "-Wl,-z,relro,-z,now,-z,execstack"),
+    )
+    with pytest.raises(ValueError, match="executable stack"):
+        _validate_static_runtime_boundary(executable_stack)
+
+    missing_relro = _compile_runtime_boundary(
+        tmp_path,
+        name="static-missing-relro",
+        link_flags=("-static-pie", "-Wl,-z,norelro,-z,now,-z,noexecstack"),
+    )
+    with pytest.raises(ValueError, match="RELRO"):
+        _validate_static_runtime_boundary(missing_relro)
+
+    wrong_architecture = tmp_path / "wrong-architecture"
+    wrong_architecture.write_bytes(hardened.read_bytes())
+    payload = bytearray(wrong_architecture.read_bytes())
+    payload[18:20] = (183).to_bytes(2, "little")  # EM_AARCH64
+    wrong_architecture.write_bytes(payload)
+    with pytest.raises(ValueError, match="amd64"):
+        _validate_static_runtime_boundary(wrong_architecture)
+
+    oversized = tmp_path / "oversized-static-boundary"
+    with oversized.open("wb") as stream:
+        stream.truncate((64 << 20) + 1)
+    with pytest.raises(ValueError, match="size"):
+        _validate_static_runtime_boundary(oversized)
+
+    invalid = tmp_path / "not-elf"
+    invalid.write_bytes(b"not an ELF executable")
+    with pytest.raises(ValueError):
+        _validate_static_runtime_boundary(invalid)
 
 
 def test_deb_builder_accepts_only_hardened_native_pthread_probe(tmp_path: Path) -> None:

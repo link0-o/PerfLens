@@ -1,5 +1,183 @@
 {
   "$defs": {
+    "RuntimeLockAdapterExecutionBinding": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "adapter_id": {
+                "const": "java_jfr"
+              }
+            },
+            "required": [
+              "adapter_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "tools": {
+                "maxItems": 2,
+                "minItems": 2
+              }
+            },
+            "required": [
+              "tools",
+              "runtime_payload_identity_sha256"
+            ]
+          }
+        }
+      ],
+      "description": "Public, path-free identity for one active Adapter configuration.",
+      "properties": {
+        "adapter_id": {
+          "enum": [
+            "native_pthread",
+            "java_jfr",
+            "cpython_threading",
+            "go_pprof",
+            "generic_ndjson_import"
+          ],
+          "title": "Adapter Id",
+          "type": "string"
+        },
+        "adapter_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Adapter Version",
+          "type": "string"
+        },
+        "backend_id": {
+          "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+          "title": "Backend Id",
+          "type": "string"
+        },
+        "configuration_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Configuration Sha256",
+          "type": "string"
+        },
+        "duration_threshold_ns": {
+          "maximum": 1000000000000,
+          "minimum": 1,
+          "title": "Duration Threshold Ns",
+          "type": "integer"
+        },
+        "execution_identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Execution Identity Sha256",
+          "type": "string"
+        },
+        "limitations": {
+          "default": [],
+          "items": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "measurement_semantics": {
+          "enum": [
+            "exact",
+            "thresholded",
+            "sampled",
+            "cumulative"
+          ],
+          "title": "Measurement Semantics",
+          "type": "string"
+        },
+        "metadata_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Metadata Sha256",
+          "type": "string"
+        },
+        "profile": {
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+          "title": "Profile",
+          "type": "string"
+        },
+        "runtime_payload_identity_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Payload Identity Sha256"
+        },
+        "runtime_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Runtime Version",
+          "type": "string"
+        },
+        "toolchain_identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Toolchain Identity Sha256",
+          "type": "string"
+        },
+        "tools": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RuntimeLockAdapterToolBinding"
+          },
+          "maxItems": 16,
+          "title": "Tools",
+          "type": "array"
+        }
+      },
+      "required": [
+        "adapter_id",
+        "adapter_version",
+        "backend_id",
+        "runtime_version",
+        "profile",
+        "measurement_semantics",
+        "duration_threshold_ns",
+        "toolchain_identity_sha256",
+        "configuration_sha256",
+        "metadata_sha256",
+        "execution_identity_sha256"
+      ],
+      "title": "RuntimeLockAdapterExecutionBinding",
+      "type": "object"
+    },
+    "RuntimeLockAdapterToolBinding": {
+      "additionalProperties": false,
+      "description": "Path-free identity of one executable used by an active Adapter.",
+      "properties": {
+        "binary_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Binary Sha256",
+          "type": "string"
+        },
+        "name": {
+          "pattern": "^[A-Za-z0-9_.+-]{1,64}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "binary_sha256"
+      ],
+      "title": "RuntimeLockAdapterToolBinding",
+      "type": "object"
+    },
     "RuntimeLockSessionBudget": {
       "additionalProperties": false,
       "properties": {
@@ -141,7 +319,67 @@
     }
   },
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.0"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "adapter_execution_bindings": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "workload": {
+            "properties": {
+              "adapter_id": {
+                "const": "java_jfr"
+              }
+            },
+            "required": [
+              "adapter_id"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "workload"
+        ]
+      },
+      "then": {
+        "properties": {
+          "adapter_execution_bindings": {
+            "maxItems": 1,
+            "minItems": 1
+          }
+        },
+        "required": [
+          "adapter_execution_bindings"
+        ]
+      }
+    }
+  ],
   "properties": {
+    "adapter_execution_bindings": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RuntimeLockAdapterExecutionBinding"
+      },
+      "title": "Adapter Execution Bindings",
+      "type": "array"
+    },
     "allowed_adapters": {
       "items": {
         "enum": [
@@ -245,8 +483,11 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "1.0",
       "default": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },

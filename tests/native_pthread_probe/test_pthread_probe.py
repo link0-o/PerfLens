@@ -334,7 +334,7 @@ def test_invalid_probe_configuration_fails_open_without_evidence(
     assert not evidence.exists()
 
 
-def test_probe_rejects_fifo_and_socket_output_descriptors_fail_open(
+def test_probe_accepts_private_pipe_but_rejects_socket_output_descriptor(
     native_assets: tuple[Path, Path],
 ) -> None:
     probe, workload = native_assets
@@ -361,7 +361,7 @@ def test_probe_rejects_fifo_and_socket_output_descriptors_fail_open(
         assert result.returncode == 0
         os.close(write_fd)
         write_fd = -1
-        assert os.read(read_fd, 1) == b""
+        assert os.read(read_fd, 1) == b"{"
     finally:
         os.close(read_fd)
         if write_fd >= 0:

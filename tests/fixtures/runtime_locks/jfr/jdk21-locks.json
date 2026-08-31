@@ -1,0 +1,732 @@
+{
+  "recording": {
+    "events": [{
+      "type": "jdk.JavaMonitorEnter", 
+      "values": {
+        "startTime": "2026-08-30T18:40:18.755430985+08:00", 
+        "duration": "PT0.069893947S", 
+        "eventThread": {
+          "osName": "main", 
+          "osThreadId": 28, 
+          "javaName": "main", 
+          "javaThreadId": 1, 
+          "group": {
+            "parent": {
+              "parent": null, 
+              "name": "system"
+            }, 
+            "name": "main"
+          }, 
+          "virtual": false
+        }, 
+        "stackTrace": {
+          "truncated": false, 
+          "frames": [{
+            "method": {
+              "type": {
+                "classLoader": {
+                  "type": {
+                    "classLoader": {
+                      "type": null, 
+                      "name": "bootstrap"
+                    }, 
+                    "name": "jdk\/internal\/loader\/ClassLoaders$AppClassLoader", 
+                    "package": {
+                      "name": "jdk\/internal\/loader", 
+                      "module": {
+                        "name": "java.base", 
+                        "version": "21.0.12.1", 
+                        "location": "jrt:\/java.base", 
+                        "classLoader": {
+                          "type": null, 
+                          "name": "bootstrap"
+                        }
+                      }, 
+                      "exported": true
+                    }, 
+                    "modifiers": 10, 
+                    "hidden": false
+                  }, 
+                  "name": "app"
+                }, 
+                "name": "JfrLockFixture", 
+                "package": null, 
+                "modifiers": 17, 
+                "hidden": false
+              }, 
+              "name": "main", 
+              "descriptor": "([Ljava\/lang\/String;)V", 
+              "modifiers": 9, 
+              "hidden": false
+            }, 
+            "lineNumber": 6, 
+            "bytecodeIndex": 31, 
+            "type": "Interpreted"
+          }]
+        }, 
+        "monitorClass": {
+          "classLoader": {
+            "type": null, 
+            "name": "bootstrap"
+          }, 
+          "name": "java\/lang\/Object", 
+          "package": {
+            "name": "java\/lang", 
+            "module": {
+              "name": "java.base", 
+              "version": "21.0.12.1", 
+              "location": "jrt:\/java.base", 
+              "classLoader": {
+                "type": null, 
+                "name": "bootstrap"
+              }
+            }, 
+            "exported": true
+          }, 
+          "modifiers": 1, 
+          "hidden": false
+        }, 
+        "previousOwner": {
+          "osName": "holder", 
+          "osThreadId": 55, 
+          "javaName": "holder", 
+          "javaThreadId": 29, 
+          "group": {
+            "parent": {
+              "parent": null, 
+              "name": "system"
+            }, 
+            "name": "main"
+          }, 
+          "virtual": false
+        }, 
+        "address": 139918159416928
+      }
+    }, {
+      "type": "jdk.JavaMonitorWait", 
+      "values": {
+        "startTime": "2026-08-30T18:40:18.826217069+08:00", 
+        "duration": "PT0.040495578S", 
+        "eventThread": {
+          "osName": "waiter", 
+          "osThreadId": 56, 
+          "javaName": "waiter", 
+          "javaThreadId": 30, 
+          "group": {
+            "parent": {
+              "parent": null, 
+              "name": "system"
+            }, 
+            "name": "main"
+          }, 
+          "virtual": false
+        }, 
+        "stackTrace": {
+          "truncated": false, 
+          "frames": [{
+            "method": {
+              "type": {
+                "classLoader": {
+                  "type": null, 
+                  "name": "bootstrap"
+                }, 
+                "name": "java\/lang\/Object", 
+                "package": {
+                  "name": "java\/lang", 
+                  "module": {
+                    "name": "java.base", 
+                    "version": "21.0.12.1", 
+                    "location": "jrt:\/java.base", 
+                    "classLoader": {
+                      "type": null, 
+                      "name": "bootstrap"
+                    }
+                  }, 
+                  "exported": true
+                }, 
+                "modifiers": 1, 
+                "hidden": false
+              }, 
+              "name": "wait0", 
+              "descriptor": "(J)V", 
+              "modifiers": 274, 
+              "hidden": false
+            }, 
+            "lineNumber": -1, 
+            "bytecodeIndex": 0, 
+            "type": "Native"
+          }, {
+            "method": {
+              "type": {
+                "classLoader": {
+                  "type": null, 
+                  "name": "bootstrap"
+                }, 
+                "name": "java\/lang\/Object", 
+                "package": {
+                  "name": "java\/lang", 
+                  "module": {
+                    "name": "java.base", 
+                    "version": "21.0.12.1", 
+                    "location": "jrt:\/java.base", 
+                    "classLoader": {
+                      "type": null, 
+                      "name": "bootstrap"
+                    }
+                  }, 
+                  "exported": true
+                }, 
+                "modifiers": 1, 
+                "hidden": false
+              }, 
+              "name": "wait", 
+              "descriptor": "(J)V", 
+              "modifiers": 17, 
+              "hidden": false
+            }, 
+            "lineNumber": 366, 
+            "bytecodeIndex": 6, 
+            "type": "Interpreted"
+          }, {
+            "method": {
+              "type": {
+                "classLoader": {
+                  "type": {
+                    "classLoader": {
+                      "type": null, 
+                      "name": "bootstrap"
+                    }, 
+                    "name": "jdk\/internal\/loader\/ClassLoaders$AppClassLoader", 
+                    "package": {
+                      "name": "jdk\/internal\/loader", 
+                      "module": {
+                        "name": "java.base", 
+                        "version": "21.0.12.1", 
+                        "location": "jrt:\/java.base", 
+                        "classLoader": {
+                          "type": null, 
+                          "name": "bootstrap"
+                        }
+                      }, 
+                      "exported": true
+                    }, 
+                    "modifiers": 10, 
+                    "hidden": false
+                  }, 
+                  "name": "app"
+                }, 
+                "name": "JfrLockFixture", 
+                "package": null, 
+                "modifiers": 17, 
+                "hidden": false
+              }, 
+              "name": "lambda$main$1", 
+              "descriptor": "()V", 
+              "modifiers": 4106, 
+              "hidden": false
+            }, 
+            "lineNumber": 8, 
+            "bytecodeIndex": 12, 
+            "type": "Interpreted"
+          }, {
+            "method": {
+              "type": {
+                "classLoader": {
+                  "type": {
+                    "classLoader": {
+                      "type": null, 
+                      "name": "bootstrap"
+                    }, 
+                    "name": "jdk\/internal\/loader\/ClassLoaders$AppClassLoader", 
+                    "package": {
+                      "name": "jdk\/internal\/loader", 
+                      "module": {
+                        "name": "java.base", 
+                        "version": "21.0.12.1", 
+                        "location": "jrt:\/java.base", 
+                        "classLoader": {
+                          "type": null, 
+                          "name": "bootstrap"
+                        }
+                      }, 
+                      "exported": true
+                    }, 
+                    "modifiers": 10, 
+                    "hidden": false
+                  }, 
+                  "name": "app"
+                }, 
+                "name": "JfrLockFixture$$Lambda\/0x00007f40c4006c28", 
+                "package": null, 
+                "modifiers": 4112, 
+                "hidden": true
+              }, 
+              "name": "run", 
+              "descriptor": "()V", 
+              "modifiers": 1, 
+              "hidden": true
+            }, 
+            "lineNumber": -1, 
+            "bytecodeIndex": 0, 
+            "type": "Interpreted"
+          }, {
+            "method": {
+              "type": {
+                "classLoader": {
+                  "type": null, 
+                  "name": "bootstrap"
+                }, 
+                "name": "java\/lang\/Thread", 
+                "package": {
+                  "name": "java\/lang", 
+                  "module": {
+                    "name": "java.base", 
+                    "version": "21.0.12.1", 
+                    "location": "jrt:\/java.base", 
+                    "classLoader": {
+                      "type": null, 
+                      "name": "bootstrap"
+                    }
+                  }, 
+                  "exported": true
+                }, 
+                "modifiers": 1, 
+                "hidden": false
+              }, 
+              "name": "runWith", 
+              "descriptor": "(Ljava\/lang\/Object;Ljava\/lang\/Runnable;)V", 
+              "modifiers": 16, 
+              "hidden": true
+            }, 
+            "lineNumber": 1596, 
+            "bytecodeIndex": 5, 
+            "type": "Interpreted"
+          }, {
+            "method": {
+              "type": {
+                "classLoader": {
+                  "type": null, 
+                  "name": "bootstrap"
+                }, 
+                "name": "java\/lang\/Thread", 
+                "package": {
+                  "name": "java\/lang", 
+                  "module": {
+                    "name": "java.base", 
+                    "version": "21.0.12.1", 
+                    "location": "jrt:\/java.base", 
+                    "classLoader": {
+                      "type": null, 
+                      "name": "bootstrap"
+                    }
+                  }, 
+                  "exported": true
+                }, 
+                "modifiers": 1, 
+                "hidden": false
+              }, 
+              "name": "run", 
+              "descriptor": "()V", 
+              "modifiers": 1, 
+              "hidden": false
+            }, 
+            "lineNumber": 1583, 
+            "bytecodeIndex": 19, 
+            "type": "Interpreted"
+          }]
+        }, 
+        "monitorClass": {
+          "classLoader": {
+            "type": null, 
+            "name": "bootstrap"
+          }, 
+          "name": "java\/lang\/Object", 
+          "package": {
+            "name": "java\/lang", 
+            "module": {
+              "name": "java.base", 
+              "version": "21.0.12.1", 
+              "location": "jrt:\/java.base", 
+              "classLoader": {
+                "type": null, 
+                "name": "bootstrap"
+              }
+            }, 
+            "exported": true
+          }, 
+          "modifiers": 1, 
+          "hidden": false
+        }, 
+        "notifier": null, 
+        "timeout": "PT0.04S", 
+        "timedOut": true, 
+        "address": 139918159416928
+      }
+    }, {
+      "type": "jdk.JavaMonitorWait", 
+      "values": {
+        "startTime": "2026-08-30T18:40:18.826132343+08:00", 
+        "duration": "PT0.040700058S", 
+        "eventThread": {
+          "osName": "main", 
+          "osThreadId": 28, 
+          "javaName": "main", 
+          "javaThreadId": 1, 
+          "group": {
+            "parent": {
+              "parent": null, 
+              "name": "system"
+            }, 
+            "name": "main"
+          }, 
+          "virtual": false
+        }, 
+        "stackTrace": {
+          "truncated": false, 
+          "frames": [{
+            "method": {
+              "type": {
+                "classLoader": {
+                  "type": null, 
+                  "name": "bootstrap"
+                }, 
+                "name": "java\/lang\/Object", 
+                "package": {
+                  "name": "java\/lang", 
+                  "module": {
+                    "name": "java.base", 
+                    "version": "21.0.12.1", 
+                    "location": "jrt:\/java.base", 
+                    "classLoader": {
+                      "type": null, 
+                      "name": "bootstrap"
+                    }
+                  }, 
+                  "exported": true
+                }, 
+                "modifiers": 1, 
+                "hidden": false
+              }, 
+              "name": "wait0", 
+              "descriptor": "(J)V", 
+              "modifiers": 274, 
+              "hidden": false
+            }, 
+            "lineNumber": -1, 
+            "bytecodeIndex": 0, 
+            "type": "Native"
+          }, {
+            "method": {
+              "type": {
+                "classLoader": {
+                  "type": null, 
+                  "name": "bootstrap"
+                }, 
+                "name": "java\/lang\/Object", 
+                "package": {
+                  "name": "java\/lang", 
+                  "module": {
+                    "name": "java.base", 
+                    "version": "21.0.12.1", 
+                    "location": "jrt:\/java.base", 
+                    "classLoader": {
+                      "type": null, 
+                      "name": "bootstrap"
+                    }
+                  }, 
+                  "exported": true
+                }, 
+                "modifiers": 1, 
+                "hidden": false
+              }, 
+              "name": "wait", 
+              "descriptor": "(J)V", 
+              "modifiers": 17, 
+              "hidden": false
+            }, 
+            "lineNumber": 366, 
+            "bytecodeIndex": 6, 
+            "type": "Interpreted"
+          }, {
+            "method": {
+              "type": {
+                "classLoader": {
+                  "type": null, 
+                  "name": "bootstrap"
+                }, 
+                "name": "java\/lang\/Thread", 
+                "package": {
+                  "name": "java\/lang", 
+                  "module": {
+                    "name": "java.base", 
+                    "version": "21.0.12.1", 
+                    "location": "jrt:\/java.base", 
+                    "classLoader": {
+                      "type": null, 
+                      "name": "bootstrap"
+                    }
+                  }, 
+                  "exported": true
+                }, 
+                "modifiers": 1, 
+                "hidden": false
+              }, 
+              "name": "join", 
+              "descriptor": "(J)V", 
+              "modifiers": 17, 
+              "hidden": false
+            }, 
+            "lineNumber": 2079, 
+            "bytecodeIndex": 129, 
+            "type": "Interpreted"
+          }, {
+            "method": {
+              "type": {
+                "classLoader": {
+                  "type": null, 
+                  "name": "bootstrap"
+                }, 
+                "name": "java\/lang\/Thread", 
+                "package": {
+                  "name": "java\/lang", 
+                  "module": {
+                    "name": "java.base", 
+                    "version": "21.0.12.1", 
+                    "location": "jrt:\/java.base", 
+                    "classLoader": {
+                      "type": null, 
+                      "name": "bootstrap"
+                    }
+                  }, 
+                  "exported": true
+                }, 
+                "modifiers": 1, 
+                "hidden": false
+              }, 
+              "name": "join", 
+              "descriptor": "()V", 
+              "modifiers": 17, 
+              "hidden": false
+            }, 
+            "lineNumber": 2155, 
+            "bytecodeIndex": 2, 
+            "type": "Interpreted"
+          }, {
+            "method": {
+              "type": {
+                "classLoader": {
+                  "type": {
+                    "classLoader": {
+                      "type": null, 
+                      "name": "bootstrap"
+                    }, 
+                    "name": "jdk\/internal\/loader\/ClassLoaders$AppClassLoader", 
+                    "package": {
+                      "name": "jdk\/internal\/loader", 
+                      "module": {
+                        "name": "java.base", 
+                        "version": "21.0.12.1", 
+                        "location": "jrt:\/java.base", 
+                        "classLoader": {
+                          "type": null, 
+                          "name": "bootstrap"
+                        }
+                      }, 
+                      "exported": true
+                    }, 
+                    "modifiers": 10, 
+                    "hidden": false
+                  }, 
+                  "name": "app"
+                }, 
+                "name": "JfrLockFixture", 
+                "package": null, 
+                "modifiers": 17, 
+                "hidden": false
+              }, 
+              "name": "main", 
+              "descriptor": "([Ljava\/lang\/String;)V", 
+              "modifiers": 9, 
+              "hidden": false
+            }, 
+            "lineNumber": 9, 
+            "bytecodeIndex": 65, 
+            "type": "Interpreted"
+          }]
+        }, 
+        "monitorClass": {
+          "classLoader": {
+            "type": null, 
+            "name": "bootstrap"
+          }, 
+          "name": "java\/lang\/Thread", 
+          "package": {
+            "name": "java\/lang", 
+            "module": {
+              "name": "java.base", 
+              "version": "21.0.12.1", 
+              "location": "jrt:\/java.base", 
+              "classLoader": {
+                "type": null, 
+                "name": "bootstrap"
+              }
+            }, 
+            "exported": true
+          }, 
+          "modifiers": 1, 
+          "hidden": false
+        }, 
+        "notifier": {
+          "osName": "waiter", 
+          "osThreadId": 56, 
+          "javaName": "waiter", 
+          "javaThreadId": 30, 
+          "group": {
+            "parent": {
+              "parent": null, 
+              "name": "system"
+            }, 
+            "name": "main"
+          }, 
+          "virtual": false
+        }, 
+        "timeout": "PT0S", 
+        "timedOut": false, 
+        "address": 139918159417840
+      }
+    }, {
+      "type": "jdk.ThreadPark", 
+      "values": {
+        "startTime": "2026-08-30T18:40:18.866937585+08:00", 
+        "duration": "PT0.0205585S", 
+        "eventThread": {
+          "osName": "main", 
+          "osThreadId": 28, 
+          "javaName": "main", 
+          "javaThreadId": 1, 
+          "group": {
+            "parent": {
+              "parent": null, 
+              "name": "system"
+            }, 
+            "name": "main"
+          }, 
+          "virtual": false
+        }, 
+        "stackTrace": {
+          "truncated": false, 
+          "frames": [{
+            "method": {
+              "type": {
+                "classLoader": {
+                  "type": null, 
+                  "name": "bootstrap"
+                }, 
+                "name": "jdk\/internal\/misc\/Unsafe", 
+                "package": {
+                  "name": "jdk\/internal\/misc", 
+                  "module": {
+                    "name": "java.base", 
+                    "version": "21.0.12.1", 
+                    "location": "jrt:\/java.base", 
+                    "classLoader": {
+                      "type": null, 
+                      "name": "bootstrap"
+                    }
+                  }, 
+                  "exported": true
+                }, 
+                "modifiers": 17, 
+                "hidden": false
+              }, 
+              "name": "park", 
+              "descriptor": "(ZJ)V", 
+              "modifiers": 257, 
+              "hidden": false
+            }, 
+            "lineNumber": -1, 
+            "bytecodeIndex": 0, 
+            "type": "Native"
+          }, {
+            "method": {
+              "type": {
+                "classLoader": {
+                  "type": null, 
+                  "name": "bootstrap"
+                }, 
+                "name": "java\/util\/concurrent\/locks\/LockSupport", 
+                "package": {
+                  "name": "java\/util\/concurrent\/locks", 
+                  "module": {
+                    "name": "java.base", 
+                    "version": "21.0.12.1", 
+                    "location": "jrt:\/java.base", 
+                    "classLoader": {
+                      "type": null, 
+                      "name": "bootstrap"
+                    }
+                  }, 
+                  "exported": true
+                }, 
+                "modifiers": 1, 
+                "hidden": false
+              }, 
+              "name": "parkNanos", 
+              "descriptor": "(J)V", 
+              "modifiers": 9, 
+              "hidden": false
+            }, 
+            "lineNumber": 410, 
+            "bytecodeIndex": 27, 
+            "type": "Interpreted"
+          }, {
+            "method": {
+              "type": {
+                "classLoader": {
+                  "type": {
+                    "classLoader": {
+                      "type": null, 
+                      "name": "bootstrap"
+                    }, 
+                    "name": "jdk\/internal\/loader\/ClassLoaders$AppClassLoader", 
+                    "package": {
+                      "name": "jdk\/internal\/loader", 
+                      "module": {
+                        "name": "java.base", 
+                        "version": "21.0.12.1", 
+                        "location": "jrt:\/java.base", 
+                        "classLoader": {
+                          "type": null, 
+                          "name": "bootstrap"
+                        }
+                      }, 
+                      "exported": true
+                    }, 
+                    "modifiers": 10, 
+                    "hidden": false
+                  }, 
+                  "name": "app"
+                }, 
+                "name": "JfrLockFixture", 
+                "package": null, 
+                "modifiers": 17, 
+                "hidden": false
+              }, 
+              "name": "main", 
+              "descriptor": "([Ljava\/lang\/String;)V", 
+              "modifiers": 9, 
+              "hidden": false
+            }, 
+            "lineNumber": 10, 
+            "bytecodeIndex": 71, 
+            "type": "Interpreted"
+          }]
+        }, 
+        "parkedClass": null, 
+        "timeout": "PT0.02S", 
+        "until": "-999999999-01-01T00:00+18:00", 
+        "address": 0
+      }
+    }]
+  }
+}

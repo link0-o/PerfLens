@@ -77,10 +77,13 @@ jobs:
           cargo build --release --locked
           --package perflens-privileged-helper
           --package perflens-trace-helper
-      - name: Build the cross-image static Container Gate
+      - name: Build static unprivileged runtime boundaries
         env:
           RUSTFLAGS: "-C target-feature=+crt-static"
-        run: cargo build --release --locked --package perflens-container-gate
+        run: >-
+          cargo build --release --locked
+          --package perflens-container-gate
+          --package perflens-runtime-supervisor
       - name: Build the hardened Native pthread probe
         run: |
           cmake -S native/pthread_probe -B build/native-pthread \

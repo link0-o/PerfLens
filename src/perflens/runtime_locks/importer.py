@@ -401,9 +401,10 @@ class _RawEvent(_StrictRecord):
         }
         if not self.model_fields_set.issubset(common | specific[self.event_kind]):
             raise ValueError("runtime event carries fields for another event kind or schema")
-        if self.event_kind in {"wait_begin", "wait_end", "acquire", "release"} and (
-            self.source_lock_id is None
-        ):
+        requires_lock_identity = self.event_kind in {"wait_begin", "acquire", "release"} or (
+            self.event_kind == "wait_end" and self.wait_begin_source_event_id is not None
+        )
+        if requires_lock_identity and self.source_lock_id is None:
             raise ValueError("paired runtime event requires a source-local lock identity")
         if self.event_kind == "wait_end" and (self.duration_ns is None or self.outcome is None):
             raise ValueError("wait completion requires its duration and outcome")
@@ -1499,7 +1500,7 @@ def _conclusions(
     ]
     if header.measurement_semantics != "exact":
         forbidden.append("exact_contention_count")
-    if not header.owner_is_source_observed:
+    if not header.owner_is_source_observed or header.adapter_id == "java_jfr":
         forbidden.append("exact_owner_relationship")
     if not header.hold_time_is_source_observed:
         forbidden.append("exact_hold_time")

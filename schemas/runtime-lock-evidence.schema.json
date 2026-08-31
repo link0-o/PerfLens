@@ -1055,8 +1055,27 @@
           },
           "then": {
             "not": {
-              "required": [
-                "converter_version"
+              "anyOf": [
+                {
+                  "required": [
+                    "converter_version"
+                  ]
+                },
+                {
+                  "required": [
+                    "adapter_execution_identity_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "configuration_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "metadata_sha256"
+                  ]
+                }
               ]
             }
           }
@@ -1099,10 +1118,60 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_format": {
+                "const": "jfr_json_v1"
+              }
+            },
+            "required": [
+              "source_format"
+            ]
+          },
+          "then": {
+            "properties": {
+              "adapter_id": {
+                "const": "java_jfr"
+              },
+              "backend_id": {
+                "const": "jfr"
+              },
+              "runtime": {
+                "const": "java"
+              },
+              "schema_version": {
+                "const": "1.1"
+              },
+              "target_scope": {
+                "const": "bound_pid"
+              }
+            },
+            "required": [
+              "adapter_execution_identity_sha256",
+              "configuration_sha256",
+              "metadata_sha256",
+              "tool"
+            ]
+          }
         }
       ],
       "description": "Versioned identity and semantics of one normalized input source.",
       "properties": {
+        "adapter_execution_identity_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adapter Execution Identity Sha256"
+        },
         "adapter_id": {
           "pattern": "^[a-z][a-z0-9_.-]{1,63}$",
           "title": "Adapter Id",
@@ -1140,6 +1209,19 @@
         },
         "clock": {
           "$ref": "#/$defs/RuntimeClock"
+        },
+        "configuration_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Configuration Sha256"
         },
         "conversion_fingerprint": {
           "pattern": "^[a-f0-9]{64}$",
@@ -1196,6 +1278,19 @@
           ],
           "title": "Measurement Semantics",
           "type": "string"
+        },
+        "metadata_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata Sha256"
         },
         "owner_is_source_observed": {
           "title": "Owner Is Source Observed",

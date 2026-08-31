@@ -42,6 +42,7 @@ from perflens.application.symbols import resolve_source as resolve_module_source
 from perflens.application.trace_evidence import canonical_trace_json_sha256
 from perflens.application.verify_analysis import verify_analysis_artifact
 from perflens.application.verify_runtime_locks import (
+    build_runtime_lock_source_replay_receipt,
     require_usable_runtime_lock_analysis,
     verify_runtime_lock_analysis_artifact,
 )
@@ -108,6 +109,7 @@ from perflens.contracts.docker_build import (
     OptimizationEvaluationReason,
 )
 from perflens.contracts.runtime_lock_sessions import (
+    RuntimeLockAdapterExecutionBinding,
     RuntimeLockAdapterId,
     RuntimeLockCapabilityArtifact,
     RuntimeLockRunArtifact,
@@ -115,6 +117,7 @@ from perflens.contracts.runtime_lock_sessions import (
     RuntimeLockSessionPreviewArtifact,
     RuntimeLockTargetScope,
     RuntimeLockWorkloadBinding,
+    derive_runtime_lock_run_boundaries,
     derive_runtime_lock_run_id,
     derive_runtime_lock_workload_identity,
 )
@@ -183,6 +186,31 @@ from perflens.runtime_locks.capability import (
     RuntimeLockCapabilityInspection,
     inspect_runtime_lock_capability,
 )
+from perflens.runtime_locks.java_jfr_adapter import (
+    JavaJfrAdapterBridge,
+    discover_java_jfr_adapter_bridge,
+)
+from perflens.runtime_locks.java_jfr_converter import (
+    convert_java_jfr_json,
+    verify_java_jfr_replay,
+)
+from perflens.runtime_locks.java_jfr_launcher import (
+    JavaJfrArtifactRootLease,
+    JavaJfrLauncher,
+    JavaJfrLaunchFailure,
+    JavaJfrLaunchPolicy,
+    JavaJfrLaunchRequest,
+    JavaJfrLaunchResult,
+    JavaJfrPrivateEvidence,
+    SubprocessJavaJfrJsonRunner,
+    acquire_java_jfr_artifact_root_lease,
+    cleanup_java_jfr_empty_private_roots,
+    cleanup_java_jfr_launch_result,
+    inventory_java_jfr_retained_evidence,
+    java_jfr_arguments_sha256,
+    open_java_jfr_private_file,
+    release_java_jfr_artifact_root_lease,
+)
 from perflens.runtime_locks.native_launcher import (
     NativeLaunchCapability,
     NativeLaunchRequest,
@@ -199,7 +227,10 @@ from perflens.runtime_locks.project_config import (
     assert_runtime_lock_project_policy_current,
     load_runtime_lock_project_policy,
 )
-from perflens.runtime_locks.session import RuntimeLockSessionRuntime
+from perflens.runtime_locks.session import (
+    RuntimeLockRunSettlement,
+    RuntimeLockSessionRuntime,
+)
 from perflens.workloads.project import (
     ProjectWorkloadRequest,
     collect_project_workload,
@@ -267,6 +298,10 @@ class ServerConfig:
     runtime_lock_native_launcher_factory: Callable[[Path, Path], NativePthreadLauncher] | None = (
         None
     )
+    runtime_lock_java_bridge_factory: Callable[[], JavaJfrAdapterBridge] | None = None
+    runtime_lock_java_launcher_factory: (
+        Callable[[Path, Path, JavaJfrLaunchPolicy], JavaJfrLauncher] | None
+    ) = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,13 +370,15 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         config.runtime_lock_runtime_factory is not None
         or config.runtime_lock_capability_factory is not None
         or config.runtime_lock_native_launcher_factory is not None
+        or config.runtime_lock_java_bridge_factory is not None
+        or config.runtime_lock_java_launcher_factory is not None
     ):
         raise ValueError("Runtime Lock factories require Runtime Lock sessions")
     if (
         config.runtime_lock_native_launcher_factory is not None
-        and not config.allow_process_execution
-    ):
-        raise ValueError("Native Runtime Lock launcher requires process execution")
+        or config.runtime_lock_java_launcher_factory is not None
+    ) and not config.allow_process_execution:
+        raise ValueError("Runtime Lock workload launcher requires process execution")
     docker_policy = (
         load_docker_project_policy(
             config.docker_project_config,
@@ -386,6 +423,11 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     runtime_lock_runtime: RuntimeLockSessionRuntime | None = None
     runtime_lock_native_launcher: NativePthreadLauncher | None = None
     runtime_lock_native_private_root: Path | None = None
+    runtime_lock_java_bridge: JavaJfrAdapterBridge | None = None
+    runtime_lock_java_launcher: JavaJfrLauncher | None = None
+    runtime_lock_java_private_root: Path | None = None
+    runtime_lock_java_artifact_lease: JavaJfrArtifactRootLease | None = None
+    runtime_lock_java_retained_results: list[JavaJfrPrivateEvidence] = []
 
     @asynccontextmanager
     async def server_lifespan(_server: MCPServer[None]) -> AsyncGenerator[None]:
@@ -406,6 +448,14 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     _cleanup_native_runtime_lock_retained_streams(runtime_lock_native_private_root)
                 with suppress(OSError):
                     runtime_lock_native_private_root.rmdir()
+            if runtime_lock_java_artifact_lease is not None:
+                try:
+                    if runtime_lock_java_private_root is not None:
+                        with suppress(OSError, PerfLensError):
+                            cleanup_java_jfr_empty_private_roots(config.artifact_root)
+                finally:
+                    with suppress(OSError, PerfLensError):
+                        release_java_jfr_artifact_root_lease(runtime_lock_java_artifact_lease)
 
     server: MCPServer[None] = MCPServer(
         "perflens",
@@ -464,6 +514,24 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         )
         return docker_optimization_runtime
 
+    def get_runtime_lock_java_bridge() -> JavaJfrAdapterBridge:
+        nonlocal runtime_lock_java_bridge
+        _require_runtime_locks(config)
+        if runtime_lock_java_bridge is not None:
+            return runtime_lock_java_bridge
+        assert runtime_lock_policy is not None
+        if config.runtime_lock_java_bridge_factory is not None:
+            bridge = config.runtime_lock_java_bridge_factory()
+        elif config.allow_process_execution:
+            bridge = discover_java_jfr_adapter_bridge(runtime_lock_policy)
+        else:
+            bridge = discover_java_jfr_adapter_bridge(
+                runtime_lock_policy,
+                trusted_owner_uids=(),
+            )
+        runtime_lock_java_bridge = bridge
+        return bridge
+
     def inspect_runtime_lock_session_capability() -> RuntimeLockCapabilityInspection:
         _require_runtime_locks(config)
         assert runtime_lock_policy is not None
@@ -498,6 +566,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             runtime_lock_policy,
             project_identity_sha256=runtime_lock_project.identity_sha256,
             native_pthread_capability=native_capability,
+            java_jfr_bridge=get_runtime_lock_java_bridge(),
         )
 
     def get_runtime_lock_session_runtime() -> RuntimeLockSessionRuntime:
@@ -564,6 +633,67 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             raise
         runtime_lock_native_private_root = private_root
         runtime_lock_native_launcher = launcher
+        return launcher
+
+    def get_runtime_lock_java_launcher() -> JavaJfrLauncher:
+        nonlocal runtime_lock_java_artifact_lease
+        nonlocal runtime_lock_java_launcher, runtime_lock_java_private_root
+        _require_runtime_locks(config)
+        if not config.allow_process_execution:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "runtime_lock_authorization",
+                "Java JFR workload execution is disabled by project MCP policy",
+                recoverable=True,
+            )
+        if runtime_lock_java_launcher is not None:
+            return runtime_lock_java_launcher
+        assert runtime_lock_project is not None
+        bridge = get_runtime_lock_java_bridge()
+        if bridge.launch_policy is None or bridge.execution_binding is None:
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_FAILED,
+                "runtime_lock_capability",
+                "The trusted Java JFR launch bridge is unavailable",
+                recoverable=True,
+                details={"limitations": bridge.capability.limitations},
+            )
+        assert runtime_lock_policy is not None
+        artifact_lease = acquire_java_jfr_artifact_root_lease(config.artifact_root)
+        private_root: Path | None = None
+        try:
+            recovered = inventory_java_jfr_retained_evidence(
+                config.artifact_root,
+                max_retained_bytes=runtime_lock_policy.budget.max_evidence_bytes,
+            )
+            runtime_lock_java_retained_results[:] = list(recovered.retained_evidence)
+            private_root = Path(
+                tempfile.mkdtemp(prefix=".runtime-lock-java-", dir=config.artifact_root)
+            )
+            private_root.chmod(0o700)
+            if config.runtime_lock_java_launcher_factory is not None:
+                launcher = config.runtime_lock_java_launcher_factory(
+                    runtime_lock_project.path,
+                    private_root,
+                    bridge.launch_policy,
+                )
+            else:
+                launcher = JavaJfrLauncher(
+                    project_root=runtime_lock_project.path,
+                    private_output_root=private_root,
+                    policy=bridge.launch_policy,
+                    json_runner=SubprocessJavaJfrJsonRunner(),
+                )
+        except Exception:
+            if private_root is not None:
+                with suppress(OSError):
+                    private_root.rmdir()
+            with suppress(OSError, PerfLensError):
+                release_java_jfr_artifact_root_lease(artifact_lease)
+            raise
+        runtime_lock_java_artifact_lease = artifact_lease
+        runtime_lock_java_private_root = private_root
+        runtime_lock_java_launcher = launcher
         return launcher
 
     def capture_module_snapshot(
@@ -725,42 +855,71 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         inspection = inspect_runtime_lock_session_capability()
         runtime = get_runtime_lock_session_runtime()
         workload: RuntimeLockWorkloadBinding | None = None
+        execution_bindings: tuple[RuntimeLockAdapterExecutionBinding, ...] = ()
         preview_warnings: tuple[str, ...] = ()
         if target_scope == "host_launched_workload":
-            if allowed_adapters != ("native_pthread",) or executable is None:
+            if (
+                len(allowed_adapters) != 1
+                or allowed_adapters[0] not in {"native_pthread", "java_jfr"}
+                or executable is None
+            ):
                 raise PerfLensError(
                     ErrorCode.PATH_SAFETY_VIOLATION,
                     "runtime_lock_authorization",
-                    "Native host Runtime Lock Preview requires one exact executable and Adapter",
+                    "Host Runtime Lock Preview requires one exact executable and Adapter",
                     recoverable=True,
                 )
+            adapter_id = allowed_adapters[0]
             _require_runtime_lock_adapter_capability(
                 inspection,
-                adapter_id="native_pthread",
+                adapter_id=adapter_id,
                 allowed_semantics=allowed_semantics,
             )
             assert runtime_lock_project is not None
-            launcher = get_runtime_lock_native_launcher()
             executable_path = _runtime_lock_project_executable(
                 runtime_lock_project.path,
                 executable,
             )
-            target = launcher.inspect_target(executable_path)
-            target_capability = launcher.capability(executable_path)
-            if target_capability.availability == "unavailable" or any(
-                semantics not in target_capability.supported_semantics
-                for semantics in allowed_semantics
-            ):
-                raise PerfLensError(
-                    ErrorCode.EXTERNAL_TOOL_FAILED,
-                    "runtime_lock_capability",
-                    "The reviewed Native pthread workload does not support this semantics scope",
-                    recoverable=True,
-                    details={"limitations": target_capability.limitations},
+            if adapter_id == "java_jfr":
+                if allowed_semantics != ("thresholded",):
+                    raise PerfLensError(
+                        ErrorCode.PATH_SAFETY_VIOLATION,
+                        "runtime_lock_authorization",
+                        "Java JFR host collection requires thresholded semantics",
+                        recoverable=True,
+                    )
+                launcher = get_runtime_lock_java_launcher()
+                target = launcher.inspect_target(executable_path)
+                workload_kind = "java_archive"
+                bridge = get_runtime_lock_java_bridge()
+                assert bridge.execution_binding is not None
+                execution_bindings = (bridge.execution_binding,)
+                preview_warnings = bridge.capability.limitations
+            else:
+                launcher = get_runtime_lock_native_launcher()
+                target = launcher.inspect_target(executable_path)
+                target_capability = launcher.capability(executable_path)
+                if target_capability.availability == "unavailable" or any(
+                    semantics not in target_capability.supported_semantics
+                    for semantics in allowed_semantics
+                ):
+                    raise PerfLensError(
+                        ErrorCode.EXTERNAL_TOOL_FAILED,
+                        "runtime_lock_capability",
+                        "The reviewed Native pthread workload does not support this "
+                        "semantics scope",
+                        recoverable=True,
+                        details={"limitations": target_capability.limitations},
+                    )
+                workload_kind = "native_elf"
+                preview_warnings = tuple(
+                    dict.fromkeys(
+                        (*target_capability.limitations, NATIVE_PTHREAD_PROVENANCE_LIMITATION)
+                    )
                 )
             workload_identity = derive_runtime_lock_workload_identity(
-                "native_pthread",
-                "native_elf",
+                adapter_id,
+                workload_kind,
                 target.project_relative_path,
                 target.binary_sha256,
                 target.size,
@@ -768,19 +927,14 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 arguments,
             )
             workload = RuntimeLockWorkloadBinding(
-                adapter_id="native_pthread",
-                workload_kind="native_elf",
+                adapter_id=adapter_id,
+                workload_kind=workload_kind,
                 program=target.project_relative_path,
                 program_sha256=target.binary_sha256,
                 program_size=target.size,
                 working_directory=".",
                 arguments=arguments,
                 workload_identity_sha256=workload_identity,
-            )
-            preview_warnings = tuple(
-                dict.fromkeys(
-                    (*target_capability.limitations, NATIVE_PTHREAD_PROVENANCE_LIMITATION)
-                )
             )
         elif executable is not None or arguments:
             raise PerfLensError(
@@ -798,6 +952,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 runtime_lock_policy.import_roots if target_scope == "controlled_import" else ()
             ),
             workload=workload,
+            adapter_execution_bindings=execution_bindings,
             budget=runtime_lock_policy.budget,
             planned_actions=_runtime_lock_planned_actions(target_scope),
             warnings=(
@@ -861,12 +1016,409 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         )
         return session
 
+    async def collect_java_jfr_runtime_lock_evidence(
+        session_id: str,
+        duration_seconds: int,
+        max_events: int,
+    ) -> ArtifactReference:
+        assert runtime_lock_policy is not None
+        assert runtime_lock_project is not None
+        runtime = get_runtime_lock_session_runtime()
+        lease = None
+        launch_result: JavaJfrLaunchResult | None = None
+        actual_active_seconds = duration_seconds
+        actual_evidence_bytes = 0
+        run_finished = False
+        failure_reason: Literal[
+            "adapter_output_invalid",
+            "correctness_failed",
+            "identity_or_policy_changed",
+            "internal_collection_error",
+            "resource_limit_exceeded",
+            "target_exited",
+            "target_identity_changed",
+        ] = "internal_collection_error"
+        try:
+            assert_runtime_lock_project_policy_current(
+                runtime_lock_policy,
+                allowed_roots=config.allowed_roots,
+            )
+            assert_managed_project_current(runtime_lock_project)
+            session = runtime.snapshot(session_id)
+            preview = store.load_runtime_lock_preview(session.preview_id)
+            bridge = get_runtime_lock_java_bridge()
+            if bridge.execution_binding is None:
+                raise _runtime_lock_native_error("Java JFR execution binding is unavailable")
+            workload = _validate_java_runtime_lock_session(
+                session,
+                preview,
+                runtime_lock_policy,
+                execution_binding=bridge.execution_binding,
+                duration_seconds=duration_seconds,
+                max_events=max_events,
+            )
+            launcher = get_runtime_lock_java_launcher()
+            executable_path = _runtime_lock_project_executable(
+                runtime_lock_project.path,
+                workload.program,
+            )
+            target = launcher.inspect_target(executable_path)
+            if (
+                target.project_relative_path != workload.program
+                or target.binary_sha256 != workload.program_sha256
+                or target.size != workload.program_size
+            ):
+                failure_reason = "target_identity_changed"
+                raise _runtime_lock_native_error(
+                    "Java JFR executable JAR differs from the authorized Preview"
+                )
+            operation_identity = _runtime_lock_java_operation_identity(
+                session,
+                target.identity_sha256,
+                duration_seconds,
+                max_events,
+                bridge.execution_binding.execution_identity_sha256,
+            )
+            lease = runtime.begin_run(
+                session_id,
+                adapter_id="java_jfr",
+                measurement_semantics="thresholded",
+                operation_identity_sha256=operation_identity,
+                target_identity_sha256=target.identity_sha256,
+                workload_identity_sha256=workload.workload_identity_sha256,
+                reserve_active_seconds=duration_seconds,
+                # A failed JFR conversion may retain one bounded recording and
+                # one bounded JSON transcript.  Reserve both honestly; each
+                # individual file remains capped by max_artifact_bytes.
+                reserve_evidence_bytes=min(
+                    session.budget.max_evidence_bytes,
+                    session.budget.max_artifact_bytes * 2,
+                ),
+                reserve_exact_events=0,
+            )
+            reserved_session = runtime.snapshot(session_id)
+            store.save(
+                reserved_session,
+                reserved_session.session_artifact_id,
+                "runtime-lock-session",
+            )
+            try:
+                launch_result = launcher.launch(
+                    executable_path,
+                    JavaJfrLaunchRequest(
+                        arguments=workload.arguments,
+                        duration_seconds=duration_seconds,
+                    ),
+                    expected_target_identity_sha256=target.identity_sha256,
+                    expected_arguments_sha256=java_jfr_arguments_sha256(workload.arguments),
+                )
+            except JavaJfrLaunchFailure as exc:
+                if exc.accounted_active_seconds is not None:
+                    actual_active_seconds = exc.accounted_active_seconds
+                retained = exc.retained_evidence
+                if retained is not None:
+                    retained_size = retained.recording_size + retained.json_size
+                    actual_evidence_bytes = retained_size
+                    retained_total = sum(
+                        item.recording_size + item.json_size
+                        for item in runtime_lock_java_retained_results
+                    )
+                    if retained_total + retained_size > session.budget.max_evidence_bytes:
+                        try:
+                            cleanup_java_jfr_launch_result(retained)
+                        except (OSError, PerfLensError):
+                            runtime_lock_java_retained_results.append(retained)
+                        failure_reason = "resource_limit_exceeded"
+                        raise PerfLensError(
+                            ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                            "runtime_lock_collection",
+                            "Retained Java JFR private evidence exceeds the Session bound",
+                            recoverable=True,
+                        ) from exc
+                    runtime_lock_java_retained_results.append(retained)
+                failure_reason = "adapter_output_invalid"
+                raise
+            retained_bytes = sum(
+                item.recording_size + item.json_size for item in runtime_lock_java_retained_results
+            )
+            if (
+                retained_bytes + launch_result.recording_size + launch_result.json_size
+                > session.budget.max_evidence_bytes
+            ):
+                cleanup_java_jfr_launch_result(launch_result)
+                launch_result = None
+                failure_reason = "resource_limit_exceeded"
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "runtime_lock_collection",
+                    "Retained Java JFR private evidence exceeds the Session bound",
+                    recoverable=True,
+                )
+            runtime_lock_java_retained_results.append(launch_result)
+            actual_active_seconds = launch_result.accounted_active_seconds
+            actual_evidence_bytes = launch_result.json_size
+            if launch_result.termination_reason == "duration_limit":
+                failure_reason = "resource_limit_exceeded"
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "runtime_lock_collection",
+                    "Java JFR workload exceeded its authorized duration",
+                    recoverable=True,
+                )
+            if launch_result.termination_reason != "exited":
+                failure_reason = "target_exited"
+                raise _runtime_lock_native_error("Java JFR workload identity became unavailable")
+            if launch_result.exit_code != 0:
+                failure_reason = "correctness_failed"
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "runtime_lock_collection",
+                    "Java JFR workload exited unsuccessfully",
+                    recoverable=True,
+                    details={"exit_code": launch_result.exit_code},
+                )
+            failure_reason = "adapter_output_invalid"
+            json_fd = open_java_jfr_private_file(launch_result, "json")
+            try:
+                with os.fdopen(os.dup(json_fd), "rb") as private_source:
+                    receipt = convert_java_jfr_json(
+                        private_source,
+                        execution_binding=bridge.execution_binding,
+                        target_pid=launch_result.target_pid,
+                        target_uid=launch_result.target_uid,
+                        target_start_time_ticks=launch_result.target_start_ticks,
+                        created_at=launch_result.started_at,
+                    )
+                if (
+                    receipt.raw_source_sha256 != launch_result.json_sha256
+                    or receipt.raw_source_bytes != launch_result.json_size
+                ):
+                    raise _runtime_lock_native_error(
+                        "Java JFR conversion source differs from the launched private JSON"
+                    )
+                evidence = receipt.evidence
+                identity_warnings = _assert_java_runtime_lock_evidence_identity(
+                    evidence,
+                    launch_result=launch_result,
+                    expected_target_identity_sha256=target.identity_sha256,
+                    execution_binding=bridge.execution_binding,
+                    max_events=max_events,
+                )
+            finally:
+                os.close(json_fd)
+            # Reopen and revalidate the private file for replay.  ``dup`` shares
+            # the original open-file offset, so reusing the first descriptor
+            # would deterministically start the replay at EOF.
+            replay_fd = open_java_jfr_private_file(launch_result, "json")
+            try:
+                with os.fdopen(os.dup(replay_fd), "rb") as private_source:
+                    replay_receipt = verify_java_jfr_replay(
+                        private_source,
+                        expected=receipt,
+                        execution_binding=bridge.execution_binding,
+                        target_pid=launch_result.target_pid,
+                        target_uid=launch_result.target_uid,
+                        target_start_time_ticks=launch_result.target_start_ticks,
+                        created_at=launch_result.started_at,
+                    )
+                    if replay_receipt is None:
+                        raise _runtime_lock_native_error(
+                            "Java JFR private deterministic replay differs from its complete "
+                            "conversion receipt"
+                        )
+            finally:
+                os.close(replay_fd)
+            analysis = build_runtime_lock_analysis(evidence)
+            verification = verify_runtime_lock_analysis_artifact(
+                analysis,
+                evidence,
+                source_replay_receipt=build_runtime_lock_source_replay_receipt(
+                    evidence,
+                    normalized_source_sha256=replay_receipt.normalized_source_sha256,
+                    normalized_source_bytes=replay_receipt.normalized_source_bytes,
+                ),
+            )
+            require_usable_runtime_lock_analysis(verification)
+            actual_evidence_bytes = len(serialize_json(evidence))
+            started_wall = datetime.fromisoformat(launch_result.started_at)
+            finished_wall = datetime.fromisoformat(launch_result.finished_at)
+            duration = launch_result.accounted_active_seconds
+            if duration != math.ceil((finished_wall - started_wall).total_seconds()):
+                failure_reason = "adapter_output_invalid"
+                raise PerfLensError(
+                    ErrorCode.PROFILE_PARSE_FAILED,
+                    "runtime_lock_collection",
+                    "Java JFR supervisor timing receipt is inconsistent",
+                    recoverable=True,
+                )
+            if duration > duration_seconds:
+                failure_reason = "resource_limit_exceeded"
+                raise _runtime_lock_native_error(
+                    "Java JFR evidence exceeded its active-time reservation"
+                )
+            run_warnings = tuple(
+                dict.fromkeys(
+                    (
+                        *preview.warnings,
+                        *launch_result.limitations,
+                        *evidence.quality.limitations,
+                        *identity_warnings,
+                    )
+                )
+            )
+            (
+                run_quality_status,
+                run_allowed_conclusions,
+                run_forbidden_conclusions,
+            ) = derive_runtime_lock_run_boundaries(
+                adapter_id="java_jfr",
+                analysis_quality_status=analysis.quality_status,
+                analysis_allowed_conclusions=analysis.allowed_conclusions,
+                analysis_forbidden_conclusions=analysis.forbidden_conclusions,
+                warnings=run_warnings,
+            )
+            provisional_run = RuntimeLockRunArtifact(
+                schema_version=preview.schema_version,
+                perflens_version=__version__,
+                run_id=derive_runtime_lock_run_id(
+                    session_id,
+                    "java_jfr",
+                    evidence.content_sha256,
+                    launch_result.started_at,
+                ),
+                created_at=launch_result.finished_at,
+                started_at=launch_result.started_at,
+                finished_at=launch_result.finished_at,
+                session_id=session_id,
+                session_artifact_id=lease.session_artifact_id,
+                session_artifact_content_sha256=lease.session_artifact_content_sha256,
+                session_revision=lease.session_revision,
+                target_scope="host_launched_workload",
+                operation_identity_sha256=operation_identity,
+                target_identity_sha256=target.identity_sha256,
+                adapter_id="java_jfr",
+                adapter_execution_identity_sha256=(
+                    bridge.execution_binding.execution_identity_sha256
+                ),
+                measurement_semantics="thresholded",
+                workload_identity_sha256=workload.workload_identity_sha256,
+                runtime_lock_evidence_id=evidence.runtime_lock_evidence_id,
+                runtime_lock_evidence_content_sha256=evidence.content_sha256,
+                runtime_lock_analysis_id=analysis.runtime_lock_analysis_id,
+                runtime_lock_analysis_content_sha256=analysis.content_sha256,
+                runtime_lock_verification_id=verification.runtime_lock_verification_id,
+                runtime_lock_verification_content_sha256=verification.content_sha256,
+                duration_seconds=duration,
+                evidence_bytes=actual_evidence_bytes,
+                event_count=len(evidence.events),
+                correctness_status="passed",
+                quality_status=run_quality_status,
+                warnings=run_warnings,
+                allowed_conclusions=run_allowed_conclusions,
+                forbidden_conclusions=run_forbidden_conclusions,
+                content_sha256="0" * 64,
+            )
+            run = provisional_run.model_copy(
+                update={
+                    "content_sha256": contract_content_sha256(
+                        provisional_run,
+                        exclude={"content_sha256"},
+                    )
+                }
+            )
+            cleanup_java_jfr_launch_result(launch_result)
+            runtime_lock_java_retained_results.remove(launch_result)
+            for artifact, artifact_id, artifact_type in (
+                (evidence, evidence.runtime_lock_evidence_id, "runtime-lock-evidence"),
+                (analysis, analysis.runtime_lock_analysis_id, "runtime-lock-analysis"),
+                (
+                    verification,
+                    verification.runtime_lock_verification_id,
+                    "runtime-lock-verification",
+                ),
+                (run, run.run_id, "runtime-lock-run"),
+            ):
+                store.save(artifact, artifact_id, artifact_type)
+            settlement = runtime.finish_run(session_id, lease, run)
+            run_finished = True
+            _persist_runtime_lock_settlement(
+                runtime,
+                session_id,
+                store,
+                settlement,
+            )
+            return ArtifactReference(
+                artifact_id=run.run_id,
+                artifact_type="runtime-lock-run",
+                uri=store.uri(run.run_id, "runtime-lock-run"),
+                summary={
+                    "session_id": session_id,
+                    "adapter_id": "java_jfr",
+                    "runtime": analysis.runtime,
+                    "measurement_semantics": "thresholded",
+                    "runtime_lock_evidence_id": evidence.runtime_lock_evidence_id,
+                    "runtime_lock_analysis_id": analysis.runtime_lock_analysis_id,
+                    "runtime_lock_verification_id": verification.runtime_lock_verification_id,
+                    "private_source_replay_status": "passed",
+                    "quality_status": run.quality_status,
+                    "event_count": run.event_count,
+                    "evidence_bytes": run.evidence_bytes,
+                    "target_pid": launch_result.target_pid,
+                    "target_uid": launch_result.target_uid,
+                    "exit_code": launch_result.exit_code,
+                    "session_state": settlement.session.state,
+                },
+            )
+        except Exception:
+            if (
+                launch_result is not None
+                and launch_result in runtime_lock_java_retained_results
+                and failure_reason == "adapter_output_invalid"
+            ):
+                # Conversion, replay, or identity-safe cleanup failures retain
+                # both private files.  Account the bytes that actually remain,
+                # not merely the JSON transcript or projected public Evidence.
+                actual_evidence_bytes = max(
+                    actual_evidence_bytes,
+                    launch_result.recording_size + launch_result.json_size,
+                )
+            if (
+                launch_result is not None
+                and failure_reason != "adapter_output_invalid"
+                and launch_result in runtime_lock_java_retained_results
+            ):
+                with suppress(PerfLensError, OSError):
+                    cleanup_java_jfr_launch_result(launch_result)
+                    runtime_lock_java_retained_results.remove(launch_result)
+            if lease is not None and not run_finished:
+                with suppress(PerfLensError):
+                    terminal = runtime.fail_run(
+                        session_id,
+                        lease,
+                        actual_active_seconds=actual_active_seconds,
+                        actual_evidence_bytes=actual_evidence_bytes,
+                        actual_exact_events=0,
+                        reason=failure_reason,
+                    )
+                    _persist_runtime_lock_settlement(
+                        runtime,
+                        session_id,
+                        store,
+                        terminal,
+                    )
+            elif lease is None:
+                with suppress(PerfLensError):
+                    terminal = runtime.revoke(session_id)
+                    store.save(terminal, terminal.session_artifact_id, "runtime-lock-session")
+            raise
+
     @server.tool(
         name="collect_runtime_lock_evidence",
         description=(
-            "Execute only the exact Native pthread host workload bound into an authorized "
-            "Runtime Lock Preview. The packaged probe, fixed environment, private output, "
-            "duration, event count, and one single-use lease remain independently bounded."
+            "Execute only the exact Native pthread or startup-time Java JFR host workload "
+            "bound into an authorized Runtime Lock Preview. The fixed Adapter, environment, "
+            "private output, duration, event count, and one single-use lease remain "
+            "independently bounded."
         ),
         annotations=EXECUTES_TARGET,
         meta={"perflens/permission": "RUNTIME_LOCK_WORKLOAD_EXECUTION"},
@@ -882,10 +1434,24 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         assert runtime_lock_policy is not None
         assert runtime_lock_project is not None
         runtime = get_runtime_lock_session_runtime()
+        candidate_session = runtime.snapshot(session_id)
+        candidate_preview = store.load_runtime_lock_preview(candidate_session.preview_id)
+        if (
+            candidate_preview.workload is not None
+            and candidate_preview.workload.adapter_id == "java_jfr"
+        ):
+            if measurement_semantics != "thresholded":
+                raise _runtime_lock_native_error(
+                    "Java JFR collection requires thresholded semantics"
+                )
+            return await collect_java_jfr_runtime_lock_evidence(
+                session_id,
+                duration_seconds,
+                max_events,
+            )
         lease = None
         launch_result: NativeLaunchResult | None = None
         pinned: _PinnedRuntimeLockImport | None = None
-        started_monotonic = time.monotonic()
         actual_evidence_bytes = 0
         actual_exact_events = 0
         run_finished = False
@@ -1055,17 +1621,26 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     analysis,
                     evidence,
                     private_source_stream=private_source,
+                    normalized_source_sha256=receipt.normalized_source_sha256,
+                    normalized_source_bytes=receipt.normalized_source_bytes,
                 )
             _assert_runtime_lock_import_unchanged(pinned)
             require_usable_runtime_lock_analysis(private_verification)
-            verification = verify_runtime_lock_analysis_artifact(analysis, evidence)
-            require_usable_runtime_lock_analysis(verification)
+            verification = private_verification
             retain_private_stream_on_failure = False
             actual_evidence_bytes = len(serialize_json(evidence))
             actual_exact_events = len(evidence.events) if measurement_semantics == "exact" else 0
             started_wall = datetime.fromisoformat(launch_result.started_at)
             finished_wall = datetime.fromisoformat(launch_result.finished_at)
-            duration = math.ceil((finished_wall - started_wall).total_seconds())
+            duration = launch_result.accounted_active_seconds
+            if duration != math.ceil((finished_wall - started_wall).total_seconds()):
+                failure_reason = "adapter_output_invalid"
+                raise PerfLensError(
+                    ErrorCode.PROFILE_PARSE_FAILED,
+                    "runtime_lock_collection",
+                    "Native pthread supervisor timing receipt is inconsistent",
+                    recoverable=True,
+                )
             if duration > duration_seconds:
                 failure_reason = "resource_limit_exceeded"
                 raise PerfLensError(
@@ -1074,8 +1649,29 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "Native pthread evidence exceeded its authorized active-time reservation",
                     recoverable=True,
                 )
+            run_warnings = tuple(
+                dict.fromkeys(
+                    (
+                        *preview.warnings,
+                        *launch_result.limitations,
+                        *evidence.quality.limitations,
+                        *identity_warnings,
+                    )
+                )
+            )
+            (
+                run_quality_status,
+                run_allowed_conclusions,
+                run_forbidden_conclusions,
+            ) = derive_runtime_lock_run_boundaries(
+                adapter_id="native_pthread",
+                analysis_quality_status=analysis.quality_status,
+                analysis_allowed_conclusions=analysis.allowed_conclusions,
+                analysis_forbidden_conclusions=analysis.forbidden_conclusions,
+                warnings=run_warnings,
+            )
             provisional_run = RuntimeLockRunArtifact(
-                schema_version="1.0",
+                schema_version=preview.schema_version,
                 perflens_version=__version__,
                 run_id=derive_runtime_lock_run_id(
                     session_id,
@@ -1106,23 +1702,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 evidence_bytes=actual_evidence_bytes,
                 event_count=len(evidence.events),
                 correctness_status="passed",
-                quality_status=(
-                    "partial"
-                    if identity_warnings or launch_result.quality_status == "partial"
-                    else analysis.quality_status
-                ),
-                warnings=tuple(
-                    dict.fromkeys(
-                        (
-                            *preview.warnings,
-                            *launch_result.limitations,
-                            *evidence.quality.limitations,
-                            *identity_warnings,
-                        )
-                    )
-                ),
-                allowed_conclusions=analysis.allowed_conclusions,
-                forbidden_conclusions=analysis.forbidden_conclusions,
+                quality_status=run_quality_status,
+                warnings=run_warnings,
+                allowed_conclusions=run_allowed_conclusions,
+                forbidden_conclusions=run_forbidden_conclusions,
                 content_sha256="0" * 64,
             )
             run = provisional_run.model_copy(
@@ -1154,12 +1737,13 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 (run, run.run_id, "runtime-lock-run"),
             ):
                 store.save(artifact, artifact_id, artifact_type)
-            final_session = runtime.finish_run(session_id, lease, run)
+            settlement = runtime.finish_run(session_id, lease, run)
             run_finished = True
-            store.save(
-                final_session,
-                final_session.session_artifact_id,
-                "runtime-lock-session",
+            _persist_runtime_lock_settlement(
+                runtime,
+                session_id,
+                store,
+                settlement,
             )
             return ArtifactReference(
                 artifact_id=run.run_id,
@@ -1180,7 +1764,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "target_pid": launch_result.target_pid,
                     "target_uid": launch_result.target_uid,
                     "exit_code": launch_result.exit_code,
-                    "session_state": final_session.state,
+                    "session_state": settlement.session.state,
                 },
             )
         except Exception:
@@ -1190,15 +1774,20 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     terminal = runtime.fail_run(
                         session_id,
                         lease,
-                        actual_active_seconds=time.monotonic() - started_monotonic,
+                        actual_active_seconds=(
+                            launch_result.accounted_active_seconds
+                            if launch_result is not None
+                            else duration_seconds
+                        ),
                         actual_evidence_bytes=actual_evidence_bytes,
                         actual_exact_events=actual_exact_events,
                         reason=failure_reason,
                     )
-                    store.save(
+                    _persist_runtime_lock_settlement(
+                        runtime,
+                        session_id,
+                        store,
                         terminal,
-                        terminal.session_artifact_id,
-                        "runtime-lock-session",
                     )
             elif lease is None:
                 with suppress(PerfLensError):
@@ -1380,8 +1969,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 )
             _assert_runtime_lock_import_unchanged(pinned)
             require_usable_runtime_lock_analysis(private_verification)
-            verification = verify_runtime_lock_analysis_artifact(analysis, evidence)
-            require_usable_runtime_lock_analysis(verification)
+            verification = private_verification
             actual_evidence_bytes = len(serialize_json(evidence))
             actual_exact_events = len(evidence.events) if measurement_semantics == "exact" else 0
             finished_wall = datetime.now(tz=UTC)
@@ -1394,8 +1982,19 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     recoverable=True,
                 )
             finished_at = finished_wall.isoformat()
+            (
+                run_quality_status,
+                run_allowed_conclusions,
+                run_forbidden_conclusions,
+            ) = derive_runtime_lock_run_boundaries(
+                adapter_id="generic_ndjson_import",
+                analysis_quality_status=analysis.quality_status,
+                analysis_allowed_conclusions=analysis.allowed_conclusions,
+                analysis_forbidden_conclusions=analysis.forbidden_conclusions,
+                warnings=evidence.quality.limitations,
+            )
             provisional_run = RuntimeLockRunArtifact(
-                schema_version="1.0",
+                schema_version=preview.schema_version,
                 perflens_version=__version__,
                 run_id=derive_runtime_lock_run_id(
                     session_id,
@@ -1426,10 +2025,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 evidence_bytes=actual_evidence_bytes,
                 event_count=len(evidence.events),
                 correctness_status="unavailable",
-                quality_status=analysis.quality_status,
+                quality_status=run_quality_status,
                 warnings=evidence.quality.limitations,
-                allowed_conclusions=analysis.allowed_conclusions,
-                forbidden_conclusions=analysis.forbidden_conclusions,
+                allowed_conclusions=run_allowed_conclusions,
+                forbidden_conclusions=run_forbidden_conclusions,
                 content_sha256="0" * 64,
             )
             run = provisional_run.model_copy(
@@ -1459,12 +2058,13 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 (run, run.run_id, "runtime-lock-run"),
             ):
                 store.save(artifact, artifact_id, artifact_type)
-            final_session = runtime.finish_run(session_id, lease, run)
+            settlement = runtime.finish_run(session_id, lease, run)
             run_finished = True
-            store.save(
-                final_session,
-                final_session.session_artifact_id,
-                "runtime-lock-session",
+            _persist_runtime_lock_settlement(
+                runtime,
+                session_id,
+                store,
+                settlement,
             )
             return ArtifactReference(
                 artifact_id=run.run_id,
@@ -1482,7 +2082,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "quality_status": run.quality_status,
                     "event_count": run.event_count,
                     "evidence_bytes": run.evidence_bytes,
-                    "session_state": final_session.state,
+                    "session_state": settlement.session.state,
                 },
             )
         except Exception:
@@ -1496,10 +2096,11 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                         actual_exact_events=actual_exact_events,
                         reason="internal_collection_error",
                     )
-                    store.save(
+                    _persist_runtime_lock_settlement(
+                        runtime,
+                        session_id,
+                        store,
                         terminal,
-                        terminal.session_artifact_id,
-                        "runtime-lock-session",
                     )
             elif lease is None:
                 with suppress(PerfLensError):
@@ -4110,6 +4711,31 @@ def _require_docker_optimization(config: ServerConfig) -> None:
         )
 
 
+def _persist_runtime_lock_settlement(
+    runtime: RuntimeLockSessionRuntime,
+    session_id: str,
+    store: ArtifactStore,
+    settlement: RuntimeLockRunSettlement,
+) -> None:
+    """Publish marker-last or destroy the process-local authorization.
+
+    Once the authority reconciles a lease, the returned Session revision may
+    only be used as a parent after both the Session and its finalization marker
+    are durable.  A partial write therefore poisons the in-memory capability;
+    leaving it active would permit a later run to extend an unverifiable chain.
+    """
+
+    try:
+        store.save_runtime_lock_settlement(
+            settlement.session,
+            settlement.finalization,
+        )
+    except Exception:
+        with suppress(PerfLensError):
+            runtime.abandon_unpublished(session_id)
+        raise
+
+
 def _validate_runtime_lock_preview_policy(
     policy: RuntimeLockProjectPolicy,
     *,
@@ -4291,6 +4917,145 @@ def _runtime_lock_native_operation_identity(
         )
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _validate_java_runtime_lock_session(
+    session: RuntimeLockSessionArtifact,
+    preview: RuntimeLockSessionPreviewArtifact,
+    policy: RuntimeLockProjectPolicy,
+    *,
+    execution_binding: RuntimeLockAdapterExecutionBinding,
+    duration_seconds: int,
+    max_events: int,
+) -> RuntimeLockWorkloadBinding:
+    workload = preview.workload
+    if (
+        session.state != "active"
+        or session.target_scope != "host_launched_workload"
+        or preview.target_scope != session.target_scope
+        or preview.content_sha256 != session.preview_content_sha256
+        or preview.runtime_lock_config_sha256 != policy.sha256
+        or session.runtime_lock_config_sha256 != policy.sha256
+        or session.allowed_adapters != ("java_jfr",)
+        or session.allowed_semantics != ("thresholded",)
+        or workload is None
+        or workload.adapter_id != "java_jfr"
+        or workload.workload_kind != "java_archive"
+        or preview.adapter_execution_bindings != (execution_binding,)
+        or isinstance(duration_seconds, bool)
+        or not 1 <= duration_seconds <= session.budget.max_collection_duration_seconds
+        or isinstance(max_events, bool)
+        or not 1 <= max_events <= 20_000
+    ):
+        raise _runtime_lock_native_error(
+            "Java JFR collection is outside the authorized Runtime Lock Session"
+        )
+    _validate_runtime_lock_preview_policy(
+        policy,
+        target_scope="host_launched_workload",
+        allowed_adapters=("java_jfr",),
+        allowed_semantics=("thresholded",),
+    )
+    adapter_policy = policy.adapter_policy("java_jfr")
+    if (
+        execution_binding.profile != adapter_policy.profile
+        or execution_binding.duration_threshold_ns != adapter_policy.duration_threshold_ns
+    ):
+        raise _runtime_lock_native_error(
+            "Java JFR execution binding differs from the current project policy"
+        )
+    return workload
+
+
+def _runtime_lock_java_operation_identity(
+    session: RuntimeLockSessionArtifact,
+    target_identity_sha256: str,
+    duration_seconds: int,
+    max_events: int,
+    execution_identity_sha256: str,
+) -> str:
+    material = "\0".join(
+        (
+            "perflens-runtime-lock-java-operation-v1",
+            session.session_id,
+            str(session.revision),
+            str(session.workload_runs_used + 1),
+            target_identity_sha256,
+            str(duration_seconds),
+            str(max_events),
+            execution_identity_sha256,
+        )
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _assert_java_runtime_lock_evidence_identity(
+    evidence: RuntimeLockEvidenceArtifact,
+    *,
+    launch_result: JavaJfrLaunchResult,
+    expected_target_identity_sha256: str,
+    execution_binding: RuntimeLockAdapterExecutionBinding,
+    max_events: int,
+) -> tuple[str, ...]:
+    target = evidence.target
+    source = evidence.source
+    evidence_tids = set(target.observed_target_tids)
+    launch_tids = set(launch_result.observed_tids)
+    bound_tools = {tool.name: tool for tool in execution_binding.tools}
+    bound_java = bound_tools.get("java")
+    bound_jfr = bound_tools.get("jfr")
+    if (
+        launch_result.target_identity_sha256 != expected_target_identity_sha256
+        or target.target_kind != "host"
+        or target.target_pid != launch_result.target_pid
+        or target.target_uid != launch_result.target_uid
+        or target.target_start_time_ticks != launch_result.target_start_ticks
+        or launch_result.target_uid != os.geteuid()
+        or launch_result.target_pid not in evidence_tids
+        or launch_result.target_pid not in launch_tids
+        or source.runtime != "java"
+        or source.adapter_id != "java_jfr"
+        or source.backend_id != "jfr"
+        or source.source_format != "jfr_json_v1"
+        or source.target_scope != "bound_pid"
+        or source.source_sha256 != launch_result.json_sha256
+        or source.source_bytes != launch_result.json_size
+        or source.configuration_sha256 != launch_result.jfc_sha256
+        or source.adapter_execution_identity_sha256 != execution_binding.execution_identity_sha256
+        or source.metadata_sha256 != execution_binding.metadata_sha256
+        or bound_java is None
+        or bound_jfr is None
+        or bound_java.binary_sha256 != launch_result.java_tool_sha256
+        or bound_jfr.binary_sha256 != launch_result.jfr_tool_sha256
+        or source.tool is None
+        or source.tool.name != "jfr"
+        or source.tool.path != "jfr"
+        or source.tool.binary_sha256 != bound_jfr.binary_sha256
+        or len(evidence.events) > max_events
+    ):
+        raise _runtime_lock_native_error(
+            "Java JFR target, source, tool, or execution identity changed during collection"
+        )
+    context_ids = {context.context_id for context in evidence.execution_contexts}
+    if any(
+        context.target_pid != launch_result.target_pid
+        or (context.target_tid is not None and context.target_tid not in evidence_tids)
+        for context in evidence.execution_contexts
+    ) or any(
+        event.execution_context_id is not None and event.execution_context_id not in context_ids
+        for event in evidence.events
+    ):
+        raise _runtime_lock_native_error(
+            "Java JFR execution context escaped the bound target process"
+        )
+    transient_tids = evidence_tids - launch_tids
+    if transient_tids:
+        return (
+            "Independent Java thread polling was partial: some evidence TIDs were shorter-lived "
+            "than the procfs polling window; PID, UID, start time, JFR source, and execution "
+            "binding passed.",
+        )
+    return ()
 
 
 def _pin_native_runtime_lock_stream(

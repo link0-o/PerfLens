@@ -66,10 +66,14 @@ from perflens.contracts.runtime_lock_sessions import (
     RuntimeLockCapabilityArtifact,
     RuntimeLockComparisonArtifact,
     RuntimeLockRunArtifact,
+    RuntimeLockRunFinalizationArtifact,
     RuntimeLockSessionArtifact,
     RuntimeLockSessionPreviewArtifact,
+    derive_runtime_lock_run_boundaries,
+    derive_runtime_lock_run_finalization_id,
 )
 from perflens.contracts.runtime_locks import (
+    MeasurementSemantics,
     RuntimeAdapterCapabilityArtifact,
     RuntimeLockAnalysisArtifact,
     RuntimeLockAnalysisVerificationArtifact,
@@ -234,6 +238,36 @@ class ArtifactStore:
                 ) from exc
         self._assert_root_identity()
         return output
+
+    def save_runtime_lock_settlement(
+        self,
+        session: RuntimeLockSessionArtifact,
+        finalization: RuntimeLockRunFinalizationArtifact,
+    ) -> tuple[Path, Path]:
+        """Persist a reconciled Session and publish its finalization marker last."""
+
+        if (
+            session.schema_version != "1.1"
+            or finalization.final_session_artifact_id != session.session_artifact_id
+            or finalization.final_session_artifact_content_sha256 != session.content_sha256
+            or finalization.final_session_revision != session.revision
+            or session.settlement_finalization_id != finalization.finalization_id
+        ):
+            raise self._identity_error(
+                finalization.finalization_id,
+                "runtime-lock-run-finalization",
+            )
+        session_path = self.save(
+            session,
+            session.session_artifact_id,
+            "runtime-lock-session",
+        )
+        marker_path = self.save(
+            finalization,
+            finalization.finalization_id,
+            "runtime-lock-run-finalization",
+        )
+        return session_path, marker_path
 
     def load_analysis(self, analysis_id: str) -> AnalysisArtifact:
         analysis = self._load(analysis_id, "analysis", AnalysisArtifact)
@@ -402,11 +436,26 @@ class ArtifactStore:
             exclude={"authorization_summary_sha256", "content_sha256"},
         )
         capability = self.load_runtime_lock_capability(preview.capability_id)
+        references = {reference.adapter_id: reference for reference in capability.adapters}
+        covered_semantics: set[MeasurementSemantics] = set()
+        preview_scope_matches = True
+        for adapter_id in preview.allowed_adapters:
+            reference = references.get(adapter_id)
+            if reference is None or reference.availability not in {"available", "partial"}:
+                preview_scope_matches = False
+                break
+            selected = set(reference.supported_semantics) & set(preview.allowed_semantics)
+            if not selected:
+                preview_scope_matches = False
+                break
+            covered_semantics.update(selected)
         if (
             preview.authorization_summary_sha256 != expected_summary
             or preview.capability_content_sha256 != capability.content_sha256
             or preview.project_identity_sha256 != capability.project_identity_sha256
             or preview.project_policy_sha256 != capability.project_policy_sha256
+            or not preview_scope_matches
+            or covered_semantics != set(preview.allowed_semantics)
         ):
             raise self._identity_error(preview_id, "runtime-lock-preview")
         return preview
@@ -454,8 +503,13 @@ class ArtifactStore:
             runtime_lock_verification_id,
             "runtime-lock-verification",
         )
-        analysis, evidence, replayed = self.load_runtime_lock_analysis(
+        analysis, evidence, _ = self.load_runtime_lock_analysis(
             verification.runtime_lock_analysis_id
+        )
+        replayed = verify_runtime_lock_analysis_artifact(
+            analysis,
+            evidence,
+            source_replay_receipt=verification.source_replay_receipt,
         )
         if (
             replayed != verification
@@ -540,7 +594,9 @@ class ArtifactStore:
         preview = self.load_runtime_lock_preview(session.preview_id)
         created = datetime.fromisoformat(session.created_at)
         if (
-            session.preview_content_sha256 != preview.content_sha256
+            session.schema_version != preview.schema_version
+            or session.perflens_version != preview.perflens_version
+            or session.preview_content_sha256 != preview.content_sha256
             or session.project_identity_sha256 != preview.project_identity_sha256
             or session.client_connection_identity_sha256
             != preview.client_connection_identity_sha256
@@ -575,6 +631,8 @@ class ArtifactStore:
                 seen=seen,
             )
             immutable_fields = (
+                "schema_version",
+                "perflens_version",
                 "session_id",
                 "created_at",
                 "expires_at",
@@ -603,19 +661,19 @@ class ArtifactStore:
                 session.evidence_bytes_used,
                 session.exact_events_used,
             )
-            usage_transition_valid = (
-                workload_delta == 1
-                and session.state == "active"
-                and current_usage[0] > previous_usage[0]
-                and current_usage[1] > previous_usage[1]
-                and current_usage[2] >= previous_usage[2]
-            ) or (
-                workload_delta == 0
-                and all(
-                    current <= prior
-                    for current, prior in zip(current_usage, previous_usage, strict=True)
+            if session.settlement_finalization_id is not None:
+                usage_transition_valid = self._validate_runtime_lock_settlement_transition(
+                    session,
+                    previous,
                 )
-            )
+            else:
+                usage_transition_valid = (
+                    workload_delta == 1
+                    and session.state == "active"
+                    and current_usage[0] > previous_usage[0]
+                    and current_usage[1] > previous_usage[1]
+                    and current_usage[2] >= previous_usage[2]
+                ) or (workload_delta == 0 and current_usage == previous_usage)
             if (
                 previous.content_sha256 != session.previous_session_artifact_content_sha256
                 or previous.revision + 1 != session.revision
@@ -631,6 +689,125 @@ class ArtifactStore:
                 raise self._identity_error(session_artifact_id, "runtime-lock-session")
         return session
 
+    def load_runtime_lock_run_finalization(
+        self,
+        finalization_id: str,
+    ) -> RuntimeLockRunFinalizationArtifact:
+        finalization = self._load_runtime_lock_run_finalization_record(finalization_id)
+        final_session = self.load_runtime_lock_session(finalization.final_session_artifact_id)
+        if (
+            final_session.content_sha256 != finalization.final_session_artifact_content_sha256
+            or final_session.settlement_finalization_id != finalization.finalization_id
+        ):
+            raise self._identity_error(finalization_id, "runtime-lock-run-finalization")
+        return finalization
+
+    def _load_runtime_lock_run_finalization_record(
+        self,
+        finalization_id: str,
+    ) -> RuntimeLockRunFinalizationArtifact:
+        finalization = self._load(
+            finalization_id,
+            "runtime-lock-run-finalization",
+            RuntimeLockRunFinalizationArtifact,
+        )
+        self._require_embedded_id(
+            finalization.finalization_id,
+            finalization_id,
+            "runtime-lock-run-finalization",
+        )
+        self._verify_contract_content(
+            finalization,
+            finalization.content_sha256,
+            finalization_id,
+            "runtime-lock-run-finalization",
+        )
+        return finalization
+
+    def _validate_runtime_lock_settlement_transition(
+        self,
+        session: RuntimeLockSessionArtifact,
+        previous: RuntimeLockSessionArtifact,
+    ) -> bool:
+        finalization_id = session.settlement_finalization_id
+        if finalization_id is None or session.schema_version != "1.1":
+            return False
+        finalization = self._load_runtime_lock_run_finalization_record(finalization_id)
+        expected_usage = (
+            previous.active_seconds_used
+            - finalization.reserved_active_seconds
+            + finalization.accounted_active_seconds,
+            previous.evidence_bytes_used
+            - finalization.reserved_evidence_bytes
+            + finalization.accounted_evidence_bytes,
+            previous.exact_events_used
+            - finalization.reserved_exact_events
+            + finalization.accounted_exact_events,
+        )
+        if (
+            finalization.schema_version != session.schema_version
+            or finalization.perflens_version != session.perflens_version
+            or finalization.session_id != session.session_id
+            or finalization.reserved_session_artifact_id != previous.session_artifact_id
+            or finalization.reserved_session_artifact_content_sha256 != previous.content_sha256
+            or finalization.reserved_session_revision != previous.revision
+            or finalization.final_session_artifact_id != session.session_artifact_id
+            or finalization.final_session_artifact_content_sha256 != session.content_sha256
+            or finalization.final_session_revision != session.revision
+            or finalization.created_at != session.updated_at
+            or finalization.adapter_id not in session.allowed_adapters
+            or finalization.measurement_semantics not in session.allowed_semantics
+            or session.workload_runs_used != previous.workload_runs_used
+            or expected_usage
+            != (
+                session.active_seconds_used,
+                session.evidence_bytes_used,
+                session.exact_events_used,
+            )
+        ):
+            return False
+        if finalization.outcome == "failed":
+            return (
+                session.state in {"failed", "exhausted"}
+                and session.invalidation_reason == finalization.failure_reason
+            )
+        if session.state != "active" or session.invalidation_reason is not None:
+            return False
+        assert finalization.run_id is not None
+        assert finalization.run_content_sha256 is not None
+        run = self._load(
+            finalization.run_id,
+            "runtime-lock-run",
+            RuntimeLockRunArtifact,
+        )
+        self._require_embedded_id(
+            run.run_id,
+            finalization.run_id,
+            "runtime-lock-run",
+        )
+        self._verify_contract_content(
+            run,
+            run.content_sha256,
+            run.run_id,
+            "runtime-lock-run",
+        )
+        return (
+            run.content_sha256 == finalization.run_content_sha256
+            and datetime.fromisoformat(finalization.created_at)
+            >= datetime.fromisoformat(run.created_at)
+            and run.session_id == finalization.session_id
+            and run.session_artifact_id == previous.session_artifact_id
+            and run.session_artifact_content_sha256 == previous.content_sha256
+            and run.session_revision == previous.revision
+            and run.operation_identity_sha256 == finalization.operation_identity_sha256
+            and run.adapter_id == finalization.adapter_id
+            and run.measurement_semantics == finalization.measurement_semantics
+            and run.duration_seconds == finalization.accounted_active_seconds
+            and run.evidence_bytes == finalization.accounted_evidence_bytes
+            and (run.event_count if run.measurement_semantics == "exact" else 0)
+            == finalization.accounted_exact_events
+        )
+
     def load_runtime_lock_run(self, run_id: str) -> RuntimeLockRunArtifact:
         run = self._load(run_id, "runtime-lock-run", RuntimeLockRunArtifact)
         self._require_embedded_id(run.run_id, run_id, "runtime-lock-run")
@@ -644,10 +821,76 @@ class ArtifactStore:
         preview = self.load_runtime_lock_preview(session.preview_id)
         analysis, evidence, _ = self.load_runtime_lock_analysis(run.runtime_lock_analysis_id)
         verification = self.load_runtime_lock_verification(run.runtime_lock_verification_id)
+        finalization = self.load_runtime_lock_run_finalization(
+            derive_runtime_lock_run_finalization_id(
+                run.session_id,
+                run.operation_identity_sha256,
+            )
+        )
+        execution_bindings = {
+            binding.adapter_id: binding for binding in preview.adapter_execution_bindings
+        }
+        execution_binding = execution_bindings.get(run.adapter_id)
+        expected_execution_identity = (
+            execution_binding.execution_identity_sha256 if execution_binding is not None else None
+        )
+        execution_binding_matches = (
+            run.adapter_execution_identity_sha256 == expected_execution_identity
+            and (
+                execution_binding is None
+                or (
+                    run.measurement_semantics == execution_binding.measurement_semantics
+                    and evidence.source.measurement_semantics
+                    == execution_binding.measurement_semantics
+                    and evidence.source.duration_threshold_ns
+                    == execution_binding.duration_threshold_ns
+                )
+            )
+        )
+        verification_matches_run = (
+            verification.runtime_lock_analysis_id == analysis.runtime_lock_analysis_id
+            and verification.runtime_lock_analysis_content_sha256 == analysis.content_sha256
+            and verification.runtime_lock_evidence_id == evidence.runtime_lock_evidence_id
+            and verification.runtime_lock_evidence_content_sha256 == evidence.content_sha256
+        )
+        if execution_binding is not None and run.adapter_id == "java_jfr":
+            source_tool = evidence.source.tool
+            bound_tools = {tool.name: tool for tool in execution_binding.tools}
+            bound_jfr = bound_tools.get("jfr")
+            execution_binding_matches = execution_binding_matches and (
+                evidence.source.schema_version == preview.schema_version
+                and evidence.source.runtime == "java"
+                and evidence.source.adapter_id == execution_binding.adapter_id
+                and evidence.source.adapter_version == execution_binding.adapter_version
+                and evidence.source.backend_id == execution_binding.backend_id
+                and evidence.source.backend_version == execution_binding.runtime_version
+                and evidence.source.adapter_execution_identity_sha256
+                == execution_binding.execution_identity_sha256
+                and evidence.source.configuration_sha256 == execution_binding.configuration_sha256
+                and evidence.source.metadata_sha256 == execution_binding.metadata_sha256
+                and source_tool is not None
+                and bound_jfr is not None
+                and source_tool.name == bound_jfr.name
+                and source_tool.version == bound_jfr.version
+                and source_tool.binary_sha256 == bound_jfr.binary_sha256
+            )
         run_started = datetime.fromisoformat(run.started_at)
         run_created = datetime.fromisoformat(run.created_at)
+        try:
+            expected_run_boundaries = derive_runtime_lock_run_boundaries(
+                adapter_id=run.adapter_id,
+                analysis_quality_status=analysis.quality_status,
+                analysis_allowed_conclusions=analysis.allowed_conclusions,
+                analysis_forbidden_conclusions=analysis.forbidden_conclusions,
+                warnings=run.warnings,
+            )
+        except ValueError:
+            expected_run_boundaries = None
         if (
             run.session_id != session.session_id
+            or finalization.outcome != "completed"
+            or finalization.run_id != run.run_id
+            or finalization.run_content_sha256 != run.content_sha256
             or run.session_artifact_content_sha256 != session.content_sha256
             or run.session_revision != session.revision
             or session.state != "active"
@@ -661,6 +904,8 @@ class ArtifactStore:
             )
             or run.adapter_id not in session.allowed_adapters
             or run.measurement_semantics not in session.allowed_semantics
+            or not execution_binding_matches
+            or not verification_matches_run
             or run.runtime_lock_evidence_id != evidence.runtime_lock_evidence_id
             or run.runtime_lock_evidence_content_sha256 != evidence.content_sha256
             or run.runtime_lock_analysis_content_sha256 != analysis.content_sha256
@@ -669,9 +914,12 @@ class ArtifactStore:
             or run.measurement_semantics != analysis.measurement_semantics
             or run.measurement_semantics != evidence.source.measurement_semantics
             or evidence.source.source_format != _RUNTIME_LOCK_ADAPTER_SOURCE_FORMATS[run.adapter_id]
-            or not _runtime_lock_run_quality_matches_analysis(run, analysis)
-            or run.allowed_conclusions != analysis.allowed_conclusions
-            or run.forbidden_conclusions != analysis.forbidden_conclusions
+            or expected_run_boundaries
+            != (
+                run.quality_status,
+                run.allowed_conclusions,
+                run.forbidden_conclusions,
+            )
             or run.event_count != len(evidence.events)
             or run.evidence_bytes != len(serialize_json(evidence))
             or run_started < datetime.fromisoformat(session.updated_at)
@@ -717,8 +965,9 @@ class ArtifactStore:
             )
         )
         threshold_or_sampling_match = self._runtime_lock_measurement_controls(
-            baseline_evidence
-        ) == self._runtime_lock_measurement_controls(candidate_evidence)
+            baseline,
+            baseline_evidence,
+        ) == self._runtime_lock_measurement_controls(candidate, candidate_evidence)
         if (
             baseline.content_sha256 != comparison.baseline_run_content_sha256
             or candidate.content_sha256 != comparison.candidate_run_content_sha256
@@ -790,10 +1039,12 @@ class ArtifactStore:
 
     @staticmethod
     def _runtime_lock_measurement_controls(
+        run: RuntimeLockRunArtifact,
         evidence: RuntimeLockEvidenceArtifact,
-    ) -> tuple[int | None, int | None, int | None, int | None]:
+    ) -> tuple[str | None, int | None, int | None, int | None, int | None]:
         source = evidence.source
         return (
+            run.adapter_execution_identity_sha256,
             source.duration_threshold_ns,
             source.sampling_period,
             source.sampling_fraction,
@@ -1204,6 +1455,7 @@ class ArtifactStore:
             "runtime-lock-diagnosis",
             "runtime-lock-session",
             "runtime-lock-run",
+            "runtime-lock-run-finalization",
             "runtime-lock-comparison",
             "container-resource-context",
             "container-run",
@@ -1373,6 +1625,16 @@ class ArtifactStore:
             run = RuntimeLockRunArtifact.model_validate_json(payload)
             self._require_embedded_id(run.run_id, artifact_id, artifact_type)
             if self.load_runtime_lock_run(artifact_id) != run:
+                raise self._identity_error(artifact_id, artifact_type)
+            return
+        if artifact_type == "runtime-lock-run-finalization":
+            finalization = RuntimeLockRunFinalizationArtifact.model_validate_json(payload)
+            self._require_embedded_id(
+                finalization.finalization_id,
+                artifact_id,
+                artifact_type,
+            )
+            if self.load_runtime_lock_run_finalization(artifact_id) != finalization:
                 raise self._identity_error(artifact_id, artifact_type)
             return
         if artifact_type == "runtime-lock-comparison":
@@ -1923,23 +2185,6 @@ class ArtifactStore:
                 details={"value": value[:128]},
             )
         return value
-
-
-def _runtime_lock_run_quality_matches_analysis(
-    run: RuntimeLockRunArtifact,
-    analysis: RuntimeLockAnalysisArtifact,
-) -> bool:
-    if run.quality_status == analysis.quality_status:
-        return True
-    return (
-        run.quality_status == "partial"
-        and analysis.quality_status == "complete"
-        and any(
-            warning.startswith("Independent TID polling was partial:")
-            or warning.startswith("Native launch coverage is partial:")
-            for warning in run.warnings
-        )
-    )
 
 
 def _file_identity(

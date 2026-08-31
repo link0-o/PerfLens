@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "protocol_version": "1.0",
+  "request_id": "0123456789abcdefabcd",
+  "supervisor_version": "0.3.2",
+  "supervisor_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "workload_pid": 1300,
+  "workload_start_ticks": 987654,
+  "elapsed_monotonic_ns": 1500000000,
+  "accounted_active_seconds": 2,
+  "exit_code": 0,
+  "terminating_signal": null,
+  "termination_reason": "exited",
+  "term_sent": true,
+  "kill_sent": true,
+  "observed_group_descendants": 0,
+  "residual_group_descendants": 0,
+  "cleanup_complete": true
+}

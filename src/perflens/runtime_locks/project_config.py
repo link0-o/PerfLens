@@ -53,6 +53,7 @@ _ADAPTER_POLICY_KEYS = {
     "launch_instrumentation_allowed",
     "controlled_import_allowed",
 }
+_JAVA_JFR_POLICY_KEYS = _ADAPTER_POLICY_KEYS | {"profile"}
 _ADAPTER_ORDER = (
     "cpython_threading",
     "generic_ndjson_import",
@@ -77,11 +78,12 @@ class RuntimeLockAdapterProjectPolicy:
     exact_enabled: bool
     launch_instrumentation_allowed: bool
     controlled_import_allowed: bool
+    profile: Literal["balanced", "deep"] | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class RuntimeLockProjectPolicy:
-    schema_version: Literal["1.0"]
+    schema_version: Literal["1.0", "1.1"]
     path: Path
     device: int
     inode: int
@@ -106,7 +108,7 @@ class RuntimeLockProjectPolicy:
 
 
 class _ValidatedPolicy(TypedDict):
-    schema_version: Literal["1.0"]
+    schema_version: Literal["1.0", "1.1"]
     enabled: bool
     target_scopes: tuple[RuntimeLockTargetScope, ...]
     allowed_adapters: tuple[RuntimeLockAdapterId, ...]
@@ -130,7 +132,7 @@ def render_default_runtime_lock_project_policy(*, docker_enabled: bool = False) 
 # Initialization only writes this policy. It does not instrument, attach, import, or collect.
 # 初始化只写入本策略, 不执行插桩、附加、导入或采集。
 
-schema_version = "1.0"
+schema_version = "1.1"
 enabled = true
 target_scopes = {scopes}
 allowed_adapters = [
@@ -161,6 +163,7 @@ controlled_import_allowed = true
 enabled = true
 allowed_semantics = ["thresholded"]
 duration_threshold_ns = 10000000
+profile = "balanced"
 exact_enabled = false
 launch_instrumentation_allowed = true
 controlled_import_allowed = true
@@ -274,8 +277,10 @@ def assert_runtime_lock_project_policy_current(
 
 
 def _validate_policy_values(parsed: dict[str, object]) -> _ValidatedPolicy:
-    if parsed.get("schema_version") != "1.0":
+    raw_schema_version = parsed.get("schema_version")
+    if raw_schema_version not in {"1.0", "1.1"}:
         raise _policy_error("Runtime Lock project policy version is unsupported")
+    schema_version = cast(Literal["1.0", "1.1"], raw_schema_version)
     if set(parsed) != _TOP_LEVEL_KEYS:
         raise _policy_error("Runtime Lock policy has missing or unknown top-level fields")
     enabled = _boolean(parsed["enabled"], "enabled")
@@ -340,9 +345,18 @@ def _validate_policy_values(parsed: dict[str, object]) -> _ValidatedPolicy:
         if not isinstance(raw_adapter, dict):
             raise _policy_error(f"Runtime Lock {adapter_id} policy must be a table")
         typed_adapter = cast(dict[str, object], raw_adapter)
-        if set(typed_adapter) != _ADAPTER_POLICY_KEYS:
+        expected_keys = (
+            _JAVA_JFR_POLICY_KEYS
+            if adapter_id == "java_jfr" and schema_version == "1.1"
+            else _ADAPTER_POLICY_KEYS
+        )
+        if set(typed_adapter) != expected_keys:
             raise _policy_error(f"Runtime Lock {adapter_id} policy has unknown fields")
-        adapter = _validate_adapter_policy(typed_adapter)
+        adapter = _validate_adapter_policy(
+            typed_adapter,
+            adapter_id=adapter_id,
+            schema_version=schema_version,
+        )
         typed_id = adapter_id
         if typed_id in allowed_adapters and enabled and not adapter.enabled:
             raise _policy_error("allowed Runtime Lock Adapter cannot be disabled")
@@ -352,7 +366,7 @@ def _validate_policy_values(parsed: dict[str, object]) -> _ValidatedPolicy:
             raise _policy_error("Adapter semantics exceed the Runtime Lock policy scope")
         adapters.append((typed_id, adapter))
     return {
-        "schema_version": "1.0",
+        "schema_version": schema_version,
         "enabled": enabled,
         "target_scopes": cast(tuple[RuntimeLockTargetScope, ...], target_scopes),
         "allowed_adapters": cast(tuple[RuntimeLockAdapterId, ...], allowed_adapters),
@@ -364,7 +378,12 @@ def _validate_policy_values(parsed: dict[str, object]) -> _ValidatedPolicy:
     }
 
 
-def _validate_adapter_policy(values: dict[str, object]) -> RuntimeLockAdapterProjectPolicy:
+def _validate_adapter_policy(
+    values: dict[str, object],
+    *,
+    adapter_id: RuntimeLockAdapterId,
+    schema_version: Literal["1.0", "1.1"],
+) -> RuntimeLockAdapterProjectPolicy:
     enabled = _boolean(values["enabled"], "Adapter enabled")
     semantics = _enum_list(
         values["allowed_semantics"],
@@ -375,6 +394,20 @@ def _validate_adapter_policy(values: dict[str, object]) -> RuntimeLockAdapterPro
     exact_enabled = _boolean(values["exact_enabled"], "exact enabled")
     launch = _boolean(values["launch_instrumentation_allowed"], "launch instrumentation")
     controlled_import = _boolean(values["controlled_import_allowed"], "controlled import")
+    raw_profile = values.get("profile")
+    profile: Literal["balanced", "deep"] | None = None
+    if adapter_id == "java_jfr":
+        if schema_version == "1.0":
+            profile = "balanced"
+        else:
+            if raw_profile not in {"balanced", "deep"}:
+                raise _policy_error("Java JFR profile must be balanced or deep")
+            profile = cast(Literal["balanced", "deep"], raw_profile)
+        expected_threshold = 10_000_000 if profile == "balanced" else 1_000_000
+        if threshold != expected_threshold:
+            raise _policy_error("Java JFR profile and threshold disagree")
+    elif raw_profile is not None:
+        raise _policy_error("Only the Java JFR Adapter may select a profile")
     if enabled and not semantics:
         raise _policy_error("enabled Runtime Lock Adapter needs a semantics")
     if exact_enabled != ("exact" in semantics):
@@ -392,6 +425,7 @@ def _validate_adapter_policy(values: dict[str, object]) -> RuntimeLockAdapterPro
         exact_enabled=exact_enabled,
         launch_instrumentation_allowed=launch,
         controlled_import_allowed=controlled_import,
+        profile=profile,
     )
 
 

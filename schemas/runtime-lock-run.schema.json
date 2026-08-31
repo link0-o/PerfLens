@@ -1,6 +1,62 @@
 {
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.0"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "adapter_execution_identity_sha256": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "adapter_id": {
+            "const": "java_jfr"
+          }
+        },
+        "required": [
+          "adapter_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "adapter_execution_identity_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "adapter_execution_identity_sha256"
+        ]
+      }
+    }
+  ],
   "properties": {
+    "adapter_execution_identity_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Adapter Execution Identity Sha256"
+    },
     "adapter_id": {
       "enum": [
         "native_pthread",
@@ -128,8 +184,11 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "1.0",
       "default": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },

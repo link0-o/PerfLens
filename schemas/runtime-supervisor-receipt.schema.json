@@ -1,0 +1,138 @@
+{
+  "$id": "https://github.com/link0-o/PerfLens/schemas/runtime-supervisor-receipt.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "accounted_active_seconds": {
+      "exclusiveMinimum": 0,
+      "maximum": 32,
+      "title": "Accounted Active Seconds",
+      "type": "integer"
+    },
+    "cleanup_complete": {
+      "title": "Cleanup Complete",
+      "type": "boolean"
+    },
+    "elapsed_monotonic_ns": {
+      "exclusiveMinimum": 0,
+      "title": "Elapsed Monotonic Ns",
+      "type": "integer"
+    },
+    "exit_code": {
+      "anyOf": [
+        {
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Exit Code"
+    },
+    "kill_sent": {
+      "title": "Kill Sent",
+      "type": "boolean"
+    },
+    "observed_group_descendants": {
+      "minimum": 0,
+      "title": "Observed Group Descendants",
+      "type": "integer"
+    },
+    "protocol_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "request_id": {
+      "pattern": "^[a-f0-9]{20}$",
+      "title": "Request Id",
+      "type": "string"
+    },
+    "residual_group_descendants": {
+      "minimum": 0,
+      "title": "Residual Group Descendants",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "supervisor_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Supervisor Sha256",
+      "type": "string"
+    },
+    "supervisor_version": {
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "title": "Supervisor Version",
+      "type": "string"
+    },
+    "term_sent": {
+      "title": "Term Sent",
+      "type": "boolean"
+    },
+    "terminating_signal": {
+      "anyOf": [
+        {
+          "maximum": 64,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Terminating Signal"
+    },
+    "termination_reason": {
+      "enum": [
+        "exited",
+        "timeout",
+        "parent_lost",
+        "supervisor_signal",
+        "setup_failed"
+      ],
+      "title": "Termination Reason",
+      "type": "string"
+    },
+    "workload_pid": {
+      "exclusiveMinimum": 0,
+      "maximum": 2147483647,
+      "title": "Workload Pid",
+      "type": "integer"
+    },
+    "workload_start_ticks": {
+      "exclusiveMinimum": 0,
+      "title": "Workload Start Ticks",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "protocol_version",
+    "request_id",
+    "supervisor_version",
+    "supervisor_sha256",
+    "workload_pid",
+    "workload_start_ticks",
+    "elapsed_monotonic_ns",
+    "accounted_active_seconds",
+    "exit_code",
+    "terminating_signal",
+    "termination_reason",
+    "term_sent",
+    "kill_sent",
+    "observed_group_descendants",
+    "residual_group_descendants",
+    "cleanup_complete"
+  ],
+  "title": "PerfLens Runtime Supervisor Receipt",
+  "type": "object"
+}

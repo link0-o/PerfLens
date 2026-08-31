@@ -1,5 +1,92 @@
 {
   "$defs": {
+    "RuntimeLockSourceReplayReceipt": {
+      "additionalProperties": false,
+      "description": "Path-free attestation that retained raw input reproduced one Evidence.",
+      "properties": {
+        "adapter_execution_identity_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adapter Execution Identity Sha256"
+        },
+        "conversion_fingerprint": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Conversion Fingerprint",
+          "type": "string"
+        },
+        "converter_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Converter Version",
+          "type": "string"
+        },
+        "normalized_source_bytes": {
+          "maximum": 67108864,
+          "minimum": 0,
+          "title": "Normalized Source Bytes",
+          "type": "integer"
+        },
+        "normalized_source_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Normalized Source Sha256",
+          "type": "string"
+        },
+        "raw_source_bytes": {
+          "maximum": 67108864,
+          "minimum": 0,
+          "title": "Raw Source Bytes",
+          "type": "integer"
+        },
+        "raw_source_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Raw Source Sha256",
+          "type": "string"
+        },
+        "runtime_lock_evidence_content_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Runtime Lock Evidence Content Sha256",
+          "type": "string"
+        },
+        "runtime_lock_evidence_id": {
+          "pattern": "^[a-z][a-z0-9-]*-[a-f0-9]{16,64}$",
+          "title": "Runtime Lock Evidence Id",
+          "type": "string"
+        },
+        "source_format": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Source Format",
+          "type": "string"
+        },
+        "status": {
+          "const": "passed",
+          "default": "passed",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_format",
+        "raw_source_sha256",
+        "raw_source_bytes",
+        "normalized_source_sha256",
+        "normalized_source_bytes",
+        "converter_version",
+        "conversion_fingerprint",
+        "runtime_lock_evidence_id",
+        "runtime_lock_evidence_content_sha256"
+      ],
+      "title": "RuntimeLockSourceReplayReceipt",
+      "type": "object"
+    },
     "RuntimeLockVerificationCheck": {
       "additionalProperties": false,
       "properties": {
@@ -66,6 +153,9 @@
       },
       "then": {
         "properties": {
+          "source_replay_receipt": {
+            "type": "null"
+          },
           "verifier_version": {
             "const": "runtime-lock-verifier-v1"
           }
@@ -124,6 +214,17 @@
       ],
       "title": "Schema Version",
       "type": "string"
+    },
+    "source_replay_receipt": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RuntimeLockSourceReplayReceipt"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "verification_status": {
       "enum": [

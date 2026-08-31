@@ -15,15 +15,12 @@ import hashlib
 import math
 import os
 import re
-import select
 import signal
 import stat
-import subprocess
-import time
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Protocol, cast
 
@@ -41,6 +38,17 @@ from perflens.runtime_locks.native_pthread_abi import (
     native_pthread_visible_lock_kinds,
 )
 from perflens.runtime_locks.native_pthread_converter import parse_native_pthread_probe_footer
+from perflens.runtime_locks.supervisor import (
+    RuntimeSupervisorClient,
+    RuntimeSupervisorNativePthreadRequest,
+    RuntimeSupervisorPolicy,
+    RuntimeSupervisorRequest,
+    discover_runtime_supervisor_policy,
+    runtime_supervisor_directory_identity,
+    runtime_supervisor_file_identity,
+    runtime_supervisor_request_id,
+    runtime_supervisor_writable_identity,
+)
 
 _MAX_ELF_BYTES = 256 << 20
 _MAX_PROBE_BYTES = 64 << 20
@@ -55,7 +63,6 @@ _MAX_ELF_NEEDED_LIBRARIES = 64
 _MAX_STREAM_BYTES = 64 << 20
 _MAX_ARGUMENTS = 256
 _MAX_ARGUMENT_BYTES = 64 << 10
-_MAX_TIDS = 4096
 _MAX_EVENTS = 20_000
 _MAX_DURATION_SECONDS = 30.0
 _MAX_EXACT_DURATION_SECONDS = 3.0
@@ -117,14 +124,6 @@ class _DirectoryIdentity:
     inode: int
     owner_uid: int
     mode: int
-
-
-@dataclass(frozen=True, slots=True)
-class _ProcessIdentity:
-    start_ticks: int
-    process_group_id: int
-    session_id: int
-    state: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,6 +318,7 @@ class NativeLaunchResult:
     started_at: str
     finished_at: str
     duration_seconds: float
+    accounted_active_seconds: int
     exit_code: int | None
     termination_reason: NativeTerminationReason
     footer_observed: bool
@@ -340,6 +340,7 @@ class NativePthreadLauncher:
         probe_policy: NativePthreadProbePolicy,
         invoking_uid: int | None = None,
         runtime_glibc_version: str | None = None,
+        supervisor_client: RuntimeSupervisorClient | None = None,
     ) -> None:
         actual_uid = os.geteuid()
         if invoking_uid is not None and invoking_uid != actual_uid:
@@ -365,6 +366,18 @@ class NativePthreadLauncher:
         self._probe = inspect_native_pthread_probe(probe_policy)
         self._runtime_glibc_version = _runtime_glibc_version(runtime_glibc_version)
         _require_active_launcher_kernel_support()
+        if supervisor_client is None:
+            discovery = discover_runtime_supervisor_policy()
+            if discovery.policy is None:
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "runtime_lock_capability",
+                    "The fixed Runtime Lock supervisor is unavailable",
+                    recoverable=True,
+                    details={"limitations": discovery.limitations},
+                )
+            supervisor_client = RuntimeSupervisorClient(discovery.policy)
+        self._supervisor = supervisor_client
 
     @property
     def probe_identity(self) -> NativePthreadProbeIdentity:
@@ -429,18 +442,12 @@ class NativePthreadLauncher:
             invoking_uid=self._invoking_uid,
             runtime_glibc_version=self._runtime_glibc_version,
         )
-        snapshot_fd = probe_fd = output_fd = root_fd = project_fd = pidfd = -1
-        process: subprocess.Popen[bytes] | None = None
-        leader_reaped = False
+        snapshot_fd = probe_fd = output_fd = root_fd = project_fd = -1
         stream_created = False
         launch_succeeded = False
         stream_name = f"native-pthread-{os.urandom(10).hex()}.ndjson"
         stream_path = self._output_root / stream_name
         started_at = datetime.now(tz=UTC)
-        started_monotonic = time.monotonic()
-        start_ticks: int | None = None
-        observed_tids: set[int] = set()
-        termination_reason: NativeTerminationReason = "exited"
         try:
             snapshot_fd = _sealed_target_snapshot(target)
             probe_fd = _open_identity_fd(self._probe.path, self._probe)
@@ -458,110 +465,48 @@ class NativePthreadLauncher:
             )
             stream_created = True
             stream_path = self._output_root / stream_name
-            environment = _probe_environment(probe_fd, output_fd, request)
-            argv = (str(target.path), *request.arguments)
-            try:
-                process = subprocess.Popen(  # noqa: S603 - executable is a sealed memfd
-                    argv,
-                    executable=f"/proc/self/fd/{snapshot_fd}",
-                    cwd=f"/proc/self/fd/{project_fd}",
-                    env=environment,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    shell=False,
-                    close_fds=True,
-                    pass_fds=(snapshot_fd, probe_fd, output_fd, project_fd),
-                    start_new_session=True,
-                )
-            except OSError as exc:
-                with suppress(OSError):
-                    os.unlink(stream_name, dir_fd=root_fd)
+            supervisor_request = RuntimeSupervisorRequest(
+                request_id=runtime_supervisor_request_id(),
+                expected_parent_pid=os.getpid(),
+                expected_supervisor_sha256=self._supervisor.policy.sha256,
+                executable=runtime_supervisor_file_identity(snapshot_fd),
+                working_directory=runtime_supervisor_directory_identity(project_fd),
+                arguments=request.arguments,
+                timeout_milliseconds=math.ceil(request.duration_seconds * 1_000),
+                request=RuntimeSupervisorNativePthreadRequest(
+                    probe=runtime_supervisor_file_identity(probe_fd),
+                    output=runtime_supervisor_writable_identity(
+                        output_fd,
+                        maximum_size=_MAX_STREAM_BYTES,
+                    ),
+                    semantics=request.semantics,
+                    threshold_ns=request.threshold_ns,
+                    max_events=request.max_events,
+                ),
+            )
+            receipt = self._supervisor.execute(supervisor_request)
+            if receipt.terminating_signal == signal.SIGXFSZ:
                 raise PerfLensError(
-                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
                     "native_pthread_launcher",
-                    "Native pthread workload could not be started",
+                    "Native pthread private evidence exceeded 64 MiB",
                     recoverable=True,
-                ) from exc
-            process_identity = _read_proc_process_identity(process.pid)
-            if process_identity is None:
-                termination_reason = "identity_unavailable"
-                raise _native_error(
-                    "Native pthread leader identity is unavailable; same-group descendants "
-                    "may require manual review"
                 )
-            start_ticks = process_identity.start_ticks
-            if (
-                process_identity.process_group_id != process.pid
-                or process_identity.session_id != process.pid
-            ):
-                termination_reason = "identity_unavailable"
+            if receipt.termination_reason not in {"exited", "timeout"}:
                 raise _native_error(
-                    "Native pthread leader escaped its fixed process session; descendants may "
-                    "require manual review"
+                    "Runtime supervisor could not prove the Native workload lifecycle"
                 )
-            try:
-                pidfd = os.pidfd_open(process.pid, 0)
-            except OSError as exc:
-                raise _native_error(
-                    "Native pthread leader pidfd could not be opened; same-group cleanup "
-                    "may be incomplete if procfs identity cannot be retained"
-                ) from exc
-            observed_tids.add(process.pid)
-            while not _pidfd_ready(pidfd, timeout_seconds=0):
-                observed_tids.update(_read_proc_tids(process.pid))
-                current_identity = _read_proc_process_identity(process.pid)
-                if current_identity is None:
-                    if _pidfd_ready(pidfd, timeout_seconds=0):
-                        break
-                    termination_reason = "identity_unavailable"
-                    _signal_pidfd(pidfd, signal.SIGKILL)
-                    raise _native_error(
-                        "Native pthread leader identity disappeared; same-group descendants may "
-                        "require manual review"
-                    )
-                if (
-                    current_identity.start_ticks != start_ticks
-                    or current_identity.process_group_id != process.pid
-                    or current_identity.session_id != process.pid
-                ):
-                    termination_reason = "identity_unavailable"
-                    _signal_pidfd(pidfd, signal.SIGKILL)
-                    raise _native_error(
-                        "Native pthread leader process identity changed; same-group descendants "
-                        "may require manual review"
-                    )
-                if time.monotonic() - started_monotonic >= request.duration_seconds:
-                    termination_reason = "duration_limit"
-                    _signal_bound_process_group(
-                        process.pid,
-                        pidfd,
-                        start_ticks,
-                        signal.SIGTERM,
-                    )
-                    if not _pidfd_ready(pidfd, timeout_seconds=0.5):
-                        _signal_bound_process_group(
-                            process.pid,
-                            pidfd,
-                            start_ticks,
-                            signal.SIGKILL,
-                        )
-                    if not _pidfd_ready(pidfd, timeout_seconds=1.0):
-                        raise _native_error("Native pthread workload did not stop within its bound")
-                    break
-                time.sleep(0.01)
-            observed_tids.update(_read_proc_tids(process.pid))
-            _cleanup_bound_process_group(process.pid, pidfd, start_ticks)
-            exit_code = process.wait(timeout=1.0)
-            leader_reaped = True
+            os.fsync(output_fd)
             os.close(output_fd)
             output_fd = -1
-            finished_at = datetime.now(tz=UTC)
-            duration = time.monotonic() - started_monotonic
+            os.fsync(root_fd)
+            finished_at = started_at + timedelta(
+                microseconds=(receipt.elapsed_monotonic_ns + 999) // 1_000
+            )
             stream_sha256, stream_size, footer = _inspect_private_stream(
                 stream_path,
                 owner_uid=self._invoking_uid,
-                expected_pid=process.pid,
+                expected_pid=receipt.workload_pid,
             )
             launch_succeeded = True
             return NativeLaunchResult(
@@ -569,52 +514,30 @@ class NativePthreadLauncher:
                 stream_sha256=stream_sha256,
                 stream_size=stream_size,
                 target_identity_sha256=target.identity_sha256,
-                target_pid=process.pid,
+                target_pid=receipt.workload_pid,
                 target_uid=self._invoking_uid,
-                target_start_ticks=start_ticks,
-                observed_tids=tuple(sorted(observed_tids))[:_MAX_TIDS],
+                target_start_ticks=receipt.workload_start_ticks,
+                observed_tids=(receipt.workload_pid,),
                 started_at=started_at.isoformat(),
                 finished_at=finished_at.isoformat(),
-                duration_seconds=duration,
-                exit_code=exit_code,
-                termination_reason=termination_reason,
+                duration_seconds=receipt.elapsed_monotonic_ns / 1_000_000_000,
+                accounted_active_seconds=receipt.accounted_active_seconds,
+                exit_code=receipt.exit_code,
+                termination_reason=(
+                    "duration_limit" if receipt.termination_reason == "timeout" else "exited"
+                ),
                 footer_observed=footer is not None,
                 declared_event_count=(footer[0] if footer is not None else None),
                 lost_event_count=(footer[1] if footer is not None else None),
                 truncated=(footer[2] if footer is not None else None),
             )
         finally:
-            if process is not None and not leader_reaped:
-                if pidfd >= 0:
-                    if start_ticks is not None:
-                        with suppress(OSError, PerfLensError):
-                            _cleanup_bound_process_group(
-                                process.pid,
-                                pidfd,
-                                start_ticks,
-                            )
-                    with suppress(OSError, PerfLensError):
-                        _signal_pidfd(pidfd, signal.SIGKILL)
-                    with suppress(OSError, PerfLensError):
-                        _pidfd_ready(pidfd, timeout_seconds=1.0)
-                else:
-                    if start_ticks is not None:
-                        with suppress(OSError, PerfLensError):
-                            _cleanup_procfs_bound_process_group(
-                                process.pid,
-                                start_ticks,
-                            )
-                    with suppress(OSError):
-                        process.kill()
-                with suppress(OSError, subprocess.TimeoutExpired):
-                    process.wait(timeout=1.0)
             for descriptor in (
                 output_fd,
                 snapshot_fd,
                 probe_fd,
                 project_fd,
                 root_fd,
-                pidfd,
             ):
                 if descriptor >= 0:
                     with suppress(OSError):
@@ -632,6 +555,7 @@ def inspect_native_pthread_installation(
     probe_policy: NativePthreadProbePolicy | None,
     *,
     runtime_glibc_version: str | None = None,
+    supervisor_policy: RuntimeSupervisorPolicy | None = None,
 ) -> NativeLaunchCapability:
     """Report wheel-only installations as unavailable without executing anything."""
 
@@ -656,6 +580,12 @@ def inspect_native_pthread_installation(
         runtime = _runtime_glibc_version(runtime_glibc_version)
         probe = inspect_native_pthread_probe(probe_policy)
         _require_active_launcher_kernel_support()
+        effective_supervisor = supervisor_policy
+        if effective_supervisor is None:
+            effective_supervisor = discover_runtime_supervisor_policy().policy
+        if effective_supervisor is None:
+            raise _native_error("The fixed root-owned Runtime Lock supervisor is unavailable")
+        RuntimeSupervisorClient(effective_supervisor)
     except PerfLensError as exc:
         return NativeLaunchCapability(
             target_scope="host_launched_workload",
@@ -1525,219 +1455,6 @@ def _validated_arguments(arguments: tuple[str, ...]) -> tuple[str, ...]:
     if total > _MAX_ARGUMENT_BYTES:
         raise _native_error("Native pthread workload argument vector exceeds its bound")
     return tuple(validated)
-
-
-def _probe_environment(
-    probe_fd: int,
-    output_fd: int,
-    request: NativeLaunchRequest,
-) -> dict[str, str]:
-    environment = {
-        "LANG": "C",
-        "LC_ALL": "C",
-        "PATH": "/usr/bin:/bin",
-        "LD_PRELOAD": f"/proc/self/fd/{probe_fd}",
-        "PERFLENS_RUNTIME_LOCK_FD": str(output_fd),
-        "PERFLENS_RUNTIME_LOCK_MAX_EVENTS": str(request.max_events),
-        "PERFLENS_RUNTIME_LOCK_MODE": request.semantics,
-    }
-    if request.threshold_ns is not None:
-        environment["PERFLENS_RUNTIME_LOCK_THRESHOLD_NS"] = str(request.threshold_ns)
-    return environment
-
-
-def _read_proc_process_identity(pid: int) -> _ProcessIdentity | None:
-    try:
-        raw = Path(f"/proc/{pid}/stat").read_bytes()
-    except OSError:
-        return None
-    closing = raw.rfind(b")")
-    if closing < 0:
-        return None
-    fields = raw[closing + 2 :].split()
-    if len(fields) <= 19:
-        return None
-    try:
-        process_group_id = int(fields[2])
-        session_id = int(fields[3])
-        start_ticks = int(fields[19])
-    except ValueError:
-        return None
-    if process_group_id <= 0 or session_id <= 0 or start_ticks <= 0:
-        return None
-    try:
-        state = fields[0].decode("ascii", errors="strict")
-    except UnicodeDecodeError:
-        return None
-    if len(state) != 1:
-        return None
-    return _ProcessIdentity(
-        start_ticks=start_ticks,
-        process_group_id=process_group_id,
-        session_id=session_id,
-        state=state,
-    )
-
-
-def _read_proc_tids(pid: int) -> tuple[int, ...]:
-    try:
-        entries = os.listdir(f"/proc/{pid}/task")
-    except OSError:
-        return ()
-    tids = sorted(int(entry) for entry in entries if entry.isascii() and entry.isdigit())
-    if len(tids) > _MAX_TIDS:
-        return tuple(tids[:_MAX_TIDS])
-    return tuple(tids)
-
-
-def _pidfd_ready(pidfd: int, *, timeout_seconds: float) -> bool:
-    try:
-        readable, _writable, _exceptional = select.select(
-            [pidfd],
-            [],
-            [],
-            timeout_seconds,
-        )
-    except OSError as exc:
-        raise _native_error("Native pthread leader pidfd cannot be polled") from exc
-    return bool(readable)
-
-
-def _signal_pidfd(pidfd: int, requested_signal: signal.Signals) -> None:
-    try:
-        signal.pidfd_send_signal(pidfd, requested_signal)
-    except ProcessLookupError:
-        return
-    except OSError as exc:
-        raise _native_error("Native pthread leader could not be signaled safely") from exc
-
-
-def _read_pidfd_target(pidfd: int) -> int | None:
-    descriptor = -1
-    try:
-        descriptor = os.open(
-            f"/proc/self/fdinfo/{pidfd}",
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
-        )
-        raw = os.read(descriptor, 4097)
-    except OSError:
-        return None
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-    if len(raw) > 4096:
-        return None
-    for line in raw.splitlines():
-        if not line.startswith(b"Pid:"):
-            continue
-        try:
-            value = int(line.removeprefix(b"Pid:").strip())
-        except ValueError:
-            return None
-        return value if value > 0 else None
-    return None
-
-
-def _assert_bound_process_group(
-    leader_pid: int,
-    pidfd: int,
-    expected_start_ticks: int,
-) -> None:
-    if _read_pidfd_target(pidfd) != leader_pid:
-        raise _native_error("Native pthread process-group identity changed before cleanup")
-    _assert_procfs_bound_process_group(leader_pid, expected_start_ticks)
-
-
-def _assert_procfs_bound_process_group(
-    leader_pid: int,
-    expected_start_ticks: int,
-) -> None:
-    identity = _read_proc_process_identity(leader_pid)
-    if (
-        identity is None
-        or identity.start_ticks != expected_start_ticks
-        or identity.process_group_id != leader_pid
-        or identity.session_id != leader_pid
-    ):
-        raise _native_error("Native pthread process-group identity changed before cleanup")
-
-
-def _signal_procfs_bound_process_group(
-    leader_pid: int,
-    expected_start_ticks: int,
-    requested_signal: signal.Signals,
-) -> None:
-    """Signal a same-session group while its non-reaped leader pins the PGID."""
-
-    _assert_procfs_bound_process_group(leader_pid, expected_start_ticks)
-    try:
-        os.killpg(leader_pid, requested_signal)
-    except ProcessLookupError:
-        return
-    except OSError as exc:
-        raise _native_error("Native pthread process group could not be signaled safely") from exc
-
-
-def _signal_bound_process_group(
-    leader_pid: int,
-    pidfd: int,
-    expected_start_ticks: int,
-    requested_signal: signal.Signals,
-) -> None:
-    """Signal a group only while its original, non-reaped leader pins the PGID."""
-
-    if pidfd < 0:
-        raise _native_error("Native pthread process-group pidfd is unavailable")
-    _assert_bound_process_group(leader_pid, pidfd, expected_start_ticks)
-    _signal_procfs_bound_process_group(
-        leader_pid,
-        expected_start_ticks,
-        requested_signal,
-    )
-
-
-def _cleanup_bound_process_group(
-    leader_pid: int,
-    pidfd: int,
-    expected_start_ticks: int,
-) -> None:
-    """Stop same-session descendants before reaping the identity-pinned leader."""
-
-    try:
-        _signal_bound_process_group(
-            leader_pid,
-            pidfd,
-            expected_start_ticks,
-            signal.SIGTERM,
-        )
-    except ProcessLookupError:
-        return
-    time.sleep(0.02)
-    _signal_bound_process_group(
-        leader_pid,
-        pidfd,
-        expected_start_ticks,
-        signal.SIGKILL,
-    )
-
-
-def _cleanup_procfs_bound_process_group(
-    leader_pid: int,
-    expected_start_ticks: int,
-) -> None:
-    """Best-effort group cleanup when pidfd creation failed after identity capture."""
-
-    _signal_procfs_bound_process_group(
-        leader_pid,
-        expected_start_ticks,
-        signal.SIGTERM,
-    )
-    time.sleep(0.02)
-    _signal_procfs_bound_process_group(
-        leader_pid,
-        expected_start_ticks,
-        signal.SIGKILL,
-    )
 
 
 def _inspect_private_stream(

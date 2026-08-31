@@ -87,12 +87,48 @@ def compute_runtime_lock_verification_content_sha256(
     return contract_content_sha256(verification, exclude={"content_sha256"})
 
 
+def build_runtime_lock_source_replay_receipt(
+    evidence: public.RuntimeLockEvidenceArtifact,
+    *,
+    normalized_source_sha256: str | None = None,
+    normalized_source_bytes: int | None = None,
+) -> public.RuntimeLockSourceReplayReceipt:
+    """Bind one successful private conversion replay to its public Evidence."""
+
+    if evidence.schema_version != "1.1" or evidence.source.converter_version is None:
+        raise ValueError("source replay receipts require schema 1.1 converter identity")
+    if (normalized_source_sha256 is None) != (normalized_source_bytes is None):
+        raise ValueError("normalized source replay identity must be supplied as one pair")
+    replay_sha256, replay_bytes = normalized_runtime_lock_records_identity(evidence)
+    if normalized_source_sha256 is None:
+        normalized_source_sha256 = replay_sha256
+    if normalized_source_bytes is None:
+        normalized_source_bytes = replay_bytes
+    return public.RuntimeLockSourceReplayReceipt(
+        source_format=evidence.source.source_format,
+        raw_source_sha256=evidence.source.source_sha256,
+        raw_source_bytes=evidence.source.source_bytes,
+        normalized_source_sha256=normalized_source_sha256,
+        normalized_source_bytes=normalized_source_bytes,
+        converter_version=evidence.source.converter_version,
+        conversion_fingerprint=compute_runtime_source_conversion_fingerprint(evidence.source),
+        adapter_execution_identity_sha256=(evidence.source.adapter_execution_identity_sha256),
+        runtime_lock_evidence_id=evidence.runtime_lock_evidence_id,
+        runtime_lock_evidence_content_sha256=evidence.content_sha256,
+    )
+
+
 def _verify_private_source_and_replay(
     evidence: public.RuntimeLockEvidenceArtifact,
     private_source_stream: BinaryIO,
     *,
     replay_source_format: str | None,
-) -> tuple[list[str], VerificationStatus, str]:
+) -> tuple[
+    list[str],
+    VerificationStatus,
+    str,
+    public.RuntimeLockSourceReplayReceipt | None,
+]:
     """Hash retained source bytes before any format-specific conversion replay."""
 
     failures: list[str] = []
@@ -112,6 +148,7 @@ def _verify_private_source_and_replay(
                         "failed",
                         "Private source conversion replay was blocked by an invalid "
                         "source receipt.",
+                        None,
                     )
                 digest.update(chunk)
                 retained.write(chunk)
@@ -124,12 +161,14 @@ def _verify_private_source_and_replay(
                     failures,
                     "failed",
                     "Private source conversion replay was blocked by an invalid source receipt.",
+                    None,
                 )
             if replay_source_format is None:
                 return (
                     failures,
                     "skipped",
                     "This source format has no Stage 1 private converter replay implementation.",
+                    None,
                 )
 
             retained.seek(0)
@@ -158,11 +197,13 @@ def _verify_private_source_and_replay(
                     failures,
                     "failed",
                     "Private source conversion replay differs from public Runtime Lock evidence.",
+                    None,
                 )
             return (
                 failures,
                 "passed",
                 "Private source conversion reproduced the complete public Runtime Lock evidence.",
+                build_runtime_lock_source_replay_receipt(evidence),
             )
     except (OSError, PerfLensError, TypeError, ValueError) as exc:
         failures.append(f"private source identity replay failed: {type(exc).__name__}")
@@ -170,6 +211,7 @@ def _verify_private_source_and_replay(
             failures,
             "failed",
             f"Private source conversion replay failed: {type(exc).__name__}.",
+            None,
         )
 
 
@@ -178,6 +220,9 @@ def verify_runtime_lock_analysis_artifact(
     evidence: public.RuntimeLockEvidenceArtifact,
     *,
     private_source_stream: BinaryIO | None = None,
+    source_replay_receipt: public.RuntimeLockSourceReplayReceipt | None = None,
+    normalized_source_sha256: str | None = None,
+    normalized_source_bytes: int | None = None,
 ) -> public.RuntimeLockAnalysisVerificationArtifact:
     """Rebuild every aggregate from public events and return all bounded checks."""
 
@@ -198,8 +243,13 @@ def verify_runtime_lock_analysis_artifact(
     )
     source_conversion_status: VerificationStatus = "skipped"
     source_conversion_detail = "Private source conversion replay was unavailable."
-    if private_source_stream is not None:
-        raw_failures, source_conversion_status, source_conversion_detail = (
+    accepted_replay_receipt: public.RuntimeLockSourceReplayReceipt | None = None
+    if private_source_stream is not None and source_replay_receipt is not None:
+        source_failures.append("private source and replay receipt cannot be supplied together")
+        source_conversion_status = "failed"
+        source_conversion_detail = "Ambiguous private source replay inputs were rejected."
+    elif private_source_stream is not None:
+        raw_failures, source_conversion_status, source_conversion_detail, replay_receipt = (
             _verify_private_source_and_replay(
                 evidence,
                 private_source_stream,
@@ -207,8 +257,41 @@ def verify_runtime_lock_analysis_artifact(
             )
         )
         source_failures.extend(raw_failures)
+        accepted_replay_receipt = (
+            build_runtime_lock_source_replay_receipt(
+                evidence,
+                normalized_source_sha256=normalized_source_sha256,
+                normalized_source_bytes=normalized_source_bytes,
+            )
+            if replay_receipt is not None
+            else None
+        )
+    elif source_replay_receipt is not None:
+        try:
+            expected_receipt = build_runtime_lock_source_replay_receipt(
+                evidence,
+                normalized_source_sha256=source_replay_receipt.normalized_source_sha256,
+                normalized_source_bytes=source_replay_receipt.normalized_source_bytes,
+            )
+            if source_replay_receipt != expected_receipt:
+                raise ValueError("source replay receipt differs from immutable Evidence")
+        except ValueError as exc:
+            source_failures.append(f"source replay receipt validation failed: {type(exc).__name__}")
+            source_conversion_status = "failed"
+            source_conversion_detail = "Persisted source conversion replay receipt is invalid."
+        else:
+            accepted_replay_receipt = source_replay_receipt
+            source_conversion_status = "passed"
+            source_conversion_detail = (
+                "Private source conversion reproduced the complete public Runtime Lock evidence."
+            )
     if source_failures:
         results["source_identity"] = ("failed", _bounded(source_failures))
+    elif accepted_replay_receipt is not None:
+        results["source_identity"] = (
+            "passed",
+            "Raw source byte count and SHA-256 match the persisted replay receipt.",
+        )
     elif private_source_stream is None:
         results["source_identity"] = (
             "skipped",
@@ -413,6 +496,7 @@ def verify_runtime_lock_analysis_artifact(
             "evidence_id": evidence.runtime_lock_evidence_id,
             "evidence_content_sha256": evidence.content_sha256,
             "checks": checks,
+            "source_replay_receipt": accepted_replay_receipt,
         }
     )
     provisional = public.RuntimeLockAnalysisVerificationArtifact(
@@ -425,6 +509,7 @@ def verify_runtime_lock_analysis_artifact(
         created_at=analysis.created_at,
         verification_status=verification_status,
         checks=checks,
+        source_replay_receipt=accepted_replay_receipt,
         verifier_version=(
             "runtime-lock-verifier-v1"
             if analysis.schema_version == "1.0"
@@ -1481,7 +1566,7 @@ def _independent_projection_failures(
         {
             **_expected_metrics(row.metrics),
             "execution_context_id": row.context.context_id,
-            "lock_count": row.lock_count,
+            **({"lock_count": row.lock_count} if row.lock_count is not None else {}),
         }
         for row in context_rows
     )
@@ -1493,7 +1578,7 @@ def _independent_projection_failures(
         {
             **_expected_metrics(row.metrics),
             "stack_id": row.stack_id,
-            "lock_count": row.lock_count,
+            **({"lock_count": row.lock_count} if row.lock_count is not None else {}),
             "execution_context_count": row.execution_context_count,
         }
         for row in path_rows
@@ -1506,7 +1591,7 @@ def _independent_projection_failures(
         {
             **_expected_metrics(row.metrics),
             "wait_outcome": row.outcome,
-            "lock_count": row.lock_count,
+            **({"lock_count": row.lock_count} if row.lock_count is not None else {}),
             "execution_context_count": row.execution_context_count,
         }
         for row in outcome_rows
@@ -1519,7 +1604,7 @@ def _independent_projection_failures(
         {
             **_expected_metrics(row.metrics),
             "lock_kind": row.lock_kind,
-            "lock_count": row.lock_count,
+            **({"lock_count": row.lock_count} if row.lock_count is not None else {}),
             "execution_context_count": row.execution_context_count,
         }
         for row in kind_rows

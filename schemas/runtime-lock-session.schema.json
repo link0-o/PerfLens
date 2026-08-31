@@ -71,6 +71,27 @@
     }
   },
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.0"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "settlement_finalization_id": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ],
   "properties": {
     "active_seconds_used": {
       "default": 0,
@@ -246,8 +267,11 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "1.0",
       "default": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },
@@ -260,6 +284,19 @@
       "pattern": "^runtime-lock-session-[a-f0-9]{20}$",
       "title": "Session Id",
       "type": "string"
+    },
+    "settlement_finalization_id": {
+      "anyOf": [
+        {
+          "pattern": "^runtime-lock-run-finalization-[a-f0-9]{20}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Settlement Finalization Id"
     },
     "state": {
       "enum": [

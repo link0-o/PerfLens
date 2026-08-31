@@ -16,9 +16,11 @@ from perflens import __version__
 from perflens.application.evidence import contract_content_sha256
 from perflens.contracts.artifacts import ContractModel
 from perflens.contracts.runtime_lock_sessions import (
+    RuntimeLockAdapterExecutionBinding,
     RuntimeLockAdapterId,
     RuntimeLockCapabilityArtifact,
     RuntimeLockRunArtifact,
+    RuntimeLockRunFinalizationArtifact,
     RuntimeLockSessionArtifact,
     RuntimeLockSessionBudget,
     RuntimeLockSessionEndReason,
@@ -26,6 +28,7 @@ from perflens.contracts.runtime_lock_sessions import (
     RuntimeLockTargetScope,
     RuntimeLockWorkloadBinding,
     derive_runtime_lock_preview_id,
+    derive_runtime_lock_run_finalization_id,
     derive_runtime_lock_session_artifact_id,
 )
 from perflens.contracts.runtime_locks import MeasurementSemantics
@@ -74,6 +77,14 @@ class RuntimeLockRunLease:
     session_revision: int
     expires_at: str
     token: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeLockRunSettlement:
+    """Artifacts that must be persisted Session-first and marker-last."""
+
+    session: RuntimeLockSessionArtifact
+    finalization: RuntimeLockRunFinalizationArtifact
 
 
 @dataclass(slots=True)
@@ -286,7 +297,7 @@ class RuntimeLockSessionAuthority:
             )
             if not 1 <= reserve_active_seconds <= max_duration:
                 raise _resource_error("Runtime Lock active-time reservation is invalid")
-            if not 1 <= reserve_evidence_bytes <= budget.max_artifact_bytes:
+            if not 1 <= reserve_evidence_bytes <= budget.max_evidence_bytes:
                 raise _resource_error("Runtime Lock evidence reservation is invalid")
             if measurement_semantics == "exact":
                 if not 1 <= reserve_exact_events <= budget.max_exact_events:
@@ -371,7 +382,7 @@ class RuntimeLockSessionAuthority:
         access: RuntimeLockSessionAccess,
         lease: RuntimeLockRunLease,
         run: RuntimeLockRunArtifact,
-    ) -> RuntimeLockSessionArtifact:
+    ) -> RuntimeLockRunSettlement:
         _verify_content(run)
         with self._lock:
             state = self._require(access)
@@ -391,9 +402,17 @@ class RuntimeLockSessionAuthority:
                 raise _resource_error("Runtime Lock Run exceeded its reservation")
             artifact = state.artifact
             self._release_active_lease(state)
+            finalization_id = derive_runtime_lock_run_finalization_id(
+                artifact.session_id,
+                active.operation_identity_sha256,
+            )
+            settled_at = max(
+                self._wall_now(),
+                datetime.fromisoformat(run.created_at),
+            )
             state.artifact = _update_session(
                 artifact,
-                updated_at=self._wall_now(),
+                updated_at=settled_at,
                 active_seconds_used=(
                     artifact.active_seconds_used
                     - active.reserved_active_seconds
@@ -409,8 +428,25 @@ class RuntimeLockSessionAuthority:
                     - active.reserved_exact_events
                     + (run.event_count if active.measurement_semantics == "exact" else 0)
                 ),
+                settlement_finalization_id=finalization_id,
             )
-            return state.artifact
+            finalization = _build_run_finalization(
+                reserved_session=artifact,
+                final_session=state.artifact,
+                active=active,
+                outcome="completed",
+                run=run,
+                accounted_active_seconds=run.duration_seconds,
+                accounted_evidence_bytes=run.evidence_bytes,
+                accounted_exact_events=(
+                    run.event_count if active.measurement_semantics == "exact" else 0
+                ),
+                failure_reason=None,
+            )
+            return RuntimeLockRunSettlement(
+                session=state.artifact,
+                finalization=finalization,
+            )
 
     def fail_run(
         self,
@@ -421,7 +457,7 @@ class RuntimeLockSessionAuthority:
         actual_evidence_bytes: int,
         actual_exact_events: int = 0,
         reason: RuntimeLockSessionEndReason,
-    ) -> RuntimeLockSessionArtifact:
+    ) -> RuntimeLockRunSettlement:
         actual_seconds = _bounded_actual_seconds(actual_active_seconds)
         public_reason = _public_end_reason(reason)
         if actual_evidence_bytes < 0 or actual_exact_events < 0:
@@ -437,31 +473,59 @@ class RuntimeLockSessionAuthority:
                 or actual_exact_events > active.reserved_exact_events
             )
             artifact = state.artifact
+            accounted_active_seconds = min(actual_seconds, active.reserved_active_seconds)
+            accounted_evidence_bytes = min(
+                actual_evidence_bytes,
+                active.reserved_evidence_bytes,
+            )
+            accounted_exact_events = min(
+                actual_exact_events,
+                active.reserved_exact_events,
+            )
+            finalization_id = derive_runtime_lock_run_finalization_id(
+                artifact.session_id,
+                active.operation_identity_sha256,
+            )
             state.artifact = _update_session(
                 artifact,
                 updated_at=self._wall_now(),
                 active_seconds_used=(
                     artifact.active_seconds_used
                     - active.reserved_active_seconds
-                    + min(actual_seconds, active.reserved_active_seconds)
+                    + accounted_active_seconds
                 ),
                 evidence_bytes_used=(
                     artifact.evidence_bytes_used
                     - active.reserved_evidence_bytes
-                    + min(actual_evidence_bytes, active.reserved_evidence_bytes)
+                    + accounted_evidence_bytes
                 ),
                 exact_events_used=(
                     artifact.exact_events_used
                     - active.reserved_exact_events
-                    + min(actual_exact_events, active.reserved_exact_events)
+                    + accounted_exact_events
                 ),
                 state="exhausted" if over_budget else "failed",
                 invalidation_reason=(
                     "operation_reservation_exceeded" if over_budget else public_reason
                 ),
+                settlement_finalization_id=finalization_id,
             )
             self._release_active_lease(state)
-            return state.artifact
+            finalization = _build_run_finalization(
+                reserved_session=artifact,
+                final_session=state.artifact,
+                active=active,
+                outcome="failed",
+                run=None,
+                accounted_active_seconds=accounted_active_seconds,
+                accounted_evidence_bytes=accounted_evidence_bytes,
+                accounted_exact_events=accounted_exact_events,
+                failure_reason=("operation_reservation_exceeded" if over_budget else public_reason),
+            )
+            return RuntimeLockRunSettlement(
+                session=state.artifact,
+                finalization=finalization,
+            )
 
     def revoke(self, access: RuntimeLockSessionAccess) -> RuntimeLockSessionArtifact:
         with self._lock:
@@ -483,6 +547,20 @@ class RuntimeLockSessionAuthority:
             state = self._require(access, allow_inactive=True)
             if state.artifact.state == "active":
                 raise _authorization_error("Active Runtime Lock Session cannot be discarded")
+            self._release_active_lease(state)
+            self._sessions.pop(access.session_id, None)
+
+    def abandon_unpublished(self, access: RuntimeLockSessionAccess) -> None:
+        """Fail closed when a reconciled Session cannot be published atomically.
+
+        This path intentionally emits no replacement Artifact.  A Session whose
+        marker-last settlement did not reach durable storage cannot safely form
+        the parent of another run, so its process-local bearer capability is
+        destroyed regardless of the in-memory Session state.
+        """
+
+        with self._lock:
+            state = self._require(access, allow_inactive=True)
             self._release_active_lease(state)
             self._sessions.pop(access.session_id, None)
 
@@ -687,6 +765,7 @@ class RuntimeLockSessionRuntime:
         allowed_semantics: tuple[MeasurementSemantics, ...],
         import_roots: tuple[str, ...] = (),
         workload: RuntimeLockWorkloadBinding | None = None,
+        adapter_execution_bindings: tuple[RuntimeLockAdapterExecutionBinding, ...] = (),
         budget: RuntimeLockSessionBudget | None = None,
         planned_actions: tuple[str, ...],
         warnings: tuple[str, ...] = (),
@@ -717,6 +796,7 @@ class RuntimeLockSessionRuntime:
                 allowed_semantics=allowed_semantics,
                 import_roots=import_roots,
                 workload=workload,
+                adapter_execution_bindings=adapter_execution_bindings,
                 budget=budget,
                 planned_actions=planned_actions,
                 warnings=warnings,
@@ -807,7 +887,7 @@ class RuntimeLockSessionRuntime:
         session_id: str,
         lease: RuntimeLockRunLease,
         run: RuntimeLockRunArtifact,
-    ) -> RuntimeLockSessionArtifact:
+    ) -> RuntimeLockRunSettlement:
         with self._lock:
             session = self._require_session(session_id)
             return self._authority.finish_run(session.access, lease, run)
@@ -821,7 +901,7 @@ class RuntimeLockSessionRuntime:
         actual_evidence_bytes: int,
         actual_exact_events: int = 0,
         reason: RuntimeLockSessionEndReason,
-    ) -> RuntimeLockSessionArtifact:
+    ) -> RuntimeLockRunSettlement:
         with self._lock:
             session = self._require_session(session_id)
             return self._authority.fail_run(
@@ -844,6 +924,14 @@ class RuntimeLockSessionRuntime:
             self._authority.discard(session.access)
             self._sessions.pop(session_id, None)
             return artifact
+
+    def abandon_unpublished(self, session_id: str) -> None:
+        """Destroy an authorization whose final state was not durably published."""
+
+        with self._lock:
+            session = self._require_session(session_id)
+            self._authority.abandon_unpublished(session.access)
+            self._sessions.pop(session_id, None)
 
     def close(self) -> tuple[RuntimeLockSessionArtifact, ...]:
         with self._lock:
@@ -914,6 +1002,7 @@ def build_runtime_lock_session_preview(
     allowed_semantics: tuple[MeasurementSemantics, ...],
     import_roots: tuple[str, ...] = (),
     workload: RuntimeLockWorkloadBinding | None = None,
+    adapter_execution_bindings: tuple[RuntimeLockAdapterExecutionBinding, ...] = (),
     budget: RuntimeLockSessionBudget | None = None,
     planned_actions: tuple[str, ...],
     warnings: tuple[str, ...] = (),
@@ -937,7 +1026,7 @@ def build_runtime_lock_session_preview(
     _validate_preview_scope(capability, adapters, semantics)
     created = now.isoformat()
     data = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "perflens_version": __version__,
         "preview_id": derive_runtime_lock_preview_id(
             capability.project_identity_sha256,
@@ -958,6 +1047,7 @@ def build_runtime_lock_session_preview(
         "allowed_semantics": semantics,
         "import_roots": tuple(sorted(import_roots)),
         "workload": workload,
+        "adapter_execution_bindings": adapter_execution_bindings,
         "budget": budget or RuntimeLockSessionBudget(),
         "planned_actions": planned_actions,
         "warnings": warnings,
@@ -1042,7 +1132,7 @@ def _new_session_artifact(
     authorization_receipt_sha256: str,
 ) -> RuntimeLockSessionArtifact:
     data = {
-        "schema_version": "1.0",
+        "schema_version": preview.schema_version,
         "perflens_version": __version__,
         "session_artifact_id": derive_runtime_lock_session_artifact_id(
             session_id,
@@ -1098,6 +1188,9 @@ def _update_session(
     timestamp = effective_updated_at.isoformat()
     data = {
         **artifact.model_dump(mode="json"),
+        # A settlement marker describes exactly one predecessor -> successor
+        # transition and must never leak into a later unrelated revision.
+        "settlement_finalization_id": None,
         **updates,
         "revision": artifact.revision + 1,
         "previous_session_artifact_id": artifact.session_artifact_id,
@@ -1113,6 +1206,7 @@ def _update_session(
     active_seconds = data["active_seconds_used"]
     evidence = data["evidence_bytes_used"]
     exact_events = data["exact_events_used"]
+    settlement_finalization_id = data.get("settlement_finalization_id")
     if (
         not isinstance(state, str)
         or isinstance(revision, bool)
@@ -1127,6 +1221,10 @@ def _update_session(
         or not isinstance(evidence, int)
         or isinstance(exact_events, bool)
         or not isinstance(exact_events, int)
+        or (
+            settlement_finalization_id is not None
+            and not isinstance(settlement_finalization_id, str)
+        )
     ):
         raise ValueError("Runtime Lock Session update contains invalid counters")
     data["session_artifact_id"] = derive_runtime_lock_session_artifact_id(
@@ -1140,6 +1238,7 @@ def _update_session(
         active_seconds,
         evidence,
         exact_events,
+        settlement_finalization_id,
     )
     return _with_content(RuntimeLockSessionArtifact.model_validate(data))
 
@@ -1150,6 +1249,62 @@ def _with_content(artifact: RuntimeLockSessionArtifact) -> RuntimeLockSessionArt
             **artifact.model_dump(mode="json"),
             "content_sha256": contract_content_sha256(
                 artifact,
+                exclude={"content_sha256"},
+            ),
+        }
+    )
+
+
+def _build_run_finalization(
+    *,
+    reserved_session: RuntimeLockSessionArtifact,
+    final_session: RuntimeLockSessionArtifact,
+    active: _ActiveLease,
+    outcome: str,
+    run: RuntimeLockRunArtifact | None,
+    accounted_active_seconds: int,
+    accounted_evidence_bytes: int,
+    accounted_exact_events: int,
+    failure_reason: RuntimeLockSessionEndReason | None,
+) -> RuntimeLockRunFinalizationArtifact:
+    finalization_id = derive_runtime_lock_run_finalization_id(
+        reserved_session.session_id,
+        active.operation_identity_sha256,
+    )
+    provisional = RuntimeLockRunFinalizationArtifact.model_validate(
+        {
+            "schema_version": "1.1",
+            "perflens_version": __version__,
+            "finalization_id": finalization_id,
+            "created_at": final_session.updated_at,
+            "session_id": reserved_session.session_id,
+            "operation_identity_sha256": active.operation_identity_sha256,
+            "outcome": outcome,
+            "adapter_id": active.adapter_id,
+            "measurement_semantics": active.measurement_semantics,
+            "reserved_session_artifact_id": reserved_session.session_artifact_id,
+            "reserved_session_artifact_content_sha256": reserved_session.content_sha256,
+            "reserved_session_revision": reserved_session.revision,
+            "final_session_artifact_id": final_session.session_artifact_id,
+            "final_session_artifact_content_sha256": final_session.content_sha256,
+            "final_session_revision": final_session.revision,
+            "reserved_active_seconds": active.reserved_active_seconds,
+            "reserved_evidence_bytes": active.reserved_evidence_bytes,
+            "reserved_exact_events": active.reserved_exact_events,
+            "accounted_active_seconds": accounted_active_seconds,
+            "accounted_evidence_bytes": accounted_evidence_bytes,
+            "accounted_exact_events": accounted_exact_events,
+            "run_id": run.run_id if run is not None else None,
+            "run_content_sha256": run.content_sha256 if run is not None else None,
+            "failure_reason": failure_reason,
+            "content_sha256": "0" * 64,
+        }
+    )
+    return RuntimeLockRunFinalizationArtifact.model_validate(
+        {
+            **provisional.model_dump(mode="json"),
+            "content_sha256": contract_content_sha256(
+                provisional,
                 exclude={"content_sha256"},
             ),
         }

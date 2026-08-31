@@ -19,6 +19,11 @@ from perflens.contracts.runtime_locks import (
     RuntimeAdapterCapabilityArtifact,
     RuntimeFamily,
 )
+from perflens.runtime_locks.java_jfr_adapter import (
+    JavaJfrAdapterBridge,
+    build_java_jfr_adapter_bridge,
+)
+from perflens.runtime_locks.java_jfr_capability import JavaJfrCapability
 from perflens.runtime_locks.native_launcher import NativeLaunchCapability
 from perflens.runtime_locks.project_config import RuntimeLockProjectPolicy
 
@@ -82,6 +87,8 @@ def inspect_runtime_lock_capability(
     *,
     project_identity_sha256: str,
     native_pthread_capability: NativeLaunchCapability | None = None,
+    java_jfr_capability: JavaJfrCapability | None = None,
+    java_jfr_bridge: JavaJfrAdapterBridge | None = None,
     created_at: datetime | None = None,
 ) -> RuntimeLockCapabilityInspection:
     """Report only implemented and policy-enabled backends; never execute a target."""
@@ -96,6 +103,8 @@ def inspect_runtime_lock_capability(
             adapter_id,
             created_at=created,
             native_pthread_capability=native_pthread_capability,
+            java_jfr_capability=java_jfr_capability,
+            java_jfr_bridge=java_jfr_bridge,
         )
         for adapter_id in policy.allowed_adapters
     )
@@ -121,6 +130,10 @@ def inspect_runtime_lock_capability(
         (item for item in references if item.adapter_id == "native_pthread"),
         None,
     )
+    java_reference = next(
+        (item for item in references if item.adapter_id == "java_jfr"),
+        None,
+    )
     if native_reference is not None and native_reference.availability == "available":
         limitations = (
             "Native pthread launch instrumentation is available only for the safely discovered "
@@ -132,6 +145,15 @@ def inspect_runtime_lock_capability(
             "Native pthread launch instrumentation has partial coverage; its Adapter limitations "
             "must be retained in every result.",
             NATIVE_PTHREAD_ACTIVE_SCOPE_LIMITATION,
+        )
+    elif java_reference is not None and java_reference.availability in {
+        "available",
+        "partial",
+    }:
+        limitations = (
+            "Java JFR startup instrumentation is available only for one policy-authorized "
+            "host executable-JAR workload; live attach is unavailable.",
+            *java_reference.limitations,
         )
     elif any(item.adapter_id == "generic_ndjson_import" for item in available):
         limitations = (
@@ -147,6 +169,11 @@ def inspect_runtime_lock_capability(
         next_steps = (
             "Preview one bounded Native pthread launch Session for an explicit workload.",
         )
+    elif java_reference is not None and java_reference.availability in {
+        "available",
+        "partial",
+    }:
+        next_steps = ("Preview one bounded Java JFR launch Session for an explicit JAR.",)
     elif any(item.adapter_id == "generic_ndjson_import" for item in available):
         next_steps = (
             "Preview one controlled-import Session before importing Runtime Lock evidence.",
@@ -154,7 +181,7 @@ def inspect_runtime_lock_capability(
     else:
         next_steps = ("Install or enable one reviewed Runtime Lock Adapter.",)
     provisional = RuntimeLockCapabilityArtifact(
-        schema_version="1.0",
+        schema_version="1.1",
         perflens_version=__version__,
         capability_id=derive_runtime_lock_capability_id(
             project_identity_sha256,
@@ -190,6 +217,8 @@ def _adapter_capability(
     *,
     created_at: str,
     native_pthread_capability: NativeLaunchCapability | None,
+    java_jfr_capability: JavaJfrCapability | None,
+    java_jfr_bridge: JavaJfrAdapterBridge | None,
 ) -> RuntimeAdapterCapabilityArtifact:
     if adapter_id == "native_pthread":
         return _native_adapter_capability(
@@ -197,6 +226,14 @@ def _adapter_capability(
             created_at=created_at,
             native_pthread_capability=native_pthread_capability,
         )
+    if adapter_id == "java_jfr":
+        if java_jfr_bridge is not None:
+            return java_jfr_bridge.capability
+        return build_java_jfr_adapter_bridge(
+            policy,
+            java_jfr_capability,
+            created_at=created_at,
+        ).capability
     adapter_policy = policy.adapter_policy(adapter_id)
     implemented = adapter_id == "generic_ndjson_import"
     enabled = policy.enabled and adapter_policy.enabled

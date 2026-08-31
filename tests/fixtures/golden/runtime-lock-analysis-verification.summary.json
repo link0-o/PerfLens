@@ -120,7 +120,7 @@
   },
   "verification": {
     "schema_version": "1.1",
-    "runtime_lock_verification_id": "runtime-lock-verification-9d3ea60f9c5c8c33",
+    "runtime_lock_verification_id": "runtime-lock-verification-da75f9170be8fed4",
     "runtime_lock_evidence_id": "runtime-lock-evidence-79057ed0e5e5402de145dfaf",
     "runtime_lock_evidence_content_sha256": "671640de55e129abebbe848cba612810dad119858a6403ee49f5a91175672fc1",
     "runtime_lock_analysis_id": "runtime-lock-analysis-709ad7843d62f559",
@@ -131,7 +131,7 @@
       {
         "name": "source_identity",
         "status": "passed",
-        "detail": "Private source byte count and SHA-256 match the immutable source receipt."
+        "detail": "Raw source byte count and SHA-256 match the persisted replay receipt."
       },
       {
         "name": "source_conversion_replay",
@@ -179,7 +179,19 @@
         "detail": "Every Agent-visible Analysis field matches its digest and input fingerprint."
       }
     ],
+    "source_replay_receipt": {
+      "status": "passed",
+      "source_format": "perflens_runtime_lock_ndjson_v1",
+      "raw_source_sha256": "d0ff1cdaf96ab4c2b4e5e50d634f34eacc608f702c7ce49f2a515706e9bdbb33",
+      "raw_source_bytes": 2522,
+      "normalized_source_sha256": "7a2516e35477e19edd899d061e5d8ec47969fa987e73457f207e2f1470343e2e",
+      "normalized_source_bytes": 2421,
+      "converter_version": "runtime-lock-ndjson-v1.1",
+      "conversion_fingerprint": "3fc88314b1a525347bad9b2382b4dc2f83646451beb611b3c4e5a0e668c75481",
+      "runtime_lock_evidence_id": "runtime-lock-evidence-79057ed0e5e5402de145dfaf",
+      "runtime_lock_evidence_content_sha256": "671640de55e129abebbe848cba612810dad119858a6403ee49f5a91175672fc1"
+    },
     "verifier_version": "runtime-lock-verifier-v2",
-    "content_sha256": "9826d5550315d5a5750c90a85da4b94f81a420c7469e62b49b87da9f6852e563"
+    "content_sha256": "d6a5de40a04f1d48e620294942391f84b839f4b800fe6bcf6f798e4ce71673b3"
   }
 }

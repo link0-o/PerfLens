@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0",
+  "generator": "tests/native Java lock fixture JfrLockFixture",
+  "jfr_print_arguments": [
+    "--json",
+    "--events",
+    "jdk.JavaMonitorEnter,jdk.JavaMonitorWait,jdk.ThreadPark,jdk.DataLoss",
+    "--stack-depth",
+    "127"
+  ],
+  "fixtures": [
+    {
+      "path": "jdk21-locks.json",
+      "jdk_major": 21,
+      "jdk_runtime_version": "21.0.12.1",
+      "sha256": "48516b6b0e97e98a8c097f82eaa8b1b1b53f292e0591cb4e3e31c300b560d87c",
+      "bytes": 22814,
+      "provenance": "generated locally with /usr/lib/jvm/java-21-openjdk-amd64"
+    },
+    {
+      "path": "jdk25-locks.json",
+      "jdk_major": 25,
+      "jdk_runtime_version": "25.0.4.1",
+      "sha256": "bfd7d73bbf6542d547806118e07d15a2b7b5dc80bf447f354073a312c332cea5",
+      "bytes": 22801,
+      "provenance": "generated locally with /usr/lib/jvm/java-25-openjdk-amd64"
+    }
+  ],
+  "missing_matrix_fixture": {
+    "jdk_major": 17,
+    "reason": "JDK 17 was not installed on the development host; no fixture was fabricated"
+  }
+}

@@ -89,6 +89,7 @@ from perflens.contracts.runtime_lock_sessions import (
     RuntimeLockCapabilityArtifact,
     RuntimeLockComparisonArtifact,
     RuntimeLockRunArtifact,
+    RuntimeLockRunFinalizationArtifact,
     RuntimeLockSessionArtifact,
     RuntimeLockSessionBudget,
     RuntimeLockSessionPreviewArtifact,
@@ -109,6 +110,10 @@ from perflens.contracts.trace import (
     TraceEvidenceArtifact,
 )
 from perflens.privileged_helper.protocol import helper_request_schema, helper_response_schema
+from perflens.runtime_locks.supervisor import (
+    runtime_supervisor_receipt_schema,
+    runtime_supervisor_request_schema,
+)
 from perflens.trace_helper.protocol import (
     trace_helper_request_schema,
     trace_helper_response_schema,
@@ -186,6 +191,7 @@ MODELS = {
     "runtime-lock-session-preview.schema.json": RuntimeLockSessionPreviewArtifact,
     "runtime-lock-session.schema.json": RuntimeLockSessionArtifact,
     "runtime-lock-run.schema.json": RuntimeLockRunArtifact,
+    "runtime-lock-run-finalization.schema.json": RuntimeLockRunFinalizationArtifact,
     "runtime-lock-comparison.schema.json": RuntimeLockComparisonArtifact,
     "docker-runtime-capability.schema.json": DockerRuntimeCapabilityArtifact,
     "docker-build-capability.schema.json": DockerBuildCapabilityArtifact,
@@ -232,6 +238,14 @@ def main() -> None:
     )
     (root / "trace-helper-response.schema.json").write_text(
         json.dumps(trace_helper_response_schema(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (root / "runtime-supervisor-request.schema.json").write_text(
+        json.dumps(runtime_supervisor_request_schema(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (root / "runtime-supervisor-receipt.schema.json").write_text(
+        json.dumps(runtime_supervisor_receipt_schema(), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 

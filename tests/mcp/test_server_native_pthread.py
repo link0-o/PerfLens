@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
 import stat
 from datetime import UTC, datetime, timedelta
@@ -14,7 +15,10 @@ import pytest
 from mcp.client import Client
 
 from perflens.application.evidence import contract_content_sha256
-from perflens.contracts.runtime_lock_sessions import RuntimeLockRunArtifact
+from perflens.contracts.runtime_lock_sessions import (
+    RuntimeLockRunArtifact,
+    derive_runtime_lock_run_finalization_id,
+)
 from perflens.docker.workload import inspect_managed_project_root
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp import server as server_module
@@ -147,6 +151,7 @@ class _FakeNativeLauncher:
             started_at=started.isoformat(),
             finished_at=finished.isoformat(),
             duration_seconds=0.2,
+            accounted_active_seconds=1,
             exit_code=(-15 if self.behavior == "timeout" else 0),
             termination_reason=("duration_limit" if self.behavior == "timeout" else "exited"),
             footer_observed=True,
@@ -392,6 +397,19 @@ def test_native_host_preview_collects_converts_verifies_and_cleans_private_strea
     loaded = store.load_runtime_lock_run(run_id)
     assert loaded.workload_identity_sha256
     assert loaded.quality_status == "partial"
+    started = datetime.fromisoformat(loaded.started_at)
+    finished = datetime.fromisoformat(loaded.finished_at)
+    assert loaded.created_at == loaded.finished_at
+    assert loaded.duration_seconds == math.ceil((finished - started).total_seconds()) == 1
+    finalization_id = derive_runtime_lock_run_finalization_id(
+        loaded.session_id,
+        loaded.operation_identity_sha256,
+    )
+    finalization = store.load_runtime_lock_run_finalization(finalization_id)
+    assert finalization.accounted_active_seconds == loaded.duration_seconds
+    settled_session = store.load_runtime_lock_session(finalization.final_session_artifact_id)
+    assert settled_session.active_seconds_used == loaded.duration_seconds
+    assert settled_session.settlement_finalization_id == finalization.finalization_id
     assert any(
         warning.startswith("Native launch coverage is partial:") for warning in loaded.warnings
     )
@@ -440,6 +458,82 @@ def test_native_thresholded_collection_uses_only_policy_threshold(tmp_path: Path
             assert launchers[0].requests[0].threshold_ns == 1000
 
     asyncio.run(exercise())
+
+
+def test_native_persisted_run_rejects_promoted_quality_boundary_tampering(
+    tmp_path: Path,
+) -> None:
+    server, project, artifacts, _launchers = _server(tmp_path)
+    run_id = ""
+
+    async def exercise() -> None:
+        nonlocal run_id
+        async with Client(cast(Any, server)) as client:
+            _preview, session = await _authorize_host_session(client)
+            collected = await client.call_tool(
+                "collect_runtime_lock_evidence",
+                {
+                    "session_id": session["session_id"],
+                    "measurement_semantics": "exact",
+                    "duration_seconds": 3,
+                    "max_events": 20,
+                },
+            )
+            assert not collected.is_error, collected.content
+            run_id = cast(str, _structured(collected)["artifact_id"])
+
+    asyncio.run(exercise())
+    store = ArtifactStore(artifacts, PathPolicy((project,)), allow_writes=False)
+    run = store.load_runtime_lock_run(run_id)
+    analysis, _evidence, _verification = store.load_runtime_lock_analysis(
+        run.runtime_lock_analysis_id
+    )
+    assert analysis.quality_status == "complete"
+    assert run.quality_status == "partial"
+    finalization_id = derive_runtime_lock_run_finalization_id(
+        run.session_id,
+        run.operation_identity_sha256,
+    )
+    finalization = store.load_runtime_lock_run_finalization(finalization_id)
+    provisional = run.model_copy(
+        update={
+            "quality_status": "complete",
+            "forbidden_conclusions": tuple(
+                item
+                for item in run.forbidden_conclusions
+                if item != "unqualified_runtime_lock_conclusion"
+            ),
+            "content_sha256": "0" * 64,
+        }
+    )
+    forged = provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+    run_path = artifacts / f"{run_id}.runtime-lock-run.json"
+    run_path.write_text(forged.model_dump_json(), encoding="utf-8")
+    run_path.chmod(0o600)
+    provisional_marker = finalization.model_copy(
+        update={"run_content_sha256": forged.content_sha256, "content_sha256": "0" * 64}
+    )
+    forged_marker = provisional_marker.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                provisional_marker,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+    marker_path = artifacts / (f"{finalization_id}.runtime-lock-run-finalization.json")
+    marker_path.write_text(forged_marker.model_dump_json(), encoding="utf-8")
+    marker_path.chmod(0o600)
+
+    with pytest.raises(PerfLensError, match="Agent-visible content"):
+        store.load_runtime_lock_run(run_id)
 
 
 def test_native_short_lived_tid_is_reported_partial_without_false_rejection(

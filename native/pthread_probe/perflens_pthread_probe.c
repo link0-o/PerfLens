@@ -415,10 +415,15 @@ static bool output_descriptor_is_safe(int fd) {
     struct stat status;
     long flags = syscall(SYS_fcntl, fd, F_GETFL, 0U);
     long descriptor_flags;
-    if (flags < 0 || ((int)flags & O_ACCMODE) == O_RDONLY) {
+    if (flags < 0 || ((int)flags & O_ACCMODE) == O_RDONLY ||
+        ((int)flags & O_APPEND) != 0) {
         return false;
     }
-    if (syscall(SYS_fstat, fd, &status) != 0 || !S_ISREG(status.st_mode) ||
+    /* Stable active collection writes either to the launcher's private,
+     * empty regular file or to the runtime supervisor's private bounded
+     * pipe. Sockets and every other descriptor type remain forbidden. */
+    if (syscall(SYS_fstat, fd, &status) != 0 ||
+        (!S_ISREG(status.st_mode) && !S_ISFIFO(status.st_mode)) ||
         status.st_nlink != 1 || status.st_uid != raw_uid() ||
         (status.st_mode & (mode_t)0777) != (mode_t)0600) {
         return false;

@@ -97,6 +97,15 @@ def main() -> None:
         packaged_gate = Path("usr/lib/perflens/perflens-container-gate")
         assert (main_root / packaged_gate).is_file()
         assert not (collector_root / packaged_gate).exists()
+        packaged_supervisor = Path("usr/lib/perflens/perflens-runtime-supervisor")
+        assert (main_root / packaged_supervisor).is_file()
+        assert not (collector_root / packaged_supervisor).exists()
+        _assert_root_owned_archive_file(
+            dpkg_deb,
+            main_package,
+            packaged_supervisor,
+            expected_mode=0o755,
+        )
         packaged_probe = Path("usr/lib/perflens/libperflens-pthread-probe.so")
         probe = main_root / packaged_probe
         assert probe.is_file()
@@ -151,6 +160,9 @@ def main() -> None:
         container_gate = root / "usr/lib/perflens/perflens-container-gate"
         assert container_gate.is_file()
         assert container_gate.stat().st_mode & 0o777 == 0o755
+        runtime_supervisor = root / "usr/lib/perflens/perflens-runtime-supervisor"
+        assert runtime_supervisor.is_file()
+        assert runtime_supervisor.stat().st_mode & 0o777 == 0o755
         docker_config = main_root / "usr/share/perflens/docker-empty-config"
         assert docker_config.is_dir()
         assert not tuple(docker_config.iterdir())
@@ -210,6 +222,7 @@ def _assert_safe_modes(root: Path) -> None:
         if path.is_dir() or path.name in {
             "perflens-launcher",
             "perflens-container-gate",
+            "perflens-runtime-supervisor",
             "perflens-privileged-helper",
             "perflens-trace-helper",
         }:
@@ -231,11 +244,13 @@ def _assert_shared_libraries(root: Path) -> None:
         )
         assert "not found" not in completed.stdout, shared_object
     gate = root / "usr/lib/perflens/perflens-container-gate"
-    with gate.open("rb") as gate_stream:
-        validate_self_contained_elf(
-            gate_stream.fileno(),
-            file_size=gate.stat().st_size,
-        )
+    supervisor = root / "usr/lib/perflens/perflens-runtime-supervisor"
+    for fixed_runtime_boundary in (gate, supervisor):
+        with fixed_runtime_boundary.open("rb") as stream:
+            validate_self_contained_elf(
+                stream.fileno(),
+                file_size=fixed_runtime_boundary.stat().st_size,
+            )
     for helper in (
         root / "usr/lib/perflens/perflens-privileged-helper",
         root / "usr/lib/perflens/perflens-trace-helper",

@@ -60,6 +60,11 @@ def main() -> None:
         help="Prebuilt release perflens-container-gate binary.",
     )
     parser.add_argument(
+        "--runtime-supervisor-binary",
+        type=Path,
+        help="Prebuilt static perflens-runtime-supervisor binary.",
+    )
+    parser.add_argument(
         "--pthread-probe-library",
         type=Path,
         help="Prebuilt hardened libperflens-pthread-probe.so.",
@@ -97,6 +102,12 @@ def main() -> None:
         parser,
         "Rust container Gate binary",
     )
+    runtime_supervisor_binary = _executable(
+        arguments.runtime_supervisor_binary
+        or project_root / "target/release/perflens-runtime-supervisor",
+        parser,
+        "Rust Runtime Lock supervisor binary",
+    )
     pthread_probe_library = _regular_input(
         arguments.pthread_probe_library
         or project_root / "build/native-pthread/libperflens-pthread-probe.so",
@@ -108,13 +119,10 @@ def main() -> None:
     except (OSError, ValueError) as exc:
         parser.error(f"Native pthread probe library is unsafe: {exc}")
     try:
-        with container_gate_binary.open("rb") as gate_stream:
-            validate_self_contained_elf(
-                gate_stream.fileno(),
-                file_size=container_gate_binary.stat().st_size,
-            )
+        for binary in (container_gate_binary, runtime_supervisor_binary):
+            _validate_static_runtime_boundary(binary)
     except (OSError, ValueError) as exc:
-        parser.error(f"Rust container Gate binary is not self-contained: {exc}")
+        parser.error(f"Rust static runtime boundary binary is unsafe: {exc}")
     python = _executable(arguments.python, parser, "Python interpreter")
     uv_candidate = arguments.uv or _which_path("uv", parser)
     uv = _executable(uv_candidate, parser, "uv executable")
@@ -159,6 +167,7 @@ def main() -> None:
             python_abi=python_abi,
             offline=arguments.offline,
             container_gate_binary=container_gate_binary,
+            runtime_supervisor_binary=runtime_supervisor_binary,
             pthread_probe_library=pthread_probe_library,
         )
         _build_collector_tree(
@@ -189,6 +198,7 @@ def _build_main_tree(
     python_abi: str,
     offline: bool,
     container_gate_binary: Path,
+    runtime_supervisor_binary: Path,
     pthread_probe_library: Path,
 ) -> None:
     runtime = root / "usr/lib/perflens"
@@ -237,6 +247,9 @@ def _build_main_tree(
     container_gate = runtime / "perflens-container-gate"
     shutil.copyfile(container_gate_binary, container_gate)
     container_gate.chmod(0o755)
+    runtime_supervisor = runtime / "perflens-runtime-supervisor"
+    shutil.copyfile(runtime_supervisor_binary, runtime_supervisor)
+    runtime_supervisor.chmod(0o755)
     pthread_probe = runtime / "libperflens-pthread-probe.so"
     shutil.copyfile(pthread_probe_library, pthread_probe)
     pthread_probe.chmod(0o644)
@@ -455,6 +468,7 @@ def _normalize_tree(root: Path) -> None:
         launcher.chmod(0o755)
     for helper_name in (
         "perflens-container-gate",
+        "perflens-runtime-supervisor",
         "perflens-privileged-helper",
         "perflens-trace-helper",
     ):
@@ -554,6 +568,57 @@ def _validate_pthread_probe_library(path: Path) -> None:
         )
         if not bind_now:
             raise ValueError("probe is missing immediate relocation binding")
+
+
+def _validate_static_runtime_boundary(path: Path) -> None:
+    """Require the package runtime boundaries to be hardened static amd64 ELF files."""
+
+    metadata = path.stat(follow_symlinks=False)
+    if not 1 <= metadata.st_size <= 64 << 20:
+        raise ValueError("static runtime boundary size is outside the fixed bound")
+    with path.open("rb") as handle:
+        validate_self_contained_elf(handle.fileno(), file_size=metadata.st_size)
+        handle.seek(0)
+        try:
+            elf = ELFFile(handle)
+        except ELFError as exc:
+            raise ValueError("static runtime boundary is not a valid ELF executable") from exc
+        if (
+            elf.elfclass != 64
+            or not elf.little_endian
+            or elf["e_machine"] != "EM_X86_64"
+            or elf["e_type"] not in {"ET_EXEC", "ET_DYN"}
+        ):
+            raise ValueError("static runtime boundary must be a little-endian amd64 executable")
+        has_relro = False
+        for segment in elf.iter_segments():
+            segment_type = segment["p_type"]
+            if segment_type == "PT_INTERP":
+                raise ValueError("static runtime boundary cannot carry an interpreter")
+            if segment_type == "PT_GNU_RELRO":
+                has_relro = True
+            if segment_type == "PT_GNU_STACK" and int(segment["p_flags"]) & 1:
+                raise ValueError("static runtime boundary requests an executable stack")
+        if not has_relro:
+            raise ValueError("static runtime boundary is missing GNU RELRO")
+        dynamic = elf.get_section_by_name(".dynamic")
+        if dynamic is None:
+            return
+        tags = tuple(cast(Any, dynamic).iter_tags())
+        tag_names = {str(tag.entry.d_tag) for tag in tags}
+        if any(str(tag.entry.d_tag) == "DT_NEEDED" for tag in tags):
+            raise ValueError("static runtime boundary unexpectedly depends on a shared library")
+        if {"DT_RPATH", "DT_RUNPATH", "DT_TEXTREL"} & tag_names:
+            raise ValueError("static runtime boundary contains an unsafe loader directive")
+        bind_now = (
+            "DT_BIND_NOW" in tag_names
+            or any(str(tag.entry.d_tag) == "DT_FLAGS" and int(tag.entry.d_val) & 8 for tag in tags)
+            or any(
+                str(tag.entry.d_tag) == "DT_FLAGS_1" and int(tag.entry.d_val) & 1 for tag in tags
+            )
+        )
+        if not bind_now:
+            raise ValueError("static runtime boundary is missing immediate relocation binding")
 
 
 def _elf_symbol_in_executable_load(elf: ELFFile, symbol: Any) -> bool:

@@ -7,6 +7,8 @@ from pydantic import ValidationError
 
 from perflens.contracts.runtime_lock_sessions import (
     RuntimeLockAdapterCapabilityReference,
+    RuntimeLockAdapterExecutionBinding,
+    RuntimeLockAdapterToolBinding,
     RuntimeLockCapabilityArtifact,
     RuntimeLockComparisonArtifact,
     RuntimeLockRunArtifact,
@@ -14,11 +16,14 @@ from perflens.contracts.runtime_lock_sessions import (
     RuntimeLockSessionBudget,
     RuntimeLockSessionPreviewArtifact,
     RuntimeLockWorkloadBinding,
+    derive_runtime_lock_adapter_execution_identity,
     derive_runtime_lock_capability_id,
     derive_runtime_lock_comparison_id,
     derive_runtime_lock_preview_id,
+    derive_runtime_lock_run_boundaries,
     derive_runtime_lock_run_id,
     derive_runtime_lock_session_artifact_id,
+    derive_runtime_lock_toolchain_identity,
     derive_runtime_lock_workload_identity,
 )
 
@@ -105,6 +110,74 @@ def _preview() -> RuntimeLockSessionPreviewArtifact:
         authorization_summary_sha256=_SIX,
         content_sha256="7" * 64,
     )
+
+
+def _java_binding() -> RuntimeLockAdapterExecutionBinding:
+    tools = (
+        RuntimeLockAdapterToolBinding(name="java", version="25.0.4.1", binary_sha256=_FOUR),
+        RuntimeLockAdapterToolBinding(name="jfr", version="25.0.4.1", binary_sha256=_FIVE),
+    )
+    toolchain_identity = derive_runtime_lock_toolchain_identity(tools)
+    runtime_payload_identity = "8" * 64
+    execution_identity = derive_runtime_lock_adapter_execution_identity(
+        "java_jfr",
+        "java-jfr-adapter-v1",
+        "jfr",
+        "25.0.4.1",
+        "balanced",
+        "thresholded",
+        10_000_000,
+        toolchain_identity,
+        _TWO,
+        _THREE,
+        runtime_payload_identity,
+    )
+    return RuntimeLockAdapterExecutionBinding(
+        adapter_id="java_jfr",
+        adapter_version="java-jfr-adapter-v1",
+        backend_id="jfr",
+        runtime_version="25.0.4.1",
+        profile="balanced",
+        measurement_semantics="thresholded",
+        duration_threshold_ns=10_000_000,
+        tools=tools,
+        toolchain_identity_sha256=toolchain_identity,
+        configuration_sha256=_TWO,
+        metadata_sha256=_THREE,
+        runtime_payload_identity_sha256=runtime_payload_identity,
+        execution_identity_sha256=execution_identity,
+        limitations=("Thresholded JFR events do not represent invisible waits.",),
+    )
+
+
+def test_runtime_lock_schema_1_0_session_id_derivation_remains_compatible() -> None:
+    session = _session()
+    legacy_id = derive_runtime_lock_session_artifact_id(
+        session.session_id,
+        session.revision,
+        session.state,
+        session.updated_at,
+        session.previous_session_artifact_id,
+        session.previous_session_artifact_content_sha256,
+        session.workload_runs_used,
+        session.active_seconds_used,
+        session.evidence_bytes_used,
+        session.exact_events_used,
+    )
+    explicit_none_id = derive_runtime_lock_session_artifact_id(
+        session.session_id,
+        session.revision,
+        session.state,
+        session.updated_at,
+        session.previous_session_artifact_id,
+        session.previous_session_artifact_content_sha256,
+        session.workload_runs_used,
+        session.active_seconds_used,
+        session.evidence_bytes_used,
+        session.exact_events_used,
+        None,
+    )
+    assert legacy_id == explicit_none_id == session.session_artifact_id
 
 
 def _session() -> RuntimeLockSessionArtifact:
@@ -245,6 +318,87 @@ def test_runtime_lock_workload_binding_rejects_secret_or_identity_change() -> No
         RuntimeLockWorkloadBinding.model_validate(payload)
 
 
+def test_java_jfr_execution_binding_is_content_bound_and_required_by_preview() -> None:
+    binding = _java_binding()
+    payload = binding.model_dump(mode="json")
+    payload["profile"] = "deep"
+    with pytest.raises(ValidationError, match="threshold"):
+        RuntimeLockAdapterExecutionBinding.model_validate(payload)
+
+    payload = binding.model_dump(mode="json")
+    payload["metadata_sha256"] = _FOUR
+    with pytest.raises(ValidationError, match="identity differs"):
+        RuntimeLockAdapterExecutionBinding.model_validate(payload)
+
+    preview_payload = _preview().model_dump(mode="json")
+    original_workload = _preview().workload
+    assert original_workload is not None
+    java_identity = derive_runtime_lock_workload_identity(
+        "java_jfr",
+        "java_archive",
+        "workloads/app.jar",
+        original_workload.program_sha256,
+        original_workload.program_size,
+        original_workload.working_directory,
+        original_workload.arguments,
+    )
+    java_workload = RuntimeLockWorkloadBinding(
+        adapter_id="java_jfr",
+        workload_kind="java_archive",
+        program="workloads/app.jar",
+        program_sha256=original_workload.program_sha256,
+        program_size=original_workload.program_size,
+        working_directory=original_workload.working_directory,
+        arguments=original_workload.arguments,
+        workload_identity_sha256=java_identity,
+    )
+    preview_payload["workload"] = java_workload.model_dump(mode="json")
+    preview_payload["schema_version"] = "1.1"
+    preview_payload["allowed_adapters"] = ["java_jfr"]
+    preview_payload["allowed_semantics"] = ["thresholded"]
+    with pytest.raises(ValidationError, match="execution binding"):
+        RuntimeLockSessionPreviewArtifact.model_validate(preview_payload)
+    preview_payload["adapter_execution_bindings"] = [binding.model_dump(mode="json")]
+    assert (
+        RuntimeLockSessionPreviewArtifact.model_validate(preview_payload)
+        .adapter_execution_bindings[0]
+        .execution_identity_sha256
+        == binding.execution_identity_sha256
+    )
+
+    preview_payload["allowed_semantics"] = ["exact"]
+    with pytest.raises(ValidationError, match="semantics scope"):
+        RuntimeLockSessionPreviewArtifact.model_validate(preview_payload)
+
+    preview_payload["allowed_semantics"] = ["thresholded"]
+    preview_payload["schema_version"] = "1.0"
+    with pytest.raises(ValidationError, match=r"Preview 1\.0"):
+        RuntimeLockSessionPreviewArtifact.model_validate(preview_payload)
+
+
+def test_runtime_lock_execution_binding_limitations_are_bounded() -> None:
+    payload = _java_binding().model_dump(mode="json")
+    payload["limitations"] = ["x" * 2049]
+    with pytest.raises(ValidationError):
+        RuntimeLockAdapterExecutionBinding.model_validate(payload)
+
+    payload["limitations"] = ["bounded"] * 33
+    with pytest.raises(ValidationError):
+        RuntimeLockAdapterExecutionBinding.model_validate(payload)
+
+
+def test_java_jfr_run_requires_execution_identity() -> None:
+    payload = _run().model_dump(mode="json")
+    payload["adapter_id"] = "java_jfr"
+    with pytest.raises(ValidationError, match="execution identity"):
+        RuntimeLockRunArtifact.model_validate(payload)
+
+    payload["schema_version"] = "1.0"
+    payload["adapter_execution_identity_sha256"] = _ONE
+    with pytest.raises(ValidationError, match=r"Run 1\.0"):
+        RuntimeLockRunArtifact.model_validate(payload)
+
+
 def test_runtime_lock_session_rejects_budget_overrun() -> None:
     payload = _session().model_dump(mode="json")
     payload["workload_runs_used"] = 7
@@ -311,6 +465,46 @@ def test_runtime_lock_run_timestamps_and_duration_must_be_conserved() -> None:
     payload["created_at"] = payload["started_at"]
     with pytest.raises(ValidationError, match="timestamps are inconsistent"):
         RuntimeLockRunArtifact.model_validate(payload)
+
+
+def test_runtime_lock_run_quality_gate_is_intrinsically_consistent() -> None:
+    payload = _run().model_dump(mode="json")
+    payload["quality_status"] = "partial"
+    with pytest.raises(ValidationError, match="must forbid unqualified"):
+        RuntimeLockRunArtifact.model_validate(payload)
+
+    payload = _run().model_dump(mode="json")
+    payload["forbidden_conclusions"].append("unqualified_runtime_lock_conclusion")
+    with pytest.raises(ValidationError, match="cannot carry the partial-quality gate"):
+        RuntimeLockRunArtifact.model_validate(payload)
+
+
+def test_runtime_lock_run_boundaries_only_promote_reviewed_adapter_coverage() -> None:
+    expected = derive_runtime_lock_run_boundaries(
+        adapter_id="native_pthread",
+        analysis_quality_status="complete",
+        analysis_allowed_conclusions=("runtime_lock_wait_distribution",),
+        analysis_forbidden_conclusions=("performance_root_cause",),
+        warnings=("Native launch coverage is partial: reviewed launcher limitation.",),
+    )
+    assert expected == (
+        "partial",
+        ("runtime_lock_wait_distribution",),
+        ("performance_root_cause", "unqualified_runtime_lock_conclusion"),
+    )
+
+    unreviewed = derive_runtime_lock_run_boundaries(
+        adapter_id="native_pthread",
+        analysis_quality_status="complete",
+        analysis_allowed_conclusions=("runtime_lock_wait_distribution",),
+        analysis_forbidden_conclusions=("performance_root_cause",),
+        warnings=("A caller supplied an arbitrary partial warning.",),
+    )
+    assert unreviewed == (
+        "complete",
+        ("runtime_lock_wait_distribution",),
+        ("performance_root_cause",),
+    )
 
 
 def test_runtime_lock_comparison_requires_all_matched_inputs_for_verified_improvement() -> None:
