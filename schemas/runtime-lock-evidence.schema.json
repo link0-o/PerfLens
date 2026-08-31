@@ -1192,6 +1192,46 @@
               "tool"
             ]
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_format": {
+                "const": "pprof_text_v1"
+              }
+            },
+            "required": [
+              "source_format"
+            ]
+          },
+          "then": {
+            "properties": {
+              "adapter_id": {
+                "const": "go_pprof"
+              },
+              "backend_id": {
+                "enum": [
+                  "pprof-block",
+                  "pprof-mutex"
+                ]
+              },
+              "runtime": {
+                "const": "go"
+              },
+              "schema_version": {
+                "const": "1.1"
+              },
+              "target_scope": {
+                "const": "bound_pid"
+              }
+            },
+            "required": [
+              "adapter_execution_identity_sha256",
+              "configuration_sha256",
+              "metadata_sha256",
+              "tool"
+            ]
+          }
         }
       ],
       "description": "Versioned identity and semantics of one normalized input source.",

@@ -33,7 +33,11 @@ def test_runtime_lock_policy_loads_safe_defaults(tmp_path: Path) -> None:
 
     assert policy.enabled is True
     assert policy.schema_version == "1.1"
-    assert policy.target_scopes == ("controlled_import", "host_launched_workload")
+    assert policy.target_scopes == (
+        "controlled_import",
+        "host_bound_process",
+        "host_launched_workload",
+    )
     assert policy.budget.max_workload_runs == 6
     assert policy.adapter_policy("native_pthread").duration_threshold_ns == 1000
     assert policy.adapter_policy("native_pthread").profile is None
@@ -53,6 +57,7 @@ def test_runtime_lock_policy_enables_only_bounded_docker_scopes_when_requested(
     assert policy.target_scopes == (
         "controlled_import",
         "docker_optimization",
+        "host_bound_process",
         "host_launched_workload",
         "managed_temporary_container",
     )
@@ -170,6 +175,25 @@ def test_runtime_lock_policy_rejects_java_profile_on_other_adapter(tmp_path: Pat
         load_runtime_lock_project_policy(policy_path, allowed_roots=(tmp_path,))
 
 
+def test_runtime_lock_policy_requires_both_go_startup_profile_rates(tmp_path: Path) -> None:
+    policy_path = _write_policy(tmp_path / "runtime-locks.toml")
+    policy_path.write_text(
+        policy_path.read_text(encoding="utf-8").replace(
+            "launch_instrumentation_allowed = false\ncontrolled_import_allowed = false\n"
+            "mutex_profile_fraction = 0\nblock_profile_rate_ns = 0\n"
+            "file_backend_enabled = false\nloopback_backend_enabled = false",
+            "launch_instrumentation_allowed = true\ncontrolled_import_allowed = false\n"
+            "mutex_profile_fraction = 1\nblock_profile_rate_ns = 0\n"
+            "file_backend_enabled = true\nloopback_backend_enabled = false",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PerfLensError, match="requires both mutex and block"):
+        load_runtime_lock_project_policy(policy_path, allowed_roots=(tmp_path,))
+
+
 def test_runtime_lock_policy_strictly_reads_legacy_1_0_without_java_profile(
     tmp_path: Path,
 ) -> None:
@@ -177,7 +201,32 @@ def test_runtime_lock_policy_strictly_reads_legacy_1_0_without_java_profile(
     policy_path.write_text(
         policy_path.read_text(encoding="utf-8")
         .replace('schema_version = "1.1"', 'schema_version = "1.0"', 1)
+        .replace(', "host_bound_process"', "", 1)
         .replace('profile = "balanced"\n', "", 1),
+        encoding="utf-8",
+    )
+
+    # The checked-in schema 1.0 contract exposed Go only through controlled
+    # import. Recreate that legacy entry point instead of treating the schema
+    # 1.1 discovery-only default as an old policy.
+    policy_path.write_text(
+        policy_path.read_text(encoding="utf-8").replace(
+            "[adapters.go_pprof]\n"
+            "enabled = true\n"
+            'allowed_semantics = ["cumulative"]\n'
+            "duration_threshold_ns = 0\n"
+            "exact_enabled = false\n"
+            "launch_instrumentation_allowed = false\n"
+            "controlled_import_allowed = false",
+            "[adapters.go_pprof]\n"
+            "enabled = true\n"
+            'allowed_semantics = ["cumulative"]\n'
+            "duration_threshold_ns = 0\n"
+            "exact_enabled = false\n"
+            "launch_instrumentation_allowed = false\n"
+            "controlled_import_allowed = true",
+            1,
+        ),
         encoding="utf-8",
     )
 

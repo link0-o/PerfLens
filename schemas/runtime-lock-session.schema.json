@@ -311,6 +311,7 @@
     },
     "target_scope": {
       "enum": [
+        "host_bound_process",
         "host_launched_workload",
         "managed_temporary_container",
         "docker_optimization",

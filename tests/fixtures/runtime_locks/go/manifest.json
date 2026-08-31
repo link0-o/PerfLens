@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "generator": "go1.24.4 linux/amd64 runtime/pprof + matching pprof -raw",
+  "profiles": [
+    {
+      "fixture": "go1.24.4-mutex.raw",
+      "profile_kind": "mutex",
+      "runtime_version": "1.24.4",
+      "expected_event_count": 2,
+      "source_sha256": "97bfd91b2872541746e59bb027d18b5d123e2469ae04b7fa851963996ef5f568"
+    },
+    {
+      "fixture": "go1.24.4-block.raw",
+      "profile_kind": "block",
+      "runtime_version": "1.24.4",
+      "expected_event_count": 2,
+      "source_sha256": "a14d69047269d2ad1a60832971cb50726c5f95226d8876134273b4d9dc00a665"
+    }
+  ]
+}

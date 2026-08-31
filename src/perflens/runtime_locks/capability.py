@@ -20,6 +20,7 @@ from perflens.contracts.runtime_locks import (
     RuntimeFamily,
 )
 from perflens.runtime_locks.cpython_adapter import CpythonAdapterBridge
+from perflens.runtime_locks.go_pprof_adapter import GoPprofAdapterBridge
 from perflens.runtime_locks.java_jfr_adapter import (
     JavaJfrAdapterBridge,
     build_java_jfr_adapter_bridge,
@@ -91,6 +92,7 @@ def inspect_runtime_lock_capability(
     java_jfr_capability: JavaJfrCapability | None = None,
     java_jfr_bridge: JavaJfrAdapterBridge | None = None,
     cpython_bridge: CpythonAdapterBridge | None = None,
+    go_pprof_bridge: GoPprofAdapterBridge | None = None,
     created_at: datetime | None = None,
 ) -> RuntimeLockCapabilityInspection:
     """Report only implemented and policy-enabled backends; never execute a target."""
@@ -108,6 +110,7 @@ def inspect_runtime_lock_capability(
             java_jfr_capability=java_jfr_capability,
             java_jfr_bridge=java_jfr_bridge,
             cpython_bridge=cpython_bridge,
+            go_pprof_bridge=go_pprof_bridge,
         )
         for adapter_id in policy.allowed_adapters
     )
@@ -141,6 +144,10 @@ def inspect_runtime_lock_capability(
         (item for item in references if item.adapter_id == "cpython_threading"),
         None,
     )
+    go_reference = next(
+        (item for item in references if item.adapter_id == "go_pprof"),
+        None,
+    )
     if native_reference is not None and native_reference.availability == "available":
         limitations = (
             "Native pthread launch instrumentation is available only for the safely discovered "
@@ -161,6 +168,12 @@ def inspect_runtime_lock_capability(
             "CPython startup instrumentation is limited to public threading constructors; "
             "GIL, internal, C-extension, and direct _thread locks remain outside coverage.",
             *cpython_reference.limitations,
+        )
+    elif go_reference is not None and go_reference.availability in {"available", "partial"}:
+        limitations = (
+            "Go pprof exposes cumulative profile semantics without exact TID, owner, lock "
+            "identity, or hold duration.",
+            *go_reference.limitations,
         )
     elif java_reference is not None and java_reference.availability in {
         "available",
@@ -190,6 +203,8 @@ def inspect_runtime_lock_capability(
         "partial",
     }:
         next_steps = ("Preview one bounded CPython threading launch Session.",)
+    elif go_reference is not None and go_reference.availability in {"available", "partial"}:
+        next_steps = ("Preview one bounded cumulative Go pprof Session.",)
     elif java_reference is not None and java_reference.availability in {
         "available",
         "partial",
@@ -241,6 +256,7 @@ def _adapter_capability(
     java_jfr_capability: JavaJfrCapability | None,
     java_jfr_bridge: JavaJfrAdapterBridge | None,
     cpython_bridge: CpythonAdapterBridge | None,
+    go_pprof_bridge: GoPprofAdapterBridge | None,
 ) -> RuntimeAdapterCapabilityArtifact:
     if adapter_id == "native_pthread":
         return _native_adapter_capability(
@@ -258,6 +274,8 @@ def _adapter_capability(
         ).capability
     if adapter_id == "cpython_threading" and cpython_bridge is not None:
         return cpython_bridge.capability
+    if adapter_id == "go_pprof" and go_pprof_bridge is not None:
+        return go_pprof_bridge.capability
     adapter_policy = policy.adapter_policy(adapter_id)
     implemented = adapter_id == "generic_ndjson_import"
     enabled = policy.enabled and adapter_policy.enabled

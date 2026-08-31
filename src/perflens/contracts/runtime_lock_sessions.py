@@ -39,6 +39,7 @@ RuntimeLockAdapterId = Literal[
     "generic_ndjson_import",
 ]
 RuntimeLockTargetScope = Literal[
+    "host_bound_process",
     "host_launched_workload",
     "managed_temporary_container",
     "docker_optimization",
@@ -369,6 +370,29 @@ def derive_runtime_lock_workload_identity(
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def derive_runtime_lock_process_target_identity(
+    target_pid: int,
+    target_uid: int,
+    target_start_time_ticks: int,
+    loopback_port: int,
+    socket_inode: int,
+) -> str:
+    """Bind a host process to one literal loopback listener without exposing paths."""
+
+    material = "\0".join(
+        (
+            "perflens-runtime-lock-process-target-v1",
+            str(target_pid),
+            str(target_uid),
+            str(target_start_time_ticks),
+            "127.0.0.1",
+            str(loopback_port),
+            str(socket_inode),
+        )
+    )
+    return hashlib.sha256(material.encode("ascii")).hexdigest()
+
+
 def derive_runtime_lock_adapter_execution_identity(
     adapter_id: str,
     adapter_version: str,
@@ -470,6 +494,31 @@ class RuntimeLockWorkloadBinding(ContractModel):
         return self
 
 
+class RuntimeLockProcessTargetBinding(ContractModel):
+    """Identity of one same-UID host process and its literal loopback pprof listener."""
+
+    target_pid: int = Field(gt=0)
+    target_uid: int = Field(ge=0)
+    target_start_time_ticks: int = Field(gt=0)
+    loopback_address: Literal["127.0.0.1"] = "127.0.0.1"
+    loopback_port: int = Field(ge=1, le=65535)
+    socket_inode: int = Field(gt=0)
+    target_identity_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_target(self) -> RuntimeLockProcessTargetBinding:
+        expected = derive_runtime_lock_process_target_identity(
+            self.target_pid,
+            self.target_uid,
+            self.target_start_time_ticks,
+            self.loopback_port,
+            self.socket_inode,
+        )
+        if self.target_identity_sha256 != expected:
+            raise ValueError("Runtime Lock process target identity differs from its content")
+        return self
+
+
 class RuntimeLockAdapterToolBinding(ContractModel):
     """Path-free identity of one executable used by an active Adapter."""
 
@@ -507,6 +556,16 @@ class RuntimeLockAdapterExecutionBinding(ContractModel):
                     "then": {
                         "required": ["tools", "runtime_payload_identity_sha256"],
                         "properties": {"tools": {"minItems": 1, "maxItems": 1}},
+                    },
+                },
+                {
+                    "if": {
+                        "properties": {"adapter_id": {"const": "go_pprof"}},
+                        "required": ["adapter_id"],
+                    },
+                    "then": {
+                        "required": ["tools"],
+                        "properties": {"tools": {"minItems": 2, "maxItems": 2}},
                     },
                 },
             ]
@@ -558,6 +617,15 @@ class RuntimeLockAdapterExecutionBinding(ContractModel):
                 or self.duration_threshold_ns != expected_threshold
             ):
                 raise ValueError("CPython threading execution binding has unsupported controls")
+        if self.adapter_id == "go_pprof" and (
+            self.backend_id != "pprof"
+            or self.profile != "mutex_and_block"
+            or self.measurement_semantics != "cumulative"
+            or self.duration_threshold_ns is not None
+            or tool_names != ("go", "pprof")
+            or self.runtime_payload_identity_sha256 is not None
+        ):
+            raise ValueError("Go pprof execution binding has unsupported controls")
         if self.tools and self.toolchain_identity_sha256 != derive_runtime_lock_toolchain_identity(
             self.tools
         ):
@@ -671,6 +739,17 @@ class RuntimeLockSessionPreviewArtifact(ContractModel):
                                 },
                                 "required": ["schema_version", "workload"],
                             },
+                            {
+                                "properties": {
+                                    "schema_version": {"const": "1.1"},
+                                    "workload": {
+                                        "type": "object",
+                                        "properties": {"adapter_id": {"const": "go_pprof"}},
+                                        "required": ["adapter_id"],
+                                    },
+                                },
+                                "required": ["schema_version", "workload"],
+                            },
                         ]
                     },
                     "then": {
@@ -700,6 +779,7 @@ class RuntimeLockSessionPreviewArtifact(ContractModel):
     allowed_semantics: tuple[MeasurementSemantics, ...]
     import_roots: tuple[str, ...] = ()
     workload: RuntimeLockWorkloadBinding | None = None
+    process_target: RuntimeLockProcessTargetBinding | None = None
     adapter_execution_bindings: tuple[RuntimeLockAdapterExecutionBinding, ...] = ()
     budget: RuntimeLockSessionBudget
     planned_actions: tuple[str, ...]
@@ -729,6 +809,8 @@ class RuntimeLockSessionPreviewArtifact(ContractModel):
             raise ValueError("Runtime Lock Adapter execution binding exceeds semantics scope")
         if self.schema_version == "1.0" and self.adapter_execution_bindings:
             raise ValueError("Runtime Lock Preview 1.0 cannot carry Adapter execution bindings")
+        if self.schema_version == "1.0" and self.process_target is not None:
+            raise ValueError("Runtime Lock Preview 1.0 cannot carry a process target")
         if not self.allowed_adapters or not self.allowed_semantics:
             raise ValueError("Runtime Lock Preview requires Adapter and semantics scopes")
         if not self.planned_actions or len(self.planned_actions) > 32:
@@ -738,7 +820,7 @@ class RuntimeLockSessionPreviewArtifact(ContractModel):
         if self.target_scope == "controlled_import" and self.workload is not None:
             raise ValueError("controlled import cannot carry an executable workload")
         if self.target_scope == "controlled_import" and self.adapter_execution_bindings:
-            raise ValueError("controlled import cannot carry active Adapter execution bindings")
+            raise ValueError("controlled import cannot carry an active execution binding")
         if self.target_scope == "host_launched_workload":
             if self.workload is None:
                 raise ValueError("host Runtime Lock Preview requires an exact workload")
@@ -750,12 +832,27 @@ class RuntimeLockSessionPreviewArtifact(ContractModel):
                 self.workload.adapter_id == "java_jfr"
                 or (
                     self.schema_version == "1.1"
-                    and self.workload.adapter_id == "cpython_threading"
+                    and self.workload.adapter_id in {"cpython_threading", "go_pprof"}
                 )
             ) and binding_ids != (
                 self.workload.adapter_id,
             ):
                 raise ValueError("Managed runtime workload requires one exact execution binding")
+        if self.target_scope == "host_bound_process":
+            if (
+                self.schema_version != "1.1"
+                or self.process_target is None
+                or self.workload is not None
+                or self.import_roots
+                or self.allowed_adapters != ("go_pprof",)
+                or self.allowed_semantics != ("cumulative",)
+                or binding_ids != ("go_pprof",)
+            ):
+                raise ValueError(
+                    "host-bound process requires one exact Go pprof cumulative target"
+                )
+        elif self.process_target is not None:
+            raise ValueError("Only a host-bound Runtime Lock Preview may carry a process target")
         if self.target_scope in {"managed_temporary_container", "docker_optimization"} and (
             self.workload is not None
         ):
@@ -897,6 +994,13 @@ class RuntimeLockRunArtifact(ContractModel):
                                 },
                                 "required": ["schema_version", "adapter_id"],
                             },
+                            {
+                                "properties": {
+                                    "schema_version": {"const": "1.1"},
+                                    "adapter_id": {"const": "go_pprof"},
+                                },
+                                "required": ["schema_version", "adapter_id"],
+                            },
                         ]
                     },
                     "then": {
@@ -978,7 +1082,10 @@ class RuntimeLockRunArtifact(ContractModel):
             raise ValueError("Runtime Lock Run 1.0 cannot carry an Adapter execution identity")
         if (
             self.adapter_id == "java_jfr"
-            or (self.schema_version == "1.1" and self.adapter_id == "cpython_threading")
+            or (
+                self.schema_version == "1.1"
+                and self.adapter_id in {"cpython_threading", "go_pprof"}
+            )
         ) and (
             self.adapter_execution_identity_sha256 is None
         ):

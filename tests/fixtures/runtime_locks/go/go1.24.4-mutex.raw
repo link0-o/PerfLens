@@ -1,0 +1,14 @@
+PeriodType: contentions count
+Period: 1
+Time: 2026-08-31 19:23:45.679763013 +0800 CST
+Samples:
+contentions/count delay/nanoseconds
+         77     764451: 1
+         63      73991: 2
+Locations
+     1: 0x4cfa43 M=1 sync.(*Mutex).Unlock sync/mutex.go:65:0 s=64
+             main.main.func1 ./perflens-go-golden.go:36:0 s=29
+     2: 0x447a40 M=1 runtime._LostContendedRuntimeLock runtime/proc.go:5447:0 s=5447
+Mappings
+1: 0x400000/0x4d0000/0x0 /tmp/perflens-go-golden e47597573955a61e7c99ae0c2acf8a95fb0c527c [FN]
+2: 0x7efcb7235000/0x7efcb7237000/0x0 [vdso]

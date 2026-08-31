@@ -895,6 +895,37 @@ class ArtifactStore:
                 and source_tool.version == bound_python.version
                 and source_tool.binary_sha256 == bound_python.binary_sha256
             )
+        if execution_binding is not None and run.adapter_id == "go_pprof":
+            source_tool = evidence.source.tool
+            bound_tools = {tool.name: tool for tool in execution_binding.tools}
+            bound_pprof = bound_tools.get("pprof")
+            profile_controls_match = (
+                evidence.source.backend_id == "pprof-mutex"
+                and evidence.source.sampling_fraction is not None
+                and evidence.source.block_profile_rate_ns is None
+            ) or (
+                evidence.source.backend_id == "pprof-block"
+                and evidence.source.sampling_fraction is None
+                and evidence.source.block_profile_rate_ns is not None
+            )
+            execution_binding_matches = execution_binding_matches and (
+                evidence.source.schema_version == preview.schema_version
+                and evidence.source.runtime == "go"
+                and evidence.source.adapter_id == execution_binding.adapter_id
+                and evidence.source.adapter_version == execution_binding.adapter_version
+                and evidence.source.backend_version == execution_binding.runtime_version
+                and evidence.source.source_format == "pprof_text_v1"
+                and evidence.source.adapter_execution_identity_sha256
+                == execution_binding.execution_identity_sha256
+                and evidence.source.configuration_sha256 == execution_binding.configuration_sha256
+                and evidence.source.metadata_sha256 == execution_binding.metadata_sha256
+                and profile_controls_match
+                and source_tool is not None
+                and bound_pprof is not None
+                and source_tool.name == bound_pprof.name
+                and source_tool.version == bound_pprof.version
+                and source_tool.binary_sha256 == bound_pprof.binary_sha256
+            )
         run_started = datetime.fromisoformat(run.started_at)
         run_created = datetime.fromisoformat(run.created_at)
         try:

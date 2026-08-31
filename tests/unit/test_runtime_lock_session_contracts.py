@@ -11,6 +11,7 @@ from perflens.contracts.runtime_lock_sessions import (
     RuntimeLockAdapterToolBinding,
     RuntimeLockCapabilityArtifact,
     RuntimeLockComparisonArtifact,
+    RuntimeLockProcessTargetBinding,
     RuntimeLockRunArtifact,
     RuntimeLockSessionArtifact,
     RuntimeLockSessionBudget,
@@ -20,6 +21,7 @@ from perflens.contracts.runtime_lock_sessions import (
     derive_runtime_lock_capability_id,
     derive_runtime_lock_comparison_id,
     derive_runtime_lock_preview_id,
+    derive_runtime_lock_process_target_identity,
     derive_runtime_lock_run_boundaries,
     derive_runtime_lock_run_id,
     derive_runtime_lock_session_artifact_id,
@@ -150,6 +152,96 @@ def _java_binding() -> RuntimeLockAdapterExecutionBinding:
     )
 
 
+def _go_binding() -> RuntimeLockAdapterExecutionBinding:
+    tools = (
+        RuntimeLockAdapterToolBinding(name="go", version="1.24.4", binary_sha256=_FOUR),
+        RuntimeLockAdapterToolBinding(name="pprof", version="1.24.4", binary_sha256=_FIVE),
+    )
+    toolchain_identity = derive_runtime_lock_toolchain_identity(tools)
+    execution_identity = derive_runtime_lock_adapter_execution_identity(
+        "go_pprof",
+        "go-pprof-adapter-v1",
+        "pprof",
+        "1.24.4",
+        "mutex_and_block",
+        "cumulative",
+        None,
+        toolchain_identity,
+        _TWO,
+        _THREE,
+    )
+    return RuntimeLockAdapterExecutionBinding(
+        adapter_id="go_pprof",
+        adapter_version="go-pprof-adapter-v1",
+        backend_id="pprof",
+        runtime_version="1.24.4",
+        profile="mutex_and_block",
+        measurement_semantics="cumulative",
+        tools=tools,
+        toolchain_identity_sha256=toolchain_identity,
+        configuration_sha256=_TWO,
+        metadata_sha256=_THREE,
+        execution_identity_sha256=execution_identity,
+    )
+
+
+def test_host_bound_process_preview_binds_pid_start_time_port_and_socket() -> None:
+    created, expires = _times()
+    capability = _capability().model_copy(
+        update={
+            "adapters": (
+                RuntimeLockAdapterCapabilityReference(
+                    adapter_id="go_pprof",
+                    capability_id="runtime-adapter-" + "b" * 16,
+                    capability_content_sha256=_TWO,
+                    availability="available",
+                    supported_semantics=("cumulative",),
+                ),
+            )
+        }
+    )
+    identity = derive_runtime_lock_process_target_identity(100, 1000, 500, 6060, 700)
+    target = RuntimeLockProcessTargetBinding(
+        target_pid=100,
+        target_uid=1000,
+        target_start_time_ticks=500,
+        loopback_port=6060,
+        socket_inode=700,
+        target_identity_sha256=identity,
+    )
+    preview = RuntimeLockSessionPreviewArtifact(
+        schema_version="1.1",
+        perflens_version="0.4.0",
+        preview_id=derive_runtime_lock_preview_id(_ZERO, _ONE, capability.content_sha256, created),
+        created_at=created,
+        expires_at=expires,
+        project_identity_sha256=_ZERO,
+        client_connection_identity_sha256=_FOUR,
+        project_policy_sha256=_ONE,
+        capability_id=capability.capability_id,
+        capability_content_sha256=capability.content_sha256,
+        runtime_lock_config_sha256=_FIVE,
+        target_scope="host_bound_process",
+        allowed_adapters=("go_pprof",),
+        allowed_semantics=("cumulative",),
+        process_target=target,
+        adapter_execution_bindings=(_go_binding(),),
+        budget=RuntimeLockSessionBudget(),
+        planned_actions=("Fetch one bound loopback profile.",),
+        authorization_summary_sha256=_SIX,
+        content_sha256="7" * 64,
+    )
+    assert preview.process_target == target
+
+    with pytest.raises(ValidationError, match="differs from its content"):
+        RuntimeLockProcessTargetBinding(
+            target_pid=100,
+            target_uid=1000,
+            target_start_time_ticks=500,
+            loopback_port=6060,
+            socket_inode=701,
+            target_identity_sha256=identity,
+        )
 def test_runtime_lock_schema_1_0_session_id_derivation_remains_compatible() -> None:
     session = _session()
     legacy_id = derive_runtime_lock_session_artifact_id(

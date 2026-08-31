@@ -197,6 +197,54 @@
       "title": "RuntimeSupervisorFileIdentity",
       "type": "object"
     },
+    "RuntimeSupervisorGoPprofRawRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "const": "go_pprof_raw",
+          "default": "go_pprof_raw",
+          "title": "Adapter",
+          "type": "string"
+        },
+        "output": {
+          "$ref": "#/$defs/RuntimeSupervisorWritableFileIdentity"
+        },
+        "profile": {
+          "$ref": "#/$defs/RuntimeSupervisorFileIdentity"
+        }
+      },
+      "required": [
+        "adapter",
+        "profile",
+        "output"
+      ],
+      "title": "RuntimeSupervisorGoPprofRawRequest",
+      "type": "object"
+    },
+    "RuntimeSupervisorGoPprofWorkloadRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "const": "go_pprof_workload",
+          "default": "go_pprof_workload",
+          "title": "Adapter",
+          "type": "string"
+        },
+        "block_profile": {
+          "$ref": "#/$defs/RuntimeSupervisorWritableFileIdentity"
+        },
+        "mutex_profile": {
+          "$ref": "#/$defs/RuntimeSupervisorWritableFileIdentity"
+        }
+      },
+      "required": [
+        "adapter",
+        "mutex_profile",
+        "block_profile"
+      ],
+      "title": "RuntimeSupervisorGoPprofWorkloadRequest",
+      "type": "object"
+    },
     "RuntimeSupervisorJavaJfrPrintRequest": {
       "additionalProperties": false,
       "properties": {
@@ -408,7 +456,10 @@
           "request": {
             "properties": {
               "adapter": {
-                "const": "java_jfr_print"
+                "enum": [
+                  "go_pprof_raw",
+                  "java_jfr_print"
+                ]
               }
             },
             "required": [
@@ -463,6 +514,8 @@
       "discriminator": {
         "mapping": {
           "cpython_threading": "#/$defs/RuntimeSupervisorCpythonThreadingRequest",
+          "go_pprof_raw": "#/$defs/RuntimeSupervisorGoPprofRawRequest",
+          "go_pprof_workload": "#/$defs/RuntimeSupervisorGoPprofWorkloadRequest",
           "java_jfr_print": "#/$defs/RuntimeSupervisorJavaJfrPrintRequest",
           "java_jfr_workload": "#/$defs/RuntimeSupervisorJavaJfrWorkloadRequest",
           "native_pthread": "#/$defs/RuntimeSupervisorNativePthreadRequest"
@@ -481,6 +534,12 @@
         },
         {
           "$ref": "#/$defs/RuntimeSupervisorCpythonThreadingRequest"
+        },
+        {
+          "$ref": "#/$defs/RuntimeSupervisorGoPprofWorkloadRequest"
+        },
+        {
+          "$ref": "#/$defs/RuntimeSupervisorGoPprofRawRequest"
         }
       ],
       "title": "Request"

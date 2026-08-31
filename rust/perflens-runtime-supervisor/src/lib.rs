@@ -36,6 +36,7 @@ const MAX_JFR_PROFILE_BYTES: u64 = 1 << 20;
 const MAX_JFR_RECORDING_BYTES: u64 = 64 << 20;
 const MAX_CPYTHON_BOOTSTRAP_BYTES: u64 = 1 << 20;
 const MAX_CPYTHON_SCRIPT_BYTES: u64 = 64 << 20;
+const MAX_GO_PROFILE_BYTES: u64 = 64 << 20;
 const MAX_SUPERVISOR_BYTES: u64 = 64 << 20;
 static SUPERVISOR_ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -125,6 +126,14 @@ pub enum AdapterRequest {
         semantics: NativeSemantics,
         threshold_ns: Option<u64>,
         max_events: u32,
+    },
+    GoPprofWorkload {
+        mutex_profile: WritableFileIdentity,
+        block_profile: WritableFileIdentity,
+    },
+    GoPprofRaw {
+        profile: FileIdentity,
+        output: WritableFileIdentity,
     },
 }
 
@@ -264,6 +273,12 @@ pub(crate) enum EvidenceOutput {
     MonitoredFile {
         descriptor: RawFd,
         maximum_size: u64,
+    },
+    MonitoredFiles {
+        first_descriptor: RawFd,
+        first_maximum_size: u64,
+        second_descriptor: RawFd,
+        second_maximum_size: u64,
     },
 }
 
@@ -494,6 +509,52 @@ fn validate_request(
                 redirect_stdout: false,
             }
         }
+        AdapterRequest::GoPprofWorkload {
+            mutex_profile,
+            block_profile,
+        } => {
+            validate_writable_file(mutex_profile)?;
+            validate_writable_file(block_profile)?;
+            insert_unique(&mut descriptors, mutex_profile.descriptor)?;
+            insert_unique(&mut descriptors, block_profile.descriptor)?;
+            retained.extend([mutex_profile.descriptor, block_profile.descriptor]);
+            environment.extend([
+                c_string(&format!(
+                    "PERFLENS_GO_MUTEX_PROFILE=/proc/self/fd/{}",
+                    mutex_profile.descriptor
+                ))?,
+                c_string(&format!(
+                    "PERFLENS_GO_BLOCK_PROFILE=/proc/self/fd/{}",
+                    block_profile.descriptor
+                ))?,
+            ]);
+            executable_arguments.push(c_string("perflens-go-workload")?);
+            executable_arguments.extend(strings_to_c(&request.arguments)?);
+            EvidenceOutput::MonitoredFiles {
+                first_descriptor: mutex_profile.descriptor,
+                first_maximum_size: mutex_profile.maximum_size,
+                second_descriptor: block_profile.descriptor,
+                second_maximum_size: block_profile.maximum_size,
+            }
+        }
+        AdapterRequest::GoPprofRaw { profile, output } => {
+            validate_regular_file(profile, false, MAX_GO_PROFILE_BYTES)?;
+            validate_writable_file(output)?;
+            insert_unique(&mut descriptors, profile.descriptor)?;
+            insert_unique(&mut descriptors, output.descriptor)?;
+            retained.push(profile.descriptor);
+            executable_arguments.extend(strings_to_c(&[
+                "pprof".to_owned(),
+                "-raw".to_owned(),
+                format!("/proc/self/fd/{}", profile.descriptor),
+            ])?);
+            EvidenceOutput::BoundedStream {
+                destination_fd: output.descriptor,
+                maximum_size: output.maximum_size,
+                native_environment_fd: false,
+                redirect_stdout: true,
+            }
+        }
     };
     retained.sort_unstable();
     retained.dedup();
@@ -598,10 +659,14 @@ fn validate_adapter_arguments(
     adapter: &AdapterRequest,
     arguments: &[String],
 ) -> Result<(), SupervisorError> {
-    if matches!(adapter, AdapterRequest::JavaJfrPrint { .. }) && !arguments.is_empty() {
+    if matches!(
+        adapter,
+        AdapterRequest::JavaJfrPrint { .. } | AdapterRequest::GoPprofRaw { .. }
+    ) && !arguments.is_empty()
+    {
         return Err(SupervisorError::new(
             "invalid_request",
-            "Java JFR print does not accept workload arguments",
+            "runtime profile conversion does not accept workload arguments",
         ));
     }
     Ok(())
@@ -1054,6 +1119,10 @@ mod tests {
             include_str!("../../../tests/fixtures/runtime_supervisor/valid-native-request.json"),
             include_str!("../../../tests/fixtures/runtime_supervisor/valid-cpython-request.json"),
             include_str!(
+                "../../../tests/fixtures/runtime_supervisor/valid-go-workload-request.json"
+            ),
+            include_str!("../../../tests/fixtures/runtime_supervisor/valid-go-raw-request.json"),
+            include_str!(
                 "../../../tests/fixtures/runtime_supervisor/valid-java-workload-request.json"
             ),
             include_str!(
@@ -1105,6 +1174,21 @@ mod tests {
         .expect("structurally valid Java print request");
         let error = validate_adapter_arguments(&invalid.request, &invalid.arguments)
             .expect_err("Java print arguments must be rejected");
+        assert_eq!(error.code, "invalid_request");
+    }
+
+    #[test]
+    fn go_raw_rejects_semantically_ignored_arguments() {
+        let valid: SupervisorRequest = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/runtime_supervisor/valid-go-raw-request.json"
+        ))
+        .expect("valid Go raw request");
+        validate_adapter_arguments(&valid.request, &valid.arguments)
+            .expect("argument-free Go raw conversion");
+        let mut invalid = valid;
+        invalid.arguments.push("unexpected".to_owned());
+        let error = validate_adapter_arguments(&invalid.request, &invalid.arguments)
+            .expect_err("Go raw arguments must be rejected");
         assert_eq!(error.code, "invalid_request");
     }
 

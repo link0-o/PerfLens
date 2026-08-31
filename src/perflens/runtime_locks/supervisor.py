@@ -140,11 +140,25 @@ class RuntimeSupervisorCpythonThreadingRequest(_StrictSupervisorModel):
         return self
 
 
+class RuntimeSupervisorGoPprofWorkloadRequest(_StrictSupervisorModel):
+    adapter: Literal["go_pprof_workload"] = "go_pprof_workload"
+    mutex_profile: RuntimeSupervisorWritableFileIdentity
+    block_profile: RuntimeSupervisorWritableFileIdentity
+
+
+class RuntimeSupervisorGoPprofRawRequest(_StrictSupervisorModel):
+    adapter: Literal["go_pprof_raw"] = "go_pprof_raw"
+    profile: RuntimeSupervisorFileIdentity
+    output: RuntimeSupervisorWritableFileIdentity
+
+
 RuntimeSupervisorAdapterRequest = Annotated[
     RuntimeSupervisorNativePthreadRequest
     | RuntimeSupervisorJavaJfrWorkloadRequest
     | RuntimeSupervisorJavaJfrPrintRequest
-    | RuntimeSupervisorCpythonThreadingRequest,
+    | RuntimeSupervisorCpythonThreadingRequest
+    | RuntimeSupervisorGoPprofWorkloadRequest
+    | RuntimeSupervisorGoPprofRawRequest,
     Field(discriminator="adapter"),
 ]
 
@@ -205,8 +219,8 @@ class RuntimeSupervisorRequest(_StrictSupervisorModel):
             and self.timeout_milliseconds > 3_000
         ):
             raise ValueError("exact CPython supervision exceeds three seconds")
-        if self.request.adapter == "java_jfr_print" and self.arguments:
-            raise ValueError("Java JFR print does not accept workload arguments")
+        if self.request.adapter in {"java_jfr_print", "go_pprof_raw"} and self.arguments:
+            raise ValueError("runtime profile conversion does not accept workload arguments")
         return self
 
 
@@ -502,10 +516,14 @@ def runtime_supervisor_request_descriptors(request: RuntimeSupervisorRequest) ->
                 adapter.output.descriptor,
             )
         )
-    else:
+    elif adapter.adapter == "cpython_threading":
         descriptors.extend(
             (adapter.bootstrap.descriptor, adapter.script.descriptor, adapter.output.descriptor)
         )
+    elif adapter.adapter == "go_pprof_workload":
+        descriptors.extend((adapter.mutex_profile.descriptor, adapter.block_profile.descriptor))
+    else:
+        descriptors.extend((adapter.profile.descriptor, adapter.output.descriptor))
     return tuple(descriptors)
 
 
@@ -561,6 +579,8 @@ def runtime_supervisor_request_schema() -> dict[str, Any]:
         "RuntimeSupervisorJavaJfrWorkloadRequest",
         "RuntimeSupervisorJavaJfrPrintRequest",
         "RuntimeSupervisorCpythonThreadingRequest",
+        "RuntimeSupervisorGoPprofWorkloadRequest",
+        "RuntimeSupervisorGoPprofRawRequest",
     ):
         required = cast(list[str], definitions[name]["required"])
         definitions[name]["required"] = ["adapter", *required]
@@ -593,7 +613,9 @@ def runtime_supervisor_request_schema() -> dict[str, Any]:
             "if": {
                 "properties": {
                     "request": {
-                        "properties": {"adapter": {"const": "java_jfr_print"}},
+                        "properties": {
+                            "adapter": {"enum": ["go_pprof_raw", "java_jfr_print"]}
+                        },
                         "required": ["adapter"],
                     }
                 },

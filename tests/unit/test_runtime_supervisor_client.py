@@ -54,6 +54,8 @@ def test_python_models_accept_every_shared_valid_request_fixture() -> None:
     )
     assert {path.name for path in fixtures} == {
         "valid-cpython-request.json",
+        "valid-go-raw-request.json",
+        "valid-go-workload-request.json",
         "valid-java-print-request.json",
         "valid-java-workload-request.json",
         "valid-native-request.json",
@@ -101,6 +103,8 @@ def test_checked_supervisor_schemas_match_models_and_shared_goldens() -> None:
     receipt_validator = cast(_JsonSchemaValidator, Draft202012Validator(receipt_schema))
     for name in (
         "valid-cpython-request.json",
+        "valid-go-raw-request.json",
+        "valid-go-workload-request.json",
         "valid-native-request.json",
         "valid-java-workload-request.json",
         "valid-java-print-request.json",

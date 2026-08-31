@@ -46,6 +46,20 @@
               "schema_version",
               "adapter_id"
             ]
+          },
+          {
+            "properties": {
+              "adapter_id": {
+                "const": "go_pprof"
+              },
+              "schema_version": {
+                "const": "1.1"
+              }
+            },
+            "required": [
+              "schema_version",
+              "adapter_id"
+            ]
           }
         ]
       },
@@ -241,6 +255,7 @@
     },
     "target_scope": {
       "enum": [
+        "host_bound_process",
         "host_launched_workload",
         "managed_temporary_container",
         "docker_optimization",

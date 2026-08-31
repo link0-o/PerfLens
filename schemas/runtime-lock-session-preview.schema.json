@@ -50,6 +50,29 @@
               "runtime_payload_identity_sha256"
             ]
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "adapter_id": {
+                "const": "go_pprof"
+              }
+            },
+            "required": [
+              "adapter_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "tools": {
+                "maxItems": 2,
+                "minItems": 2
+              }
+            },
+            "required": [
+              "tools"
+            ]
+          }
         }
       ],
       "description": "Public, path-free identity for one active Adapter configuration.",
@@ -207,6 +230,59 @@
         "binary_sha256"
       ],
       "title": "RuntimeLockAdapterToolBinding",
+      "type": "object"
+    },
+    "RuntimeLockProcessTargetBinding": {
+      "additionalProperties": false,
+      "description": "Identity of one same-UID host process and its literal loopback pprof listener.",
+      "properties": {
+        "loopback_address": {
+          "const": "127.0.0.1",
+          "default": "127.0.0.1",
+          "title": "Loopback Address",
+          "type": "string"
+        },
+        "loopback_port": {
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Loopback Port",
+          "type": "integer"
+        },
+        "socket_inode": {
+          "exclusiveMinimum": 0,
+          "title": "Socket Inode",
+          "type": "integer"
+        },
+        "target_identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Target Identity Sha256",
+          "type": "string"
+        },
+        "target_pid": {
+          "exclusiveMinimum": 0,
+          "title": "Target Pid",
+          "type": "integer"
+        },
+        "target_start_time_ticks": {
+          "exclusiveMinimum": 0,
+          "title": "Target Start Time Ticks",
+          "type": "integer"
+        },
+        "target_uid": {
+          "minimum": 0,
+          "title": "Target Uid",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "target_pid",
+        "target_uid",
+        "target_start_time_ticks",
+        "loopback_port",
+        "socket_inode",
+        "target_identity_sha256"
+      ],
+      "title": "RuntimeLockProcessTargetBinding",
       "type": "object"
     },
     "RuntimeLockSessionBudget": {
@@ -412,6 +488,28 @@
               "schema_version",
               "workload"
             ]
+          },
+          {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              },
+              "workload": {
+                "properties": {
+                  "adapter_id": {
+                    "const": "go_pprof"
+                  }
+                },
+                "required": [
+                  "adapter_id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "schema_version",
+              "workload"
+            ]
           }
         ]
       },
@@ -524,6 +622,17 @@
       "title": "Preview Id",
       "type": "string"
     },
+    "process_target": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RuntimeLockProcessTargetBinding"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "project_identity_sha256": {
       "pattern": "^[a-f0-9]{64}$",
       "title": "Project Identity Sha256",
@@ -550,6 +659,7 @@
     },
     "target_scope": {
       "enum": [
+        "host_bound_process",
         "host_launched_workload",
         "managed_temporary_container",
         "docker_optimization",

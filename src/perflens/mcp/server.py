@@ -112,6 +112,7 @@ from perflens.contracts.runtime_lock_sessions import (
     RuntimeLockAdapterExecutionBinding,
     RuntimeLockAdapterId,
     RuntimeLockCapabilityArtifact,
+    RuntimeLockProcessTargetBinding,
     RuntimeLockRunArtifact,
     RuntimeLockSessionArtifact,
     RuntimeLockSessionPreviewArtifact,
@@ -203,6 +204,34 @@ from perflens.runtime_locks.cpython_launcher import (
     CpythonThreadingLauncher,
     cleanup_cpython_launch_result,
     open_cpython_private_stream,
+)
+from perflens.runtime_locks.go_pprof_adapter import (
+    GoPprofAdapterBridge,
+    GoToolIdentity,
+    build_go_pprof_adapter_bridge,
+    discover_go_pprof_adapter_bridge,
+    inspect_go_pprof_installation,
+)
+from perflens.runtime_locks.go_pprof_converter import (
+    GoProfileKind,
+    convert_go_pprof_raw,
+    verify_go_pprof_replay,
+)
+from perflens.runtime_locks.go_pprof_launcher import (
+    GoPprofLauncher,
+    GoPprofLaunchRequest,
+    GoPprofLaunchResult,
+    GoPprofRawResult,
+    cleanup_go_pprof_raw_result,
+    cleanup_go_pprof_result,
+    open_go_pprof_raw,
+)
+from perflens.runtime_locks.go_pprof_loopback import (
+    GoPprofLoopbackCapture,
+    capture_go_pprof_loopback_profile,
+    cleanup_go_pprof_loopback_capture,
+    inspect_go_pprof_loopback_target,
+    open_go_pprof_loopback_capture,
 )
 from perflens.runtime_locks.java_jfr_adapter import (
     JavaJfrAdapterBridge,
@@ -324,6 +353,10 @@ class ServerConfig:
     runtime_lock_cpython_launcher_factory: (
         Callable[[Path, Path, CpythonLaunchPolicy], CpythonThreadingLauncher] | None
     ) = None
+    runtime_lock_go_bridge_factory: Callable[[], GoPprofAdapterBridge] | None = None
+    runtime_lock_go_launcher_factory: (
+        Callable[[Path, Path, GoToolIdentity, GoToolIdentity], GoPprofLauncher] | None
+    ) = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -396,12 +429,15 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         or config.runtime_lock_java_launcher_factory is not None
         or config.runtime_lock_cpython_bridge_factory is not None
         or config.runtime_lock_cpython_launcher_factory is not None
+        or config.runtime_lock_go_bridge_factory is not None
+        or config.runtime_lock_go_launcher_factory is not None
     ):
         raise ValueError("Runtime Lock factories require Runtime Lock sessions")
     if (
         config.runtime_lock_native_launcher_factory is not None
         or config.runtime_lock_java_launcher_factory is not None
         or config.runtime_lock_cpython_launcher_factory is not None
+        or config.runtime_lock_go_launcher_factory is not None
     ) and not config.allow_process_execution:
         raise ValueError("Runtime Lock workload launcher requires process execution")
     docker_policy = (
@@ -457,6 +493,28 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     runtime_lock_cpython_launcher: CpythonThreadingLauncher | None = None
     runtime_lock_cpython_private_root: Path | None = None
     runtime_lock_cpython_retained_results: list[CpythonLaunchResult] = []
+    runtime_lock_go_bridge: GoPprofAdapterBridge | None = None
+    runtime_lock_go_launcher: GoPprofLauncher | None = None
+    runtime_lock_go_private_root: Path | None = None
+    runtime_lock_go_retained_results: list[
+        tuple[GoPprofLaunchResult, GoPprofRawResult | None]
+    ] = []
+    runtime_lock_go_retained_loopback: list[
+        tuple[GoPprofLoopbackCapture, GoPprofRawResult | None]
+    ] = []
+
+    def runtime_lock_go_retained_bytes() -> int:
+        launched = sum(
+            launch.mutex_profile_size
+            + launch.block_profile_size
+            + (raw.raw_size if raw is not None else 0)
+            for launch, raw in runtime_lock_go_retained_results
+        )
+        loopback = sum(
+            capture.profile_size + (raw.raw_size if raw is not None else 0)
+            for capture, raw in runtime_lock_go_retained_loopback
+        )
+        return launched + loopback
 
     @asynccontextmanager
     async def server_lifespan(_server: MCPServer[None]) -> AsyncGenerator[None]:
@@ -488,6 +546,18 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             if runtime_lock_cpython_private_root is not None:
                 with suppress(OSError):
                     runtime_lock_cpython_private_root.rmdir()
+            if runtime_lock_go_private_root is not None:
+                for launch, raw in runtime_lock_go_retained_results:
+                    with suppress(OSError, PerfLensError):
+                        cleanup_go_pprof_result(launch, raw)
+                for capture, raw in runtime_lock_go_retained_loopback:
+                    with suppress(OSError, PerfLensError):
+                        cleanup_go_pprof_loopback_capture(capture)
+                    if raw is not None:
+                        with suppress(OSError, PerfLensError):
+                            cleanup_go_pprof_raw_result(raw)
+                with suppress(OSError):
+                    runtime_lock_go_private_root.rmdir()
 
     server: MCPServer[None] = MCPServer(
         "perflens",
@@ -583,6 +653,25 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         runtime_lock_cpython_bridge = bridge
         return bridge
 
+    def get_runtime_lock_go_bridge() -> GoPprofAdapterBridge:
+        nonlocal runtime_lock_go_bridge
+        _require_runtime_locks(config)
+        if runtime_lock_go_bridge is not None:
+            return runtime_lock_go_bridge
+        assert runtime_lock_policy is not None
+        if config.runtime_lock_go_bridge_factory is not None:
+            bridge = config.runtime_lock_go_bridge_factory()
+        elif config.allow_process_execution:
+            bridge = discover_go_pprof_adapter_bridge(runtime_lock_policy)
+        else:
+            bridge = build_go_pprof_adapter_bridge(
+                runtime_lock_policy,
+                inspect_go_pprof_installation(trusted_owner_uids=()),
+                supervisor_available=False,
+            )
+        runtime_lock_go_bridge = bridge
+        return bridge
+
     def inspect_runtime_lock_session_capability() -> RuntimeLockCapabilityInspection:
         _require_runtime_locks(config)
         assert runtime_lock_policy is not None
@@ -619,6 +708,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             native_pthread_capability=native_capability,
             java_jfr_bridge=get_runtime_lock_java_bridge(),
             cpython_bridge=get_runtime_lock_cpython_bridge(),
+            go_pprof_bridge=get_runtime_lock_go_bridge(),
         )
 
     def get_runtime_lock_session_runtime() -> RuntimeLockSessionRuntime:
@@ -793,6 +883,59 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             raise
         runtime_lock_cpython_private_root = private_root
         runtime_lock_cpython_launcher = launcher
+        return launcher
+
+    def get_runtime_lock_go_launcher() -> GoPprofLauncher:
+        nonlocal runtime_lock_go_launcher, runtime_lock_go_private_root
+        _require_runtime_locks(config)
+        if not config.allow_process_execution:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "runtime_lock_authorization",
+                "Go pprof workload execution is disabled by project MCP policy",
+                recoverable=True,
+            )
+        if runtime_lock_go_launcher is not None:
+            return runtime_lock_go_launcher
+        assert runtime_lock_project is not None
+        bridge = get_runtime_lock_go_bridge()
+        if (
+            bridge.execution_binding is None
+            or bridge.tool is None
+            or bridge.pprof_tool is None
+        ):
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_FAILED,
+                "runtime_lock_capability",
+                "The trusted Go pprof launch bridge is unavailable",
+                recoverable=True,
+                details={"limitations": bridge.capability.limitations},
+            )
+        private_root = Path(
+            tempfile.mkdtemp(prefix=".runtime-lock-go-", dir=config.artifact_root)
+        )
+        private_root.chmod(0o700)
+        try:
+            if config.runtime_lock_go_launcher_factory is not None:
+                launcher = config.runtime_lock_go_launcher_factory(
+                    runtime_lock_project.path,
+                    private_root,
+                    bridge.tool,
+                    bridge.pprof_tool,
+                )
+            else:
+                launcher = GoPprofLauncher(
+                    project_root=runtime_lock_project.path,
+                    private_output_root=private_root,
+                    go_tool=bridge.tool,
+                    pprof_tool=bridge.pprof_tool,
+                )
+        except Exception:
+            with suppress(OSError):
+                private_root.rmdir()
+            raise
+        runtime_lock_go_private_root = private_root
+        runtime_lock_go_launcher = launcher
         return launcher
 
     def capture_module_snapshot(
@@ -1178,6 +1321,659 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     store.save(terminal, terminal.session_artifact_id, "runtime-lock-session")
             raise
 
+    async def collect_go_pprof_runtime_lock_evidence(
+        session_id: str,
+        duration_seconds: int,
+        max_events: int,
+        profile_kind: GoProfileKind,
+    ) -> ArtifactReference:
+        assert runtime_lock_policy is not None
+        assert runtime_lock_project is not None
+        runtime = get_runtime_lock_session_runtime()
+        lease = None
+        launch_result: GoPprofLaunchResult | None = None
+        raw_result: GoPprofRawResult | None = None
+        actual_active_seconds = duration_seconds
+        actual_evidence_bytes = 0
+        run_finished = False
+        retain_private_evidence = False
+        failure_reason: Literal[
+            "adapter_output_invalid",
+            "correctness_failed",
+            "identity_or_policy_changed",
+            "internal_collection_error",
+            "resource_limit_exceeded",
+            "target_exited",
+            "target_identity_changed",
+        ] = "internal_collection_error"
+        try:
+            assert_runtime_lock_project_policy_current(
+                runtime_lock_policy, allowed_roots=config.allowed_roots
+            )
+            assert_managed_project_current(runtime_lock_project)
+            session = runtime.snapshot(session_id)
+            preview = store.load_runtime_lock_preview(session.preview_id)
+            bridge = get_runtime_lock_go_bridge()
+            binding = bridge.execution_binding
+            if binding is None:
+                raise _runtime_lock_native_error("Go pprof execution binding is unavailable")
+            workload = _validate_go_runtime_lock_session(
+                session,
+                preview,
+                runtime_lock_policy,
+                execution_binding=binding,
+                duration_seconds=duration_seconds,
+                max_events=max_events,
+                profile_kind=profile_kind,
+            )
+            launcher = get_runtime_lock_go_launcher()
+            executable_path = _runtime_lock_project_executable(
+                runtime_lock_project.path, workload.program
+            )
+            target = launcher.inspect_target(executable_path)
+            if (
+                target.project_relative_path != workload.program
+                or target.binary_sha256 != workload.program_sha256
+                or target.size != workload.program_size
+            ):
+                failure_reason = "target_identity_changed"
+                raise _runtime_lock_native_error(
+                    "Go workload differs from the authorized Preview"
+                )
+            adapter_policy = runtime_lock_policy.adapter_policy("go_pprof")
+            operation_identity = _runtime_lock_go_operation_identity(
+                session,
+                target.identity_sha256,
+                profile_kind,
+                duration_seconds,
+                max_events,
+                binding.execution_identity_sha256,
+                adapter_policy.mutex_profile_fraction,
+                adapter_policy.block_profile_rate_ns,
+            )
+            lease = runtime.begin_run(
+                session_id,
+                adapter_id="go_pprof",
+                measurement_semantics="cumulative",
+                operation_identity_sha256=operation_identity,
+                target_identity_sha256=target.identity_sha256,
+                workload_identity_sha256=workload.workload_identity_sha256,
+                reserve_active_seconds=duration_seconds,
+                reserve_evidence_bytes=min(
+                    session.budget.max_evidence_bytes,
+                    session.budget.max_artifact_bytes * 3,
+                ),
+                reserve_exact_events=0,
+            )
+            reserved = runtime.snapshot(session_id)
+            store.save(reserved, reserved.session_artifact_id, "runtime-lock-session")
+            launch_result = launcher.launch(
+                executable_path,
+                GoPprofLaunchRequest(
+                    arguments=workload.arguments,
+                    duration_seconds=duration_seconds,
+                ),
+                expected_target_identity_sha256=target.identity_sha256,
+            )
+            actual_active_seconds = launch_result.accounted_active_seconds
+            actual_evidence_bytes = (
+                launch_result.mutex_profile_size + launch_result.block_profile_size
+            )
+            if launch_result.termination_reason == "duration_limit":
+                failure_reason = "resource_limit_exceeded"
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "runtime_lock_collection",
+                    "Go workload exceeded its authorized duration",
+                    recoverable=True,
+                )
+            if launch_result.exit_code is None:
+                failure_reason = "target_exited"
+                raise _runtime_lock_native_error("Go workload exit status is unavailable")
+            if launch_result.exit_code != 0:
+                failure_reason = "correctness_failed"
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "runtime_lock_collection",
+                    "Go workload exited unsuccessfully",
+                    recoverable=True,
+                    details={"exit_code": launch_result.exit_code},
+                )
+            failure_reason = "adapter_output_invalid"
+            retain_private_evidence = True
+            raw_result = launcher.render_raw(launch_result, profile_kind)
+            actual_evidence_bytes += raw_result.raw_size
+            source_fd = open_go_pprof_raw(raw_result)
+            try:
+                with os.fdopen(os.dup(source_fd), "rb") as source:
+                    receipt = convert_go_pprof_raw(
+                        source,
+                        execution_binding=binding,
+                        profile_kind=profile_kind,
+                        target_pid=launch_result.target_pid,
+                        target_uid=launch_result.target_uid,
+                        target_start_time_ticks=launch_result.target_start_ticks,
+                        mutex_profile_fraction=(
+                            adapter_policy.mutex_profile_fraction
+                            if profile_kind == "mutex"
+                            else None
+                        ),
+                        block_profile_rate_ns=(
+                            adapter_policy.block_profile_rate_ns
+                            if profile_kind == "block"
+                            else None
+                        ),
+                        limits=RuntimeLockResourceLimits(
+                            max_source_bytes=session.budget.max_artifact_bytes,
+                            max_input_records=max_events,
+                            max_output_bytes=session.budget.max_artifact_bytes,
+                        ),
+                        created_at=launch_result.started_at,
+                    )
+            finally:
+                os.close(source_fd)
+            replay_fd = open_go_pprof_raw(raw_result)
+            try:
+                with os.fdopen(os.dup(replay_fd), "rb") as replay:
+                    if verify_go_pprof_replay(
+                        replay,
+                        expected=receipt,
+                        execution_binding=binding,
+                        target_pid=launch_result.target_pid,
+                        target_uid=launch_result.target_uid,
+                        target_start_time_ticks=launch_result.target_start_ticks,
+                        mutex_profile_fraction=(
+                            adapter_policy.mutex_profile_fraction
+                            if profile_kind == "mutex"
+                            else None
+                        ),
+                        block_profile_rate_ns=(
+                            adapter_policy.block_profile_rate_ns
+                            if profile_kind == "block"
+                            else None
+                        ),
+                    ) is None:
+                        raise _runtime_lock_native_error(
+                            "Go private profile replay differs from the public Artifact"
+                        )
+            finally:
+                os.close(replay_fd)
+            evidence = receipt.evidence
+            identity_warnings = _assert_go_runtime_lock_evidence_identity(
+                evidence,
+                launch_result=launch_result,
+                raw_result=raw_result,
+                expected_target_identity_sha256=target.identity_sha256,
+                execution_binding=binding,
+                profile_kind=profile_kind,
+                max_events=max_events,
+            )
+            analysis = build_runtime_lock_analysis(evidence)
+            verification = verify_runtime_lock_analysis_artifact(analysis, evidence)
+            require_usable_runtime_lock_analysis(verification)
+            public_evidence_bytes = len(serialize_json(evidence))
+            warnings = tuple(
+                dict.fromkeys(
+                    (*preview.warnings, *evidence.quality.limitations, *identity_warnings)
+                )
+            )
+            quality, allowed, forbidden = derive_runtime_lock_run_boundaries(
+                adapter_id="go_pprof",
+                analysis_quality_status=analysis.quality_status,
+                analysis_allowed_conclusions=analysis.allowed_conclusions,
+                analysis_forbidden_conclusions=analysis.forbidden_conclusions,
+                warnings=warnings,
+            )
+            provisional_run = RuntimeLockRunArtifact(
+                schema_version=preview.schema_version,
+                perflens_version=__version__,
+                run_id=derive_runtime_lock_run_id(
+                    session_id,
+                    "go_pprof",
+                    evidence.content_sha256,
+                    launch_result.started_at,
+                ),
+                created_at=launch_result.finished_at,
+                started_at=launch_result.started_at,
+                finished_at=launch_result.finished_at,
+                session_id=session_id,
+                session_artifact_id=lease.session_artifact_id,
+                session_artifact_content_sha256=lease.session_artifact_content_sha256,
+                session_revision=lease.session_revision,
+                target_scope="host_launched_workload",
+                operation_identity_sha256=operation_identity,
+                target_identity_sha256=target.identity_sha256,
+                adapter_id="go_pprof",
+                adapter_execution_identity_sha256=binding.execution_identity_sha256,
+                measurement_semantics="cumulative",
+                workload_identity_sha256=workload.workload_identity_sha256,
+                runtime_lock_evidence_id=evidence.runtime_lock_evidence_id,
+                runtime_lock_evidence_content_sha256=evidence.content_sha256,
+                runtime_lock_analysis_id=analysis.runtime_lock_analysis_id,
+                runtime_lock_analysis_content_sha256=analysis.content_sha256,
+                runtime_lock_verification_id=verification.runtime_lock_verification_id,
+                runtime_lock_verification_content_sha256=verification.content_sha256,
+                duration_seconds=actual_active_seconds,
+                evidence_bytes=public_evidence_bytes,
+                event_count=len(evidence.events),
+                correctness_status="passed",
+                quality_status=quality,
+                warnings=warnings,
+                allowed_conclusions=allowed,
+                forbidden_conclusions=forbidden,
+                content_sha256="0" * 64,
+            )
+            run = provisional_run.model_copy(
+                update={
+                    "content_sha256": contract_content_sha256(
+                        provisional_run, exclude={"content_sha256"}
+                    )
+                }
+            )
+            cleanup_go_pprof_result(launch_result, raw_result)
+            retain_private_evidence = False
+            actual_evidence_bytes = public_evidence_bytes
+            for artifact, artifact_id, artifact_type in (
+                (evidence, evidence.runtime_lock_evidence_id, "runtime-lock-evidence"),
+                (analysis, analysis.runtime_lock_analysis_id, "runtime-lock-analysis"),
+                (
+                    verification,
+                    verification.runtime_lock_verification_id,
+                    "runtime-lock-verification",
+                ),
+                (run, run.run_id, "runtime-lock-run"),
+            ):
+                store.save(artifact, artifact_id, artifact_type)
+            settlement = runtime.finish_run(session_id, lease, run)
+            run_finished = True
+            _persist_runtime_lock_settlement(runtime, session_id, store, settlement)
+            return ArtifactReference(
+                artifact_id=run.run_id,
+                artifact_type="runtime-lock-run",
+                uri=store.uri(run.run_id, "runtime-lock-run"),
+                summary={
+                    "session_id": session_id,
+                    "adapter_id": "go_pprof",
+                    "profile_kind": profile_kind,
+                    "runtime": analysis.runtime,
+                    "measurement_semantics": "cumulative",
+                    "runtime_lock_evidence_id": evidence.runtime_lock_evidence_id,
+                    "runtime_lock_analysis_id": analysis.runtime_lock_analysis_id,
+                    "runtime_lock_verification_id": verification.runtime_lock_verification_id,
+                    "private_source_replay_status": "passed",
+                    "quality_status": run.quality_status,
+                    "event_count": run.event_count,
+                    "target_pid": launch_result.target_pid,
+                    "exit_code": launch_result.exit_code,
+                    "session_state": settlement.session.state,
+                },
+            )
+        except Exception:
+            if launch_result is not None:
+                if retain_private_evidence:
+                    retained = (launch_result, raw_result)
+                    retained_bytes = (
+                        launch_result.mutex_profile_size
+                        + launch_result.block_profile_size
+                        + (raw_result.raw_size if raw_result is not None else 0)
+                    )
+                    if (
+                        retained not in runtime_lock_go_retained_results
+                        and runtime_lock_go_retained_bytes() + retained_bytes
+                        <= config.max_artifact_bytes
+                    ):
+                        runtime_lock_go_retained_results.append(retained)
+                    else:
+                        with suppress(OSError, PerfLensError):
+                            cleanup_go_pprof_result(launch_result, raw_result)
+                else:
+                    with suppress(OSError, PerfLensError):
+                        cleanup_go_pprof_result(launch_result, raw_result)
+            if lease is not None and not run_finished:
+                with suppress(PerfLensError):
+                    terminal = runtime.fail_run(
+                        session_id,
+                        lease,
+                        actual_active_seconds=actual_active_seconds,
+                        actual_evidence_bytes=actual_evidence_bytes,
+                        actual_exact_events=0,
+                        reason=failure_reason,
+                    )
+                    _persist_runtime_lock_settlement(runtime, session_id, store, terminal)
+            elif lease is None:
+                with suppress(PerfLensError):
+                    terminal = runtime.revoke(session_id)
+                    store.save(terminal, terminal.session_artifact_id, "runtime-lock-session")
+            raise
+
+    async def collect_go_pprof_loopback_runtime_lock_evidence(
+        session_id: str,
+        duration_seconds: int,
+        max_events: int,
+        profile_kind: GoProfileKind,
+    ) -> ArtifactReference:
+        assert runtime_lock_policy is not None
+        assert runtime_lock_project is not None
+        runtime = get_runtime_lock_session_runtime()
+        lease = None
+        capture: GoPprofLoopbackCapture | None = None
+        raw_result: GoPprofRawResult | None = None
+        actual_active_seconds = duration_seconds
+        actual_evidence_bytes = 0
+        run_finished = False
+        retain_private_evidence = False
+        failure_reason: Literal[
+            "adapter_output_invalid",
+            "identity_or_policy_changed",
+            "internal_collection_error",
+            "resource_limit_exceeded",
+            "target_exited",
+            "target_identity_changed",
+        ] = "internal_collection_error"
+        try:
+            assert_runtime_lock_project_policy_current(
+                runtime_lock_policy,
+                allowed_roots=config.allowed_roots,
+            )
+            assert_managed_project_current(runtime_lock_project)
+            session = runtime.snapshot(session_id)
+            preview = store.load_runtime_lock_preview(session.preview_id)
+            bridge = get_runtime_lock_go_bridge()
+            binding = bridge.execution_binding
+            if binding is None:
+                raise _runtime_lock_native_error("Go pprof execution binding is unavailable")
+            target = _validate_go_loopback_runtime_lock_session(
+                session,
+                preview,
+                runtime_lock_policy,
+                execution_binding=binding,
+                duration_seconds=duration_seconds,
+                max_events=max_events,
+                profile_kind=profile_kind,
+            )
+            current_target = inspect_go_pprof_loopback_target(
+                target.target_pid,
+                target.loopback_port,
+            )
+            if current_target != target:
+                failure_reason = "target_identity_changed"
+                raise _runtime_lock_native_error(
+                    "Go pprof loopback target differs from the authorized Preview"
+                )
+            adapter_policy = runtime_lock_policy.adapter_policy("go_pprof")
+            operation_identity = _runtime_lock_go_operation_identity(
+                session,
+                target.target_identity_sha256,
+                profile_kind,
+                duration_seconds,
+                max_events,
+                binding.execution_identity_sha256,
+                adapter_policy.mutex_profile_fraction,
+                adapter_policy.block_profile_rate_ns,
+            )
+            lease = runtime.begin_run(
+                session_id,
+                adapter_id="go_pprof",
+                measurement_semantics="cumulative",
+                operation_identity_sha256=operation_identity,
+                target_identity_sha256=target.target_identity_sha256,
+                workload_identity_sha256=target.target_identity_sha256,
+                reserve_active_seconds=duration_seconds,
+                reserve_evidence_bytes=min(
+                    session.budget.max_evidence_bytes,
+                    session.budget.max_artifact_bytes * 2,
+                ),
+                reserve_exact_events=0,
+            )
+            reserved = runtime.snapshot(session_id)
+            store.save(reserved, reserved.session_artifact_id, "runtime-lock-session")
+            launcher = get_runtime_lock_go_launcher()
+            assert runtime_lock_go_private_root is not None
+            capture = capture_go_pprof_loopback_profile(
+                target,
+                profile_kind,
+                private_output_root=runtime_lock_go_private_root,
+                maximum_bytes=session.budget.max_artifact_bytes,
+                timeout_seconds=duration_seconds,
+            )
+            actual_active_seconds = capture.accounted_active_seconds
+            actual_evidence_bytes = capture.profile_size
+            if actual_active_seconds > duration_seconds:
+                failure_reason = "resource_limit_exceeded"
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "runtime_lock_collection",
+                    "Go pprof loopback fetch exceeded its authorized active time",
+                    recoverable=True,
+                )
+            failure_reason = "adapter_output_invalid"
+            retain_private_evidence = True
+            profile_fd = open_go_pprof_loopback_capture(capture)
+            try:
+                raw_result = launcher.render_pinned_raw(profile_fd, profile_kind)
+            finally:
+                os.close(profile_fd)
+            actual_evidence_bytes += raw_result.raw_size
+            raw_fd = open_go_pprof_raw(raw_result)
+            try:
+                with os.fdopen(os.dup(raw_fd), "rb") as source:
+                    receipt = convert_go_pprof_raw(
+                        source,
+                        execution_binding=binding,
+                        profile_kind=profile_kind,
+                        target_pid=target.target_pid,
+                        target_uid=target.target_uid,
+                        target_start_time_ticks=target.target_start_time_ticks,
+                        mutex_profile_fraction=(
+                            adapter_policy.mutex_profile_fraction
+                            if profile_kind == "mutex"
+                            else None
+                        ),
+                        block_profile_rate_ns=(
+                            adapter_policy.block_profile_rate_ns
+                            if profile_kind == "block"
+                            else None
+                        ),
+                        limits=RuntimeLockResourceLimits(
+                            max_source_bytes=session.budget.max_artifact_bytes,
+                            max_input_records=max_events,
+                            max_output_bytes=session.budget.max_artifact_bytes,
+                        ),
+                        created_at=capture.started_at,
+                    )
+            finally:
+                os.close(raw_fd)
+            replay_fd = open_go_pprof_raw(raw_result)
+            try:
+                with os.fdopen(os.dup(replay_fd), "rb") as replay:
+                    if verify_go_pprof_replay(
+                        replay,
+                        expected=receipt,
+                        execution_binding=binding,
+                        target_pid=target.target_pid,
+                        target_uid=target.target_uid,
+                        target_start_time_ticks=target.target_start_time_ticks,
+                        mutex_profile_fraction=(
+                            adapter_policy.mutex_profile_fraction
+                            if profile_kind == "mutex"
+                            else None
+                        ),
+                        block_profile_rate_ns=(
+                            adapter_policy.block_profile_rate_ns
+                            if profile_kind == "block"
+                            else None
+                        ),
+                    ) is None:
+                        raise _runtime_lock_native_error(
+                            "Go loopback private profile replay differs from the public Artifact"
+                        )
+            finally:
+                os.close(replay_fd)
+            if inspect_go_pprof_loopback_target(
+                target.target_pid,
+                target.loopback_port,
+            ) != target:
+                failure_reason = "target_identity_changed"
+                raise _runtime_lock_native_error(
+                    "Go pprof loopback PID or socket identity changed after conversion"
+                )
+            evidence = receipt.evidence
+            identity_warnings = _assert_go_loopback_runtime_lock_evidence_identity(
+                evidence,
+                capture=capture,
+                raw_result=raw_result,
+                execution_binding=binding,
+                profile_kind=profile_kind,
+                max_events=max_events,
+            )
+            analysis = build_runtime_lock_analysis(evidence)
+            verification = verify_runtime_lock_analysis_artifact(analysis, evidence)
+            require_usable_runtime_lock_analysis(verification)
+            public_evidence_bytes = len(serialize_json(evidence))
+            warnings = tuple(
+                dict.fromkeys(
+                    (
+                        *preview.warnings,
+                        *evidence.quality.limitations,
+                        *identity_warnings,
+                        "A loopback pprof snapshot cannot independently prove workload "
+                        "correctness.",
+                    )
+                )
+            )
+            quality, allowed, forbidden = derive_runtime_lock_run_boundaries(
+                adapter_id="go_pprof",
+                analysis_quality_status=analysis.quality_status,
+                analysis_allowed_conclusions=analysis.allowed_conclusions,
+                analysis_forbidden_conclusions=analysis.forbidden_conclusions,
+                warnings=warnings,
+            )
+            provisional_run = RuntimeLockRunArtifact(
+                schema_version=preview.schema_version,
+                perflens_version=__version__,
+                run_id=derive_runtime_lock_run_id(
+                    session_id,
+                    "go_pprof",
+                    evidence.content_sha256,
+                    capture.started_at,
+                ),
+                created_at=capture.finished_at,
+                started_at=capture.started_at,
+                finished_at=capture.finished_at,
+                session_id=session_id,
+                session_artifact_id=lease.session_artifact_id,
+                session_artifact_content_sha256=lease.session_artifact_content_sha256,
+                session_revision=lease.session_revision,
+                target_scope="host_bound_process",
+                operation_identity_sha256=operation_identity,
+                target_identity_sha256=target.target_identity_sha256,
+                adapter_id="go_pprof",
+                adapter_execution_identity_sha256=binding.execution_identity_sha256,
+                measurement_semantics="cumulative",
+                workload_identity_sha256=target.target_identity_sha256,
+                runtime_lock_evidence_id=evidence.runtime_lock_evidence_id,
+                runtime_lock_evidence_content_sha256=evidence.content_sha256,
+                runtime_lock_analysis_id=analysis.runtime_lock_analysis_id,
+                runtime_lock_analysis_content_sha256=analysis.content_sha256,
+                runtime_lock_verification_id=verification.runtime_lock_verification_id,
+                runtime_lock_verification_content_sha256=verification.content_sha256,
+                duration_seconds=actual_active_seconds,
+                evidence_bytes=public_evidence_bytes,
+                event_count=len(evidence.events),
+                correctness_status="unavailable",
+                quality_status=quality,
+                warnings=warnings,
+                allowed_conclusions=allowed,
+                forbidden_conclusions=forbidden,
+                content_sha256="0" * 64,
+            )
+            run = provisional_run.model_copy(
+                update={
+                    "content_sha256": contract_content_sha256(
+                        provisional_run, exclude={"content_sha256"}
+                    )
+                }
+            )
+            cleanup_go_pprof_raw_result(raw_result)
+            cleanup_go_pprof_loopback_capture(capture)
+            retain_private_evidence = False
+            actual_evidence_bytes = public_evidence_bytes
+            for artifact, artifact_id, artifact_type in (
+                (evidence, evidence.runtime_lock_evidence_id, "runtime-lock-evidence"),
+                (analysis, analysis.runtime_lock_analysis_id, "runtime-lock-analysis"),
+                (
+                    verification,
+                    verification.runtime_lock_verification_id,
+                    "runtime-lock-verification",
+                ),
+                (run, run.run_id, "runtime-lock-run"),
+            ):
+                store.save(artifact, artifact_id, artifact_type)
+            settlement = runtime.finish_run(session_id, lease, run)
+            run_finished = True
+            _persist_runtime_lock_settlement(runtime, session_id, store, settlement)
+            return ArtifactReference(
+                artifact_id=run.run_id,
+                artifact_type="runtime-lock-run",
+                uri=store.uri(run.run_id, "runtime-lock-run"),
+                summary={
+                    "session_id": session_id,
+                    "adapter_id": "go_pprof",
+                    "backend": "same_uid_loopback",
+                    "profile_kind": profile_kind,
+                    "measurement_semantics": "cumulative",
+                    "runtime_lock_evidence_id": evidence.runtime_lock_evidence_id,
+                    "runtime_lock_analysis_id": analysis.runtime_lock_analysis_id,
+                    "runtime_lock_verification_id": verification.runtime_lock_verification_id,
+                    "private_source_replay_status": "passed",
+                    "quality_status": run.quality_status,
+                    "event_count": run.event_count,
+                    "target_pid": target.target_pid,
+                    "session_state": settlement.session.state,
+                },
+            )
+        except Exception:
+            if capture is not None:
+                if retain_private_evidence:
+                    retained = (capture, raw_result)
+                    retained_bytes = capture.profile_size + (
+                        raw_result.raw_size if raw_result is not None else 0
+                    )
+                    if (
+                        retained not in runtime_lock_go_retained_loopback
+                        and runtime_lock_go_retained_bytes() + retained_bytes
+                        <= config.max_artifact_bytes
+                    ):
+                        runtime_lock_go_retained_loopback.append(retained)
+                    else:
+                        if raw_result is not None:
+                            with suppress(OSError, PerfLensError):
+                                cleanup_go_pprof_raw_result(raw_result)
+                        with suppress(OSError, PerfLensError):
+                            cleanup_go_pprof_loopback_capture(capture)
+                else:
+                    if raw_result is not None:
+                        with suppress(OSError, PerfLensError):
+                            cleanup_go_pprof_raw_result(raw_result)
+                    with suppress(OSError, PerfLensError):
+                        cleanup_go_pprof_loopback_capture(capture)
+            if lease is not None and not run_finished:
+                with suppress(PerfLensError):
+                    terminal = runtime.fail_run(
+                        session_id,
+                        lease,
+                        actual_active_seconds=actual_active_seconds,
+                        actual_evidence_bytes=actual_evidence_bytes,
+                        actual_exact_events=0,
+                        reason=failure_reason,
+                    )
+                    _persist_runtime_lock_settlement(runtime, session_id, store, terminal)
+            elif lease is None:
+                with suppress(PerfLensError):
+                    terminal = runtime.revoke(session_id)
+                    store.save(terminal, terminal.session_artifact_id, "runtime-lock-session")
+            raise
+
     @server.tool(
         name="inspect_collection_capabilities",
         description=(
@@ -1220,6 +2016,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         allowed_semantics: tuple[Literal["exact", "thresholded", "sampled", "cumulative"], ...],
         executable: str | None = None,
         arguments: tuple[str, ...] = (),
+        target_pid: int | None = None,
+        loopback_port: int | None = None,
     ) -> RuntimeLockSessionPreviewArtifact:
         _require_runtime_locks(config)
         assert runtime_lock_policy is not None
@@ -1232,12 +2030,61 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         inspection = inspect_runtime_lock_session_capability()
         runtime = get_runtime_lock_session_runtime()
         workload: RuntimeLockWorkloadBinding | None = None
+        process_target: RuntimeLockProcessTargetBinding | None = None
         execution_bindings: tuple[RuntimeLockAdapterExecutionBinding, ...] = ()
         preview_warnings: tuple[str, ...] = ()
-        if target_scope == "host_launched_workload":
+        if target_scope == "host_bound_process":
+            if (
+                allowed_adapters != ("go_pprof",)
+                or allowed_semantics != ("cumulative",)
+                or executable is not None
+                or arguments
+                or target_pid is None
+                or loopback_port is None
+            ):
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_authorization",
+                    "Host-bound Go pprof Preview requires one PID, literal loopback port, and "
+                    "cumulative semantics",
+                    recoverable=True,
+                )
+            _require_runtime_lock_adapter_capability(
+                inspection,
+                adapter_id="go_pprof",
+                allowed_semantics=allowed_semantics,
+            )
+            adapter_policy = runtime_lock_policy.adapter_policy("go_pprof")
+            if not adapter_policy.loopback_backend_enabled:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_authorization",
+                    "The same-UID Go pprof loopback backend is disabled by project policy",
+                    recoverable=True,
+                )
+            bridge = get_runtime_lock_go_bridge()
+            if bridge.execution_binding is None:
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "runtime_lock_capability",
+                    "The Go pprof converter binding is unavailable",
+                    recoverable=True,
+                )
+            process_target = inspect_go_pprof_loopback_target(target_pid, loopback_port)
+            execution_bindings = (bridge.execution_binding,)
+            preview_warnings = bridge.capability.limitations
+        elif target_scope == "host_launched_workload":
+            if target_pid is not None or loopback_port is not None:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_authorization",
+                    "A launched workload Preview cannot also attach to a process",
+                    recoverable=True,
+                )
             if (
                 len(allowed_adapters) != 1
-                or allowed_adapters[0] not in {"native_pthread", "java_jfr", "cpython_threading"}
+                or allowed_adapters[0]
+                not in {"native_pthread", "java_jfr", "cpython_threading", "go_pprof"}
                 or executable is None
             ):
                 raise PerfLensError(
@@ -1301,6 +2148,28 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 execution_bindings = (binding,)
                 preview_warnings = bridge.capability.limitations
                 program_sha256 = target.script_sha256
+            elif adapter_id == "go_pprof":
+                if allowed_semantics != ("cumulative",):
+                    raise PerfLensError(
+                        ErrorCode.PATH_SAFETY_VIOLATION,
+                        "runtime_lock_authorization",
+                        "Go pprof host collection requires cumulative semantics",
+                        recoverable=True,
+                    )
+                launcher = get_runtime_lock_go_launcher()
+                target = launcher.inspect_target(executable_path)
+                workload_kind = "go_elf"
+                bridge = get_runtime_lock_go_bridge()
+                if bridge.execution_binding is None:
+                    raise PerfLensError(
+                        ErrorCode.EXTERNAL_TOOL_FAILED,
+                        "runtime_lock_capability",
+                        "The Go pprof execution binding is unavailable",
+                        recoverable=True,
+                    )
+                execution_bindings = (bridge.execution_binding,)
+                preview_warnings = bridge.capability.limitations
+                program_sha256 = target.binary_sha256
             else:
                 launcher = get_runtime_lock_native_launcher()
                 target = launcher.inspect_target(executable_path)
@@ -1343,7 +2212,33 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 arguments=arguments,
                 workload_identity_sha256=workload_identity,
             )
-        elif executable is not None or arguments:
+        elif target_scope == "controlled_import":
+            if (
+                executable is not None
+                or arguments
+                or target_pid is not None
+                or loopback_port is not None
+            ):
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_authorization",
+                    "Controlled import cannot bind an executable workload",
+                    recoverable=True,
+                )
+            if "go_pprof" in allowed_adapters:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_authorization",
+                    "Raw Go pprof import cannot prove a target PID; use the startup-file or "
+                    "same-UID PID/socket-bound loopback backend",
+                    recoverable=True,
+                )
+        elif (
+            executable is not None
+            or arguments
+            or target_pid is not None
+            or loopback_port is not None
+        ):
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,
                 "runtime_lock_authorization",
@@ -1359,12 +2254,14 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 runtime_lock_policy.import_roots if target_scope == "controlled_import" else ()
             ),
             workload=workload,
+            process_target=process_target,
             adapter_execution_bindings=execution_bindings,
             budget=runtime_lock_policy.budget,
             planned_actions=_runtime_lock_planned_actions(target_scope),
             warnings=(
                 preview_warnings
-                if target_scope == "host_launched_workload"
+                if target_scope in {"host_launched_workload", "host_bound_process"}
+                or preview_warnings
                 else (
                     ("This Runtime Lock launch entry point is not implemented yet.",)
                     if target_scope != "controlled_import"
@@ -1822,8 +2719,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     @server.tool(
         name="collect_runtime_lock_evidence",
         description=(
-            "Execute only the exact Native pthread, startup-time Java JFR, or startup-time "
-            "CPython threading host workload "
+            "Execute only the exact Native pthread, startup-time Java JFR, startup-time "
+            "CPython threading, or startup-time Go pprof host workload "
             "bound into an authorized Runtime Lock Preview. The fixed Adapter, environment, "
             "private output, duration, event count, and one single-use lease remain "
             "independently bounded."
@@ -1834,9 +2731,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     )
     async def collect_runtime_lock_evidence(
         session_id: str,
-        measurement_semantics: Literal["exact", "thresholded"],
+        measurement_semantics: Literal["exact", "thresholded", "cumulative"],
         duration_seconds: int,
         max_events: int = 20_000,
+        profile_kind: GoProfileKind = "mutex",
     ) -> ArtifactReference:
         _require_runtime_locks(config)
         assert runtime_lock_policy is not None
@@ -1844,6 +2742,17 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         runtime = get_runtime_lock_session_runtime()
         candidate_session = runtime.snapshot(session_id)
         candidate_preview = store.load_runtime_lock_preview(candidate_session.preview_id)
+        if candidate_preview.target_scope == "host_bound_process":
+            if measurement_semantics != "cumulative":
+                raise _runtime_lock_native_error(
+                    "Go pprof loopback collection requires cumulative semantics"
+                )
+            return await collect_go_pprof_loopback_runtime_lock_evidence(
+                session_id,
+                duration_seconds,
+                max_events,
+                profile_kind,
+            )
         if (
             candidate_preview.workload is not None
             and candidate_preview.workload.adapter_id == "java_jfr"
@@ -1861,11 +2770,37 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             candidate_preview.workload is not None
             and candidate_preview.workload.adapter_id == "cpython_threading"
         ):
+            if measurement_semantics == "cumulative":
+                raise _runtime_lock_native_error(
+                    "CPython collection requires exact or thresholded semantics"
+                )
             return await collect_cpython_runtime_lock_evidence(
                 session_id,
                 measurement_semantics,
                 duration_seconds,
                 max_events,
+            )
+        if (
+            candidate_preview.workload is not None
+            and candidate_preview.workload.adapter_id == "go_pprof"
+        ):
+            if measurement_semantics != "cumulative":
+                raise _runtime_lock_native_error(
+                    "Go pprof collection requires cumulative semantics"
+                )
+            return await collect_go_pprof_runtime_lock_evidence(
+                session_id,
+                duration_seconds,
+                max_events,
+                profile_kind,
+            )
+        if measurement_semantics == "cumulative":
+            raise _runtime_lock_native_error(
+                "Cumulative collection is supported only by the Go pprof Adapter"
+            )
+        if profile_kind != "mutex":
+            raise _runtime_lock_native_error(
+                "profile_kind is valid only for the Go pprof Adapter"
             )
         lease = None
         launch_result: NativeLaunchResult | None = None
@@ -5207,11 +6142,19 @@ def _validate_runtime_lock_preview_policy(
     for adapter_id in allowed_adapters:
         adapter = policy.adapter_policy(adapter_id)
         selected_semantics = set(adapter.allowed_semantics) & set(allowed_semantics)
+        entry_point_allowed = (
+            adapter.controlled_import_allowed
+            if target_scope == "controlled_import"
+            else (
+                adapter.loopback_backend_enabled
+                if target_scope == "host_bound_process" and adapter_id == "go_pprof"
+                else adapter.launch_instrumentation_allowed
+            )
+        )
         if (
             not adapter.enabled
             or not selected_semantics
-            or (target_scope == "controlled_import" and not adapter.controlled_import_allowed)
-            or (target_scope != "controlled_import" and not adapter.launch_instrumentation_allowed)
+            or not entry_point_allowed
         ):
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,
@@ -5483,6 +6426,239 @@ def _runtime_lock_cpython_operation_identity(
         )
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _validate_go_runtime_lock_session(
+    session: RuntimeLockSessionArtifact,
+    preview: RuntimeLockSessionPreviewArtifact,
+    policy: RuntimeLockProjectPolicy,
+    *,
+    execution_binding: RuntimeLockAdapterExecutionBinding,
+    duration_seconds: int,
+    max_events: int,
+    profile_kind: GoProfileKind,
+) -> RuntimeLockWorkloadBinding:
+    workload = preview.workload
+    adapter_policy = policy.adapter_policy("go_pprof")
+    selected_rate = (
+        adapter_policy.mutex_profile_fraction
+        if profile_kind == "mutex"
+        else adapter_policy.block_profile_rate_ns
+    )
+    if (
+        session.state != "active"
+        or session.target_scope != "host_launched_workload"
+        or preview.target_scope != session.target_scope
+        or preview.content_sha256 != session.preview_content_sha256
+        or preview.runtime_lock_config_sha256 != policy.sha256
+        or session.runtime_lock_config_sha256 != policy.sha256
+        or session.allowed_adapters != ("go_pprof",)
+        or session.allowed_semantics != ("cumulative",)
+        or workload is None
+        or workload.adapter_id != "go_pprof"
+        or workload.workload_kind != "go_elf"
+        or preview.adapter_execution_bindings != (execution_binding,)
+        or not adapter_policy.file_backend_enabled
+        or selected_rate is None
+        or isinstance(duration_seconds, bool)
+        or not 1 <= duration_seconds <= session.budget.max_collection_duration_seconds
+        or isinstance(max_events, bool)
+        or not 1 <= max_events <= session.budget.max_exact_events
+    ):
+        raise _runtime_lock_native_error(
+            "Go pprof collection is outside the authorized Runtime Lock Session"
+        )
+    _validate_runtime_lock_preview_policy(
+        policy,
+        target_scope="host_launched_workload",
+        allowed_adapters=("go_pprof",),
+        allowed_semantics=("cumulative",),
+    )
+    return workload
+
+
+def _validate_go_loopback_runtime_lock_session(
+    session: RuntimeLockSessionArtifact,
+    preview: RuntimeLockSessionPreviewArtifact,
+    policy: RuntimeLockProjectPolicy,
+    *,
+    execution_binding: RuntimeLockAdapterExecutionBinding,
+    duration_seconds: int,
+    max_events: int,
+    profile_kind: GoProfileKind,
+) -> RuntimeLockProcessTargetBinding:
+    target = preview.process_target
+    adapter_policy = policy.adapter_policy("go_pprof")
+    selected_rate = (
+        adapter_policy.mutex_profile_fraction
+        if profile_kind == "mutex"
+        else adapter_policy.block_profile_rate_ns
+    )
+    if (
+        session.state != "active"
+        or session.target_scope != "host_bound_process"
+        or preview.target_scope != session.target_scope
+        or preview.content_sha256 != session.preview_content_sha256
+        or preview.runtime_lock_config_sha256 != policy.sha256
+        or session.runtime_lock_config_sha256 != policy.sha256
+        or session.allowed_adapters != ("go_pprof",)
+        or session.allowed_semantics != ("cumulative",)
+        or target is None
+        or preview.workload is not None
+        or preview.adapter_execution_bindings != (execution_binding,)
+        or not adapter_policy.loopback_backend_enabled
+        or selected_rate is None
+        or isinstance(duration_seconds, bool)
+        or not 1 <= duration_seconds <= session.budget.max_collection_duration_seconds
+        or isinstance(max_events, bool)
+        or not 1 <= max_events <= session.budget.max_exact_events
+    ):
+        raise _runtime_lock_native_error(
+            "Go pprof loopback collection is outside the authorized Runtime Lock Session"
+        )
+    _validate_runtime_lock_preview_policy(
+        policy,
+        target_scope="host_bound_process",
+        allowed_adapters=("go_pprof",),
+        allowed_semantics=("cumulative",),
+    )
+    return target
+
+
+def _runtime_lock_go_operation_identity(
+    session: RuntimeLockSessionArtifact,
+    target_identity_sha256: str,
+    profile_kind: GoProfileKind,
+    duration_seconds: int,
+    max_events: int,
+    execution_identity_sha256: str,
+    mutex_profile_fraction: int | None,
+    block_profile_rate_ns: int | None,
+) -> str:
+    material = "\0".join(
+        (
+            "perflens-runtime-lock-go-operation-v1",
+            session.session_id,
+            str(session.revision),
+            str(session.workload_runs_used + 1),
+            target_identity_sha256,
+            profile_kind,
+            str(duration_seconds),
+            str(max_events),
+            execution_identity_sha256,
+            str(mutex_profile_fraction or 0),
+            str(block_profile_rate_ns or 0),
+        )
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _assert_go_runtime_lock_evidence_identity(
+    evidence: RuntimeLockEvidenceArtifact,
+    *,
+    launch_result: GoPprofLaunchResult,
+    raw_result: GoPprofRawResult,
+    expected_target_identity_sha256: str,
+    execution_binding: RuntimeLockAdapterExecutionBinding,
+    profile_kind: GoProfileKind,
+    max_events: int,
+) -> tuple[str, ...]:
+    source = evidence.source
+    target = evidence.target
+    bound_tools = {tool.name: tool for tool in execution_binding.tools}
+    bound_go = bound_tools.get("go")
+    bound_pprof = bound_tools.get("pprof")
+    if (
+        launch_result.target_identity_sha256 != expected_target_identity_sha256
+        or target.target_kind != "host"
+        or target.target_pid != launch_result.target_pid
+        or target.target_uid != launch_result.target_uid
+        or target.target_start_time_ticks != launch_result.target_start_ticks
+        or target.observed_target_tids
+        or launch_result.target_uid != os.geteuid()
+        or source.runtime != "go"
+        or source.adapter_id != "go_pprof"
+        or source.backend_id != f"pprof-{profile_kind}"
+        or source.source_format != "pprof_text_v1"
+        or source.target_scope != "bound_pid"
+        or source.source_sha256 != raw_result.raw_sha256
+        or source.source_bytes != raw_result.raw_size
+        or source.adapter_execution_identity_sha256
+        != execution_binding.execution_identity_sha256
+        or source.configuration_sha256 != execution_binding.configuration_sha256
+        or source.metadata_sha256 != execution_binding.metadata_sha256
+        or bound_go is None
+        or bound_pprof is None
+        or bound_go.binary_sha256 != launch_result.go_tool_sha256
+        or bound_pprof.binary_sha256 != launch_result.pprof_tool_sha256
+        or source.tool is None
+        or source.tool.name != "pprof"
+        or source.tool.path != "pprof"
+        or source.tool.binary_sha256 != launch_result.pprof_tool_sha256
+        or len(evidence.events) > max_events
+        or any(context.kind != "process_aggregate" for context in evidence.execution_contexts)
+        or any(event.lock_id is not None for event in evidence.events)
+    ):
+        raise _runtime_lock_native_error(
+            "Go pprof Evidence differs from its authorized workload or toolchain identity"
+        )
+    return (
+        "Go pprof profile controls are application-declared and not independently attested by "
+        "the profile payload.",
+    )
+
+
+def _assert_go_loopback_runtime_lock_evidence_identity(
+    evidence: RuntimeLockEvidenceArtifact,
+    *,
+    capture: GoPprofLoopbackCapture,
+    raw_result: GoPprofRawResult,
+    execution_binding: RuntimeLockAdapterExecutionBinding,
+    profile_kind: GoProfileKind,
+    max_events: int,
+) -> tuple[str, ...]:
+    source = evidence.source
+    target = evidence.target
+    bound_pprof = next(
+        (tool for tool in execution_binding.tools if tool.name == "pprof"),
+        None,
+    )
+    if (
+        target.target_kind != "host"
+        or target.target_pid != capture.target.target_pid
+        or target.target_uid != capture.target.target_uid
+        or target.target_start_time_ticks != capture.target.target_start_time_ticks
+        or target.observed_target_tids
+        or target.target_uid != os.geteuid()
+        or source.runtime != "go"
+        or source.adapter_id != "go_pprof"
+        or source.backend_id != f"pprof-{profile_kind}"
+        or source.source_format != "pprof_text_v1"
+        or source.target_scope != "bound_pid"
+        or source.source_sha256 != raw_result.raw_sha256
+        or source.source_bytes != raw_result.raw_size
+        or source.adapter_execution_identity_sha256
+        != execution_binding.execution_identity_sha256
+        or source.configuration_sha256 != execution_binding.configuration_sha256
+        or source.metadata_sha256 != execution_binding.metadata_sha256
+        or bound_pprof is None
+        or source.tool is None
+        or source.tool.name != "pprof"
+        or source.tool.path != "pprof"
+        or source.tool.binary_sha256 != bound_pprof.binary_sha256
+        or len(evidence.events) > max_events
+        or any(context.kind != "process_aggregate" for context in evidence.execution_contexts)
+        or any(event.lock_id is not None for event in evidence.events)
+    ):
+        raise _runtime_lock_native_error(
+            "Go pprof loopback Evidence differs from its PID/socket or toolchain identity"
+        )
+    return (
+        "Go pprof profile controls are application-declared and not independently attested by "
+        "the profile payload.",
+        "Loopback collection binds PID, UID, start time, port, and socket inode but does not "
+        "attach to or modify the target process.",
+    )
 
 
 def _assert_cpython_runtime_lock_evidence_identity(
@@ -6167,6 +7343,14 @@ def _runtime_lock_planned_actions(
             "Import only a versioned source inside one reviewed project-relative import root.",
             "Normalize, analyze, and independently verify the redacted Runtime Lock evidence.",
             "Expose only bounded verified hotspots, call paths, and evidence limitations.",
+            "Revoke the in-memory Session authorization when the evidence workflow ends.",
+        )
+    if target_scope == "host_bound_process":
+        return (
+            "Authorize this exact same-UID PID, start time, and literal-loopback socket.",
+            "Fetch only one fixed Go mutex or block pprof endpoint without redirects or proxies.",
+            "Convert with the content-bound pprof tool and revalidate PID/socket identity.",
+            "Analyze and independently verify the cumulative, redacted Runtime Lock evidence.",
             "Revoke the in-memory Session authorization when the evidence workflow ends.",
         )
     return (

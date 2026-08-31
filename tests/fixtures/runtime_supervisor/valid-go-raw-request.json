@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "protocol_version": "1.0",
+  "request_id": "4345678901abcdefabcd",
+  "expected_parent_pid": 1200,
+  "expected_supervisor_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "executable": {
+    "descriptor": 10,
+    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "device": 2049,
+    "inode": 501,
+    "owner_uid": 0,
+    "mode": 365,
+    "links": 1,
+    "size": 16384
+  },
+  "working_directory": {
+    "descriptor": 11,
+    "device": 2049,
+    "inode": 502,
+    "owner_uid": 1000,
+    "mode": 448
+  },
+  "arguments": [],
+  "timeout_milliseconds": 30000,
+  "request": {
+    "adapter": "go_pprof_raw",
+    "profile": {
+      "descriptor": 12,
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "device": 2049,
+      "inode": 503,
+      "owner_uid": 1000,
+      "mode": 384,
+      "links": 1,
+      "size": 8192
+    },
+    "output": {
+      "descriptor": 13,
+      "device": 2049,
+      "inode": 504,
+      "owner_uid": 1000,
+      "mode": 384,
+      "links": 1,
+      "maximum_size": 67108864
+    }
+  }
+}

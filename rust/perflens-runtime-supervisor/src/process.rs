@@ -169,15 +169,20 @@ pub fn supervise(
                 "leader_already_reaped" | "post_reap_cleanup_failed"
             ) {
                 let cleanup = finalize_adopted_descendants(supervisor_pid, &excluded_children);
-                return match cleanup {
-                    Ok((_, 0)) => Err(primary),
-                    Ok((_, residual)) => Err(SupervisorError::new(
+                let evidence_cleanup = enforce_final_evidence_bound(validated);
+                return match (cleanup, evidence_cleanup) {
+                    (Ok((_, 0)), Ok(())) => Err(primary),
+                    (Ok((_, 0)), Err(evidence)) => Err(SupervisorError::new(
+                        "post_reap_cleanup_failed",
+                        format!("{primary}; final evidence cleanup also failed: {evidence}"),
+                    )),
+                    (Ok((_, residual)), _) => Err(SupervisorError::new(
                         "post_reap_cleanup_failed",
                         format!(
                             "{primary}; {residual} adopted descendants remained after safe cleanup"
                         ),
                     )),
-                    Err(cleanup) => Err(SupervisorError::new(
+                    (Err(cleanup), _) => Err(SupervisorError::new(
                         "post_reap_cleanup_failed",
                         format!(
                             "{primary}; safe adopted-descendant cleanup also failed: {cleanup}"
@@ -267,6 +272,12 @@ enum EvidenceBoundary {
         descriptor: RawFd,
         maximum_size: u64,
     },
+    MonitoredFiles {
+        first_descriptor: RawFd,
+        first_maximum_size: u64,
+        second_descriptor: RawFd,
+        second_maximum_size: u64,
+    },
 }
 
 impl EvidenceBoundary {
@@ -306,13 +317,24 @@ impl EvidenceBoundary {
                 descriptor,
                 maximum_size,
             }),
+            EvidenceOutput::MonitoredFiles {
+                first_descriptor,
+                first_maximum_size,
+                second_descriptor,
+                second_maximum_size,
+            } => Ok(Self::MonitoredFiles {
+                first_descriptor,
+                first_maximum_size,
+                second_descriptor,
+                second_maximum_size,
+            }),
         }
     }
 
     fn poll_descriptor(&self) -> RawFd {
         match self {
             Self::BoundedStream { source, .. } => source.as_raw_fd(),
-            Self::MonitoredFile { .. } => -1,
+            Self::MonitoredFile { .. } | Self::MonitoredFiles { .. } => -1,
         }
     }
 
@@ -369,6 +391,17 @@ impl EvidenceBoundary {
                 descriptor,
                 maximum_size,
             } => enforce_monitored_file_bound(*descriptor, *maximum_size),
+            Self::MonitoredFiles {
+                first_descriptor,
+                first_maximum_size,
+                second_descriptor,
+                second_maximum_size,
+            } => enforce_two_monitored_file_bounds(
+                *first_descriptor,
+                *first_maximum_size,
+                *second_descriptor,
+                *second_maximum_size,
+            ),
         }
     }
 
@@ -406,6 +439,24 @@ fn enforce_monitored_file_bound(
     ))
 }
 
+fn enforce_two_monitored_file_bounds(
+    first_descriptor: RawFd,
+    first_maximum_size: u64,
+    second_descriptor: RawFd,
+    second_maximum_size: u64,
+) -> Result<(), SupervisorError> {
+    let first = enforce_monitored_file_bound(first_descriptor, first_maximum_size);
+    let second = enforce_monitored_file_bound(second_descriptor, second_maximum_size);
+    match (first, second) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(first), Err(second)) => Err(SupervisorError::new(
+            "resource_limit_exceeded",
+            format!("both Go profile bounds were exceeded: {first}; {second}"),
+        )),
+    }
+}
+
 fn enforce_final_evidence_bound(validated: &ValidatedRequest) -> Result<(), SupervisorError> {
     match validated.evidence_output {
         EvidenceOutput::BoundedStream { .. } => Ok(()),
@@ -413,6 +464,17 @@ fn enforce_final_evidence_bound(validated: &ValidatedRequest) -> Result<(), Supe
             descriptor,
             maximum_size,
         } => enforce_monitored_file_bound(descriptor, maximum_size),
+        EvidenceOutput::MonitoredFiles {
+            first_descriptor,
+            first_maximum_size,
+            second_descriptor,
+            second_maximum_size,
+        } => enforce_two_monitored_file_bounds(
+            first_descriptor,
+            first_maximum_size,
+            second_descriptor,
+            second_maximum_size,
+        ),
     }
 }
 
@@ -528,7 +590,9 @@ fn spawn(validated: &ValidatedRequest) -> Result<SpawnedChild, SupervisorError> 
             set_nonblocking(read.as_raw_fd())?;
             (Some(read), Some(write))
         }
-        EvidenceOutput::MonitoredFile { .. } => (None, None),
+        EvidenceOutput::MonitoredFile { .. } | EvidenceOutput::MonitoredFiles { .. } => {
+            (None, None)
+        }
     };
     let supervisor_pid = process_id();
     let argv: Vec<*const libc::c_char> = validated
@@ -1537,8 +1601,14 @@ fn is_would_block(error: &io::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{direct_child_identities, read_process_identity, validate_process_privilege_state};
+    use super::{
+        direct_child_identities, enforce_two_monitored_file_bounds, read_process_identity,
+        validate_process_privilege_state,
+    };
     use crate::sys::ProcessPrivilegeState;
+    use std::fs::{self, OpenOptions};
+    use std::os::fd::AsRawFd;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn proc_stat_parser_reads_current_process() {
@@ -1611,5 +1681,38 @@ mod tests {
                 .expect_err("privileged or inconsistent identity must be rejected");
             assert_eq!(error.code, "privilege_boundary_violation");
         }
+    }
+
+    #[test]
+    fn both_go_profile_files_are_bounded_even_when_the_first_fails() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let first_path = std::env::temp_dir().join(format!("perflens-go-first-{suffix}"));
+        let second_path = std::env::temp_dir().join(format!("perflens-go-second-{suffix}"));
+        let first = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&first_path)
+            .expect("first profile");
+        let second = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&second_path)
+            .expect("second profile");
+        first.set_len(8).expect("oversize first");
+        second.set_len(9).expect("oversize second");
+        let error = enforce_two_monitored_file_bounds(first.as_raw_fd(), 4, second.as_raw_fd(), 5)
+            .expect_err("both files exceed their bounds");
+        assert_eq!(error.code, "resource_limit_exceeded");
+        assert_eq!(first.metadata().expect("first metadata").len(), 4);
+        assert_eq!(second.metadata().expect("second metadata").len(), 5);
+        drop(first);
+        drop(second);
+        fs::remove_file(first_path).expect("remove first");
+        fs::remove_file(second_path).expect("remove second");
     }
 }

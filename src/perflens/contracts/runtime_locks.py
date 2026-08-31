@@ -683,6 +683,29 @@ class RuntimeSourceManifest(ContractModel):
                             },
                         },
                     },
+                    {
+                        "if": {
+                            "properties": {"source_format": {"const": "pprof_text_v1"}},
+                            "required": ["source_format"],
+                        },
+                        "then": {
+                            "required": [
+                                "adapter_execution_identity_sha256",
+                                "configuration_sha256",
+                                "metadata_sha256",
+                                "tool",
+                            ],
+                            "properties": {
+                                "schema_version": {"const": "1.1"},
+                                "runtime": {"const": "go"},
+                                "adapter_id": {"const": "go_pprof"},
+                                "backend_id": {
+                                    "enum": ["pprof-block", "pprof-mutex"]
+                                },
+                                "target_scope": {"const": "bound_pid"},
+                            },
+                        },
+                    },
                 ]
             }
         ),
@@ -776,6 +799,19 @@ class RuntimeSourceManifest(ContractModel):
             or self.tool.status != "available"
         ):
             raise ValueError("CPython source lacks its bound Adapter execution identity")
+        if self.source_format == "pprof_text_v1" and (
+            self.schema_version != "1.1"
+            or self.runtime != "go"
+            or self.adapter_id != "go_pprof"
+            or self.backend_id not in {"pprof-mutex", "pprof-block"}
+            or self.target_scope != "bound_pid"
+            or any(value is None for value in execution_fields)
+            or self.tool is None
+            or self.tool.name != "pprof"
+            or self.tool.path != "pprof"
+            or self.tool.status != "available"
+        ):
+            raise ValueError("Go pprof source lacks its bound Adapter execution identity")
         return self
 
 

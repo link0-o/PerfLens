@@ -54,6 +54,12 @@ _ADAPTER_POLICY_KEYS = {
     "controlled_import_allowed",
 }
 _JAVA_JFR_POLICY_KEYS = _ADAPTER_POLICY_KEYS | {"profile"}
+_GO_PPROF_POLICY_KEYS = _ADAPTER_POLICY_KEYS | {
+    "mutex_profile_fraction",
+    "block_profile_rate_ns",
+    "file_backend_enabled",
+    "loopback_backend_enabled",
+}
 _ADAPTER_ORDER = (
     "cpython_threading",
     "generic_ndjson_import",
@@ -65,6 +71,7 @@ _SEMANTICS_ORDER = ("cumulative", "exact", "sampled", "thresholded")
 _TARGET_SCOPE_ORDER = (
     "controlled_import",
     "docker_optimization",
+    "host_bound_process",
     "host_launched_workload",
     "managed_temporary_container",
 )
@@ -79,6 +86,10 @@ class RuntimeLockAdapterProjectPolicy:
     launch_instrumentation_allowed: bool
     controlled_import_allowed: bool
     profile: Literal["balanced", "deep"] | None = None
+    mutex_profile_fraction: int | None = None
+    block_profile_rate_ns: int | None = None
+    file_backend_enabled: bool = False
+    loopback_backend_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,10 +134,10 @@ def render_default_runtime_lock_project_policy(*, docker_enabled: bool = False) 
     """Return an enabled-for-discovery policy that executes nothing during init."""
 
     scopes = (
-        '["controlled_import", "docker_optimization", "host_launched_workload", '
-        '"managed_temporary_container"]'
+        '["controlled_import", "docker_optimization", "host_bound_process", '
+        '"host_launched_workload", "managed_temporary_container"]'
         if docker_enabled
-        else '["controlled_import", "host_launched_workload"]'
+        else '["controlled_import", "host_bound_process", "host_launched_workload"]'
     )
     return f"""# PerfLens v0.4.0 Runtime Lock discovery and bounded-session policy.
 # Initialization only writes this policy. It does not instrument, attach, import, or collect.
@@ -182,7 +193,11 @@ allowed_semantics = ["cumulative"]
 duration_threshold_ns = 0
 exact_enabled = false
 launch_instrumentation_allowed = false
-controlled_import_allowed = true
+controlled_import_allowed = false
+mutex_profile_fraction = 0
+block_profile_rate_ns = 0
+file_backend_enabled = false
+loopback_backend_enabled = false
 
 [adapters.generic_ndjson_import]
 enabled = true
@@ -289,6 +304,8 @@ def _validate_policy_values(parsed: dict[str, object]) -> _ValidatedPolicy:
         "target scopes",
         _TARGET_SCOPE_ORDER,
     )
+    if schema_version == "1.0" and "host_bound_process" in target_scopes:
+        raise _policy_error("schema 1.0 cannot enable the host-bound process target scope")
     allowed_adapters = _enum_list(
         parsed["allowed_adapters"],
         "allowed Adapters",
@@ -345,12 +362,18 @@ def _validate_policy_values(parsed: dict[str, object]) -> _ValidatedPolicy:
         if not isinstance(raw_adapter, dict):
             raise _policy_error(f"Runtime Lock {adapter_id} policy must be a table")
         typed_adapter = cast(dict[str, object], raw_adapter)
-        expected_keys = (
-            _JAVA_JFR_POLICY_KEYS
-            if adapter_id == "java_jfr" and schema_version == "1.1"
-            else _ADAPTER_POLICY_KEYS
-        )
-        if set(typed_adapter) != expected_keys:
+        expected_keys = _ADAPTER_POLICY_KEYS
+        compatible_keys = {frozenset(expected_keys)}
+        if adapter_id == "java_jfr" and schema_version == "1.1":
+            compatible_keys = {frozenset(_JAVA_JFR_POLICY_KEYS)}
+        elif adapter_id == "go_pprof":
+            # Early schema-1.1 policies predate the active Go backend fields.
+            # They remain readable with every new capability disabled.
+            compatible_keys = {
+                frozenset(_ADAPTER_POLICY_KEYS),
+                frozenset(_GO_PPROF_POLICY_KEYS),
+            }
+        if frozenset(typed_adapter) not in compatible_keys:
             raise _policy_error(f"Runtime Lock {adapter_id} policy has unknown fields")
         adapter = _validate_adapter_policy(
             typed_adapter,
@@ -396,6 +419,10 @@ def _validate_adapter_policy(
     controlled_import = _boolean(values["controlled_import_allowed"], "controlled import")
     raw_profile = values.get("profile")
     profile: Literal["balanced", "deep"] | None = None
+    mutex_profile_fraction: int | None = None
+    block_profile_rate_ns: int | None = None
+    file_backend_enabled = False
+    loopback_backend_enabled = False
     if adapter_id == "java_jfr":
         if schema_version == "1.0":
             profile = "balanced"
@@ -408,6 +435,51 @@ def _validate_adapter_policy(
             raise _policy_error("Java JFR profile and threshold disagree")
     elif raw_profile is not None:
         raise _policy_error("Only the Java JFR Adapter may select a profile")
+    if adapter_id == "go_pprof" and schema_version == "1.1":
+        mutex_profile_fraction = (
+            _integer(
+                values.get("mutex_profile_fraction", 0),
+                "Go mutex profile fraction",
+                0,
+                1_000_000,
+            )
+            or None
+        )
+        block_profile_rate_ns = (
+            _integer(
+                values.get("block_profile_rate_ns", 0),
+                "Go block profile rate",
+                0,
+                10**12,
+            )
+            or None
+        )
+        file_backend_enabled = _boolean(
+            values.get("file_backend_enabled", False),
+            "Go file backend enabled",
+        )
+        loopback_backend_enabled = _boolean(
+            values.get("loopback_backend_enabled", False),
+            "Go loopback backend enabled",
+        )
+        if file_backend_enabled != launch:
+            raise _policy_error(
+                "Go file backend and launch-instrumentation switches must agree"
+            )
+        if (file_backend_enabled or loopback_backend_enabled) and (
+            mutex_profile_fraction is None or block_profile_rate_ns is None
+        ):
+            raise _policy_error(
+                "Active Go pprof backend requires both mutex and block profile rates"
+            )
+    elif adapter_id == "go_pprof" and set(values) == _GO_PPROF_POLICY_KEYS:
+        if (
+            _integer(values["mutex_profile_fraction"], "Go mutex profile fraction", 0, 0)
+            or _integer(values["block_profile_rate_ns"], "Go block profile rate", 0, 0)
+            or _boolean(values["file_backend_enabled"], "Go file backend enabled")
+            or _boolean(values["loopback_backend_enabled"], "Go loopback backend enabled")
+        ):
+            raise _policy_error("schema 1.0 Go backend extension fields must remain disabled")
     if enabled and not semantics:
         raise _policy_error("enabled Runtime Lock Adapter needs a semantics")
     if exact_enabled != ("exact" in semantics):
@@ -416,7 +488,16 @@ def _validate_adapter_policy(
         raise _policy_error("thresholded Runtime Lock Adapter requires a non-zero threshold")
     if "thresholded" not in semantics and threshold != 0:
         raise _policy_error("non-thresholded Runtime Lock Adapter cannot set a threshold")
-    if enabled and not (launch or controlled_import):
+    has_entry_point = launch or controlled_import or (
+        adapter_id == "go_pprof" and loopback_backend_enabled
+    )
+    discovery_only_go = (
+        adapter_id == "go_pprof"
+        and schema_version == "1.1"
+        and not file_backend_enabled
+        and not loopback_backend_enabled
+    )
+    if enabled and not has_entry_point and not discovery_only_go:
         raise _policy_error("enabled Runtime Lock Adapter has no bounded evidence entry point")
     return RuntimeLockAdapterProjectPolicy(
         enabled=enabled,
@@ -426,6 +507,10 @@ def _validate_adapter_policy(
         launch_instrumentation_allowed=launch,
         controlled_import_allowed=controlled_import,
         profile=profile,
+        mutex_profile_fraction=mutex_profile_fraction,
+        block_profile_rate_ns=block_profile_rate_ns,
+        file_backend_enabled=file_backend_enabled,
+        loopback_backend_enabled=loopback_backend_enabled,
     )
 
 
