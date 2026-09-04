@@ -605,11 +605,12 @@ class RuntimeSourceManifest(ContractModel):
                         "if": _legacy_schema_condition(),
                         "then": _forbid_present_json_schema(
                             "converter_version",
+                            "runtime_version",
                             "adapter_execution_identity_sha256",
                             "configuration_sha256",
                             "metadata_sha256",
                         ),
-                        "else": {"required": ["converter_version"]},
+                        "else": {"required": ["converter_version", "runtime_version"]},
                     },
                     {
                         "if": _schema_1_1_condition(),
@@ -717,6 +718,7 @@ class RuntimeSourceManifest(ContractModel):
     adapter_version: str = Field(min_length=1, max_length=128)
     backend_id: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,63}$")
     backend_version: str = Field(min_length=1, max_length=256)
+    runtime_version: str | None = Field(default=None, min_length=1, max_length=256)
     measurement_semantics: MeasurementSemantics
     source_format: Literal[
         "perflens_runtime_lock_ndjson_v1",
@@ -750,8 +752,16 @@ class RuntimeSourceManifest(ContractModel):
     def validate_semantics(self) -> RuntimeSourceManifest:
         if self.schema_version == "1.1" and self.converter_version is None:
             raise ValueError("schema 1.1 runtime source requires a converter version")
+        if self.schema_version == "1.1" and self.runtime_version is None:
+            raise ValueError("schema 1.1 runtime source requires the observed runtime version")
         if self.schema_version == "1.0" and "converter_version" in self.model_fields_set:
             raise ValueError("schema 1.0 runtime source cannot carry converter_version")
+        if self.schema_version == "1.0" and "runtime_version" in self.model_fields_set:
+            raise ValueError("schema 1.0 runtime source cannot carry runtime_version")
+        if self.runtime_version is not None and not is_safe_runtime_public_label(
+            self.runtime_version
+        ):
+            raise ValueError("runtime source version contains sensitive or path material")
         execution_fields = (
             self.adapter_execution_identity_sha256,
             self.configuration_sha256,
@@ -2076,6 +2086,8 @@ class RuntimeLockSourceReplayReceipt(ContractModel):
     source_format: str = Field(min_length=1, max_length=128)
     raw_source_sha256: Sha256
     raw_source_bytes: int = Field(ge=0, le=64 << 20)
+    origin_source_sha256: Sha256 | None = None
+    origin_source_bytes: int | None = Field(default=None, ge=0, le=64 << 20)
     normalized_source_sha256: Sha256
     normalized_source_bytes: int = Field(ge=0, le=64 << 20)
     converter_version: str = Field(min_length=1, max_length=128)
@@ -2083,6 +2095,12 @@ class RuntimeLockSourceReplayReceipt(ContractModel):
     adapter_execution_identity_sha256: Sha256 | None = None
     runtime_lock_evidence_id: ArtifactId
     runtime_lock_evidence_content_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_origin_receipt(self) -> RuntimeLockSourceReplayReceipt:
+        if (self.origin_source_sha256 is None) != (self.origin_source_bytes is None):
+            raise ValueError("origin source replay identity must be supplied as one pair")
+        return self
 
 
 class RuntimeLockAnalysisVerificationArtifact(ContractModel):

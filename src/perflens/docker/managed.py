@@ -26,7 +26,12 @@ from perflens.contracts.docker import (
     ContainerRunArtifact,
     ContainerWorkloadSpecArtifact,
 )
-from perflens.docker.adapter import DockerCommandAdapter, ManagedDockerCreateRequest
+from perflens.docker.adapter import (
+    DockerCommandAdapter,
+    ManagedDockerCreateRequest,
+    RuntimeLockDockerLaunch,
+    project_runtime_lock_docker_launch,
+)
 from perflens.docker.identity import (
     LinuxContainerIdentityReader,
     NamespaceIdentity,
@@ -47,10 +52,10 @@ from perflens.docker.workload import (
 )
 from perflens.domain.errors import ErrorCode, PerfLensError
 
-_READY_PREFIX = b"PERFLENS_GATE_V2 READY\0"
-_READY_NAMESPACE_IDENTITY = struct.Struct("!QQQQ")
+_READY_PREFIX = b"PERFLENS_GATE_V3 READY\0"
+_READY_NAMESPACE_IDENTITY = struct.Struct("!QQQQQ")
 _READY_FRAME_SIZE = len(_READY_PREFIX) + _READY_NAMESPACE_IDENTITY.size
-_EXEC_FRAME = b"PERFLENS_GATE_V2 EXEC\n"
+_EXEC_FRAME = b"PERFLENS_GATE_V3 EXEC\n"
 _PEER_CREDENTIALS = struct.Struct("=iII")
 _SESSION_LABEL = "io.perflens.session-sha256"
 _WORKLOAD_LABEL = "io.perflens.workload-sha256"
@@ -149,6 +154,7 @@ class ManagedDockerCoordinator:
         lease: DockerRunLease,
         client_connection_identity_sha256: str,
         policy_identity_sha256: str,
+        runtime_lock_launch: RuntimeLockDockerLaunch | None = None,
     ) -> PreparedManagedContainer:
         now = self._now()
         if not lease.allowed_modes:
@@ -168,6 +174,7 @@ class ManagedDockerCoordinator:
                 session=session,
                 lease=lease,
                 now=now,
+                runtime_lock_launch=runtime_lock_launch,
             )
         except BaseException:
             # A failed reconciliation leaves the private lease fail-closed.
@@ -187,6 +194,7 @@ class ManagedDockerCoordinator:
         session: ContainerOptimizationSessionArtifact,
         lease: DockerRunLease,
         now: datetime,
+        runtime_lock_launch: RuntimeLockDockerLaunch | None,
     ) -> PreparedManagedContainer:
         _validate_authorized_run(
             workload=workload,
@@ -256,6 +264,7 @@ class ManagedDockerCoordinator:
                 session_identity_sha256=session_identity,
                 workload_spec_sha256=workload.content_sha256,
                 creation_receipt_sha256=creation_receipt,
+                runtime_lock_launch=runtime_lock_launch,
             )
             container_id = self._adapter.create_managed_container(request)
             _validate_managed_inspect(
@@ -276,6 +285,7 @@ class ManagedDockerCoordinator:
             connection, gate_peer_uid, gate_namespace = _accept_gate(
                 listener.socket,
                 expected_pid=instance.init_host_pid,
+                expected_container_uid=int(request.container_user.split(":", 1)[0]),
                 timeout_seconds=self._gate_wait_seconds,
             )
             kernel = self._reader.inspect_process(
@@ -283,13 +293,12 @@ class ManagedDockerCoordinator:
                 namespace_attestation=gate_namespace,
             )
             if gate_peer_uid != kernel.host_uid:
-                raise _managed_error(
-                    "Container Gate peer UID differs from the verified target"
-                )
+                raise _managed_error("Container Gate peer UID differs from the verified target")
             target_artifact = build_managed_container_target_artifact(
                 adapter=self._adapter,
                 instance=instance,
                 target=kernel,
+                container_uid=int(request.container_user.split(":", 1)[0]),
                 invoking_uid=self._invoking_uid,
                 allow_rootful_cross_uid=self._allow_rootful_cross_uid,
                 created_at=now,
@@ -362,9 +371,7 @@ class ManagedDockerCoordinator:
                     "managed_container_cleanup_status": cleanup_status,
                 }
                 if cleanup_status == "removed":
-                    error.message = (
-                        f"{error.message}; verified temporary container was removed"
-                    )
+                    error.message = f"{error.message}; verified temporary container was removed"
                 elif cleanup_status == "preserved_for_manual_cleanup":
                     error.message = (
                         f"{error.message}; container cleanup identity could not be verified and "
@@ -493,9 +500,7 @@ def build_container_run_artifact(
         build_artifact_sha256,
         "build artifact identities",
     )
-    benchmark_content_sha256 = (
-        contract_content_sha256(benchmark) if benchmark is not None else None
-    )
+    benchmark_content_sha256 = contract_content_sha256(benchmark) if benchmark is not None else None
     if (workload.benchmark_output_contract_sha256 is None) != (benchmark is None):
         raise _managed_error("Container benchmark output differs from its workload contract")
     target = prepared.target.artifact
@@ -606,9 +611,11 @@ def _validate_managed_inspect(
     if (running and process_id <= 0) or (not running and process_id != 0):
         raise _managed_error("Managed Docker PID does not match its running state")
     config = _dict_field(data, "Config")
+    runtime_lock_surface = project_runtime_lock_docker_launch(request.runtime_lock_launch)
     expected_command = [
         "--control",
         _CONTROL_SOCKET_PATH,
+        *runtime_lock_surface.arguments,
         "--",
         request.workload_entrypoint,
         *request.workload_arguments,
@@ -665,7 +672,7 @@ def _validate_managed_inspect(
     if not isinstance(mounts_value, list):
         raise _managed_error("Managed Docker mount set differs from policy")
     mounts = cast(list[object], mounts_value)
-    if len(mounts) != 4:
+    if len(mounts) != 4 + len(runtime_lock_surface.mounts):
         raise _managed_error("Managed Docker mount set differs from policy")
     observed: dict[str, tuple[str, bool]] = {}
     for raw in mounts:
@@ -689,6 +696,9 @@ def _validate_managed_inspect(
         "/perflens-scratch": (str(request.scratch_root), True),
         _CONTROL_CONTAINER_PATH: (str(request.control_root), False),
         _GATE_CONTAINER_PATH: (str(request.gate_path), False),
+        **{
+            destination: (str(source), False) for source, destination in runtime_lock_surface.mounts
+        },
     }
     if observed != expected_mounts:
         raise _managed_error("Managed Docker mount source, target, or access differs from policy")
@@ -708,10 +718,13 @@ def _create_gate_listener(path: Path, timeout_seconds: int) -> _BoundGateListene
             | getattr(os, "O_NOFOLLOW", 0),
         )
         directory = os.fstat(directory_descriptor)
-        if not stat.S_ISDIR(directory.st_mode) or stat.S_IMODE(directory.st_mode) != 0o700:
+        if not stat.S_ISDIR(directory.st_mode) or stat.S_IMODE(directory.st_mode) != 0o711:
             raise _managed_error("Container Gate control directory identity is unsafe")
         listener.bind(f"/proc/self/fd/{directory_descriptor}/{path.name}")
-        os.chmod(path, 0o600)
+        # The random parent remains 0700. The bind-mounted socket needs write
+        # permission for a remapped container UID; SO_PEERCRED and the exact Gate
+        # PID still authenticate the only accepted peer.
+        os.chmod(path, 0o622)  # noqa: S103
         listener.listen(1)
         listener.settimeout(timeout_seconds)
         pathname = path.stat(follow_symlinks=False)
@@ -720,7 +733,7 @@ def _create_gate_listener(path: Path, timeout_seconds: int) -> _BoundGateListene
             or pathname.st_dev != directory.st_dev
             or pathname.st_uid != directory.st_uid
             or pathname.st_ino <= 0
-            or stat.S_IMODE(pathname.st_mode) != 0o600
+            or stat.S_IMODE(pathname.st_mode) != 0o622
         ):
             raise _managed_error("Container Gate control Socket identity is unsafe")
         return _BoundGateListener(
@@ -744,6 +757,7 @@ def _accept_gate(
     listener: socket.socket,
     *,
     expected_pid: int,
+    expected_container_uid: int,
     timeout_seconds: int,
 ) -> tuple[socket.socket, int, NamespaceIdentity]:
     try:
@@ -766,7 +780,7 @@ def _accept_gate(
         if len(ready) != _READY_FRAME_SIZE or not ready.startswith(_READY_PREFIX):
             raise _managed_error("Container Gate readiness frame is invalid")
         values = _READY_NAMESPACE_IDENTITY.unpack(ready[len(_READY_PREFIX) :])
-        if any(value <= 0 for value in values):
+        if any(value <= 0 for value in values[:4]) or values[4] != expected_container_uid:
             raise _managed_error("Container Gate namespace attestation is invalid")
         namespace = NamespaceIdentity(
             pid=values[0],
@@ -877,16 +891,28 @@ def _assert_runtime_root_current(
         raise _managed_error("Managed Docker runtime root changed after validation")
 
 
-def _create_private_run_directories(*directories: Path) -> tuple[int, int, int]:
+def _create_private_run_directories(
+    runtime_directory: Path,
+    scratch_directory: Path,
+    control_directory: Path,
+) -> tuple[int, int, int]:
     created: list[Path] = []
     try:
-        for directory in directories:
-            directory.mkdir(mode=0o700)
+        for directory, mode in (
+            (runtime_directory, 0o700),
+            (scratch_directory, 0o733),
+            (control_directory, 0o711),
+        ):
+            directory.mkdir(mode=mode)
             created.append(directory)
+            # mkdir applies the process umask.  These paths are later bind-mounted
+            # into a potentially mapped container UID, so restore the reviewed
+            # contract mode explicitly before accepting their identity.
+            directory.chmod(mode)
             metadata = directory.stat(follow_symlinks=False)
-            if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o700:
+            if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != mode:
                 raise _managed_error("Managed Docker private directory mode is unsafe")
-        runtime = directories[0].stat(follow_symlinks=False)
+        runtime = runtime_directory.stat(follow_symlinks=False)
         return runtime.st_dev, runtime.st_ino, runtime.st_uid
     except BaseException as exc:
         for directory in reversed(created):

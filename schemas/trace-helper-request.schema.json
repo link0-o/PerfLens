@@ -90,6 +90,20 @@
           "title": "Container Pid",
           "type": "integer"
         },
+        "container_uid": {
+          "anyOf": [
+            {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Container Uid"
+        },
         "executable_name": {
           "pattern": "^[^/\\x00]{1,255}$",
           "title": "Executable Name",
@@ -145,6 +159,19 @@
           ],
           "title": "Target Kind",
           "type": "string"
+        },
+        "uid_map_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uid Map Sha256"
         },
         "uid_mapping": {
           "enum": [
@@ -243,8 +270,8 @@
           "type": "string"
         },
         "schema_version": {
-          "const": "1.1",
-          "default": "1.1",
+          "const": "1.2",
+          "default": "1.2",
           "title": "Schema Version",
           "type": "string"
         },
@@ -338,8 +365,8 @@
           "type": "string"
         },
         "schema_version": {
-          "const": "1.1",
-          "default": "1.1",
+          "const": "1.2",
+          "default": "1.2",
           "title": "Schema Version",
           "type": "string"
         }

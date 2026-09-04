@@ -211,9 +211,75 @@
       "title": "Resource Transfer Status",
       "type": "string"
     },
+    "runtime_lock_comparison_content_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Lock Comparison Content Sha256"
+    },
+    "runtime_lock_comparison_id": {
+      "anyOf": [
+        {
+          "pattern": "^runtime-lock-comparison-[a-f0-9]{20}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Lock Comparison Id"
+    },
+    "runtime_lock_conclusion": {
+      "anyOf": [
+        {
+          "enum": [
+            "verified_improvement",
+            "candidate_improvement",
+            "candidate_regression",
+            "no_material_change",
+            "not_comparable"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Lock Conclusion"
+    },
+    "runtime_lock_status": {
+      "anyOf": [
+        {
+          "enum": [
+            "not_selected",
+            "complete",
+            "partial",
+            "unavailable"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Lock Status"
+    },
     "schema_version": {
-      "const": "1.0",
       "default": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },

@@ -1,5 +1,9 @@
 """Deterministic user-space runtime-lock evidence adapters."""
 
+from perflens.runtime_locks.comparison import (
+    compare_runtime_lock_analyses,
+    runtime_lock_resource_environment_sha256,
+)
 from perflens.runtime_locks.importer import (
     RUNTIME_LOCK_NDJSON_PARSER_VERSION,
     RuntimeLockNdjsonImporter,
@@ -74,6 +78,7 @@ __all__ = [
     "RuntimeLockSessionAuthority",
     "RuntimeLockSessionRuntime",
     "build_runtime_lock_session_preview",
+    "compare_runtime_lock_analyses",
     "convert_native_pthread_probe",
     "discover_native_pthread_probe_policy",
     "import_runtime_lock_ndjson",
@@ -82,4 +87,5 @@ __all__ = [
     "inspect_native_pthread_installation",
     "inspect_native_pthread_probe",
     "replay_native_pthread_probe",
+    "runtime_lock_resource_environment_sha256",
 ]

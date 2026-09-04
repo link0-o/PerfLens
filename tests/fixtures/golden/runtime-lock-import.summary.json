@@ -4,8 +4,8 @@
     "observed_runtime_wait_distribution",
     "observed_runtime_hold_distribution"
   ],
-  "content_bytes": 5632,
-  "content_sha256": "671640de55e129abebbe848cba612810dad119858a6403ee49f5a91175672fc1",
+  "content_bytes": 5665,
+  "content_sha256": "3566765da01cc81bef2043acd24750cec5f1ed5d8a05112d4b29a226da499dc3",
   "contexts": [
     {
       "context_id": "runtime-context-007a50ab5a39104850b5",
@@ -74,7 +74,7 @@
       "timestamp_ns": 200
     }
   ],
-  "evidence_fingerprint": "6fa2e5cb95e1c1c1c2b5841c5987ee910bf8bed3e93b8abb626152f4a9846040",
+  "evidence_fingerprint": "5e7f2ea60b09d8bbc6e46f8dfb69b4b639f451a8eab00498313583d37603a649",
   "forbidden_conclusions": [
     "performance_root_cause",
     "verified_improvement",
@@ -119,13 +119,14 @@
       "epoch_correlation_available": false,
       "unit": "nanoseconds"
     },
-    "conversion_fingerprint": "3fc88314b1a525347bad9b2382b4dc2f83646451beb611b3c4e5a0e668c75481",
+    "conversion_fingerprint": "48ce7c8145927aee45fbecfba7b96e062eded1386256446bef86c777998d91d2",
     "converter_version": "runtime-lock-ndjson-v1.1",
     "fast_path_visibility": "partial",
     "hold_time_is_source_observed": true,
     "measurement_semantics": "exact",
     "owner_is_source_observed": true,
     "runtime": "python",
+    "runtime_version": "3.13.5",
     "schema_version": "1.1",
     "source_bytes": 2522,
     "source_format": "perflens_runtime_lock_ndjson_v1",

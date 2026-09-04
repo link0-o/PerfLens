@@ -71,10 +71,9 @@ NATIVE_PTHREAD_PROVENANCE_LIMITATION = (
     "consistency, not independent event provenance."
 )
 NATIVE_PTHREAD_ACTIVE_SCOPE_LIMITATION = (
-    "Active Native pthread collection is implemented only for host_launched_workload; "
-    "managed_temporary_container and docker_optimization collection remain unavailable until "
-    "the separately reviewed Stage 7 integration. Controlled NDJSON import remains available "
-    "through generic_ndjson_import."
+    "Active Native pthread collection is limited to policy-authorized launched workloads: "
+    "host_launched_workload and parent-authorized managed Docker optimization runs. Live "
+    "injection into an existing process or container remains unsupported."
 )
 
 
@@ -150,8 +149,8 @@ def inspect_runtime_lock_capability(
     )
     if native_reference is not None and native_reference.availability == "available":
         limitations = (
-            "Native pthread launch instrumentation is available only for the safely discovered "
-            "packaged probe and a policy-authorized host_launched_workload.",
+            "Native pthread launch instrumentation is available only through the safely "
+            "discovered packaged probe and a policy-authorized launched workload.",
             NATIVE_PTHREAD_ACTIVE_SCOPE_LIMITATION,
         )
     elif native_reference is not None and native_reference.availability == "partial":

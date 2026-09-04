@@ -211,7 +211,10 @@ static uid_t raw_uid(void) { return (uid_t)syscall(SYS_getuid); }
 
 static uint64_t monotonic_ns(void) {
     struct timespec now;
-    if (syscall(SYS_clock_gettime, CLOCK_MONOTONIC, &now) != 0) {
+    /* Let libc use the vDSO fast path.  Calling the raw syscall twice for
+     * every uncontended lock made thresholded observation more expensive
+     * than the published 15% budget even when no event qualified. */
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
         return 0U;
     }
     if (now.tv_sec < 0 || now.tv_nsec < 0) {
@@ -411,21 +414,25 @@ static void copy_glibc_version(void) {
     probe.glibc_version[index] = '\0';
 }
 
-static bool output_descriptor_is_safe(int fd) {
+static bool output_descriptor_is_safe(int fd, bool container_output) {
     struct stat status;
     long flags = syscall(SYS_fcntl, fd, F_GETFL, 0U);
     long descriptor_flags;
+    mode_t expected_mode = container_output ? (mode_t)0644 : (mode_t)0600;
     if (flags < 0 || ((int)flags & O_ACCMODE) == O_RDONLY ||
         ((int)flags & O_APPEND) != 0) {
         return false;
     }
-    /* Stable active collection writes either to the launcher's private,
-     * empty regular file or to the runtime supervisor's private bounded
-     * pipe. Sockets and every other descriptor type remain forbidden. */
+    /* Stable host collection writes to a mode-0600 bounded relay pipe.
+     * Managed Docker collection writes to a mode-0644 regular file whose
+     * enclosing run root remains mode 0700, allowing the invoking host UID
+     * to read an id-mapped file without exposing it outside that run root.
+     * Sockets and every other descriptor type remain forbidden. */
     if (syscall(SYS_fstat, fd, &status) != 0 ||
-        (!S_ISREG(status.st_mode) && !S_ISFIFO(status.st_mode)) ||
+        (container_output ? !S_ISREG(status.st_mode)
+                          : (!S_ISREG(status.st_mode) && !S_ISFIFO(status.st_mode))) ||
         status.st_nlink != 1 || status.st_uid != raw_uid() ||
-        (status.st_mode & (mode_t)0777) != (mode_t)0600) {
+        (status.st_mode & (mode_t)0777) != expected_mode) {
         return false;
     }
     descriptor_flags = syscall(SYS_fcntl, fd, F_GETFD, 0U);
@@ -635,12 +642,20 @@ static bool configure_from_environment(void) {
     const char *mode = getenv("PERFLENS_RUNTIME_LOCK_MODE");
     const char *threshold = getenv("PERFLENS_RUNTIME_LOCK_THRESHOLD_NS");
     const char *maximum_events = getenv("PERFLENS_RUNTIME_LOCK_MAX_EVENTS");
+    const char *container = getenv("PERFLENS_RUNTIME_LOCK_CONTAINER");
+    bool container_output = false;
     uint64_t value;
+    if (container != NULL) {
+        if (container[0] != '1' || container[1] != '\0') {
+            return false;
+        }
+        container_output = true;
+    }
     if (!parse_u64(fd_text, UINT64_C(3), PROBE_MAX_FD, &value)) {
         return false;
     }
     probe.output_fd = (int)value;
-    if (!output_descriptor_is_safe(probe.output_fd)) {
+    if (!output_descriptor_is_safe(probe.output_fd, container_output)) {
         return false;
     }
     if (mode == NULL || mode[0] == '\0' ||
@@ -846,9 +861,12 @@ static bool record_release(uint64_t token, uint64_t timestamp_ns) {
 }
 
 static bool enter_probe(void) {
-    if (probe_recursing) {
+    if (probe_recursing || !atomic_load_explicit(&probe.active, memory_order_acquire)) {
         return false;
     }
+    /* Normal pthread fork paths clear `active` in the atfork child.  The PID
+     * check remains mandatory while collection is active so raw-clone style
+     * descendants cannot inherit the authorized output descriptor. */
     ensure_process_identity();
     if (!atomic_load_explicit(&probe.active, memory_order_acquire)) {
         return false;
@@ -874,12 +892,21 @@ static void leave_probe(void) { probe_recursing = false; }
             return real_functions.real_member call;                                                   \
         }                                                                                             \
         kind = (kind_expression);                                                                     \
-        token = lock_token((const void *)(lock_type), kind);                                          \
         begin_ns = monotonic_ns();                                                                    \
-        begin_sequence = begin_exact_wait(begin_ns, token, kind);                                     \
+        token = 0U;                                                                                   \
+        begin_sequence = 0U;                                                                          \
+        if (probe.exact) {                                                                             \
+            token = lock_token((const void *)(lock_type), kind);                                      \
+            begin_sequence = begin_exact_wait(begin_ns, token, kind);                                 \
+        }                                                                                             \
         result = real_functions.real_member call;                                                     \
         end_ns = monotonic_ns();                                                                      \
-        record_lock_result(token, kind, begin_ns, end_ns, result, begin_sequence);                    \
+        if (probe.exact || safe_duration(begin_ns, end_ns) >= probe.threshold_ns) {                   \
+            if (token == 0U) {                                                                        \
+                token = lock_token((const void *)(lock_type), kind);                                  \
+            }                                                                                         \
+            record_lock_result(token, kind, begin_ns, end_ns, result, begin_sequence);                \
+        }                                                                                             \
         leave_probe();                                                                                \
         return result;                                                                                \
     }
@@ -925,9 +952,9 @@ PROBE_PUBLIC int pthread_mutex_unlock(pthread_mutex_t *mutex) {
     if (!enter_probe()) {
         return real_functions.mutex_unlock(mutex);
     }
-    token = lock_token(mutex, mutex_lock_kind(mutex));
     result = real_functions.mutex_unlock(mutex);
-    if (result == 0) {
+    if (result == 0 && held_lock_count != 0U) {
+        token = lock_token(mutex, mutex_lock_kind(mutex));
         (void)record_release(token, monotonic_ns());
     }
     leave_probe();
@@ -944,7 +971,7 @@ PROBE_PUBLIC int pthread_rwlock_unlock(pthread_rwlock_t *rwlock) {
         return real_functions.rwlock_unlock(rwlock);
     }
     result = real_functions.rwlock_unlock(rwlock);
-    if (result == 0) {
+    if (result == 0 && held_lock_count != 0U) {
         uint64_t timestamp_ns = monotonic_ns();
         token = lock_token(rwlock, PROBE_LOCK_RWLOCK_READ);
         if (!record_release(token, timestamp_ns)) {

@@ -12,7 +12,7 @@ import tempfile
 import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
@@ -101,28 +101,38 @@ from perflens.contracts.docker import (
     DockerRuntimeCapabilityArtifact,
 )
 from perflens.contracts.docker_build import (
+    DockerBuildArtifact,
     DockerBuildCapabilityArtifact,
     DockerOptimizationIterationArtifact,
     DockerOptimizationPreviewArtifact,
     DockerOptimizationSessionArtifact,
+    DockerRuntimeLockAuthorizationScope,
     OptimizationCollectionMode,
     OptimizationEvaluationReason,
+    docker_runtime_lock_scope_sha256,
+    docker_runtime_lock_version_constraints,
 )
 from perflens.contracts.runtime_lock_sessions import (
+    DockerRuntimeLockRunBinding,
     RuntimeLockAdapterExecutionBinding,
     RuntimeLockAdapterId,
     RuntimeLockCapabilityArtifact,
+    RuntimeLockComparisonArtifact,
     RuntimeLockProcessTargetBinding,
     RuntimeLockRunArtifact,
     RuntimeLockSessionArtifact,
     RuntimeLockSessionPreviewArtifact,
     RuntimeLockTargetScope,
     RuntimeLockWorkloadBinding,
+    derive_runtime_lock_adapter_execution_identity,
     derive_runtime_lock_run_boundaries,
     derive_runtime_lock_run_id,
+    derive_runtime_lock_toolchain_identity,
     derive_runtime_lock_workload_identity,
 )
 from perflens.contracts.runtime_locks import (
+    MeasurementSemantics,
+    RuntimeLockAnalysisArtifact,
     RuntimeLockAnalysisVerificationArtifact,
     RuntimeLockCallPathPage,
     RuntimeLockEvidenceArtifact,
@@ -135,6 +145,13 @@ from perflens.contracts.trace import (
     SchedulerAnalysisArtifact,
     TraceAnalysisVerificationArtifact,
     TraceEvidenceArtifact,
+)
+from perflens.docker.adapter import (
+    CpythonDockerLaunch,
+    GoPprofDockerLaunch,
+    JavaJfrDockerLaunch,
+    NativePthreadDockerLaunch,
+    RuntimeLockDockerLaunch,
 )
 from perflens.docker.benchmark import load_managed_benchmark
 from perflens.docker.build_adapter import open_local_docker_build_adapter
@@ -187,9 +204,17 @@ from perflens.runtime_locks.capability import (
     RuntimeLockCapabilityInspection,
     inspect_runtime_lock_capability,
 )
+from perflens.runtime_locks.comparison import (
+    compare_runtime_lock_analyses as compare_runtime_lock_artifacts,
+)
+from perflens.runtime_locks.comparison import (
+    docker_runtime_lock_fixed_environment_sha256,
+    runtime_lock_resource_environment_sha256,
+)
 from perflens.runtime_locks.cpython_adapter import (
     CpythonAdapterBridge,
     CpythonLaunchPolicy,
+    assert_cpython_launch_policy_current,
     build_cpython_adapter_bridge,
     discover_cpython_adapter_bridge,
     inspect_cpython_installation,
@@ -204,6 +229,14 @@ from perflens.runtime_locks.cpython_launcher import (
     CpythonThreadingLauncher,
     cleanup_cpython_launch_result,
     open_cpython_private_stream,
+)
+from perflens.runtime_locks.docker_binding import bind_runtime_lock_evidence_to_container
+from perflens.runtime_locks.docker_capture import (
+    DockerRuntimeLockCapture,
+    GoDockerPprofAuthority,
+    JavaDockerJfrAuthority,
+    bind_observed_runtime_execution,
+    capture_docker_runtime_lock_evidence,
 )
 from perflens.runtime_locks.go_pprof_adapter import (
     GoPprofAdapterBridge,
@@ -222,8 +255,10 @@ from perflens.runtime_locks.go_pprof_launcher import (
     GoPprofLaunchRequest,
     GoPprofLaunchResult,
     GoPprofRawResult,
+    assert_go_tool_identity,
     cleanup_go_pprof_raw_result,
     cleanup_go_pprof_result,
+    inspect_pinned_go_executable_version,
     open_go_pprof_raw,
 )
 from perflens.runtime_locks.go_pprof_loopback import (
@@ -251,8 +286,10 @@ from perflens.runtime_locks.java_jfr_launcher import (
     JavaJfrPrivateEvidence,
     SubprocessJavaJfrJsonRunner,
     acquire_java_jfr_artifact_root_lease,
+    assert_java_jfr_launch_policy_current,
     cleanup_java_jfr_empty_private_roots,
     cleanup_java_jfr_launch_result,
+    inspect_java_jfr_tool_identity,
     inventory_java_jfr_retained_evidence,
     java_jfr_arguments_sha256,
     open_java_jfr_private_file,
@@ -265,6 +302,10 @@ from perflens.runtime_locks.native_launcher import (
     NativePthreadLauncher,
     discover_native_pthread_probe_policy,
     inspect_native_pthread_installation,
+)
+from perflens.runtime_locks.native_pthread_abi import (
+    NATIVE_PTHREAD_PROBE_ABI_VERSION,
+    NATIVE_PTHREAD_PROBE_PROTOCOL_VERSION,
 )
 from perflens.runtime_locks.native_pthread_converter import (
     convert_native_pthread_probe,
@@ -378,7 +419,238 @@ class _PinnedRuntimeLockImport:
     metadata: os.stat_result
 
 
+@dataclass(frozen=True, slots=True)
+class _DockerRuntimeLockRequest:
+    docker_optimization_session_id: str
+    build_id: str
+    adapter_id: RuntimeLockAdapterId
+    execution_binding: RuntimeLockAdapterExecutionBinding
+    authorized_execution_identity_sha256: str
+    launch: RuntimeLockDockerLaunch
+    observation_limit_seconds: int
+    go_profile_kind: GoProfileKind | None = None
+    runtime_characteristics: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _DockerRuntimeLockCollected:
+    request: _DockerRuntimeLockRequest
+    evidence: RuntimeLockEvidenceArtifact
+    analysis: RuntimeLockAnalysisArtifact
+    verification: RuntimeLockAnalysisVerificationArtifact
+    target: ContainerTargetArtifact
+    container_run: ContainerRunArtifact
+    measurement: ContainerMeasurementArtifact
+    started_at: str
+    finished_at: str
+    replay_verified: bool
+
+
+def _docker_runtime_lock_accounted_bytes(collected: _DockerRuntimeLockCollected) -> int:
+    """Return the conservative byte charge for every bounded evidence representation."""
+
+    receipt = collected.verification.source_replay_receipt
+    if receipt is None or receipt.origin_source_bytes is None:
+        raise PerfLensError(
+            ErrorCode.PROFILE_PARSE_FAILED,
+            "runtime_lock_docker_binding",
+            "Docker Runtime Lock replay receipt lacks its complete source chain",
+            recoverable=False,
+        )
+    return (
+        len(serialize_json(collected.evidence))
+        + receipt.origin_source_bytes
+        + receipt.raw_source_bytes
+        + receipt.normalized_source_bytes
+    )
+
+
+def _finalize_docker_runtime_lock_run(
+    store: ArtifactStore,
+    optimization_runtime: DockerOptimizationRuntime,
+    session_id: str,
+    lease: DockerOptimizationWorkloadLease,
+    build: DockerBuildArtifact,
+    collected: _DockerRuntimeLockCollected,
+) -> tuple[DockerOptimizationSessionArtifact, RuntimeLockRunArtifact]:
+    evidence_bytes = len(serialize_json(collected.evidence))
+    accounted_evidence_bytes = _docker_runtime_lock_accounted_bytes(collected)
+    event_count = len(collected.evidence.events)
+    started = datetime.fromisoformat(collected.started_at)
+    finished = datetime.fromisoformat(collected.finished_at)
+    lifecycle_seconds = math.ceil((finished - started).total_seconds())
+    active_seconds = min(
+        collected.request.observation_limit_seconds,
+        lifecycle_seconds,
+    )
+    exact_events = (
+        event_count
+        if collected.request.execution_binding.measurement_semantics == "exact"
+        else 0
+    )
+    # Persist the replayable evidence chain before consuming the nested Runtime Lock
+    # allowance.  A failure at any point is handled by the outer collection path, which
+    # marks this completed workload unavailable and blocks further collection.  These
+    # append-only inputs may safely remain as bounded orphans; no Run exposes them until
+    # the charged parent Session revision and final Run both exist.
+    for artifact, artifact_id, artifact_type in (
+        (
+            collected.evidence,
+            collected.evidence.runtime_lock_evidence_id,
+            "runtime-lock-evidence",
+        ),
+        (
+            collected.analysis,
+            collected.analysis.runtime_lock_analysis_id,
+            "runtime-lock-analysis",
+        ),
+        (
+            collected.verification,
+            collected.verification.runtime_lock_verification_id,
+            "runtime-lock-verification",
+        ),
+    ):
+        store.save(artifact, artifact_id, artifact_type)
+    session = optimization_runtime.charge_runtime_lock_use(
+        session_id,
+        lease,
+        actual_active_seconds=active_seconds,
+        actual_evidence_bytes=accounted_evidence_bytes,
+        exact_event_count=exact_events,
+        result_status=(
+            "active" if collected.analysis.quality_status == "complete" else "partial"
+        ),
+    )
+    if collected.request.runtime_characteristics is None:
+        raise PerfLensError(
+            ErrorCode.PROFILE_PARSE_FAILED,
+            "runtime_lock_docker_binding",
+            "Docker Runtime Lock actual execution characteristics are unavailable",
+            recoverable=False,
+        )
+    binding = DockerRuntimeLockRunBinding(
+        docker_optimization_session_id=session.session_id,
+        docker_optimization_session_artifact_id=session.session_artifact_id,
+        docker_optimization_session_artifact_content_sha256=session.content_sha256,
+        build_id=build.build_id,
+        build_content_sha256=build.content_sha256,
+        container_target_id=collected.target.target_id,
+        container_target_content_sha256=collected.target.content_sha256,
+        container_run_id=collected.container_run.run_id,
+        container_run_content_sha256=collected.container_run.content_sha256,
+        container_measurement_id=collected.measurement.measurement_id,
+        container_measurement_content_sha256=collected.measurement.content_sha256,
+        authorized_execution_identity_sha256=(
+            collected.request.authorized_execution_identity_sha256
+        ),
+        actual_execution_binding=collected.request.execution_binding,
+        actual_runtime_characteristics=collected.request.runtime_characteristics,
+        accounted_evidence_bytes=accounted_evidence_bytes,
+    )
+    warnings = tuple(
+        dict.fromkeys(
+            (
+                *collected.evidence.quality.limitations,
+                "Docker Runtime Lock duration is the bounded observation interval; "
+                "lifecycle timestamps may include sub-second coordination overhead.",
+                *(() if collected.replay_verified else ("Private source replay failed.",)),
+            )
+        )
+    )
+    quality, allowed, forbidden = derive_runtime_lock_run_boundaries(
+        adapter_id=collected.request.adapter_id,
+        analysis_quality_status=collected.analysis.quality_status,
+        analysis_allowed_conclusions=collected.analysis.allowed_conclusions,
+        analysis_forbidden_conclusions=collected.analysis.forbidden_conclusions,
+        warnings=warnings,
+    )
+    benchmark = (
+        store.load_benchmark(collected.container_run.benchmark_id)
+        if collected.container_run.benchmark_id is not None
+        else None
+    )
+    correctness_status: Literal["passed", "failed", "unavailable"]
+    if collected.container_run.exit_code != 0 or (
+        benchmark is not None and benchmark.error_count not in {None, 0}
+    ):
+        correctness_status = "failed"
+    elif benchmark is not None and benchmark.error_count == 0:
+        correctness_status = "passed"
+    else:
+        correctness_status = "unavailable"
+    operation_identity = hashlib.sha256(
+        (
+            "perflens-docker-runtime-lock-operation-v1\0"
+            f"{session.session_id}\0{lease.lease_id}\0{build.content_sha256}\0"
+            f"{collected.container_run.content_sha256}\0{collected.evidence.content_sha256}"
+        ).encode()
+    ).hexdigest()
+    provisional = RuntimeLockRunArtifact(
+        schema_version="1.1",
+        perflens_version=__version__,
+        run_id=derive_runtime_lock_run_id(
+            session.session_id,
+            collected.request.adapter_id,
+            collected.evidence.content_sha256,
+            collected.started_at,
+        ),
+        created_at=collected.finished_at,
+        started_at=collected.started_at,
+        finished_at=collected.finished_at,
+        authorization_kind="docker_optimization",
+        session_id=session.session_id,
+        docker_optimization_binding=binding,
+        target_scope="docker_optimization",
+        operation_identity_sha256=operation_identity,
+        target_identity_sha256=collected.target.identity_fingerprint,
+        adapter_id=collected.request.adapter_id,
+        adapter_execution_identity_sha256=(
+            collected.request.execution_binding.execution_identity_sha256
+        ),
+        measurement_semantics=(collected.request.execution_binding.measurement_semantics),
+        workload_identity_sha256=build.recipe_content_sha256,
+        runtime_lock_evidence_id=collected.evidence.runtime_lock_evidence_id,
+        runtime_lock_evidence_content_sha256=collected.evidence.content_sha256,
+        runtime_lock_analysis_id=collected.analysis.runtime_lock_analysis_id,
+        runtime_lock_analysis_content_sha256=collected.analysis.content_sha256,
+        runtime_lock_verification_id=(collected.verification.runtime_lock_verification_id),
+        runtime_lock_verification_content_sha256=collected.verification.content_sha256,
+        duration_seconds=active_seconds,
+        evidence_bytes=evidence_bytes,
+        event_count=event_count,
+        correctness_status=correctness_status,
+        quality_status=quality,
+        warnings=warnings,
+        allowed_conclusions=allowed,
+        forbidden_conclusions=forbidden,
+        content_sha256="0" * 64,
+    )
+    runtime_run = provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+    # Publish the Run before its parent Session revision.  If Run persistence
+    # fails, the outer failure path records a terminal/unavailable parent; if
+    # Session persistence fails, the append-only Run remains unreachable until
+    # its exact parent revision exists.  Reversing this order could expose an
+    # active parent counter with no corresponding Runtime Lock Run.
+    store.save(runtime_run, runtime_run.run_id, "runtime-lock-run")
+    store.save(
+        session,
+        session.session_artifact_id,
+        "docker-optimization-session",
+    )
+    optimization_runtime.mark_runtime_lock_published(session_id, lease)
+    return session, runtime_run
+
+
+
 def create_server(config: ServerConfig) -> MCPServer[None]:
+    client_connection_identity_sha256 = hashlib.sha256(os.urandom(32)).hexdigest()
     if config.allow_pid_attach and not config.allow_active_collection:
         raise ValueError("PID attachment cannot be enabled while active collection is disabled")
     if config.allow_automatic_collection and (
@@ -496,12 +768,13 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     runtime_lock_go_bridge: GoPprofAdapterBridge | None = None
     runtime_lock_go_launcher: GoPprofLauncher | None = None
     runtime_lock_go_private_root: Path | None = None
-    runtime_lock_go_retained_results: list[
-        tuple[GoPprofLaunchResult, GoPprofRawResult | None]
-    ] = []
+    runtime_lock_go_retained_results: list[tuple[GoPprofLaunchResult, GoPprofRawResult | None]] = []
     runtime_lock_go_retained_loopback: list[
         tuple[GoPprofLoopbackCapture, GoPprofRawResult | None]
     ] = []
+    managed_runtime_lock_requests: dict[str, _DockerRuntimeLockRequest] = {}
+    managed_runtime_lock_results: dict[str, _DockerRuntimeLockCollected] = {}
+    managed_collection_progress: dict[str, tuple[int, str]] = {}
 
     def runtime_lock_go_retained_bytes() -> int:
         launched = sum(
@@ -613,6 +886,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 config.collector_socket is not None and config.collector_socket.exists()
             ),
             collector_modes=config.automatic_collection_policy.allowed_modes,
+            client_connection_identity_sha256=client_connection_identity_sha256,
         )
         return docker_optimization_runtime
 
@@ -711,6 +985,350 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             go_pprof_bridge=get_runtime_lock_go_bridge(),
         )
 
+    def build_docker_runtime_lock_scope(
+        adapter_ids: tuple[RuntimeLockAdapterId, ...],
+    ) -> tuple[DockerRuntimeLockAuthorizationScope, RuntimeLockCapabilityInspection]:
+        """Bind reviewed Adapter identities into the parent Docker consent.
+
+        This helper performs discovery only.  It neither creates a second Runtime Lock
+        Session nor launches a container, and it intentionally has no token parameter.
+        """
+
+        _require_runtime_locks(config)
+        assert runtime_lock_policy is not None
+        if (
+            not adapter_ids
+            or len(set(adapter_ids)) != len(adapter_ids)
+            or tuple(sorted(adapter_ids)) != adapter_ids
+            or "generic_ndjson_import" in adapter_ids
+            or "docker_optimization" not in runtime_lock_policy.target_scopes
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "runtime_lock_authorization",
+                "Docker optimization Runtime Lock adapters must be a unique policy-enabled "
+                "active Adapter scope",
+                recoverable=True,
+            )
+        inspection = inspect_runtime_lock_session_capability()
+        references = {item.adapter_id: item for item in inspection.capability.adapters}
+        bindings: list[RuntimeLockAdapterExecutionBinding] = []
+        for adapter_id in adapter_ids:
+            reference = references.get(adapter_id)
+            if reference is None or reference.availability not in {"available", "partial"}:
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "runtime_lock_capability",
+                    "A selected Docker Runtime Lock Adapter is unavailable",
+                    recoverable=True,
+                    details={"adapter_id": adapter_id},
+                )
+            if adapter_id == "java_jfr":
+                binding = get_runtime_lock_java_bridge().execution_binding
+            elif adapter_id == "cpython_threading":
+                binding = get_runtime_lock_cpython_bridge().binding_for("thresholded")
+                if binding is None:
+                    binding = get_runtime_lock_cpython_bridge().binding_for("exact")
+            elif adapter_id == "go_pprof":
+                binding = get_runtime_lock_go_bridge().execution_binding
+            else:
+                native = next(
+                    item
+                    for item in inspection.adapter_capabilities
+                    if item.adapter_id == "native_pthread"
+                )
+                probe = discover_native_pthread_probe_policy()
+                adapter_policy = runtime_lock_policy.adapter_policy("native_pthread")
+                semantics = (
+                    "thresholded" if "thresholded" in adapter_policy.allowed_semantics else "exact"
+                )
+                threshold = (
+                    adapter_policy.duration_threshold_ns if semantics == "thresholded" else None
+                )
+                if probe.policy is None or native.availability not in {"available", "partial"}:
+                    binding = None
+                else:
+                    tools = ()
+                    toolchain = derive_runtime_lock_toolchain_identity(tools)
+                    metadata = hashlib.sha256(
+                        (
+                            "perflens-native-pthread-metadata-v1\0"
+                            f"{NATIVE_PTHREAD_PROBE_ABI_VERSION}\0"
+                            f"{NATIVE_PTHREAD_PROBE_PROTOCOL_VERSION}"
+                        ).encode()
+                    ).hexdigest()
+                    execution = derive_runtime_lock_adapter_execution_identity(
+                        "native_pthread",
+                        "native-pthread-adapter-v1",
+                        "ld-preload",
+                        "glibc-2.36-or-2.41",
+                        semantics,
+                        semantics,
+                        threshold,
+                        toolchain,
+                        probe.policy.sha256,
+                        metadata,
+                        probe.policy.sha256,
+                    )
+                    binding = RuntimeLockAdapterExecutionBinding(
+                        adapter_id="native_pthread",
+                        adapter_version="native-pthread-adapter-v1",
+                        backend_id="ld-preload",
+                        runtime_version="glibc-2.36-or-2.41",
+                        profile=semantics,
+                        measurement_semantics=semantics,
+                        duration_threshold_ns=threshold,
+                        tools=tools,
+                        toolchain_identity_sha256=toolchain,
+                        configuration_sha256=probe.policy.sha256,
+                        metadata_sha256=metadata,
+                        runtime_payload_identity_sha256=probe.policy.sha256,
+                        execution_identity_sha256=execution,
+                        limitations=native.limitations,
+                    )
+            if (
+                binding is None
+                or binding.measurement_semantics not in reference.supported_semantics
+            ):
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "runtime_lock_capability",
+                    "A selected Docker Runtime Lock execution binding is unavailable",
+                    recoverable=True,
+                    details={"adapter_id": adapter_id},
+                )
+            bindings.append(binding)
+        semantics = cast(
+            tuple[MeasurementSemantics, ...],
+            tuple(sorted({item.measurement_semantics for item in bindings})),
+        )
+        provisional = DockerRuntimeLockAuthorizationScope.model_construct(
+            schema_version="1.1",
+            runtime_lock_config_sha256=runtime_lock_policy.sha256,
+            capability_id=inspection.capability.capability_id,
+            capability_content_sha256=inspection.capability.content_sha256,
+            allowed_adapters=adapter_ids,
+            allowed_semantics=semantics,
+            adapter_execution_bindings=tuple(bindings),
+            runtime_version_constraints=docker_runtime_lock_version_constraints(tuple(bindings)),
+            budget=runtime_lock_policy.budget,
+            content_sha256="0" * 64,
+        )
+        scope = DockerRuntimeLockAuthorizationScope.model_validate(
+            {
+                **provisional.model_dump(mode="json"),
+                "content_sha256": docker_runtime_lock_scope_sha256(provisional),
+            }
+        )
+        return scope, inspection
+
+    def build_docker_runtime_lock_launch(
+        session: DockerOptimizationSessionArtifact,
+        adapter_id: RuntimeLockAdapterId,
+        *,
+        max_events: int,
+        go_profile_kind: GoProfileKind | None,
+    ) -> tuple[RuntimeLockAdapterExecutionBinding, RuntimeLockDockerLaunch]:
+        scope = session.runtime_lock_scope
+        if (
+            session.state != "active"
+            or scope is None
+            or adapter_id not in scope.allowed_adapters
+            or isinstance(max_events, bool)
+            or not 1 <= max_events <= scope.budget.max_exact_events
+        ):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "runtime_lock_authorization",
+                "Runtime Lock collection is outside the parent Docker authorization",
+                recoverable=True,
+            )
+        _require_runtime_locks(config)
+        assert runtime_lock_policy is not None
+        assert runtime_lock_project is not None
+        assert_runtime_lock_project_policy_current(
+            runtime_lock_policy,
+            allowed_roots=config.allowed_roots,
+        )
+        assert_managed_project_current(runtime_lock_project)
+        binding = next(
+            item for item in scope.adapter_execution_bindings if item.adapter_id == adapter_id
+        )
+        if (adapter_id == "go_pprof") != (go_profile_kind is not None):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "runtime_lock_authorization",
+                "A Docker Go Runtime Lock run requires exactly one authorized profile kind",
+                recoverable=True,
+            )
+        if adapter_id == "native_pthread":
+            discovery = discover_native_pthread_probe_policy()
+            if discovery.policy is None:
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "runtime_lock_capability",
+                    "The packaged Native pthread probe is unavailable",
+                    recoverable=True,
+                )
+            current_execution_identity = derive_runtime_lock_adapter_execution_identity(
+                "native_pthread",
+                "native-pthread-adapter-v1",
+                "ld-preload",
+                "glibc-2.36-or-2.41",
+                binding.measurement_semantics,
+                binding.measurement_semantics,
+                binding.duration_threshold_ns,
+                binding.toolchain_identity_sha256,
+                discovery.policy.sha256,
+                binding.metadata_sha256,
+                discovery.policy.sha256,
+            )
+            if (
+                binding.configuration_sha256 != discovery.policy.sha256
+                or binding.runtime_payload_identity_sha256 != discovery.policy.sha256
+                or binding.execution_identity_sha256 != current_execution_identity
+            ):
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_authorization",
+                    "The packaged Native pthread probe changed after Docker authorization",
+                    recoverable=False,
+                )
+            launch: RuntimeLockDockerLaunch = NativePthreadDockerLaunch(
+                probe_path=discovery.policy.path,
+                probe_sha256=discovery.policy.sha256,
+                semantics=cast(Literal["exact", "thresholded"], binding.measurement_semantics),
+                duration_threshold_ns=binding.duration_threshold_ns,
+                max_events=max_events,
+            )
+        elif adapter_id == "cpython_threading":
+            policy_binding = get_runtime_lock_cpython_bridge().launch_policy
+            if policy_binding is None:
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "runtime_lock_capability",
+                    "The packaged CPython bootstrap is unavailable",
+                    recoverable=True,
+                )
+            assert_cpython_launch_policy_current(policy_binding)
+            authorized_tools = {tool.name: tool for tool in binding.tools}
+            if (
+                binding.configuration_sha256 != policy_binding.bootstrap.sha256
+                or binding.runtime_payload_identity_sha256
+                != policy_binding.bootstrap.sha256
+                or authorized_tools.get("python") is None
+                or authorized_tools["python"].binary_sha256
+                != policy_binding.interpreter.sha256
+            ):
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_authorization",
+                    "The CPython Runtime Lock payload changed after Docker authorization",
+                    recoverable=False,
+                )
+            launch = CpythonDockerLaunch(
+                bootstrap_path=policy_binding.bootstrap.path,
+                bootstrap_sha256=policy_binding.bootstrap.sha256,
+                semantics=cast(Literal["exact", "thresholded"], binding.measurement_semantics),
+                duration_threshold_ns=binding.duration_threshold_ns,
+                max_events=max_events,
+            )
+        elif adapter_id == "java_jfr":
+            java_policy = get_runtime_lock_java_bridge().launch_policy
+            if java_policy is None:
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "runtime_lock_capability",
+                    "The packaged Java JFR configuration is unavailable",
+                    recoverable=True,
+                )
+            assert_java_jfr_launch_policy_current(java_policy)
+            current_jfr = inspect_java_jfr_tool_identity(java_policy.jfr_tool)
+            authorized_tools = {tool.name: tool for tool in binding.tools}
+            if (
+                current_jfr.path != java_policy.jfr_tool.path
+                or current_jfr.sha256 != java_policy.jfr_tool.sha256
+                or current_jfr.owner_uid != java_policy.jfr_tool.owner_uid
+                or current_jfr.mode != java_policy.jfr_tool.mode
+                or binding.configuration_sha256 != java_policy.jfc_profile.sha256
+                or binding.runtime_payload_identity_sha256
+                != java_policy.runtime_payload.identity_sha256
+                or "java" not in authorized_tools
+                or "jfr" not in authorized_tools
+                or authorized_tools["java"].binary_sha256
+                != java_policy.java_tool.sha256
+                or authorized_tools["jfr"].binary_sha256 != current_jfr.sha256
+            ):
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_authorization",
+                    "The Java JFR tool changed after Docker authorization",
+                    recoverable=False,
+                )
+            launch = JavaJfrDockerLaunch(
+                configuration_path=java_policy.jfc_profile.path,
+                configuration_sha256=java_policy.jfc_profile.sha256,
+                profile=java_policy.profile,
+            )
+        else:
+            go_bridge = get_runtime_lock_go_bridge()
+            if go_bridge.tool is None or go_bridge.pprof_tool is None:
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "runtime_lock_capability",
+                    "The authorized Go pprof tools are unavailable",
+                    recoverable=True,
+                )
+            assert_go_tool_identity(go_bridge.tool)
+            assert_go_tool_identity(go_bridge.pprof_tool)
+            authorized_tools = {tool.name: tool for tool in binding.tools}
+            if (
+                authorized_tools.get("go") is None
+                or authorized_tools.get("pprof") is None
+                or authorized_tools["go"].binary_sha256 != go_bridge.tool.sha256
+                or authorized_tools["pprof"].binary_sha256 != go_bridge.pprof_tool.sha256
+            ):
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_authorization",
+                    "The Go pprof tools changed after Docker authorization",
+                    recoverable=False,
+                )
+            adapter_policy = runtime_lock_policy.adapter_policy("go_pprof")
+            current_configuration_sha256 = hashlib.sha256(
+                "\0".join(
+                    (
+                        "perflens-go-pprof-configuration-v1",
+                        str(adapter_policy.mutex_profile_fraction or 0),
+                        str(adapter_policy.block_profile_rate_ns or 0),
+                        str(int(adapter_policy.file_backend_enabled)),
+                        str(int(adapter_policy.loopback_backend_enabled)),
+                    )
+                ).encode("utf-8")
+            ).hexdigest()
+            assert go_profile_kind is not None
+            enabled = (
+                adapter_policy.block_profile_rate_ns is not None
+                if go_profile_kind == "block"
+                else adapter_policy.mutex_profile_fraction is not None
+            )
+            if binding.configuration_sha256 != current_configuration_sha256:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_authorization",
+                    "The Go pprof configuration changed after Docker authorization",
+                    recoverable=False,
+                )
+            if not enabled:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_authorization",
+                    "The selected Go profile kind is disabled by project policy",
+                    recoverable=True,
+                )
+            launch = GoPprofDockerLaunch(profile_kinds=(go_profile_kind,))
+        return binding, launch
+
     def get_runtime_lock_session_runtime() -> RuntimeLockSessionRuntime:
         nonlocal runtime_lock_runtime
         _require_runtime_locks(config)
@@ -725,6 +1343,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             project_identity_sha256=runtime_lock_project.identity_sha256,
             project_policy_sha256=runtime_lock_policy.sha256,
             runtime_lock_config_sha256=runtime_lock_policy.sha256,
+            client_connection_identity_sha256=client_connection_identity_sha256,
         )
         return runtime_lock_runtime
 
@@ -899,11 +1518,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             return runtime_lock_go_launcher
         assert runtime_lock_project is not None
         bridge = get_runtime_lock_go_bridge()
-        if (
-            bridge.execution_binding is None
-            or bridge.tool is None
-            or bridge.pprof_tool is None
-        ):
+        if bridge.execution_binding is None or bridge.tool is None or bridge.pprof_tool is None:
             raise PerfLensError(
                 ErrorCode.EXTERNAL_TOOL_FAILED,
                 "runtime_lock_capability",
@@ -911,9 +1526,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 recoverable=True,
                 details={"limitations": bridge.capability.limitations},
             )
-        private_root = Path(
-            tempfile.mkdtemp(prefix=".runtime-lock-go-", dir=config.artifact_root)
-        )
+        private_root = Path(tempfile.mkdtemp(prefix=".runtime-lock-go-", dir=config.artifact_root))
         private_root.chmod(0o700)
         try:
             if config.runtime_lock_go_launcher_factory is not None:
@@ -1226,6 +1839,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 created_at=launch_result.finished_at,
                 started_at=launch_result.started_at,
                 finished_at=launch_result.finished_at,
+                authorization_kind="runtime_lock_session",
                 session_id=session_id,
                 session_artifact_id=lease.session_artifact_id,
                 session_artifact_content_sha256=lease.session_artifact_content_sha256,
@@ -1377,9 +1991,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 or target.size != workload.program_size
             ):
                 failure_reason = "target_identity_changed"
-                raise _runtime_lock_native_error(
-                    "Go workload differs from the authorized Preview"
-                )
+                raise _runtime_lock_native_error("Go workload differs from the authorized Preview")
             adapter_policy = runtime_lock_policy.adapter_policy("go_pprof")
             operation_identity = _runtime_lock_go_operation_identity(
                 session,
@@ -1475,24 +2087,27 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             replay_fd = open_go_pprof_raw(raw_result)
             try:
                 with os.fdopen(os.dup(replay_fd), "rb") as replay:
-                    if verify_go_pprof_replay(
-                        replay,
-                        expected=receipt,
-                        execution_binding=binding,
-                        target_pid=launch_result.target_pid,
-                        target_uid=launch_result.target_uid,
-                        target_start_time_ticks=launch_result.target_start_ticks,
-                        mutex_profile_fraction=(
-                            adapter_policy.mutex_profile_fraction
-                            if profile_kind == "mutex"
-                            else None
-                        ),
-                        block_profile_rate_ns=(
-                            adapter_policy.block_profile_rate_ns
-                            if profile_kind == "block"
-                            else None
-                        ),
-                    ) is None:
+                    if (
+                        verify_go_pprof_replay(
+                            replay,
+                            expected=receipt,
+                            execution_binding=binding,
+                            target_pid=launch_result.target_pid,
+                            target_uid=launch_result.target_uid,
+                            target_start_time_ticks=launch_result.target_start_ticks,
+                            mutex_profile_fraction=(
+                                adapter_policy.mutex_profile_fraction
+                                if profile_kind == "mutex"
+                                else None
+                            ),
+                            block_profile_rate_ns=(
+                                adapter_policy.block_profile_rate_ns
+                                if profile_kind == "block"
+                                else None
+                            ),
+                        )
+                        is None
+                    ):
                         raise _runtime_lock_native_error(
                             "Go private profile replay differs from the public Artifact"
                         )
@@ -1536,6 +2151,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 created_at=launch_result.finished_at,
                 started_at=launch_result.started_at,
                 finished_at=launch_result.finished_at,
+                authorization_kind="runtime_lock_session",
                 session_id=session_id,
                 session_artifact_id=lease.session_artifact_id,
                 session_artifact_content_sha256=lease.session_artifact_content_sha256,
@@ -1786,33 +2402,39 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             replay_fd = open_go_pprof_raw(raw_result)
             try:
                 with os.fdopen(os.dup(replay_fd), "rb") as replay:
-                    if verify_go_pprof_replay(
-                        replay,
-                        expected=receipt,
-                        execution_binding=binding,
-                        target_pid=target.target_pid,
-                        target_uid=target.target_uid,
-                        target_start_time_ticks=target.target_start_time_ticks,
-                        mutex_profile_fraction=(
-                            adapter_policy.mutex_profile_fraction
-                            if profile_kind == "mutex"
-                            else None
-                        ),
-                        block_profile_rate_ns=(
-                            adapter_policy.block_profile_rate_ns
-                            if profile_kind == "block"
-                            else None
-                        ),
-                    ) is None:
+                    if (
+                        verify_go_pprof_replay(
+                            replay,
+                            expected=receipt,
+                            execution_binding=binding,
+                            target_pid=target.target_pid,
+                            target_uid=target.target_uid,
+                            target_start_time_ticks=target.target_start_time_ticks,
+                            mutex_profile_fraction=(
+                                adapter_policy.mutex_profile_fraction
+                                if profile_kind == "mutex"
+                                else None
+                            ),
+                            block_profile_rate_ns=(
+                                adapter_policy.block_profile_rate_ns
+                                if profile_kind == "block"
+                                else None
+                            ),
+                        )
+                        is None
+                    ):
                         raise _runtime_lock_native_error(
                             "Go loopback private profile replay differs from the public Artifact"
                         )
             finally:
                 os.close(replay_fd)
-            if inspect_go_pprof_loopback_target(
-                target.target_pid,
-                target.loopback_port,
-            ) != target:
+            if (
+                inspect_go_pprof_loopback_target(
+                    target.target_pid,
+                    target.loopback_port,
+                )
+                != target
+            ):
                 failure_reason = "target_identity_changed"
                 raise _runtime_lock_native_error(
                     "Go pprof loopback PID or socket identity changed after conversion"
@@ -1860,6 +2482,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 created_at=capture.finished_at,
                 started_at=capture.started_at,
                 finished_at=capture.finished_at,
+                authorization_kind="runtime_lock_session",
                 session_id=session_id,
                 session_artifact_id=lease.session_artifact_id,
                 session_artifact_content_sha256=lease.session_artifact_content_sha256,
@@ -2020,6 +2643,15 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         loopback_port: int | None = None,
     ) -> RuntimeLockSessionPreviewArtifact:
         _require_runtime_locks(config)
+        if target_scope in {"managed_temporary_container", "docker_optimization"}:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "runtime_lock_authorization",
+                "Docker Runtime Lock scope must be content-bound by the parent Docker "
+                "Preview and cannot be authorized through the standalone Runtime Lock entry "
+                "point",
+                recoverable=True,
+            )
         assert runtime_lock_policy is not None
         _validate_runtime_lock_preview_policy(
             runtime_lock_policy,
@@ -2593,6 +3225,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 created_at=launch_result.finished_at,
                 started_at=launch_result.started_at,
                 finished_at=launch_result.finished_at,
+                authorization_kind="runtime_lock_session",
                 session_id=session_id,
                 session_artifact_id=lease.session_artifact_id,
                 session_artifact_content_sha256=lease.session_artifact_content_sha256,
@@ -2799,9 +3432,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "Cumulative collection is supported only by the Go pprof Adapter"
             )
         if profile_kind != "mutex":
-            raise _runtime_lock_native_error(
-                "profile_kind is valid only for the Go pprof Adapter"
-            )
+            raise _runtime_lock_native_error("profile_kind is valid only for the Go pprof Adapter")
         lease = None
         launch_result: NativeLaunchResult | None = None
         pinned: _PinnedRuntimeLockImport | None = None
@@ -3035,6 +3666,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 created_at=launch_result.finished_at,
                 started_at=launch_result.started_at,
                 finished_at=launch_result.finished_at,
+                authorization_kind="runtime_lock_session",
                 session_id=session_id,
                 session_artifact_id=lease.session_artifact_id,
                 session_artifact_content_sha256=lease.session_artifact_content_sha256,
@@ -3358,6 +3990,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 created_at=finished_at,
                 started_at=started_at,
                 finished_at=finished_at,
+                authorization_kind="runtime_lock_session",
                 session_id=session_id,
                 session_artifact_id=lease.session_artifact_id,
                 session_artifact_content_sha256=lease.session_artifact_content_sha256,
@@ -3535,9 +4168,30 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     )
     async def preview_docker_optimization_session(
         allowed_modes: tuple[OptimizationCollectionMode, ...],
+        runtime_lock_adapters: tuple[RuntimeLockAdapterId, ...] = (),
     ) -> DockerOptimizationPreviewArtifact:
         runtime = get_docker_optimization_runtime()
-        result = runtime.preview(allowed_modes=allowed_modes)
+        runtime_lock_scope: DockerRuntimeLockAuthorizationScope | None = None
+        runtime_lock_inspection: RuntimeLockCapabilityInspection | None = None
+        if runtime_lock_adapters:
+            runtime_lock_scope, runtime_lock_inspection = build_docker_runtime_lock_scope(
+                runtime_lock_adapters
+            )
+        if runtime_lock_scope is None:
+            result = runtime.preview(allowed_modes=allowed_modes)
+        else:
+            result = runtime.preview(
+                allowed_modes=allowed_modes,
+                runtime_lock_scope=runtime_lock_scope,
+            )
+        if runtime_lock_inspection is not None:
+            for adapter in runtime_lock_inspection.adapter_capabilities:
+                store.save(adapter, adapter.capability_id, "runtime-adapter-capability")
+            store.save(
+                runtime_lock_inspection.capability,
+                runtime_lock_inspection.capability.capability_id,
+                "runtime-lock-capability",
+            )
         store.save(
             result.capability,
             result.capability.capability_id,
@@ -4009,11 +4663,15 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 for relative_path in docker_policy.managed.treatment_paths
             ),
         )
+        runtime_lock_request = managed_runtime_lock_requests.get(session_id)
         run = docker_runtime.prepare_managed_run(
             session_id,
             requested_modes=(mode,),
             reserve_active_seconds=workload_timeout_seconds,
             reserve_evidence_bytes=max_output_bytes,
+            runtime_lock_launch=(
+                runtime_lock_request.launch if runtime_lock_request is not None else None
+            ),
         )
         try:
             captured_path_sha256 = tuple(
@@ -4026,6 +4684,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "Managed Docker treatment files differ from the authorized workload",
                 )
             target = run.prepared.target.artifact
+            store.save(target, target.target_id, "container-target")
             namespace_attestation = namespace_attestation_from_target(target)
             plan = create_collection_plan(
                 CollectionPlanRequest(
@@ -4059,7 +4718,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 run.authorization.workload.workload_spec_id,
                 "container-workload-spec",
             )
-            if mode == "record":
+            requires_runtime_executable = (
+                runtime_lock_request is not None and runtime_lock_request.adapter_id == "go_pprof"
+            )
+            if mode == "record" or requires_runtime_executable:
                 # The Gate is still live here. Pin its already-verified container root
                 # before release so short workloads cannot disappear before perf's
                 # Build-ID hits are matched to exact module bytes.
@@ -4070,15 +4732,60 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     # collection. A same-target root that is merely unreadable (for example,
                     # a cross-UID rootful container) keeps the previous truthful partial path.
                     # Identity failures from docker_identity still abort before Gate release.
-                    if exc.stage != "container_symbols" or not exc.recoverable:
+                    if (
+                        requires_runtime_executable
+                        or exc.stage != "container_symbols"
+                        or not exc.recoverable
+                    ):
                         raise
+            if requires_runtime_executable:
+                if pinned_process_root is None:
+                    raise PerfLensError(
+                        ErrorCode.PATH_SAFETY_VIOLATION,
+                        "runtime_lock_docker_binding",
+                        "Go target executable cannot be pinned before Gate release",
+                        recoverable=False,
+                    )
+                executable_fd = -1
+                try:
+                    executable_fd, _executable_sha256, _executable_bytes = (
+                        pinned_process_root.open_runtime_executable(
+                            run.authorization.workload.entrypoint
+                        )
+                    )
+                    go_tool = get_runtime_lock_go_bridge().tool
+                    if go_tool is None:
+                        raise PerfLensError(
+                            ErrorCode.EXTERNAL_TOOL_FAILED,
+                            "runtime_lock_capability",
+                            "The fixed Go version tool is unavailable",
+                            recoverable=True,
+                        )
+                    go_version = inspect_pinned_go_executable_version(
+                        go_tool,
+                        executable_fd,
+                    )
+                finally:
+                    if executable_fd >= 0:
+                        os.close(executable_fd)
+                assert runtime_lock_request is not None
+                runtime_lock_request = replace(
+                    runtime_lock_request,
+                    execution_binding=bind_observed_runtime_execution(
+                        runtime_lock_request.execution_binding,
+                        runtime_version=go_version,
+                        runtime_characteristics="go-version-metadata",
+                    ),
+                    runtime_characteristics="go-version-metadata",
+                )
             resource_reader = CgroupV2ResourceReader(run.prepared.target)
             before_snapshot = resource_reader.capture()
             resource_monitor = CgroupSnapshotMonitor(resource_reader, before_snapshot)
             workload_released = False
+            workload_started_at: datetime | None = None
 
             def capture_and_release_workload() -> None:
-                nonlocal workload_released
+                nonlocal workload_released, workload_started_at
                 if workload_released:
                     raise PerfLensError(
                         ErrorCode.PATH_SAFETY_VIOLATION,
@@ -4088,6 +4795,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 assert resource_monitor is not None
                 resource_monitor.start()
                 try:
+                    workload_started_at = datetime.now(tz=UTC)
                     run.coordinator.release(run.prepared)
                 except BaseException:
                     with suppress(PerfLensError):
@@ -4100,26 +4808,17 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 ready_callback=capture_and_release_workload,
                 namespace_attestation=namespace_attestation,
             )
+            if session_id in managed_collection_progress:
+                managed_collection_progress[session_id] = (
+                    executed.evidence_bytes,
+                    executed.collection_id,
+                )
             if not workload_released:
                 raise PerfLensError(
                     ErrorCode.EXTERNAL_TOOL_FAILED,
                     "docker_resource_context",
                     "Collector completed without releasing the managed Docker workload",
                 )
-            after_snapshot = resource_monitor.finish()
-            resource_context = build_container_resource_context(
-                resource_reader,
-                before_snapshot,
-                after_snapshot,
-                source_collection_id=executed.collection_id,
-                source_output_sha256=executed.output_sha256,
-            )
-            resource_reader.close()
-            store.save(
-                resource_context,
-                resource_context.resource_context_id,
-                "container-resource-context",
-            )
             try:
                 module_snapshot = capture_module_snapshot(
                     executed,
@@ -4139,7 +4838,87 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     recoverable=True,
                 )
             run.coordinator.wait(run.prepared, timeout_seconds=remaining)
+            workload_finished_at = datetime.now(tz=UTC)
+            if workload_started_at is None:
+                raise PerfLensError(
+                    ErrorCode.PROFILE_PARSE_FAILED,
+                    "runtime_lock_docker_binding",
+                    "Docker workload release time is unavailable",
+                    recoverable=False,
+                )
             assert_treatment_snapshot_current(treatment_snapshot)
+            runtime_lock_capture: DockerRuntimeLockCapture | None = None
+            if runtime_lock_request is not None:
+                if target.container_uid is None:
+                    raise PerfLensError(
+                        ErrorCode.PROFILE_PARSE_FAILED,
+                        "runtime_lock_docker_binding",
+                        "Docker Runtime Lock target lacks container UID-map evidence",
+                        recoverable=False,
+                    )
+                parent = get_docker_optimization_runtime().snapshot(
+                    runtime_lock_request.docker_optimization_session_id
+                )
+                scope = parent.runtime_lock_scope
+                if scope is None or runtime_lock_request.adapter_id not in scope.allowed_adapters:
+                    raise PerfLensError(
+                        ErrorCode.PATH_SAFETY_VIOLATION,
+                        "runtime_lock_authorization",
+                        "Docker Runtime Lock scope changed during the managed workload",
+                        recoverable=False,
+                    )
+                java_authority: JavaDockerJfrAuthority | None = None
+                go_authority: GoDockerPprofAuthority | None = None
+                if runtime_lock_request.adapter_id == "java_jfr":
+                    java_policy = get_runtime_lock_java_bridge().launch_policy
+                    if java_policy is None:
+                        raise PerfLensError(
+                            ErrorCode.EXTERNAL_TOOL_FAILED,
+                            "runtime_lock_capability",
+                            "The authorized Java JFR toolchain is unavailable",
+                            recoverable=True,
+                        )
+                    java_authority = JavaDockerJfrAuthority(
+                        runner=SubprocessJavaJfrJsonRunner(),
+                        jfr_tool=inspect_java_jfr_tool_identity(java_policy.jfr_tool),
+                        jdk_major=java_policy.jdk_major,
+                    )
+                elif runtime_lock_request.adapter_id == "go_pprof":
+                    assert runtime_lock_policy is not None
+                    profile_kind = runtime_lock_request.go_profile_kind
+                    if profile_kind is None:
+                        raise PerfLensError(
+                            ErrorCode.PATH_SAFETY_VIOLATION,
+                            "runtime_lock_authorization",
+                            "Docker Go Runtime Lock profile kind is unavailable",
+                            recoverable=False,
+                        )
+                    adapter_policy = runtime_lock_policy.adapter_policy("go_pprof")
+                    go_authority = GoDockerPprofAuthority(
+                        renderer=get_runtime_lock_go_launcher(),
+                        profile_kind=profile_kind,
+                        mutex_profile_fraction=adapter_policy.mutex_profile_fraction,
+                        block_profile_rate_ns=adapter_policy.block_profile_rate_ns,
+                    )
+                runtime_lock_capture = capture_docker_runtime_lock_evidence(
+                    run.prepared.receipt.scratch_directory,
+                    launch=runtime_lock_request.launch,
+                    execution_binding=runtime_lock_request.execution_binding,
+                    target_pid=target.container_pid,
+                    target_uid=target.container_uid,
+                    target_start_time_ticks=target.host_start_time_ticks,
+                    created_at=workload_started_at.isoformat(),
+                    scratch_owner_uid=os.geteuid(),
+                    source_owner_uid=target.host_uid,
+                    limits=RuntimeLockResourceLimits(
+                        max_source_bytes=scope.budget.max_artifact_bytes,
+                        max_input_records=scope.budget.max_exact_events,
+                        max_output_bytes=scope.budget.max_artifact_bytes,
+                    ),
+                    go_profile_kind=runtime_lock_request.go_profile_kind,
+                    java_authority=java_authority,
+                    go_authority=go_authority,
+                )
             benchmark = (
                 load_managed_benchmark(
                     run.prepared.receipt.scratch_directory,
@@ -4149,6 +4928,23 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 )
                 if docker_policy.managed.benchmark_output
                 else None
+            )
+            # Keep the cgroup monitor alive through workload exit, Adapter conversion, and
+            # correctness/Benchmark capture.  Runtime Lock totals cover the whole workload;
+            # binding them to the shorter perf sampling window could hide a resource transfer.
+            after_snapshot = resource_monitor.finish()
+            resource_context = build_container_resource_context(
+                resource_reader,
+                before_snapshot,
+                after_snapshot,
+                source_collection_id=executed.collection_id,
+                source_output_sha256=executed.output_sha256,
+            )
+            resource_reader.close()
+            store.save(
+                resource_context,
+                resource_context.resource_context_id,
+                "container-resource-context",
             )
             cleanup_status = run.coordinator.cleanup(run.prepared)
             finished_at = datetime.now(tz=UTC)
@@ -4194,6 +4990,50 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     measurement,
                     measurement.measurement_id,
                     "container-measurement",
+                )
+            if runtime_lock_request is not None:
+                if runtime_lock_capture is None or measurement is None:
+                    raise PerfLensError(
+                        ErrorCode.PROFILE_PARSE_FAILED,
+                        "runtime_lock_docker_binding",
+                        "Docker Runtime Lock collection lacks its measurement evidence",
+                        recoverable=False,
+                    )
+                evidence = bind_runtime_lock_evidence_to_container(
+                    runtime_lock_capture.evidence,
+                    execution_binding=runtime_lock_capture.execution_binding,
+                    target=target,
+                    run=container_run,
+                )
+                analysis = build_runtime_lock_analysis(evidence)
+                replay_receipt = build_runtime_lock_source_replay_receipt(
+                    evidence,
+                    origin_source_sha256=runtime_lock_capture.private_source_sha256,
+                    origin_source_bytes=runtime_lock_capture.private_source_bytes,
+                    normalized_source_sha256=(runtime_lock_capture.normalized_source_sha256),
+                    normalized_source_bytes=(runtime_lock_capture.normalized_source_bytes),
+                )
+                verification = verify_runtime_lock_analysis_artifact(
+                    analysis,
+                    evidence,
+                    source_replay_receipt=replay_receipt,
+                )
+                require_usable_runtime_lock_analysis(verification)
+                managed_runtime_lock_results[session_id] = _DockerRuntimeLockCollected(
+                    request=replace(
+                        runtime_lock_request,
+                        execution_binding=runtime_lock_capture.execution_binding,
+                        runtime_characteristics=(runtime_lock_capture.runtime_characteristics),
+                    ),
+                    evidence=evidence,
+                    analysis=analysis,
+                    verification=verification,
+                    target=target,
+                    container_run=container_run,
+                    measurement=measurement,
+                    started_at=workload_started_at.isoformat(),
+                    finished_at=workload_finished_at.isoformat(),
+                    replay_verified=runtime_lock_capture.replay_verified,
                 )
             return _managed_run_reference(
                 container_run,
@@ -4273,12 +5113,94 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         events: tuple[str, ...] = HARDWARE_STAT_EVENTS,
         event_source: Literal["auto", "hardware_required", "software_only"] = "auto",
         max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
+        runtime_lock_adapter: RuntimeLockAdapterId | None = None,
+        runtime_lock_max_events: int = 20_000,
+        runtime_lock_go_profile_kind: GoProfileKind | None = None,
     ) -> ArtifactReference:
         _require_automatic_collection(config, require_existing_pid_attach=False)
         _require_docker_optimization(config)
         assert docker_runtime is not None
         assert docker_policy is not None
         optimization_runtime = get_docker_optimization_runtime()
+        parent_session = optimization_runtime.snapshot(session_id)
+        runtime_lock_binding: RuntimeLockAdapterExecutionBinding | None = None
+        runtime_lock_launch: RuntimeLockDockerLaunch | None = None
+        runtime_lock_reserved_bytes = 0
+        if runtime_lock_adapter is not None:
+            if mode not in {"stat", "record"}:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_authorization",
+                    "Docker Runtime Lock collection must accompany stat or record evidence",
+                    recoverable=True,
+                )
+            runtime_lock_binding, runtime_lock_launch = build_docker_runtime_lock_launch(
+                parent_session,
+                runtime_lock_adapter,
+                max_events=runtime_lock_max_events,
+                go_profile_kind=runtime_lock_go_profile_kind,
+            )
+            scope = parent_session.runtime_lock_scope
+            assert scope is not None
+            runtime_runs = parent_session.runtime_lock_runs_used
+            runtime_active = parent_session.runtime_lock_active_seconds_used
+            runtime_bytes = parent_session.runtime_lock_evidence_bytes_used
+            runtime_exact = parent_session.runtime_lock_exact_events_used
+            if (
+                parent_session.runtime_lock_status in {"exhausted", "unavailable"}
+                or runtime_runs is None
+                or runtime_active is None
+                or runtime_bytes is None
+                or runtime_exact is None
+            ):
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "runtime_lock_authorization",
+                    "Docker Runtime Lock collection is unavailable in this Session",
+                    recoverable=False,
+                )
+            runtime_lock_duration_limit = (
+                scope.budget.max_exact_duration_seconds
+                if runtime_lock_binding.measurement_semantics == "exact"
+                else scope.budget.max_collection_duration_seconds
+            )
+            if workload_timeout_seconds > runtime_lock_duration_limit:
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "runtime_lock_authorization",
+                    "Docker workload timeout exceeds the selected Runtime Lock evidence window",
+                    recoverable=True,
+                )
+            reserved_exact_events = (
+                runtime_lock_max_events
+                if runtime_lock_binding.measurement_semantics == "exact"
+                else 0
+            )
+            if (
+                runtime_runs + 1 > scope.budget.max_workload_runs
+                or runtime_active + workload_timeout_seconds > scope.budget.max_active_seconds
+                or runtime_bytes + 4 * scope.budget.max_artifact_bytes
+                > scope.budget.max_evidence_bytes
+                or runtime_exact + reserved_exact_events
+                > scope.budget.max_workload_runs * scope.budget.max_exact_events
+            ):
+                raise PerfLensError(
+                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    "runtime_lock_authorization",
+                    "Docker Runtime Lock reservation exceeds the remaining Session budget",
+                    recoverable=False,
+                )
+            # Reserve all bounded representations before a container exists:
+            # private adapter output, converted text, normalized records, and
+            # public Evidence. Actual settlement charges their exact byte sum.
+            runtime_lock_reserved_bytes = 4 * scope.budget.max_artifact_bytes
+        elif runtime_lock_go_profile_kind is not None:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "runtime_lock_authorization",
+                "A Go profile kind cannot be selected without the Go Runtime Lock Adapter",
+                recoverable=True,
+            )
         recipe = optimization_runtime.build_recipe(session_id)
         budget = recipe.budget
         if (
@@ -4310,16 +5232,33 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             build_id=build_id,
             mode=mode,
             reserve_active_seconds=workload_timeout_seconds,
-            reserve_evidence_bytes=max_output_bytes,
+            reserve_evidence_bytes=max_output_bytes + runtime_lock_reserved_bytes,
         )
         started = time.monotonic()
         internal_session: ContainerOptimizationSessionArtifact | None = None
+        workload_completed = False
         try:
             internal_session = docker_runtime.authorize_optimization_build(
                 build,
                 recipe,
                 allowed_modes=(mode,),
             )
+            managed_collection_progress[internal_session.session_id] = (0, "")
+            if runtime_lock_binding is not None and runtime_lock_launch is not None:
+                managed_runtime_lock_requests[internal_session.session_id] = (
+                    _DockerRuntimeLockRequest(
+                        docker_optimization_session_id=session_id,
+                        build_id=build_id,
+                        adapter_id=cast(RuntimeLockAdapterId, runtime_lock_adapter),
+                        execution_binding=runtime_lock_binding,
+                        authorized_execution_identity_sha256=(
+                            runtime_lock_binding.execution_identity_sha256
+                        ),
+                        launch=runtime_lock_launch,
+                        observation_limit_seconds=workload_timeout_seconds,
+                        go_profile_kind=runtime_lock_go_profile_kind,
+                    )
+                )
             collected = await collect_managed_docker_workload(
                 session_id=internal_session.session_id,
                 mode=mode,
@@ -4331,6 +5270,17 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 event_source=event_source,
                 max_output_bytes=max_output_bytes,
             )
+            runtime_lock_collected = managed_runtime_lock_results.pop(
+                internal_session.session_id,
+                None,
+            )
+            if (runtime_lock_binding is None) != (runtime_lock_collected is None):
+                raise PerfLensError(
+                    ErrorCode.PROFILE_PARSE_FAILED,
+                    "runtime_lock_docker_binding",
+                    "Docker Runtime Lock result differs from the authorized collection scope",
+                    recoverable=False,
+                )
             session = _finish_optimization_workload_with_evidence(
                 optimization_runtime,
                 session_id,
@@ -4340,23 +5290,60 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     max(0, time.monotonic() - started),
                 ),
                 collected=collected,
+                additional_evidence_bytes=(
+                    _docker_runtime_lock_accounted_bytes(runtime_lock_collected)
+                    if runtime_lock_collected is not None
+                    else 0
+                ),
             )
-        except BaseException as exc:
-            failed_session: DockerOptimizationSessionArtifact | None = None
-            with suppress(PerfLensError):
-                failed_session = optimization_runtime.fail_workload(
+            workload_completed = True
+            runtime_lock_run: RuntimeLockRunArtifact | None = None
+            if runtime_lock_collected is not None:
+                session, runtime_lock_run = _finalize_docker_runtime_lock_run(
+                    store,
+                    optimization_runtime,
                     session_id,
                     lease,
-                    actual_active_seconds=min(
-                        workload_timeout_seconds,
-                        max(0, time.monotonic() - started),
-                    ),
-                    reason=(
-                        exc.message
-                        if isinstance(exc, PerfLensError)
-                        else "Docker optimization collection failed."
-                    ),
+                    build,
+                    runtime_lock_collected,
                 )
+        except BaseException as exc:
+            failed_session: DockerOptimizationSessionArtifact | None = None
+            persisted_evidence_bytes = 0
+            if internal_session is not None:
+                progress = managed_collection_progress.get(internal_session.session_id)
+                if progress is not None:
+                    persisted_evidence_bytes = progress[0]
+            with suppress(PerfLensError):
+                failure_reason = (
+                    exc.message
+                    if isinstance(exc, PerfLensError)
+                    else "Docker optimization collection failed."
+                )
+                if workload_completed:
+                    failed_session = optimization_runtime.fail_completed_runtime_lock_use(
+                        session_id,
+                        lease,
+                        reason=failure_reason,
+                    )
+                else:
+                    failed_session = optimization_runtime.fail_workload(
+                        session_id,
+                        lease,
+                        actual_active_seconds=min(
+                            workload_timeout_seconds,
+                            max(0, time.monotonic() - started),
+                        ),
+                        actual_evidence_bytes=persisted_evidence_bytes,
+                        reason=failure_reason,
+                        runtime_lock_requested=runtime_lock_binding is not None,
+                    )
+            if failed_session is None:
+                # Reservation overrun and expiry transitions can end the authority before the
+                # ordinary failure reconciler runs.  Persist the resulting terminal snapshot so
+                # disk evidence never presents the previous active state as current.
+                with suppress(PerfLensError):
+                    failed_session = optimization_runtime.snapshot(session_id)
             if failed_session is not None:
                 with suppress(PerfLensError):
                     store.save(
@@ -4394,13 +5381,21 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             raise
         finally:
             if internal_session is not None:
+                managed_runtime_lock_requests.pop(internal_session.session_id, None)
+                managed_runtime_lock_results.pop(internal_session.session_id, None)
+                managed_collection_progress.pop(internal_session.session_id, None)
                 with suppress(PerfLensError):
                     docker_runtime.revoke(internal_session.session_id)
-        store.save(
-            session,
-            session.session_artifact_id,
-            "docker-optimization-session",
-        )
+        # Runtime Lock finalization already publishes the exact charged parent
+        # revision before sealing the completed lease.  A second save here could
+        # report a false collection failure after publication if storage becomes
+        # unavailable between the two writes.
+        if runtime_lock_run is None:
+            store.save(
+                session,
+                session.session_artifact_id,
+                "docker-optimization-session",
+            )
         return ArtifactReference.model_validate(
             {
                 **collected.model_dump(mode="json"),
@@ -4412,6 +5407,15 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "docker_optimization_build_content_sha256": build.content_sha256,
                     "docker_optimization_candidate_round": build.candidate_round,
                     "docker_optimization_workload_runs_used": session.workload_runs_used,
+                    "runtime_lock_run_id": (
+                        runtime_lock_run.run_id if runtime_lock_run is not None else None
+                    ),
+                    "runtime_lock_adapter": (
+                        runtime_lock_run.adapter_id if runtime_lock_run is not None else None
+                    ),
+                    "runtime_lock_quality_status": (
+                        runtime_lock_run.quality_status if runtime_lock_run is not None else None
+                    ),
                 },
             }
         )
@@ -4876,6 +5880,120 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             cursor=cursor,
             limit=limit,
         )
+
+    @server.tool(
+        name="compare_runtime_lock_analyses",
+        description=(
+            "Deterministically compare two independently verified Runtime Lock Runs from the "
+            "same bounded authority. Docker Runs require one stored matched-container "
+            "comparison; standalone Runs remain resource-incomplete."
+        ),
+        annotations=WRITES_ARTIFACTS,
+        meta={"perflens/permission": "WRITES_ARTIFACTS"},
+        structured_output=True,
+    )
+    async def compare_runtime_lock_analyses_tool(
+        baseline_run_id: str,
+        candidate_run_id: str,
+        container_comparison_id: str | None = None,
+    ) -> RuntimeLockComparisonArtifact:
+        baseline_run = store.load_runtime_lock_run(baseline_run_id)
+        candidate_run = store.load_runtime_lock_run(candidate_run_id)
+        baseline_analysis, baseline_evidence, _ = store.load_runtime_lock_analysis(
+            baseline_run.runtime_lock_analysis_id
+        )
+        candidate_analysis, candidate_evidence, _ = store.load_runtime_lock_analysis(
+            candidate_run.runtime_lock_analysis_id
+        )
+        baseline_verification = store.load_runtime_lock_verification(
+            baseline_run.runtime_lock_verification_id
+        )
+        candidate_verification = store.load_runtime_lock_verification(
+            candidate_run.runtime_lock_verification_id
+        )
+
+        def resource_environment(
+            run: RuntimeLockRunArtifact,
+            evidence: RuntimeLockEvidenceArtifact,
+        ) -> str:
+            binding = run.docker_optimization_binding
+            if run.authorization_kind == "docker_optimization":
+                if binding is None:
+                    raise PerfLensError(
+                        ErrorCode.PROFILE_PARSE_FAILED,
+                        "runtime_lock_comparison",
+                        "Docker Runtime Lock Run lacks its resource binding",
+                    )
+                measurement = store.load_container_measurement(binding.container_measurement_id)
+                return docker_runtime_lock_fixed_environment_sha256(measurement)
+            return runtime_lock_resource_environment_sha256(run, evidence)
+
+        resource_transfer_status: Literal["no_observed_regression", "regression", "incomplete"] = (
+            "incomplete"
+        )
+        resource_comparison_content_sha256: str | None = None
+        baseline_build: DockerBuildArtifact | None = None
+        candidate_build: DockerBuildArtifact | None = None
+        if baseline_run.authorization_kind == "docker_optimization":
+            if container_comparison_id is None:
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_comparison",
+                    "Docker Runtime Lock comparison requires a bound container comparison",
+                    recoverable=True,
+                )
+            resource_comparison = store.load_container_matched_comparison(container_comparison_id)
+            baseline_binding = baseline_run.docker_optimization_binding
+            candidate_binding = candidate_run.docker_optimization_binding
+            if (
+                baseline_binding is None
+                or candidate_binding is None
+                or resource_comparison.baseline_measurement_id
+                != baseline_binding.container_measurement_id
+                or resource_comparison.candidate_measurement_id
+                != candidate_binding.container_measurement_id
+            ):
+                raise PerfLensError(
+                    ErrorCode.PATH_SAFETY_VIOLATION,
+                    "runtime_lock_comparison",
+                    "Container comparison does not bind the selected Runtime Lock Runs",
+                    recoverable=False,
+                )
+            resource_transfer_status = resource_comparison.resource_transfer_status
+            resource_comparison_content_sha256 = resource_comparison.content_sha256
+            baseline_build = store.load_docker_build(baseline_binding.build_id)
+            candidate_build = store.load_docker_build(candidate_binding.build_id)
+        elif container_comparison_id is not None:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "runtime_lock_comparison",
+                "Standalone Runtime Lock comparison cannot claim Docker resource evidence",
+                recoverable=True,
+            )
+
+        comparison = compare_runtime_lock_artifacts(
+            baseline_run=baseline_run,
+            baseline_analysis=baseline_analysis,
+            baseline_evidence=baseline_evidence,
+            baseline_verification=baseline_verification,
+            candidate_run=candidate_run,
+            candidate_analysis=candidate_analysis,
+            candidate_evidence=candidate_evidence,
+            candidate_verification=candidate_verification,
+            baseline_resource_environment_sha256=resource_environment(
+                baseline_run, baseline_evidence
+            ),
+            candidate_resource_environment_sha256=resource_environment(
+                candidate_run, candidate_evidence
+            ),
+            resource_transfer_status=resource_transfer_status,
+            resource_comparison_id=container_comparison_id,
+            resource_comparison_content_sha256=resource_comparison_content_sha256,
+            baseline_build=baseline_build,
+            candidate_build=candidate_build,
+        )
+        store.save(comparison, comparison.comparison_id, "runtime-lock-comparison")
+        return comparison
 
     @server.tool(
         name="build_runtime_lock_diagnosis_bundle",
@@ -5480,6 +6598,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         candidate_analysis_id: str,
         baseline_benchmark_id: str,
         candidate_benchmark_id: str,
+        runtime_lock_comparison_id: str | None = None,
         minimum_delta_percent: float = 1.0,
         minimum_practical_impact_percent: float = 1.0,
     ) -> ArtifactReference:
@@ -5493,6 +6612,11 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         candidate_analysis = store.load_analysis(candidate_analysis_id)
         baseline_benchmark = store.load_benchmark(baseline_benchmark_id)
         candidate_benchmark = store.load_benchmark(candidate_benchmark_id)
+        runtime_lock_comparison = (
+            store.load_runtime_lock_comparison(runtime_lock_comparison_id)
+            if runtime_lock_comparison_id is not None
+            else None
+        )
         profile_comparison = compare_profile_artifacts(
             baseline_analysis,
             candidate_analysis,
@@ -5526,6 +6650,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             candidate_benchmark=candidate_benchmark,
             benchmark_comparison=benchmark_comparison,
             source_container_comparison=source_comparison,
+            runtime_lock_comparison=runtime_lock_comparison,
         )
         store.save(profile_comparison, profile_comparison.comparison_id, "profile-comparison")
         store.save(
@@ -5860,12 +6985,13 @@ def _finish_optimization_workload_with_evidence(
     *,
     actual_active_seconds: float,
     collected: ArtifactReference,
+    additional_evidence_bytes: int = 0,
 ) -> DockerOptimizationSessionArtifact:
     return runtime.finish_workload(
         session_id,
         lease,
         actual_active_seconds=actual_active_seconds,
-        actual_evidence_bytes=_managed_evidence_bytes(collected),
+        actual_evidence_bytes=(_managed_evidence_bytes(collected) + additional_evidence_bytes),
     )
 
 
@@ -6124,20 +7250,6 @@ def _validate_runtime_lock_preview_policy(
             "Runtime Lock Adapter or semantics scope exceeds project policy",
             recoverable=True,
         )
-    if target_scope in {"managed_temporary_container", "docker_optimization"} and (
-        "native_pthread" in allowed_adapters
-    ):
-        raise PerfLensError(
-            ErrorCode.PATH_SAFETY_VIOLATION,
-            "runtime_lock_authorization",
-            "Active Native pthread collection for managed Docker targets is not implemented "
-            "before the separately reviewed Stage 7 integration",
-            recoverable=True,
-            suggested_actions=(
-                "Use host_launched_workload for active Native pthread collection.",
-                "Use generic_ndjson_import for a separately authorized controlled import.",
-            ),
-        )
     covered_semantics: set[str] = set()
     for adapter_id in allowed_adapters:
         adapter = policy.adapter_policy(adapter_id)
@@ -6151,11 +7263,7 @@ def _validate_runtime_lock_preview_policy(
                 else adapter.launch_instrumentation_allowed
             )
         )
-        if (
-            not adapter.enabled
-            or not selected_semantics
-            or not entry_point_allowed
-        ):
+        if not adapter.enabled or not selected_semantics or not entry_point_allowed:
             raise PerfLensError(
                 ErrorCode.PATH_SAFETY_VIOLATION,
                 "runtime_lock_authorization",
@@ -6583,8 +7691,7 @@ def _assert_go_runtime_lock_evidence_identity(
         or source.target_scope != "bound_pid"
         or source.source_sha256 != raw_result.raw_sha256
         or source.source_bytes != raw_result.raw_size
-        or source.adapter_execution_identity_sha256
-        != execution_binding.execution_identity_sha256
+        or source.adapter_execution_identity_sha256 != execution_binding.execution_identity_sha256
         or source.configuration_sha256 != execution_binding.configuration_sha256
         or source.metadata_sha256 != execution_binding.metadata_sha256
         or bound_go is None
@@ -6637,8 +7744,7 @@ def _assert_go_loopback_runtime_lock_evidence_identity(
         or source.target_scope != "bound_pid"
         or source.source_sha256 != raw_result.raw_sha256
         or source.source_bytes != raw_result.raw_size
-        or source.adapter_execution_identity_sha256
-        != execution_binding.execution_identity_sha256
+        or source.adapter_execution_identity_sha256 != execution_binding.execution_identity_sha256
         or source.configuration_sha256 != execution_binding.configuration_sha256
         or source.metadata_sha256 != execution_binding.metadata_sha256
         or bound_pprof is None

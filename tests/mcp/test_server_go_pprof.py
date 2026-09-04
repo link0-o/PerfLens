@@ -22,6 +22,7 @@ from perflens.runtime_locks.go_pprof_adapter import (
     build_go_pprof_adapter_bridge,
     inspect_go_pprof_installation,
 )
+from perflens.runtime_locks.go_pprof_converter import GoProfileKind
 from perflens.runtime_locks.go_pprof_launcher import GoPprofLauncher
 from perflens.runtime_locks.project_config import (
     load_runtime_lock_project_policy,
@@ -218,10 +219,15 @@ def _build_loopback_workload(project: Path) -> Path:
     return executable
 
 
-def test_go_preview_authorize_collect_mutex_and_block_and_reload(
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize("profile_kind", ("mutex", "block"))
+def test_go_preview_authorize_collect_profile_and_reload(
     tmp_path: Path,
     runtime_supervisor_client: RuntimeSupervisorClient,
+    profile_kind: GoProfileKind,
 ) -> None:
+    # A cold, real Go build plus one supervised profile collection may exceed
+    # the repository-wide 10 second unit-test guard on slower CI workers.
     server, project, artifacts = _server(tmp_path, runtime_supervisor_client)
 
     async def exercise() -> None:
@@ -258,28 +264,27 @@ def test_go_preview_authorize_collect_mutex_and_block_and_reload(
             )
             assert not authorization.is_error, authorization.content
             session = _structured(authorization)
-            for kind in ("mutex", "block"):
-                collected = await client.call_tool(
-                    "collect_runtime_lock_evidence",
-                    {
-                        "session_id": session["session_id"],
-                        "measurement_semantics": "cumulative",
-                        "duration_seconds": 10,
-                        "max_events": 500,
-                        "profile_kind": kind,
-                    },
-                )
-                assert not collected.is_error, collected.content
-                reference = _structured(collected)
-                assert reference["summary"]["adapter_id"] == "go_pprof"
-                assert reference["summary"]["profile_kind"] == kind
-                assert reference["summary"]["private_source_replay_status"] == "passed"
+            collected = await client.call_tool(
+                "collect_runtime_lock_evidence",
+                {
+                    "session_id": session["session_id"],
+                    "measurement_semantics": "cumulative",
+                    "duration_seconds": 10,
+                    "max_events": 500,
+                    "profile_kind": profile_kind,
+                },
+            )
+            assert not collected.is_error, collected.content
+            reference = _structured(collected)
+            assert reference["summary"]["adapter_id"] == "go_pprof"
+            assert reference["summary"]["profile_kind"] == profile_kind
+            assert reference["summary"]["private_source_replay_status"] == "passed"
 
     asyncio.run(exercise())
     assert not list(artifacts.glob(".runtime-lock-go-*/*"))
     store = ArtifactStore(artifacts, PathPolicy((project,)), allow_writes=False)
     run_paths = sorted(artifacts.glob("*.runtime-lock-run.json"))
-    assert len(run_paths) == 2
+    assert len(run_paths) == 1
     runs = [
         store.load_runtime_lock_run(path.name.removesuffix(".runtime-lock-run.json"))
         for path in run_paths

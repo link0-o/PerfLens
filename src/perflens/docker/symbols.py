@@ -7,6 +7,7 @@ authorized project workspace.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import re
@@ -149,6 +150,19 @@ class PinnedContainerProcessRoot:
             container_identity_sha256=container_identity_sha256,
             remaining_bytes=remaining_bytes,
             max_module_bytes=max_module_bytes,
+        )
+
+    def open_runtime_executable(
+        self,
+        container_path: str,
+        *,
+        maximum_bytes: int = 512 << 20,
+    ) -> tuple[int, str, int]:
+        """Pin one fixed entrypoint as an executable, capability-free regular file."""
+
+        return self._root.open_runtime_executable(
+            container_path,
+            maximum_bytes=maximum_bytes,
         )
 
     def close(self) -> None:
@@ -1244,6 +1258,47 @@ class _PinnedProcessRoot:
             )
         finally:
             os.close(descriptor)
+
+    def open_runtime_executable(
+        self,
+        container_path: str,
+        *,
+        maximum_bytes: int,
+    ) -> tuple[int, str, int]:
+        if maximum_bytes <= 0 or not _is_safe_container_module_path(container_path):
+            raise _symbol_error("container Runtime Lock executable request is unsafe")
+        descriptor = self._open_regular_beneath(container_path)
+        try:
+            before = os.fstat(descriptor)
+            mode = stat.S_IMODE(before.st_mode)
+            if (
+                before.st_nlink != 1
+                or not 1 <= before.st_size <= maximum_bytes
+                or mode & 0o111 == 0
+                or mode & 0o6022
+            ):
+                raise _symbol_error("container Runtime Lock executable identity is unsafe")
+            try:
+                capabilities = os.getxattr(descriptor, "security.capability")
+            except OSError as exc:
+                if exc.errno not in {errno.ENODATA, errno.ENOTSUP, errno.EOPNOTSUPP}:
+                    raise _symbol_error(
+                        "container Runtime Lock executable capabilities are unavailable"
+                    ) from exc
+            else:
+                if capabilities:
+                    raise _symbol_error(
+                        "container Runtime Lock executable cannot carry file capabilities"
+                    )
+            with os.fdopen(os.dup(descriptor), "rb", closefd=True) as handle:
+                digest, file_bytes = _sha256_handle(handle, max_bytes=before.st_size)
+            after = os.fstat(descriptor)
+            if _stat_identity(before) != _stat_identity(after) or file_bytes != before.st_size:
+                raise _symbol_error("container Runtime Lock executable changed during inspection")
+            return descriptor, digest, file_bytes
+        except BaseException:
+            os.close(descriptor)
+            raise
 
     def _open_regular_beneath(self, container_path: str) -> int:
         if self._root_fd is None:

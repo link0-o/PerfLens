@@ -13,9 +13,19 @@ from perflens.contracts.docker_build import (
     DockerOptimizationBudget,
     DockerOptimizationPreviewArtifact,
     DockerOptimizationSessionArtifact,
+    DockerRuntimeLockAuthorizationScope,
     OptimizationCollectionMode,
     derive_docker_build_artifact_id,
     derive_docker_optimization_preview_id,
+    derive_docker_optimization_session_artifact_id,
+    docker_runtime_lock_scope_sha256,
+    docker_runtime_lock_version_constraints,
+)
+from perflens.contracts.runtime_lock_sessions import (
+    RuntimeLockAdapterExecutionBinding,
+    RuntimeLockSessionBudget,
+    derive_runtime_lock_adapter_execution_identity,
+    derive_runtime_lock_toolchain_identity,
 )
 from perflens.docker.optimization_session import (
     EXPLICIT_DOCKER_OPTIMIZATION_AUTHORIZATION,
@@ -81,10 +91,11 @@ def _preview(
         "off_cpu",
         "lock",
     ),
+    runtime_lock_scope: DockerRuntimeLockAuthorizationScope | None = None,
 ) -> DockerOptimizationPreviewArtifact:
     created_at = NOW.isoformat()
     data = {
-        "schema_version": "1.0",
+        "schema_version": "1.1" if runtime_lock_scope is not None else "1.0",
         "perflens_version": "0.3.2",
         "preview_id": derive_docker_optimization_preview_id(
             PROJECT,
@@ -113,6 +124,7 @@ def _preview(
         "mutable_dockerfile": False,
         "mutable_dependency_lock": False,
         "budget": budget or _budget(),
+        "runtime_lock_scope": runtime_lock_scope,
         "planned_actions": (
             "Build one baseline after authorization.",
             "Collect evidence and run matched A/B candidates.",
@@ -129,6 +141,57 @@ def _preview(
                 provisional,
                 exclude={"content_sha256"},
             ),
+        }
+    )
+
+
+def _runtime_lock_scope(
+    *,
+    max_workload_runs: int = 6,
+) -> DockerRuntimeLockAuthorizationScope:
+    tools = ()
+    toolchain = derive_runtime_lock_toolchain_identity(tools)
+    binding = RuntimeLockAdapterExecutionBinding(
+        adapter_id="native_pthread",
+        adapter_version="native-pthread-adapter-v1",
+        backend_id="pthread-preload",
+        runtime_version="glibc-2.41",
+        profile="thresholded",
+        measurement_semantics="thresholded",
+        duration_threshold_ns=1_000,
+        tools=tools,
+        toolchain_identity_sha256=toolchain,
+        configuration_sha256="6" * 64,
+        metadata_sha256="7" * 64,
+        execution_identity_sha256=derive_runtime_lock_adapter_execution_identity(
+            "native_pthread",
+            "native-pthread-adapter-v1",
+            "pthread-preload",
+            "glibc-2.41",
+            "thresholded",
+            "thresholded",
+            1_000,
+            toolchain,
+            "6" * 64,
+            "7" * 64,
+        ),
+    )
+    provisional = DockerRuntimeLockAuthorizationScope.model_construct(
+        schema_version="1.1",
+        runtime_lock_config_sha256="8" * 64,
+        capability_id="runtime-lock-capability-" + "9" * 20,
+        capability_content_sha256="a" * 64,
+        allowed_adapters=("native_pthread",),
+        allowed_semantics=("thresholded",),
+        adapter_execution_bindings=(binding,),
+        runtime_version_constraints=docker_runtime_lock_version_constraints((binding,)),
+        budget=RuntimeLockSessionBudget(max_workload_runs=max_workload_runs),
+        content_sha256="0" * 64,
+    )
+    return DockerRuntimeLockAuthorizationScope.model_validate(
+        {
+            **provisional.model_dump(mode="json"),
+            "content_sha256": docker_runtime_lock_scope_sha256(provisional),
         }
     )
 
@@ -154,6 +217,50 @@ def test_preview_rejects_invalid_or_unbound_path_scope(
 
     with pytest.raises(ValidationError):
         DockerOptimizationPreviewArtifact.model_validate(payload)
+
+
+def test_preview_1_1_embeds_runtime_lock_scope_without_a_second_token() -> None:
+    payload = _preview().model_dump(mode="json")
+    payload["schema_version"] = "1.1"
+    payload["runtime_lock_scope"] = _runtime_lock_scope().model_dump(mode="json")
+    preview = DockerOptimizationPreviewArtifact.model_validate(payload)
+
+    assert preview.runtime_lock_scope is not None
+    assert "authorization" not in preview.runtime_lock_scope.model_dump_json()
+    assert preview.runtime_lock_scope.runtime_version_constraints[0].allowed_versions == (
+        "glibc-2.36",
+        "glibc-2.41",
+    )
+
+    payload["schema_version"] = "1.0"
+    with pytest.raises(ValidationError, match=r"Preview 1\.0"):
+        DockerOptimizationPreviewArtifact.model_validate(payload)
+
+
+def test_schema_1_0_docker_artifacts_do_not_project_runtime_lock_defaults() -> None:
+    preview_payload = _preview().model_dump(mode="json", exclude_none=True)
+    assert "runtime_lock_scope" not in preview_payload
+
+    authority, _ = _authority()
+    session_payload = _authorize(authority).artifact.model_dump(mode="json", exclude_none=True)
+    assert not any(key.startswith("runtime_lock_") for key in session_payload)
+
+
+def test_runtime_lock_scope_rejects_unbound_adapter_or_semantics() -> None:
+    payload = _runtime_lock_scope().model_dump(mode="json")
+    payload["allowed_adapters"] = ["java_jfr"]
+    with pytest.raises(ValidationError, match="bind every authorized Adapter"):
+        DockerRuntimeLockAuthorizationScope.model_validate(payload)
+
+    payload = _runtime_lock_scope().model_dump(mode="json")
+    payload["allowed_semantics"] = ["exact"]
+    with pytest.raises(ValidationError, match="semantics differ"):
+        DockerRuntimeLockAuthorizationScope.model_validate(payload)
+
+    payload = _runtime_lock_scope().model_dump(mode="json")
+    payload["runtime_version_constraints"][0]["allowed_versions"] = ["glibc-9.99"]
+    with pytest.raises(ValidationError, match="version constraints differ"):
+        DockerRuntimeLockAuthorizationScope.model_validate(payload)
 
 
 def _authority(
@@ -300,6 +407,331 @@ def test_authorization_binds_exact_preview_and_keeps_token_private() -> None:
     public = authorized.artifact.model_dump_json()
     assert authorized.access.token not in public
     assert authorized.access.token not in repr(authorized)
+
+
+def test_session_1_1_accounts_runtime_lock_inside_outer_workload_budget() -> None:
+    authority, _ = _authority()
+    base = _authorize(authority).artifact.model_dump(mode="json")
+    scope = _runtime_lock_scope()
+    base.update(
+        {
+            "schema_version": "1.1",
+            "workload_runs_used": 1,
+            "workload_active_seconds_used": 2,
+            "evidence_bytes_used": 4096,
+            "runtime_lock_scope": scope.model_dump(mode="json"),
+            "runtime_lock_status": "active",
+            "runtime_lock_runs_used": 1,
+            "runtime_lock_active_seconds_used": 2,
+            "runtime_lock_evidence_bytes_used": 2048,
+            "runtime_lock_exact_events_used": 0,
+        }
+    )
+    base["session_artifact_id"] = derive_docker_optimization_session_artifact_id(
+        base["session_id"],
+        base["state"],
+        base["updated_at"],
+        base["builds_used"],
+        base["workload_runs_used"],
+        base["evidence_bytes_used"],
+        scope.content_sha256,
+        base["runtime_lock_runs_used"],
+        base["runtime_lock_evidence_bytes_used"],
+        base["runtime_lock_exact_events_used"],
+        runtime_lock_status="active",
+        runtime_lock_active_seconds_used=2,
+    )
+    session = DockerOptimizationSessionArtifact.model_validate(base)
+    assert session.runtime_lock_runs_used == session.workload_runs_used
+
+    base["runtime_lock_runs_used"] = 2
+    with pytest.raises(ValidationError, match="bound Session evidence"):
+        DockerOptimizationSessionArtifact.model_validate(base)
+
+    base["runtime_lock_runs_used"] = 1
+    base["schema_version"] = "1.0"
+    with pytest.raises(ValidationError, match=r"Session 1\.0"):
+        DockerOptimizationSessionArtifact.model_validate(base)
+
+
+def test_authority_charges_runtime_lock_once_inside_completed_workload() -> None:
+    authority, _ = _authority()
+    preview = _preview(runtime_lock_scope=_runtime_lock_scope())
+    authorized = _authorize(authority, preview)
+    session = authorized.artifact
+    assert session.schema_version == "1.1"
+    assert session.runtime_lock_status == "active"
+    assert session.runtime_lock_runs_used == 0
+
+    _, session = _finish_baseline(authority, authorized)
+    assert session.baseline_build_id is not None
+    lease = _begin_test_workload(
+        authority,
+        authorized,
+        session.baseline_build_id,
+        seconds=5,
+        evidence=500,
+    )
+    authority.finish_workload(
+        authorized.access,
+        lease,
+        actual_active_seconds=4.1,
+        actual_evidence_bytes=400,
+    )
+    with pytest.raises(PerfLensError, match="exceeds its enclosing workload"):
+        authority.charge_runtime_lock_use(
+            authorized.access,
+            lease,
+            actual_active_seconds=5.1,
+            actual_evidence_bytes=401,
+            exact_event_count=0,
+        )
+
+    charged = authority.charge_runtime_lock_use(
+        authorized.access,
+        lease,
+        actual_active_seconds=2.1,
+        actual_evidence_bytes=200,
+        exact_event_count=0,
+        result_status="partial",
+    )
+    assert charged.runtime_lock_status == "partial"
+    assert charged.runtime_lock_runs_used == 1
+    assert charged.runtime_lock_active_seconds_used == 3
+    assert charged.runtime_lock_evidence_bytes_used == 200
+    assert charged.runtime_lock_exact_events_used == 0
+    assert charged.runtime_lock_runs_used <= charged.workload_runs_used
+    assert charged.runtime_lock_active_seconds_used <= charged.workload_active_seconds_used
+    assert charged.runtime_lock_evidence_bytes_used <= charged.evidence_bytes_used
+
+    with pytest.raises(PerfLensError, match="replayed"):
+        authority.charge_runtime_lock_use(
+            authorized.access,
+            lease,
+            actual_active_seconds=1,
+            actual_evidence_bytes=1,
+            exact_event_count=0,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("build_id", "docker-build-" + "f" * 20),
+        ("mode", "record"),
+        ("reserved_active_seconds", 4),
+        ("reserved_evidence_bytes", 499),
+        ("expires_at", (NOW + timedelta(seconds=2)).isoformat()),
+    ),
+)
+def test_runtime_lock_charge_binds_the_entire_completed_workload_lease(
+    field: str,
+    replacement: object,
+) -> None:
+    authority, _ = _authority()
+    authorized = _authorize(authority, _preview(runtime_lock_scope=_runtime_lock_scope()))
+    _, session = _finish_baseline(authority, authorized)
+    assert session.baseline_build_id is not None
+    lease = _begin_test_workload(
+        authority,
+        authorized,
+        session.baseline_build_id,
+        seconds=5,
+        evidence=500,
+    )
+    authority.finish_workload(
+        authorized.access,
+        lease,
+        actual_active_seconds=4,
+        actual_evidence_bytes=400,
+    )
+
+    with pytest.raises(PerfLensError, match="completed workload"):
+        authority.charge_runtime_lock_use(
+            authorized.access,
+            replace(lease, **{field: replacement}),
+            actual_active_seconds=1,
+            actual_evidence_bytes=1,
+            exact_event_count=0,
+        )
+
+
+def test_charged_but_unpublished_runtime_lock_can_only_be_poisoned_once() -> None:
+    authority, _ = _authority()
+    authorized = _authorize(authority, _preview(runtime_lock_scope=_runtime_lock_scope()))
+    _, session = _finish_baseline(authority, authorized)
+    assert session.baseline_build_id is not None
+    lease = _begin_test_workload(authority, authorized, session.baseline_build_id)
+    authority.finish_workload(
+        authorized.access,
+        lease,
+        actual_active_seconds=1,
+        actual_evidence_bytes=1,
+    )
+    authority.charge_runtime_lock_use(
+        authorized.access,
+        lease,
+        actual_active_seconds=1,
+        actual_evidence_bytes=1,
+        exact_event_count=0,
+    )
+
+    poisoned = authority.fail_completed_runtime_lock_use(authorized.access, lease)
+    assert poisoned.runtime_lock_status == "unavailable"
+    with pytest.raises(PerfLensError, match="replayed"):
+        authority.fail_completed_runtime_lock_use(authorized.access, lease)
+    with pytest.raises(PerfLensError, match="no longer available"):
+        authority.charge_runtime_lock_use(
+            authorized.access,
+            lease,
+            actual_active_seconds=0,
+            actual_evidence_bytes=0,
+            exact_event_count=0,
+        )
+
+
+def test_published_runtime_lock_cannot_be_poisoned() -> None:
+    authority, _ = _authority()
+    authorized = _authorize(authority, _preview(runtime_lock_scope=_runtime_lock_scope()))
+    _, session = _finish_baseline(authority, authorized)
+    assert session.baseline_build_id is not None
+    lease = _begin_test_workload(authority, authorized, session.baseline_build_id)
+    authority.finish_workload(
+        authorized.access,
+        lease,
+        actual_active_seconds=1,
+        actual_evidence_bytes=1,
+    )
+    authority.charge_runtime_lock_use(
+        authorized.access,
+        lease,
+        actual_active_seconds=1,
+        actual_evidence_bytes=1,
+        exact_event_count=0,
+    )
+    authority.mark_runtime_lock_published(authorized.access, lease)
+
+    with pytest.raises(PerfLensError, match="Published"):
+        authority.fail_completed_runtime_lock_use(authorized.access, lease)
+
+
+def test_runtime_lock_terminal_status_changes_session_id_with_frozen_clock() -> None:
+    authority, _ = _authority()
+    authorized = _authorize(
+        authority,
+        _preview(runtime_lock_scope=_runtime_lock_scope()),
+    )
+    _, session = _finish_baseline(authority, authorized)
+    assert session.baseline_build_id is not None
+    lease = _begin_test_workload(
+        authority,
+        authorized,
+        session.baseline_build_id,
+        seconds=5,
+        evidence=500,
+    )
+    completed = authority.finish_workload(
+        authorized.access,
+        lease,
+        actual_active_seconds=1,
+        actual_evidence_bytes=100,
+    )
+    failed = authority.fail_completed_runtime_lock_use(authorized.access, lease)
+    assert failed.updated_at == completed.updated_at == NOW.isoformat()
+    assert failed.runtime_lock_status == "unavailable"
+    assert failed.session_artifact_id != completed.session_artifact_id
+
+    with pytest.raises(PerfLensError, match="replayed"):
+        authority.fail_completed_runtime_lock_use(authorized.access, lease)
+
+
+def test_authority_rejects_unselected_or_unauthorized_exact_runtime_lock() -> None:
+    authority, _ = _authority()
+    authorized = _authorize(authority)
+    with pytest.raises(PerfLensError, match="did not authorize Runtime Lock"):
+        authority.charge_runtime_lock_use(
+            authorized.access,
+            DockerOptimizationWorkloadLease(
+                lease_id="docker-optimization-lease-" + "0" * 20,
+                session_id=authorized.artifact.session_id,
+                build_id="docker-build-" + "0" * 20,
+                mode="stat",
+                reserved_active_seconds=1,
+                reserved_evidence_bytes=1,
+                expires_at=(NOW + timedelta(seconds=1)).isoformat(),
+                token=authorized.access.token[::-1],
+            ),
+            actual_active_seconds=0,
+            actual_evidence_bytes=0,
+            exact_event_count=0,
+        )
+
+    preview = _preview(runtime_lock_scope=_runtime_lock_scope())
+    authorized = _authorize(authority, preview)
+    _, session = _finish_baseline(authority, authorized)
+    assert session.baseline_build_id is not None
+    lease = _begin_test_workload(authority, authorized, session.baseline_build_id)
+    authority.finish_workload(
+        authorized.access,
+        lease,
+        actual_active_seconds=1,
+        actual_evidence_bytes=1,
+    )
+    with pytest.raises(PerfLensError, match="outside the authorized semantics"):
+        authority.charge_runtime_lock_use(
+            authorized.access,
+            lease,
+            actual_active_seconds=1,
+            actual_evidence_bytes=1,
+            exact_event_count=1,
+        )
+
+
+def test_runtime_lock_budget_exhaustion_cannot_be_reactivated() -> None:
+    authority, _ = _authority()
+    preview = _preview(runtime_lock_scope=_runtime_lock_scope(max_workload_runs=1))
+    authorized = _authorize(authority, preview)
+    _, session = _finish_baseline(authority, authorized)
+    assert session.baseline_build_id is not None
+
+    first = _begin_test_workload(authority, authorized, session.baseline_build_id)
+    authority.finish_workload(
+        authorized.access,
+        first,
+        actual_active_seconds=1,
+        actual_evidence_bytes=1,
+    )
+    authority.charge_runtime_lock_use(
+        authorized.access,
+        first,
+        actual_active_seconds=1,
+        actual_evidence_bytes=1,
+        exact_event_count=0,
+    )
+    second = _begin_test_workload(authority, authorized, session.baseline_build_id)
+    authority.finish_workload(
+        authorized.access,
+        second,
+        actual_active_seconds=1,
+        actual_evidence_bytes=1,
+    )
+    with pytest.raises(PerfLensError, match="budget is exhausted"):
+        authority.charge_runtime_lock_use(
+            authorized.access,
+            second,
+            actual_active_seconds=1,
+            actual_evidence_bytes=1,
+            exact_event_count=0,
+        )
+    assert authority.snapshot(authorized.access).runtime_lock_status == "exhausted"
+    with pytest.raises(PerfLensError, match="budget is exhausted"):
+        authority.charge_runtime_lock_use(
+            authorized.access,
+            second,
+            actual_active_seconds=0,
+            actual_evidence_bytes=0,
+            exact_event_count=0,
+        )
 
 
 def test_build_sequence_reservations_success_and_replay_rejection() -> None:

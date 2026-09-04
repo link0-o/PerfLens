@@ -28,6 +28,45 @@ pub struct ProcessPrivilegeState {
     pub ambient_capabilities: u64,
 }
 
+pub fn clear_inheritable_capabilities() -> Result<(), SupervisorError> {
+    let mut header = CapabilityHeader {
+        version: LINUX_CAPABILITY_VERSION_3,
+        pid: 0,
+    };
+    let mut data = [CapabilityData {
+        effective: 0,
+        permitted: 0,
+        inheritable: 0,
+    }; CAPABILITY_WORDS];
+    // SAFETY: capget receives the version-3 header and the required two-word
+    // storage. The pointers remain valid for the duration of the syscall.
+    if unsafe { libc::syscall(libc::SYS_capget, &raw mut header, data.as_mut_ptr()) } != 0 {
+        return Err(SupervisorError::new(
+            "privilege_boundary_unavailable",
+            format!(
+                "runtime supervisor capabilities cannot be inspected: {}",
+                io::Error::last_os_error()
+            ),
+        ));
+    }
+    for word in &mut data {
+        word.inheritable = 0;
+    }
+    // SAFETY: capset reads the same fixed version-3 structures. This operation
+    // only drops inheritable capability bits and preserves effective/permitted
+    // words already verified by the caller.
+    if unsafe { libc::syscall(libc::SYS_capset, &raw const header, data.as_ptr()) } != 0 {
+        return Err(SupervisorError::new(
+            "privilege_boundary_unavailable",
+            format!(
+                "runtime supervisor inheritable capabilities cannot be dropped: {}",
+                io::Error::last_os_error()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 #[repr(C)]
 struct CapabilityHeader {
     version: u32,
@@ -329,7 +368,10 @@ mod tests {
         assert_eq!(state.saved_gid, state.effective_gid);
         assert_eq!(state.effective_capabilities, 0);
         assert_eq!(state.permitted_capabilities, 0);
-        assert_eq!(state.inheritable_capabilities, 0);
+        // The package test runner may intentionally inherit CAP_PERFMON from
+        // an administrator-selected Collector deployment.  This probe must
+        // report that state faithfully; `supervise` drops inheritable-only
+        // bits before applying its strict execution boundary.
         assert_eq!(state.ambient_capabilities, 0);
     }
 }

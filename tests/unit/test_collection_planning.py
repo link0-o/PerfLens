@@ -51,10 +51,16 @@ def _docker_target(
     *,
     host_uid: int | None = None,
     rootful_cross_uid: bool = False,
+    rootless_subordinate: bool = False,
 ) -> ContainerTargetArtifact:
-    uid = os.geteuid() if host_uid is None else host_uid
+    uid = (
+        os.geteuid() + 100_000
+        if rootless_subordinate
+        else (os.geteuid() if host_uid is None else host_uid)
+    )
     return ContainerTargetArtifact.model_validate(
         {
+            "schema_version": "1.1" if rootless_subordinate else "1.0",
             "perflens_version": "0.3.1",
             "target_id": "container-target-" + "a" * 20,
             "created_at": "2026-08-21T00:00:00+00:00",
@@ -64,6 +70,8 @@ def _docker_target(
             "container_pid": 12,
             "host_pid": 4321,
             "host_uid": uid,
+            "container_uid": 1001 if rootless_subordinate else None,
+            "uid_map_sha256": "9" * 64 if rootless_subordinate else None,
             "host_start_time_ticks": 9876,
             "executable_name": "worker",
             "namespace": {
@@ -96,6 +104,8 @@ def _collection_binding(target: ContainerTargetArtifact) -> ContainerCollectionT
         container_pid=target.container_pid,
         host_pid=target.host_pid,
         host_uid=target.host_uid,
+        container_uid=target.container_uid,
+        uid_map_sha256=target.uid_map_sha256,
         host_start_time_ticks=target.host_start_time_ticks,
         executable_name=target.executable_name,
         namespace=ContainerCollectionNamespaceBinding(
@@ -228,6 +238,38 @@ def test_docker_plan_threads_authenticated_namespace_attestation(
         namespace_attestation=attestation,
     )
     assert observed == [attestation, attestation]
+
+
+def test_docker_plan_allows_verified_rootless_subordinate_uid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = _docker_target(rootless_subordinate=True)
+    binding = _collection_binding(target)
+
+    def bind_target(_target: ContainerTargetArtifact) -> ContainerCollectionTargetBinding:
+        return binding
+
+    monkeypatch.setattr(
+        planning,
+        "bind_container_collection_target",
+        bind_target,
+    )
+
+    plan = create_collection_plan(
+        CollectionPlanRequest(
+            mode="record",
+            pid=target.host_pid,
+            container_target=target,
+        ),
+        policy=AutomaticCollectionPolicy(enabled=True),
+        capabilities=_capabilities(),
+        now=datetime(2026, 8, 21, tzinfo=UTC),
+    )
+
+    assert plan.policy_status == "allowed"
+    assert plan.target_uid == os.geteuid() + 100_000
+    assert plan.container_target is not None
+    assert plan.container_target.container_uid == 1001
 
 
 def test_docker_plan_rejects_pid_mismatch_and_gates_rootful_cross_uid(

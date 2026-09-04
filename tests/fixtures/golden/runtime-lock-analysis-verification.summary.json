@@ -1,10 +1,10 @@
 {
   "analysis": {
     "schema_version": "1.1",
-    "runtime_lock_analysis_id": "runtime-lock-analysis-709ad7843d62f559",
+    "runtime_lock_analysis_id": "runtime-lock-analysis-3d7db5e687e957be",
     "runtime_lock_evidence_id": "runtime-lock-evidence-79057ed0e5e5402de145dfaf",
-    "runtime_lock_evidence_content_sha256": "671640de55e129abebbe848cba612810dad119858a6403ee49f5a91175672fc1",
-    "runtime_lock_evidence_content_bytes": 5632,
+    "runtime_lock_evidence_content_sha256": "3566765da01cc81bef2043acd24750cec5f1ed5d8a05112d4b29a226da499dc3",
+    "runtime_lock_evidence_content_bytes": 5665,
     "quality_status": "complete",
     "measurement_semantics": "exact",
     "totals": {
@@ -114,17 +114,17 @@
       "cross_artifact_lock_identity",
       "system_wide_or_cross_target_behavior"
     ],
-    "analysis_fingerprint": "709ad7843d62f559c4bda88e3ae65af39c0f65e8cff04d3e9ed0530cba4b3fae",
-    "content_sha256": "b7fc17e840472261b7df31327826178d1a6f2256edf904360a6d1c66a68e0d25",
+    "analysis_fingerprint": "3d7db5e687e957bedd456c965168d6b8290346994d8a54299a34396e9c0b7e02",
+    "content_sha256": "6d521b0442c35b8658016dbe8575a89f9210d53ae30f826528f10b008d61aaaa",
     "content_bytes": 9201
   },
   "verification": {
     "schema_version": "1.1",
-    "runtime_lock_verification_id": "runtime-lock-verification-da75f9170be8fed4",
+    "runtime_lock_verification_id": "runtime-lock-verification-eb809ce14cc2fbeb",
     "runtime_lock_evidence_id": "runtime-lock-evidence-79057ed0e5e5402de145dfaf",
-    "runtime_lock_evidence_content_sha256": "671640de55e129abebbe848cba612810dad119858a6403ee49f5a91175672fc1",
-    "runtime_lock_analysis_id": "runtime-lock-analysis-709ad7843d62f559",
-    "runtime_lock_analysis_content_sha256": "b7fc17e840472261b7df31327826178d1a6f2256edf904360a6d1c66a68e0d25",
+    "runtime_lock_evidence_content_sha256": "3566765da01cc81bef2043acd24750cec5f1ed5d8a05112d4b29a226da499dc3",
+    "runtime_lock_analysis_id": "runtime-lock-analysis-3d7db5e687e957be",
+    "runtime_lock_analysis_content_sha256": "6d521b0442c35b8658016dbe8575a89f9210d53ae30f826528f10b008d61aaaa",
     "created_at": "2026-08-30T00:00:00+00:00",
     "verification_status": "verified",
     "checks": [
@@ -136,7 +136,7 @@
       {
         "name": "source_conversion_replay",
         "status": "passed",
-        "detail": "Private source conversion reproduced the complete public Runtime Lock evidence."
+        "detail": "A content-bound receipt attests to the immutable private-conversion result."
       },
       {
         "name": "evidence_invariants",
@@ -187,11 +187,11 @@
       "normalized_source_sha256": "7a2516e35477e19edd899d061e5d8ec47969fa987e73457f207e2f1470343e2e",
       "normalized_source_bytes": 2421,
       "converter_version": "runtime-lock-ndjson-v1.1",
-      "conversion_fingerprint": "3fc88314b1a525347bad9b2382b4dc2f83646451beb611b3c4e5a0e668c75481",
+      "conversion_fingerprint": "48ce7c8145927aee45fbecfba7b96e062eded1386256446bef86c777998d91d2",
       "runtime_lock_evidence_id": "runtime-lock-evidence-79057ed0e5e5402de145dfaf",
-      "runtime_lock_evidence_content_sha256": "671640de55e129abebbe848cba612810dad119858a6403ee49f5a91175672fc1"
+      "runtime_lock_evidence_content_sha256": "3566765da01cc81bef2043acd24750cec5f1ed5d8a05112d4b29a226da499dc3"
     },
     "verifier_version": "runtime-lock-verifier-v2",
-    "content_sha256": "d6a5de40a04f1d48e620294942391f84b839f4b800fe6bcf6f798e4ce71673b3"
+    "content_sha256": "a7ea366360b391a7ce092ef9cde7ff064e90a9ea7e9c21e5dfb1e31d746481e1"
   }
 }

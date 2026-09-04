@@ -485,6 +485,7 @@ def _rebind_source(
         adapter_version=binding.adapter_version,
         backend_id=f"pprof-{profile_kind}",
         backend_version=binding.runtime_version,
+        runtime_version=binding.runtime_version,
         measurement_semantics="cumulative",
         source_format="pprof_text_v1",
         converter_version=GO_PPROF_CONVERTER_VERSION,

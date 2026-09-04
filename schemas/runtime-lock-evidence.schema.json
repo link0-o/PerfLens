@@ -1029,7 +1029,8 @@
         {
           "else": {
             "required": [
-              "converter_version"
+              "converter_version",
+              "runtime_version"
             ]
           },
           "if": {
@@ -1059,6 +1060,11 @@
                 {
                   "required": [
                     "converter_version"
+                  ]
+                },
+                {
+                  "required": [
+                    "runtime_version"
                   ]
                 },
                 {
@@ -1383,6 +1389,20 @@
           ],
           "title": "Runtime",
           "type": "string"
+        },
+        "runtime_version": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Version"
         },
         "sampling_fraction": {
           "anyOf": [

@@ -1115,6 +1115,7 @@ class _ImportState:
             "adapter_version": self.header.adapter_version,
             "backend_id": self.header.backend_id,
             "backend_version": self.header.backend_version,
+            "runtime_version": self.header.runtime_version,
             "measurement_semantics": self.header.measurement_semantics,
             "source_format": "perflens_runtime_lock_ndjson_v1",
             "converter_version": RUNTIME_LOCK_NDJSON_PARSER_VERSION,

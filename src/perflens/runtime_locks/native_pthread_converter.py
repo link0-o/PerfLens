@@ -876,6 +876,7 @@ def _rebind_native_source(
         adapter_version=header.adapter_version,
         backend_id=header.backend_id,
         backend_version=header.backend_version,
+        runtime_version=header.runtime_version,
         measurement_semantics=header.semantics,
         source_format="native_interposer_ndjson_v1",
         converter_version=NATIVE_PTHREAD_CONVERTER_VERSION,

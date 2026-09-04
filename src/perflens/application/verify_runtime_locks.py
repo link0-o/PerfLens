@@ -90,6 +90,8 @@ def compute_runtime_lock_verification_content_sha256(
 def build_runtime_lock_source_replay_receipt(
     evidence: public.RuntimeLockEvidenceArtifact,
     *,
+    origin_source_sha256: str | None = None,
+    origin_source_bytes: int | None = None,
     normalized_source_sha256: str | None = None,
     normalized_source_bytes: int | None = None,
 ) -> public.RuntimeLockSourceReplayReceipt:
@@ -99,6 +101,8 @@ def build_runtime_lock_source_replay_receipt(
         raise ValueError("source replay receipts require schema 1.1 converter identity")
     if (normalized_source_sha256 is None) != (normalized_source_bytes is None):
         raise ValueError("normalized source replay identity must be supplied as one pair")
+    if (origin_source_sha256 is None) != (origin_source_bytes is None):
+        raise ValueError("origin source replay identity must be supplied as one pair")
     replay_sha256, replay_bytes = normalized_runtime_lock_records_identity(evidence)
     if normalized_source_sha256 is None:
         normalized_source_sha256 = replay_sha256
@@ -108,6 +112,8 @@ def build_runtime_lock_source_replay_receipt(
         source_format=evidence.source.source_format,
         raw_source_sha256=evidence.source.source_sha256,
         raw_source_bytes=evidence.source.source_bytes,
+        origin_source_sha256=origin_source_sha256,
+        origin_source_bytes=origin_source_bytes,
         normalized_source_sha256=normalized_source_sha256,
         normalized_source_bytes=normalized_source_bytes,
         converter_version=evidence.source.converter_version,
@@ -270,6 +276,8 @@ def verify_runtime_lock_analysis_artifact(
         try:
             expected_receipt = build_runtime_lock_source_replay_receipt(
                 evidence,
+                origin_source_sha256=source_replay_receipt.origin_source_sha256,
+                origin_source_bytes=source_replay_receipt.origin_source_bytes,
                 normalized_source_sha256=source_replay_receipt.normalized_source_sha256,
                 normalized_source_bytes=source_replay_receipt.normalized_source_bytes,
             )
@@ -283,7 +291,9 @@ def verify_runtime_lock_analysis_artifact(
             accepted_replay_receipt = source_replay_receipt
             source_conversion_status = "passed"
             source_conversion_detail = (
-                "Private source conversion reproduced the complete public Runtime Lock evidence."
+                "A persisted receipt attests the capture-time double conversion; this "
+                "verification bound that receipt to immutable Evidence without rerunning "
+                "the private converter."
             )
     if source_failures:
         results["source_identity"] = ("failed", _bounded(source_failures))
@@ -292,6 +302,14 @@ def verify_runtime_lock_analysis_artifact(
             "passed",
             "Raw source byte count and SHA-256 match the persisted replay receipt.",
         )
+        if source_conversion_status == "passed":
+            # The persisted verifier must reproduce the capture-time Artifact
+            # byte-for-byte from the path-free receipt.  Do not make the
+            # Agent-visible check detail depend on whether private bytes were
+            # available to this invocation.
+            source_conversion_detail = (
+                "A content-bound receipt attests to the immutable private-conversion result."
+            )
     elif private_source_stream is None:
         results["source_identity"] = (
             "skipped",

@@ -179,7 +179,13 @@ def _discovered(tmp_path: Path) -> JavaJfrCapability:
         if item.jdk_major == 25
     )
     surface = JavaJfrEventSurface(
-        events=("jdk.DataLoss", "jdk.JavaMonitorEnter", "jdk.JavaMonitorWait", "jdk.ThreadPark"),
+        events=(
+            "jdk.DataLoss",
+            "jdk.JVMInformation",
+            "jdk.JavaMonitorEnter",
+            "jdk.JavaMonitorWait",
+            "jdk.ThreadPark",
+        ),
         fields=(),
         raw_metadata_sha256="3" * 64,
         canonical_metadata_sha256="4" * 64,

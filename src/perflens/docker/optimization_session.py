@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Literal, cast
 
 from perflens import __version__
 from perflens.application.evidence import contract_content_sha256
@@ -19,6 +19,7 @@ from perflens.contracts.docker_build import (
     DockerBuildArtifact,
     DockerOptimizationPreviewArtifact,
     DockerOptimizationSessionArtifact,
+    DockerRuntimeLockStatus,
     OptimizationCollectionMode,
     derive_docker_optimization_session_artifact_id,
 )
@@ -82,12 +83,26 @@ class _ActiveLease:
 
 
 @dataclass(slots=True)
+class _CompletedWorkload:
+    token_sha256: str
+    lease_identity_sha256: str
+    actual_active_seconds: int
+    actual_evidence_bytes: int
+    runtime_lock_charged: bool = False
+    runtime_lock_published: bool = False
+    runtime_lock_poisoned: bool = False
+
+
+@dataclass(slots=True)
 class _OptimizationSessionState:
     artifact: DockerOptimizationSessionArtifact
     token_sha256: str
     monotonic_expires_at: float
     active_lease: _ActiveLease | None = None
     operation_attempts: dict[str, int] = field(default_factory=dict[str, int])
+    completed_workloads: dict[str, _CompletedWorkload] = field(
+        default_factory=dict[str, _CompletedWorkload]
+    )
 
 
 class DockerOptimizationSessionAuthority:
@@ -453,6 +468,177 @@ class DockerOptimizationSessionAuthority:
                     + actual_evidence_bytes
                 ),
             )
+            state.completed_workloads[lease.lease_id] = _CompletedWorkload(
+                token_sha256=_secret_sha256(lease.token),
+                lease_identity_sha256=_workload_lease_identity_sha256(lease),
+                actual_active_seconds=actual_seconds,
+                actual_evidence_bytes=actual_evidence_bytes,
+            )
+            return state.artifact
+
+    def charge_runtime_lock_use(
+        self,
+        access: DockerOptimizationSessionAccess,
+        lease: DockerOptimizationWorkloadLease,
+        *,
+        actual_active_seconds: float,
+        actual_evidence_bytes: int,
+        exact_event_count: int,
+        result_status: Literal["active", "partial", "unavailable"] = "active",
+    ) -> DockerOptimizationSessionArtifact:
+        """Account one Runtime Lock result inside an already charged workload.
+
+        The consumed workload lease is retained only as a bounded in-memory replay guard.
+        Runtime Lock time and bytes must be subsets of that exact workload and of the
+        enclosing optimization Session counters.
+        """
+        actual_seconds = _bounded_actual_seconds(actual_active_seconds)
+        if actual_evidence_bytes < 0 or exact_event_count < 0:
+            raise _resource_error("Docker Runtime Lock use cannot be negative")
+        with self._lock:
+            state = self._require(access)
+            artifact = state.artifact
+            scope = artifact.runtime_lock_scope
+            if scope is None:
+                raise _authorization_error(
+                    "Docker optimization Session did not authorize Runtime Lock"
+                )
+            if artifact.runtime_lock_status == "exhausted":
+                raise _resource_error("Docker Runtime Lock budget is exhausted")
+            if artifact.runtime_lock_status == "unavailable":
+                raise _resource_error("Docker Runtime Lock collection is no longer available")
+            completed = state.completed_workloads.get(lease.lease_id)
+            if (
+                completed is None
+                or lease.session_id != artifact.session_id
+                or not hmac.compare_digest(
+                    completed.token_sha256,
+                    _secret_sha256(lease.token),
+                )
+                or not hmac.compare_digest(
+                    completed.lease_identity_sha256,
+                    _workload_lease_identity_sha256(lease),
+                )
+            ):
+                raise _authorization_error(
+                    "Docker Runtime Lock evidence is not bound to a completed workload"
+                )
+            if completed.runtime_lock_charged:
+                raise _authorization_error("Docker Runtime Lock workload charge was replayed")
+            if (
+                actual_seconds > completed.actual_active_seconds
+                or actual_evidence_bytes > completed.actual_evidence_bytes
+            ):
+                raise _authorization_error("Docker Runtime Lock use exceeds its enclosing workload")
+            if exact_event_count and "exact" not in scope.allowed_semantics:
+                raise _authorization_error(
+                    "Docker Runtime Lock exact events were outside the authorized semantics"
+                )
+            if exact_event_count > scope.budget.max_exact_events:
+                raise _resource_error("Docker Runtime Lock exact-event limit was exceeded")
+            runtime_runs = (artifact.runtime_lock_runs_used or 0) + 1
+            runtime_active = (artifact.runtime_lock_active_seconds_used or 0) + actual_seconds
+            runtime_bytes = (artifact.runtime_lock_evidence_bytes_used or 0) + actual_evidence_bytes
+            runtime_exact = (artifact.runtime_lock_exact_events_used or 0) + exact_event_count
+            if (
+                runtime_runs > scope.budget.max_workload_runs
+                or runtime_active > scope.budget.max_active_seconds
+                or runtime_bytes > scope.budget.max_evidence_bytes
+                or runtime_exact > scope.budget.max_workload_runs * scope.budget.max_exact_events
+            ):
+                state.artifact = _update_session(
+                    artifact,
+                    updated_at=self._wall_now(),
+                    runtime_lock_status="exhausted",
+                )
+                raise _resource_error("Docker Runtime Lock budget is exhausted")
+            updated = _update_session(
+                artifact,
+                updated_at=self._wall_now(),
+                runtime_lock_status=_merge_runtime_lock_status(
+                    artifact.runtime_lock_status,
+                    prior_runs=artifact.runtime_lock_runs_used or 0,
+                    result_status=result_status,
+                ),
+                runtime_lock_runs_used=runtime_runs,
+                runtime_lock_active_seconds_used=runtime_active,
+                runtime_lock_evidence_bytes_used=runtime_bytes,
+                runtime_lock_exact_events_used=runtime_exact,
+            )
+            completed.runtime_lock_charged = True
+            state.artifact = updated
+            return state.artifact
+
+    def fail_completed_runtime_lock_use(
+        self,
+        access: DockerOptimizationSessionAccess,
+        lease: DockerOptimizationWorkloadLease,
+    ) -> DockerOptimizationSessionArtifact:
+        """Fail closed after perf completed but Runtime Lock finalization did not.
+
+        The outer workload was already charged, so charging it again would be a replay.
+        This transition authenticates the consumed lease, marks its Runtime Lock slot used,
+        records an unavailable result, and leaves only explicit finalize/revoke actions usable.
+        """
+
+        with self._lock:
+            state = self._require(access)
+            completed = state.completed_workloads.get(lease.lease_id)
+            if (
+                completed is None
+                or lease.session_id != state.artifact.session_id
+                or not hmac.compare_digest(
+                    completed.token_sha256,
+                    _secret_sha256(lease.token),
+                )
+                or not hmac.compare_digest(
+                    completed.lease_identity_sha256,
+                    _workload_lease_identity_sha256(lease),
+                )
+            ):
+                raise _authorization_error(
+                    "Docker Runtime Lock failed-finalization transition is invalid"
+                )
+            if completed.runtime_lock_published:
+                raise _authorization_error("Published Docker Runtime Lock work cannot be poisoned")
+            if completed.runtime_lock_poisoned:
+                raise _authorization_error("Docker Runtime Lock failed-finalization was replayed")
+            completed.runtime_lock_charged = True
+            completed.runtime_lock_poisoned = True
+            state.artifact = _update_session(
+                state.artifact,
+                updated_at=self._wall_now(),
+                runtime_lock_status="unavailable",
+            )
+            return state.artifact
+
+    def mark_runtime_lock_published(
+        self,
+        access: DockerOptimizationSessionAccess,
+        lease: DockerOptimizationWorkloadLease,
+    ) -> DockerOptimizationSessionArtifact:
+        """Seal one charged Runtime Lock result after Run and parent persistence."""
+
+        with self._lock:
+            state = self._require(access)
+            completed = state.completed_workloads.get(lease.lease_id)
+            if (
+                completed is None
+                or lease.session_id != state.artifact.session_id
+                or not hmac.compare_digest(
+                    completed.token_sha256,
+                    _secret_sha256(lease.token),
+                )
+                or not hmac.compare_digest(
+                    completed.lease_identity_sha256,
+                    _workload_lease_identity_sha256(lease),
+                )
+                or not completed.runtime_lock_charged
+                or completed.runtime_lock_published
+                or completed.runtime_lock_poisoned
+            ):
+                raise _authorization_error("Docker Runtime Lock publication transition is invalid")
+            completed.runtime_lock_published = True
             return state.artifact
 
     def revoke(
@@ -633,17 +819,46 @@ def _new_session_artifact(
     preview: DockerOptimizationPreviewArtifact,
     authorization_receipt_sha256: str,
 ) -> DockerOptimizationSessionArtifact:
-    data = {
-        "schema_version": "1.0",
-        "perflens_version": __version__,
-        "session_artifact_id": derive_docker_optimization_session_artifact_id(
+    runtime_lock_scope = preview.runtime_lock_scope
+    schema_version = "1.1" if runtime_lock_scope is not None else preview.schema_version
+    runtime_fields: dict[str, object] = {}
+    if schema_version == "1.1":
+        runtime_fields = {
+            "runtime_lock_scope": runtime_lock_scope,
+            "runtime_lock_status": ("active" if runtime_lock_scope is not None else "not_selected"),
+            "runtime_lock_runs_used": 0,
+            "runtime_lock_active_seconds_used": 0,
+            "runtime_lock_evidence_bytes_used": 0,
+            "runtime_lock_exact_events_used": 0,
+        }
+    if runtime_lock_scope is not None:
+        session_artifact_id = derive_docker_optimization_session_artifact_id(
             session_id,
             "active",
             created_at.isoformat(),
             0,
             0,
             0,
-        ),
+            runtime_lock_scope.content_sha256,
+            0,
+            0,
+            0,
+            runtime_lock_status="active",
+            runtime_lock_active_seconds_used=0,
+        )
+    else:
+        session_artifact_id = derive_docker_optimization_session_artifact_id(
+            session_id,
+            "active",
+            created_at.isoformat(),
+            0,
+            0,
+            0,
+        )
+    data = {
+        "schema_version": schema_version,
+        "perflens_version": __version__,
+        "session_artifact_id": session_artifact_id,
         "session_id": session_id,
         "created_at": created_at.isoformat(),
         "updated_at": created_at.isoformat(),
@@ -668,6 +883,7 @@ def _new_session_artifact(
         "workload_active_seconds_used": 0,
         "evidence_bytes_used": 0,
         "temporary_image_bytes_used": 0,
+        **runtime_fields,
         "baseline_build_id": None,
         "latest_candidate_build_id": None,
         "invalidation_reason": None,
@@ -703,14 +919,50 @@ def _update_session(
         or not isinstance(evidence_bytes_used, int)
     ):
         raise ValueError("Docker optimization Session update has invalid counters")
-    data["session_artifact_id"] = derive_docker_optimization_session_artifact_id(
-        artifact.session_id,
-        state_name,
-        updated_timestamp,
-        builds_used,
-        workload_runs_used,
-        evidence_bytes_used,
-    )
+    if artifact.runtime_lock_scope is not None:
+        runtime_lock_runs_used = data["runtime_lock_runs_used"]
+        runtime_lock_status = data["runtime_lock_status"]
+        runtime_lock_active_seconds_used = data["runtime_lock_active_seconds_used"]
+        runtime_lock_evidence_bytes_used = data["runtime_lock_evidence_bytes_used"]
+        runtime_lock_exact_events_used = data["runtime_lock_exact_events_used"]
+        if (
+            not isinstance(runtime_lock_status, str)
+            or runtime_lock_status
+            not in {"not_selected", "active", "partial", "unavailable", "exhausted"}
+            or isinstance(runtime_lock_active_seconds_used, bool)
+            or not isinstance(runtime_lock_active_seconds_used, int)
+            or isinstance(runtime_lock_runs_used, bool)
+            or not isinstance(runtime_lock_runs_used, int)
+            or isinstance(runtime_lock_evidence_bytes_used, bool)
+            or not isinstance(runtime_lock_evidence_bytes_used, int)
+            or isinstance(runtime_lock_exact_events_used, bool)
+            or not isinstance(runtime_lock_exact_events_used, int)
+        ):
+            raise ValueError("Docker Runtime Lock Session update has invalid counters")
+        checked_runtime_lock_status = cast(DockerRuntimeLockStatus, runtime_lock_status)
+        data["session_artifact_id"] = derive_docker_optimization_session_artifact_id(
+            artifact.session_id,
+            state_name,
+            updated_timestamp,
+            builds_used,
+            workload_runs_used,
+            evidence_bytes_used,
+            artifact.runtime_lock_scope.content_sha256,
+            runtime_lock_runs_used,
+            runtime_lock_evidence_bytes_used,
+            runtime_lock_exact_events_used,
+            runtime_lock_status=checked_runtime_lock_status,
+            runtime_lock_active_seconds_used=runtime_lock_active_seconds_used,
+        )
+    else:
+        data["session_artifact_id"] = derive_docker_optimization_session_artifact_id(
+            artifact.session_id,
+            state_name,
+            updated_timestamp,
+            builds_used,
+            workload_runs_used,
+            evidence_bytes_used,
+        )
     return _with_content(DockerOptimizationSessionArtifact.model_validate(data))
 
 
@@ -736,6 +988,22 @@ def _verify_content(artifact: DockerOptimizationPreviewArtifact | DockerBuildArt
         raise _authorization_error("Docker optimization Artifact content digest does not match")
 
 
+def _merge_runtime_lock_status(
+    current: str | None,
+    *,
+    prior_runs: int,
+    result_status: Literal["active", "partial", "unavailable"],
+) -> Literal["active", "partial", "unavailable"]:
+    """Conservatively combine per-run quality into the Session-level projection."""
+    if current == "partial" or result_status == "partial":
+        return "partial"
+    if current == "unavailable":
+        return "unavailable" if result_status == "unavailable" else "partial"
+    if result_status == "unavailable":
+        return "unavailable" if prior_runs == 0 else "partial"
+    return "active"
+
+
 def _bounded_actual_seconds(value: float) -> int:
     if not math.isfinite(value) or value < 0:
         raise _resource_error("Docker optimization actual duration is invalid")
@@ -744,6 +1012,17 @@ def _bounded_actual_seconds(value: float) -> int:
 
 def _secret_sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _workload_lease_identity_sha256(lease: DockerOptimizationWorkloadLease) -> str:
+    return hashlib.sha256(
+        (
+            "perflens-docker-workload-lease-v1\0"
+            f"{lease.lease_id}\0{lease.session_id}\0{lease.build_id}\0{lease.mode}\0"
+            f"{lease.reserved_active_seconds}\0{lease.reserved_evidence_bytes}\0"
+            f"{lease.expires_at}\0{_secret_sha256(lease.token)}"
+        ).encode()
+    ).hexdigest()
 
 
 def _validate_sha256(value: str, label: str) -> None:

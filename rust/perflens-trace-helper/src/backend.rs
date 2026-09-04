@@ -126,6 +126,7 @@ pub fn probe(mode: TraceMode) -> bool {
 pub fn capture(
     mode: TraceMode,
     target: &TraceHelperTarget,
+    authorized_uid: u32,
     duration: Duration,
     max_output_bytes: u64,
     lock_identity_key: &[u8; 32],
@@ -146,7 +147,7 @@ pub fn capture(
     // Fork tracking is attached before the /proc snapshot.  Threads that already exist appear in
     // the snapshot, while threads created after this point are inserted by the kernel program.
     links.push(object.attach(&attachments[0])?);
-    let initial_tids = enumerate_target_tids(target)?;
+    let initial_tids = enumerate_target_tids(target, authorized_uid)?;
     for tid in &initial_tids {
         object.add_target_tid(*tid)?;
     }
@@ -187,7 +188,7 @@ pub fn capture(
     ring.poll(0)?;
     drop(ring);
     drop(links);
-    assert_target_identity_after_release(target)?;
+    assert_target_identity_after_release(target, authorized_uid)?;
 
     retain_events_in_window(&mut callback.events, start, finish);
     callback
@@ -353,8 +354,8 @@ fn hex_prefix(bytes: &[u8], characters: usize) -> String {
     output
 }
 
-fn enumerate_target_tids(target: &TraceHelperTarget) -> io::Result<Vec<u32>> {
-    assert_target_identity(target)?;
+fn enumerate_target_tids(target: &TraceHelperTarget, authorized_uid: u32) -> io::Result<Vec<u32>> {
+    assert_target_identity(target, authorized_uid)?;
     let mut tids = Vec::new();
     for entry in fs::read_dir(Path::new("/proc").join(target.pid.to_string()).join("task"))? {
         let name = entry?.file_name();
@@ -381,16 +382,19 @@ fn enumerate_target_tids(target: &TraceHelperTarget) -> io::Result<Vec<u32>> {
             "target has no tasks",
         ));
     }
-    assert_target_identity(target)?;
+    assert_target_identity(target, authorized_uid)?;
     Ok(tids)
 }
 
-fn assert_target_identity(target: &TraceHelperTarget) -> io::Result<()> {
-    crate::assert_pid_identity(target)
+fn assert_target_identity(target: &TraceHelperTarget, authorized_uid: u32) -> io::Result<()> {
+    crate::assert_pid_identity(target, authorized_uid)
 }
 
-fn assert_target_identity_after_release(target: &TraceHelperTarget) -> io::Result<()> {
-    crate::assert_pid_identity_after_managed_release(target)
+fn assert_target_identity_after_release(
+    target: &TraceHelperTarget,
+    authorized_uid: u32,
+) -> io::Result<()> {
+    crate::assert_pid_identity_after_managed_release(target, authorized_uid)
 }
 
 fn monotonic_nanoseconds() -> io::Result<u64> {

@@ -187,7 +187,10 @@ def test_setup_enables_runtime_lock_policy_without_executing_or_expanding_docker
     assert policy.stat().st_mode & 0o777 == 0o600
     rendered = policy.read_text(encoding="utf-8")
     assert "enabled = true" in rendered
-    assert 'target_scopes = ["controlled_import", "host_launched_workload"]' in rendered
+    assert (
+        'target_scopes = ["controlled_import", "host_bound_process", "host_launched_workload"]'
+        in rendered
+    )
     assert "docker_optimization" not in rendered
     codex_config = (project / ".codex/config.toml").read_text(encoding="utf-8")
     assert '"--allow-runtime-locks"' in codex_config

@@ -127,6 +127,10 @@ def _write_process(
         "0::/docker/test-container\n",
         encoding="ascii",
     )
+    (process / "uid_map").write_text(
+        "0 0 4294967295\n",
+        encoding="ascii",
+    )
     namespaces = process / "ns"
     namespaces.mkdir()
     for index, namespace in enumerate(("pid", "user", "mnt", "cgroup"), start=1):

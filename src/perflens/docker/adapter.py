@@ -29,6 +29,52 @@ _CANONICAL_CPUS = re.compile(r"^(?:0\.[0-9]{1,6}|[1-9][0-9]{0,3}(?:\.[0-9]{1,6})
 _GATE_CONTAINER_PATH = "/usr/lib/perflens/perflens-container-gate"
 _CONTROL_CONTAINER_PATH = "/run/perflens-gate"
 _CONTROL_SOCKET_PATH = f"{_CONTROL_CONTAINER_PATH}/control.sock"
+_NATIVE_PROBE_CONTAINER_PATH = "/usr/lib/perflens/libperflens-pthread-probe.so"
+_CPYTHON_BOOTSTRAP_CONTAINER_PATH = "/usr/lib/perflens/python-runtime-lock/sitecustomize.py"
+_JAVA_JFR_CONFIG_CONTAINER_PATH = "/usr/lib/perflens/runtime-lock.jfc"
+
+
+@dataclass(frozen=True, slots=True)
+class NativePthreadDockerLaunch:
+    probe_path: Path
+    probe_sha256: str
+    semantics: Literal["exact", "thresholded"]
+    duration_threshold_ns: int | None
+    max_events: int
+
+
+@dataclass(frozen=True, slots=True)
+class CpythonDockerLaunch:
+    bootstrap_path: Path
+    bootstrap_sha256: str
+    semantics: Literal["exact", "thresholded"]
+    duration_threshold_ns: int | None
+    max_events: int
+
+
+@dataclass(frozen=True, slots=True)
+class JavaJfrDockerLaunch:
+    configuration_path: Path
+    configuration_sha256: str
+    profile: Literal["balanced", "deep"]
+
+
+@dataclass(frozen=True, slots=True)
+class GoPprofDockerLaunch:
+    profile_kinds: tuple[Literal["mutex", "block"], ...]
+
+
+RuntimeLockDockerLaunch = (
+    NativePthreadDockerLaunch | CpythonDockerLaunch | JavaJfrDockerLaunch | GoPprofDockerLaunch
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeLockDockerLaunchSurface:
+    """Path-bearing, non-secret container surface derived from one typed launch."""
+
+    mounts: tuple[tuple[Path, str], ...]
+    arguments: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +120,7 @@ class ManagedDockerCreateRequest:
     session_identity_sha256: str
     workload_spec_sha256: str
     creation_receipt_sha256: str
+    runtime_lock_launch: RuntimeLockDockerLaunch | None = None
 
 
 class DockerCommandAdapter:
@@ -125,9 +172,7 @@ class DockerCommandAdapter:
 
     def inspect_container(self, container_reference: str) -> dict[str, Any]:
         reference = _validate_container_reference(container_reference)
-        return self._run_json(
-            ("container", "inspect", "--format", "{{json .}}", reference)
-        )
+        return self._run_json(("container", "inspect", "--format", "{{json .}}", reference))
 
     def top_container(self, container_reference: str) -> str:
         reference = _validate_container_reference(container_reference)
@@ -287,23 +332,31 @@ def _managed_create_arguments(
         request.scratch_root,
         kind="directory",
         expected_uid=invoking_uid,
-        require_private=True,
+        require_private=False,
+        expected_mode=0o733,
     )
     control = _validate_mount_source(
         request.control_root,
         kind="directory",
         expected_uid=invoking_uid,
-        require_private=True,
+        require_private=False,
+        expected_mode=0o711,
     )
     gate = _validate_mount_source(
         request.gate_path,
         kind="executable",
+        label="Gate",
         expected_uid=None,
         require_private=False,
         trusted_owner_uids=trusted_gate_owner_uids,
         expected_sha256=request.gate_sha256,
     )
-    if len({project, scratch, control, gate}) != 4:
+    runtime_lock_mounts, runtime_lock_arguments = _runtime_lock_launch_arguments(
+        request.runtime_lock_launch,
+        trusted_owner_uids=trusted_gate_owner_uids,
+    )
+    source_paths = {project, scratch, control, gate, *(source for source, _ in runtime_lock_mounts)}
+    if len(source_paths) != 4 + len(runtime_lock_mounts):
         raise _managed_error("Managed Docker mount sources must be distinct")
     if any(
         _paths_overlap(left, right)
@@ -384,11 +437,18 @@ def _managed_create_arguments(
             f"type=bind,src={control},dst={_CONTROL_CONTAINER_PATH},readonly",
             "--mount",
             f"type=bind,src={gate},dst={_GATE_CONTAINER_PATH},readonly",
+        )
+    )
+    for source, destination in runtime_lock_mounts:
+        arguments.extend(("--mount", f"type=bind,src={source},dst={destination},readonly"))
+    arguments.extend(
+        (
             "--entrypoint",
             _GATE_CONTAINER_PATH,
             request.image_digest,
             "--control",
             _CONTROL_SOCKET_PATH,
+            *runtime_lock_arguments,
             "--",
             request.workload_entrypoint,
             *request.workload_arguments,
@@ -397,17 +457,154 @@ def _managed_create_arguments(
     return tuple(arguments)
 
 
+def _runtime_lock_launch_arguments(
+    launch: RuntimeLockDockerLaunch | None,
+    *,
+    trusted_owner_uids: tuple[int, ...],
+) -> tuple[tuple[tuple[Path, str], ...], tuple[str, ...]]:
+    surface = project_runtime_lock_docker_launch(launch)
+    validated_mounts = tuple(
+        (
+            _validate_runtime_lock_payload(
+                source,
+                _runtime_lock_payload_sha256(launch),
+                trusted_owner_uids=trusted_owner_uids,
+            ),
+            destination,
+        )
+        for source, destination in surface.mounts
+    )
+    return validated_mounts, surface.arguments
+
+
+def project_runtime_lock_docker_launch(
+    launch: RuntimeLockDockerLaunch | None,
+) -> RuntimeLockDockerLaunchSurface:
+    """Project the exact Gate arguments and mounts used by create and inspect.
+
+    File identity is deliberately validated only by the command adapter before
+    Docker execution.  The coordinator reuses this pure projection to compare
+    Docker inspect output without gaining a second path authority.
+    """
+
+    if launch is None:
+        return RuntimeLockDockerLaunchSurface((), ())
+    if isinstance(launch, NativePthreadDockerLaunch):
+        controls = _runtime_lock_event_controls(
+            launch.semantics,
+            launch.duration_threshold_ns,
+            launch.max_events,
+        )
+        return RuntimeLockDockerLaunchSurface(
+            ((launch.probe_path, _NATIVE_PROBE_CONTAINER_PATH),),
+            ("--runtime-lock", "native_pthread", *controls),
+        )
+    if isinstance(launch, CpythonDockerLaunch):
+        controls = _runtime_lock_event_controls(
+            launch.semantics,
+            launch.duration_threshold_ns,
+            launch.max_events,
+        )
+        return RuntimeLockDockerLaunchSurface(
+            ((launch.bootstrap_path, _CPYTHON_BOOTSTRAP_CONTAINER_PATH),),
+            ("--runtime-lock", "cpython_threading", *controls),
+        )
+    if isinstance(launch, JavaJfrDockerLaunch):
+        if launch.profile not in {"balanced", "deep"}:
+            raise _managed_error("Java JFR Runtime Lock profile is unsupported")
+        return RuntimeLockDockerLaunchSurface(
+            ((launch.configuration_path, _JAVA_JFR_CONFIG_CONTAINER_PATH),),
+            (
+                "--runtime-lock",
+                "java_jfr",
+                "--runtime-lock-profile",
+                launch.profile,
+            ),
+        )
+    if (
+        not launch.profile_kinds
+        or len(set(launch.profile_kinds)) != len(launch.profile_kinds)
+        or tuple(sorted(launch.profile_kinds)) != launch.profile_kinds
+    ):
+        raise _managed_error("Go Runtime Lock profile kinds must be unique and canonical")
+    return RuntimeLockDockerLaunchSurface(
+        (),
+        (
+            "--runtime-lock",
+            "go_pprof",
+            "--runtime-lock-profiles",
+            ",".join(launch.profile_kinds),
+        ),
+    )
+
+
+def _runtime_lock_payload_sha256(launch: RuntimeLockDockerLaunch | None) -> str:
+    if isinstance(launch, NativePthreadDockerLaunch):
+        return launch.probe_sha256
+    if isinstance(launch, CpythonDockerLaunch):
+        return launch.bootstrap_sha256
+    if isinstance(launch, JavaJfrDockerLaunch):
+        return launch.configuration_sha256
+    raise _managed_error("Runtime Lock payload identity is unavailable")
+
+
+def _runtime_lock_event_controls(
+    semantics: Literal["exact", "thresholded"],
+    duration_threshold_ns: int | None,
+    max_events: int,
+) -> tuple[str, ...]:
+    if semantics == "exact":
+        if duration_threshold_ns is not None:
+            raise _managed_error("Exact Runtime Lock launch cannot carry a threshold")
+        threshold = "none"
+    else:
+        if duration_threshold_ns is None or not 1 <= duration_threshold_ns <= 1_000_000_000:
+            raise _managed_error("Thresholded Runtime Lock launch requires a bounded threshold")
+        threshold = str(duration_threshold_ns)
+    if not 1 <= max_events <= 20_000:
+        raise _managed_error("Runtime Lock event limit exceeds its fixed bound")
+    return (
+        "--runtime-lock-semantics",
+        semantics,
+        "--runtime-lock-threshold-ns",
+        threshold,
+        "--runtime-lock-max-events",
+        str(max_events),
+    )
+
+
+def _validate_runtime_lock_payload(
+    path: Path,
+    expected_sha256: str,
+    *,
+    trusted_owner_uids: tuple[int, ...],
+) -> Path:
+    return _validate_mount_source(
+        path,
+        kind="file",
+        label="Runtime Lock package payload",
+        expected_uid=None,
+        require_private=False,
+        trusted_owner_uids=trusted_owner_uids,
+        expected_sha256=expected_sha256,
+    )
+
+
 def _validate_mount_source(
     path: Path,
     *,
-    kind: Literal["directory", "executable"],
+    kind: Literal["directory", "executable", "file"],
+    label: str = "mount source",
     expected_uid: int | None,
     require_private: bool,
+    expected_mode: int | None = None,
     trusted_owner_uids: tuple[int, ...] = (),
     expected_sha256: str | None = None,
 ) -> Path:
-    if not path.is_absolute() or path.is_symlink() or any(
-        value in str(path) for value in (",", "\x00", "\n", "\r")
+    if (
+        not path.is_absolute()
+        or path.is_symlink()
+        or any(value in str(path) for value in (",", "\x00", "\n", "\r"))
     ):
         raise _managed_error("Managed Docker mount source path is unsafe")
     try:
@@ -419,25 +616,31 @@ def _validate_mount_source(
         raise _managed_error("Managed Docker mount source identity is unsafe")
     if kind == "directory":
         valid_type = stat.S_ISDIR(metadata.st_mode)
-    else:
+    elif kind == "executable":
         valid_type = stat.S_ISREG(metadata.st_mode) and bool(metadata.st_mode & 0o111)
+    else:
+        valid_type = stat.S_ISREG(metadata.st_mode)
     if not valid_type or (expected_uid is not None and metadata.st_uid != expected_uid):
         raise _managed_error("Managed Docker mount source type or owner is unsafe")
     if trusted_owner_uids and metadata.st_uid not in trusted_owner_uids:
-        raise _managed_error("Managed Docker Gate owner is outside the trusted policy")
+        raise _managed_error(f"Managed Docker {label} owner is outside the trusted policy")
     if require_private and stat.S_IMODE(metadata.st_mode) != 0o700:
         raise _managed_error("Managed Docker private mount source must use mode 0700")
-    if kind == "executable" and (metadata.st_nlink != 1 or metadata.st_mode & 0o022):
-        raise _managed_error("Managed Docker Gate mount is writable or multiply linked")
+    if expected_mode is not None and stat.S_IMODE(metadata.st_mode) != expected_mode:
+        raise _managed_error("Managed Docker mount source mode differs from fixed policy")
+    if kind in {"executable", "file"} and (metadata.st_nlink != 1 or metadata.st_mode & 0o022):
+        raise _managed_error("Managed Docker package payload is writable or multiply linked")
     if expected_sha256 is not None:
         if not _SHA256.fullmatch(expected_sha256):
-            raise _managed_error("Managed Docker Gate SHA-256 is invalid")
+            raise _managed_error(f"Managed Docker {label} SHA-256 is invalid")
         try:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
         except OSError as exc:
-            raise _managed_error("Managed Docker Gate cannot be hashed") from exc
+            raise _managed_error(f"Managed Docker {label} cannot be hashed") from exc
         if digest != expected_sha256:
-            raise _managed_error("Managed Docker Gate content differs from the authorized binary")
+            raise _managed_error(
+                f"Managed Docker {label} content differs from the authorized binary"
+            )
     return resolved
 
 

@@ -25,7 +25,7 @@ use nix::unistd::geteuid;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const TRACE_HELPER_SCHEMA_VERSION: &str = "1.1";
+pub const TRACE_HELPER_SCHEMA_VERSION: &str = "1.2";
 pub const MAX_TRACE_HELPER_MESSAGE_BYTES: usize = 64 << 10;
 pub const MAX_TRACE_HELPER_PLAN_TTL_MILLISECONDS: u64 = 120_000;
 pub const MAX_TRACE_HELPER_DURATION_MILLISECONDS: u64 = 10_000;
@@ -101,6 +101,8 @@ pub struct ContainerTargetBinding {
     pub container_pid: u32,
     pub host_pid: u32,
     pub host_uid: u32,
+    pub container_uid: Option<u32>,
+    pub uid_map_sha256: Option<String>,
     pub host_start_time_ticks: u64,
     pub executable_name: String,
     pub namespace: ContainerNamespaceBinding,
@@ -376,7 +378,7 @@ fn handle_connection_with_worker(
             ) || !policy.allowed_modes.contains(&mode)
                 || expected_policy_sha256 != policy.policy_sha256
                 || expected_capture_backend != CAPTURE_BACKEND
-                || assert_pid_identity(&target).is_err()
+                || assert_pid_identity(&target, policy.allowed_uid).is_err()
             {
                 return write_response(
                     connection,
@@ -417,6 +419,7 @@ fn handle_connection_with_worker(
             let _worker_guard = WorkerGuard(worker_active);
             let plan = execution::TraceExecutionPlan {
                 plan_id: plan_id.clone(),
+                authorized_uid: policy.allowed_uid,
                 target: target.clone(),
                 mode,
                 duration_milliseconds,
@@ -522,6 +525,16 @@ fn target_allowed_by_policy(
                 && !container.rootful_risk_authorized
         });
     }
+    if target.target_runtime == TargetRuntime::Docker
+        && target.container.as_ref().is_some_and(|container| {
+            container.uid_mapping == DockerUidMapping::RootlessSameUid
+                && !container.rootful_risk_authorized
+                && container.container_uid.is_some()
+                && container.uid_map_sha256.is_some()
+        })
+    {
+        return true;
+    }
     allow_rootful_container_targets
         && target.target_runtime == TargetRuntime::Docker
         && target.uid == 0
@@ -592,24 +605,35 @@ fn rejected_response(
     }
 }
 
-pub(crate) fn assert_pid_identity(target: &TraceHelperTarget) -> io::Result<()> {
-    assert_pid_identity_at(target, Path::new("/proc"), Path::new("/sys/fs/cgroup"))
+pub(crate) fn assert_pid_identity(
+    target: &TraceHelperTarget,
+    authorized_uid: u32,
+) -> io::Result<()> {
+    assert_pid_identity_at(
+        target,
+        Path::new("/proc"),
+        Path::new("/sys/fs/cgroup"),
+        authorized_uid,
+    )
 }
 
 pub(crate) fn assert_pid_identity_after_managed_release(
     target: &TraceHelperTarget,
+    authorized_uid: u32,
 ) -> io::Result<()> {
-    assert_pid_identity_for_phase(target, true)
+    assert_pid_identity_for_phase(target, authorized_uid, true)
 }
 
 fn assert_pid_identity_for_phase(
     target: &TraceHelperTarget,
+    authorized_uid: u32,
     allow_managed_exec_transition: bool,
 ) -> io::Result<()> {
     assert_pid_identity_at_phase(
         target,
         Path::new("/proc"),
         Path::new("/sys/fs/cgroup"),
+        authorized_uid,
         allow_managed_exec_transition,
     )
 }
@@ -618,14 +642,16 @@ fn assert_pid_identity_at(
     target: &TraceHelperTarget,
     proc_root: &Path,
     cgroup_root: &Path,
+    authorized_uid: u32,
 ) -> io::Result<()> {
-    assert_pid_identity_at_phase(target, proc_root, cgroup_root, false)
+    assert_pid_identity_at_phase(target, proc_root, cgroup_root, authorized_uid, false)
 }
 
 fn assert_pid_identity_at_phase(
     target: &TraceHelperTarget,
     proc_root: &Path,
     cgroup_root: &Path,
+    authorized_uid: u32,
     allow_managed_exec_transition: bool,
 ) -> io::Result<()> {
     if target.pid == std::process::id() {
@@ -670,6 +696,7 @@ fn assert_pid_identity_at_phase(
                 cgroup_root,
                 target,
                 container,
+                authorized_uid,
                 allow_managed_exec_transition,
             )?;
         }
@@ -688,6 +715,7 @@ fn assert_docker_identity(
     cgroup_root: &Path,
     target: &TraceHelperTarget,
     container: &ContainerTargetBinding,
+    authorized_uid: u32,
     allow_managed_exec_transition: bool,
 ) -> io::Result<()> {
     let denied = |message| io::Error::new(io::ErrorKind::PermissionDenied, message);
@@ -702,6 +730,7 @@ fn assert_docker_identity(
     {
         return Err(denied("Docker target UID or NSpid identity changed"));
     }
+    assert_docker_uid_map(proc_root, target.uid, container, authorized_uid)?;
     for (name, expected_inode) in [
         ("pid", container.namespace.pid_namespace_inode),
         ("user", container.namespace.user_namespace_inode),
@@ -731,6 +760,105 @@ fn assert_docker_identity(
         return Err(denied("Docker target identity fingerprint changed"));
     }
     Ok(())
+}
+
+fn assert_docker_uid_map(
+    proc_root: &Path,
+    target_uid: u32,
+    container: &ContainerTargetBinding,
+    authorized_uid: u32,
+) -> io::Result<()> {
+    let denied = |message| io::Error::new(io::ErrorKind::PermissionDenied, message);
+    let (Some(container_uid), Some(expected_sha256)) =
+        (container.container_uid, container.uid_map_sha256.as_deref())
+    else {
+        if container.container_uid.is_some() || container.uid_map_sha256.is_some() {
+            return Err(denied("Docker target UID-map binding is incomplete"));
+        }
+        if container.uid_mapping == DockerUidMapping::RootlessSameUid
+            && target_uid != authorized_uid
+        {
+            return Err(denied(
+                "Legacy rootless Docker targets must use the caller UID",
+            ));
+        }
+        return Ok(());
+    };
+    let text = fs::read_to_string(proc_root.join("uid_map"))?;
+    let uid_map = parse_uid_map(&text)?;
+    if uid_map_sha256(&uid_map) != expected_sha256
+        || mapped_host_uid(&uid_map, container_uid) != Some(target_uid)
+        || (container.uid_mapping == DockerUidMapping::RootlessSameUid
+            && mapped_host_uid(&uid_map, 0) != Some(authorized_uid))
+    {
+        return Err(denied("Docker target UID map changed or is unauthorized"));
+    }
+    Ok(())
+}
+
+fn parse_uid_map(text: &str) -> io::Result<Vec<(u32, u32, u64)>> {
+    let invalid = || io::Error::new(io::ErrorKind::InvalidData, "target UID map is malformed");
+    if text.len() > 4096 {
+        return Err(invalid());
+    }
+    let mut mappings = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if mappings.len() >= 64 {
+            return Err(invalid());
+        }
+        let mut fields = line.split_whitespace();
+        let inside = fields
+            .next()
+            .and_then(|value| value.parse::<u32>().ok())
+            .ok_or_else(&invalid)?;
+        let outside = fields
+            .next()
+            .and_then(|value| value.parse::<u32>().ok())
+            .ok_or_else(&invalid)?;
+        let length = fields
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0 && *value <= u64::from(u32::MAX) + 1)
+            .ok_or_else(&invalid)?;
+        if fields.next().is_some()
+            || u64::from(inside).saturating_add(length) > u64::from(u32::MAX) + 1
+            || u64::from(outside).saturating_add(length) > u64::from(u32::MAX) + 1
+        {
+            return Err(invalid());
+        }
+        mappings.push((inside, outside, length));
+    }
+    if mappings.is_empty() {
+        return Err(invalid());
+    }
+    Ok(mappings)
+}
+
+fn mapped_host_uid(uid_map: &[(u32, u32, u64)], container_uid: u32) -> Option<u32> {
+    let container_uid = u64::from(container_uid);
+    uid_map.iter().find_map(|(inside, outside, length)| {
+        let inside = u64::from(*inside);
+        let offset = container_uid.checked_sub(inside)?;
+        if offset >= *length {
+            return None;
+        }
+        u32::try_from(u64::from(*outside) + offset).ok()
+    })
+}
+
+fn uid_map_sha256(uid_map: &[(u32, u32, u64)]) -> String {
+    let canonical = uid_map
+        .iter()
+        .map(|(inside, outside, length)| format!("{inside}:{outside}:{length}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut digest = Sha256::new();
+    digest.update(b"perflens-container-uid-map-v1\0");
+    digest.update(canonical.as_bytes());
+    hex_sha256(digest.finalize().as_slice())
 }
 
 fn assert_docker_cgroup(
@@ -982,7 +1110,11 @@ fn validate_target(target: &TraceHelperTarget, caller_uid: u32) -> Result<(), Pr
                     container.rootful_risk_authorized && target.uid == 0 && caller_uid != target.uid
                 }
                 DockerUidMapping::RootlessSameUid | DockerUidMapping::RootfulSameUid => {
-                    !container.rootful_risk_authorized && caller_uid == target.uid
+                    !container.rootful_risk_authorized
+                        && (caller_uid == target.uid
+                            || (container.uid_mapping == DockerUidMapping::RootlessSameUid
+                                && container.container_uid.is_some()
+                                && container.uid_map_sha256.is_some()))
                 }
             };
             let hashes = [
@@ -993,6 +1125,14 @@ fn validate_target(target: &TraceHelperTarget, caller_uid: u32) -> Result<(), Pr
                 &container.cgroup.identity_sha256,
                 &container.adapter_sha256,
             ];
+            let uid_map_fields_match = container.container_uid.is_some()
+                == container.uid_map_sha256.is_some()
+                && container
+                    .uid_map_sha256
+                    .as_ref()
+                    .is_none_or(|value| valid_sha256(value))
+                && (container.uid_mapping != DockerUidMapping::RootfulCrossUid
+                    || container.container_uid.is_none_or(|uid| uid == 0));
             if container.host_pid != target.pid
                 || container.host_uid != target.uid
                 || container.host_start_time_ticks != target.start_time_ticks
@@ -1013,6 +1153,7 @@ fn validate_target(target: &TraceHelperTarget, caller_uid: u32) -> Result<(), Pr
                     .any(|byte| byte == b'/' || byte < 0x20 || byte == 0x7f)
                 || !recipe_matches
                 || !risk_matches
+                || !uid_map_fields_match
             {
                 return Err(schema_error());
             }
@@ -1133,9 +1274,9 @@ mod tests {
         ContainerCgroupBinding, ContainerNamespaceBinding, ContainerTargetBinding,
         DockerAdapterRecipe, DockerTargetKind, DockerUidMapping, ProtocolErrorKind, TargetRuntime,
         TraceHelperRequest, TraceHelperServerPolicy, TraceHelperTarget, TraceMode,
-        assert_pid_identity, assert_pid_identity_at, assert_pid_identity_at_phase,
-        docker_identity_fingerprint, handle_connection, parse_request_frame, sha256_nul,
-        target_allowed_by_policy,
+        assert_docker_uid_map, assert_pid_identity, assert_pid_identity_at,
+        assert_pid_identity_at_phase, docker_identity_fingerprint, handle_connection,
+        parse_request_frame, sha256_nul, target_allowed_by_policy, uid_map_sha256,
     };
 
     const NOW_MILLISECONDS: u64 = 4_102_444_700_000;
@@ -1207,6 +1348,8 @@ mod tests {
             container_pid: 1,
             host_pid: 5252,
             host_uid: uid,
+            container_uid: None,
+            uid_map_sha256: None,
             host_start_time_ticks: 87_654,
             executable_name: "worker".to_owned(),
             namespace: ContainerNamespaceBinding {
@@ -1277,8 +1420,109 @@ mod tests {
     #[test]
     fn docker_identity_is_revalidated_from_proc_and_cgroup_state() {
         let fixture = docker_identity_fixture();
-        assert_pid_identity_at(&fixture.target, &fixture.proc_root, &fixture.cgroup_root)
-            .expect("matching Docker identity");
+        assert_pid_identity_at(
+            &fixture.target,
+            &fixture.proc_root,
+            &fixture.cgroup_root,
+            fixture.target.uid,
+        )
+        .expect("matching Docker identity");
+    }
+
+    #[test]
+    fn rootless_subordinate_uid_map_is_independently_revalidated() {
+        let fixture = docker_identity_fixture();
+        let authorized_uid = fixture.target.uid;
+        let subordinate_uid = authorized_uid.checked_add(100_000).expect("test UID range");
+        let uid_map_text = format!("0 {authorized_uid} 1\n1 {subordinate_uid} 1\n");
+        fs::write(fixture.process_root.join("uid_map"), &uid_map_text).expect("write fake UID map");
+        let mut target = fixture.target.clone();
+        target.uid = subordinate_uid;
+        let container = target.container.as_mut().expect("Docker binding");
+        container.host_uid = subordinate_uid;
+        container.container_uid = Some(1);
+        let parsed = super::parse_uid_map(&uid_map_text).expect("parse UID map");
+        container.uid_map_sha256 = Some(uid_map_sha256(&parsed));
+
+        assert_docker_uid_map(
+            &fixture.process_root,
+            subordinate_uid,
+            container,
+            authorized_uid,
+        )
+        .expect("accept caller-owned rootless subordinate mapping");
+
+        fs::write(
+            fixture.process_root.join("uid_map"),
+            format!("0 {} 1\n1 {subordinate_uid} 1\n", authorized_uid + 1),
+        )
+        .expect("replace root mapping");
+        assert!(
+            assert_docker_uid_map(
+                &fixture.process_root,
+                subordinate_uid,
+                container,
+                authorized_uid,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn uid_map_digest_matches_the_cross_language_contract() {
+        assert_eq!(
+            uid_map_sha256(&[(0, 1000, 1), (1, 101_000, 1)]),
+            "e935c1650fa4d6814f224a5a7e11185acc5f2710639cf8e987ea2951d23bdc19"
+        );
+    }
+
+    #[test]
+    fn rootless_subordinate_uid_map_rejects_digest_target_and_legacy_mismatch() {
+        let fixture = docker_identity_fixture();
+        let authorized_uid = fixture.target.uid;
+        let subordinate_uid = authorized_uid.checked_add(100_000).expect("test UID range");
+        let uid_map_text = format!("0 {authorized_uid} 1\n1 {subordinate_uid} 1\n");
+        fs::write(fixture.process_root.join("uid_map"), &uid_map_text).expect("write fake UID map");
+        let mut target = fixture.target.clone();
+        target.uid = subordinate_uid;
+        let container = target.container.as_mut().expect("Docker binding");
+        container.host_uid = subordinate_uid;
+        container.container_uid = Some(2);
+        let parsed = super::parse_uid_map(&uid_map_text).expect("parse UID map");
+        container.uid_map_sha256 = Some(uid_map_sha256(&parsed));
+        assert!(
+            assert_docker_uid_map(
+                &fixture.process_root,
+                subordinate_uid,
+                container,
+                authorized_uid,
+            )
+            .is_err()
+        );
+
+        container.container_uid = Some(1);
+        container.uid_map_sha256 = Some("f".repeat(64));
+        assert!(
+            assert_docker_uid_map(
+                &fixture.process_root,
+                subordinate_uid,
+                container,
+                authorized_uid,
+            )
+            .is_err()
+        );
+
+        container.container_uid = None;
+        container.uid_map_sha256 = None;
+        assert!(
+            assert_docker_uid_map(
+                &fixture.process_root,
+                subordinate_uid,
+                container,
+                authorized_uid,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1290,8 +1534,13 @@ mod tests {
         )
         .expect("replace start time");
         assert!(
-            assert_pid_identity_at(&fixture.target, &fixture.proc_root, &fixture.cgroup_root)
-                .is_err()
+            assert_pid_identity_at(
+                &fixture.target,
+                &fixture.proc_root,
+                &fixture.cgroup_root,
+                fixture.target.uid
+            )
+            .is_err()
         );
         fs::write(
             fixture.process_root.join("stat"),
@@ -1301,8 +1550,13 @@ mod tests {
         fs::remove_file(fixture.process_root.join("ns/pid")).expect("remove namespace link");
         symlink("pid:[999]", fixture.process_root.join("ns/pid")).expect("replace namespace link");
         assert!(
-            assert_pid_identity_at(&fixture.target, &fixture.proc_root, &fixture.cgroup_root)
-                .is_err()
+            assert_pid_identity_at(
+                &fixture.target,
+                &fixture.proc_root,
+                &fixture.cgroup_root,
+                fixture.target.uid
+            )
+            .is_err()
         );
     }
 
@@ -1312,15 +1566,25 @@ mod tests {
         fs::write(fixture.process_root.join("comm"), "replacement\n")
             .expect("replace executable name");
         assert!(
-            assert_pid_identity_at(&fixture.target, &fixture.proc_root, &fixture.cgroup_root)
-                .is_err()
+            assert_pid_identity_at(
+                &fixture.target,
+                &fixture.proc_root,
+                &fixture.cgroup_root,
+                fixture.target.uid
+            )
+            .is_err()
         );
         fs::write(fixture.process_root.join("comm"), "worker\n").expect("restore executable name");
         fs::write(fixture.process_root.join("cgroup"), "0::/docker//session\n")
             .expect("write unsafe cgroup path");
         assert!(
-            assert_pid_identity_at(&fixture.target, &fixture.proc_root, &fixture.cgroup_root)
-                .is_err()
+            assert_pid_identity_at(
+                &fixture.target,
+                &fixture.proc_root,
+                &fixture.cgroup_root,
+                fixture.target.uid
+            )
+            .is_err()
         );
     }
 
@@ -1334,6 +1598,7 @@ mod tests {
                 &fixture.target,
                 &fixture.proc_root,
                 &fixture.cgroup_root,
+                fixture.target.uid,
                 false,
             )
             .is_err()
@@ -1342,6 +1607,7 @@ mod tests {
             &fixture.target,
             &fixture.proc_root,
             &fixture.cgroup_root,
+            fixture.target.uid,
             true,
         )
         .expect("accept the managed Gate exec transition");
@@ -1353,6 +1619,7 @@ mod tests {
                 &fixture.target,
                 &fixture.proc_root,
                 &fixture.cgroup_root,
+                fixture.target.uid,
                 true,
             )
             .is_err()
@@ -1369,8 +1636,14 @@ mod tests {
         fs::write(fixture.process_root.join("comm"), "replacement\n")
             .expect("replace executable name");
         assert!(
-            assert_pid_identity_at_phase(&target, &fixture.proc_root, &fixture.cgroup_root, true,)
-                .is_err()
+            assert_pid_identity_at_phase(
+                &target,
+                &fixture.proc_root,
+                &fixture.cgroup_root,
+                fixture.target.uid,
+                true,
+            )
+            .is_err()
         );
     }
 
@@ -1387,6 +1660,8 @@ mod tests {
         let docker = fs::read(fixture("valid/docker-sched.jsonl")).expect("Docker fixture");
         let rootful =
             fs::read(fixture("valid/docker-rootful-sched.jsonl")).expect("rootful Docker fixture");
+        let subordinate = fs::read(fixture("valid/docker-rootless-subordinate-sched.jsonl"))
+            .expect("rootless subordinate Docker fixture");
         assert!(matches!(
             parse_request_frame(&health, NOW_MILLISECONDS).expect("health"),
             TraceHelperRequest::Health { .. }
@@ -1401,6 +1676,11 @@ mod tests {
         ));
         assert!(matches!(
             parse_request_frame(&rootful, NOW_MILLISECONDS).expect("rootful Docker sched"),
+            TraceHelperRequest::CollectPid { .. }
+        ));
+        assert!(matches!(
+            parse_request_frame(&subordinate, NOW_MILLISECONDS)
+                .expect("rootless subordinate Docker sched"),
             TraceHelperRequest::CollectPid { .. }
         ));
     }
@@ -1485,7 +1765,7 @@ mod tests {
             .parse::<u64>()
             .expect("numeric ticks");
         let request = format!(
-            "{{\"schema_version\":\"1.1\",\"operation\":\"collect_pid\",\"request_id\":\"request-0123456789abcdef\",\"plan_id\":\"trace-plan-0123456789abcdefabcd\",\"caller_uid\":{uid},\"target\":{{\"target_runtime\":\"host\",\"pid\":{pid},\"uid\":{uid},\"start_time_ticks\":{start_ticks}}},\"mode\":\"sched\",\"duration_milliseconds\":1000,\"max_output_bytes\":1048576,\"expires_at_unix_milliseconds\":4102444760000,\"expected_policy_sha256\":\"{}\",\"expected_capture_backend\":\"target_filtered_kernel_v1\",\"report_ready\":false}}\n",
+            "{{\"schema_version\":\"1.2\",\"operation\":\"collect_pid\",\"request_id\":\"request-0123456789abcdef\",\"plan_id\":\"trace-plan-0123456789abcdefabcd\",\"caller_uid\":{uid},\"target\":{{\"target_runtime\":\"host\",\"pid\":{pid},\"uid\":{uid},\"start_time_ticks\":{start_ticks}}},\"mode\":\"sched\",\"duration_milliseconds\":1000,\"max_output_bytes\":1048576,\"expires_at_unix_milliseconds\":4102444760000,\"expected_policy_sha256\":\"{}\",\"expected_capture_backend\":\"target_filtered_kernel_v1\",\"report_ready\":false}}\n",
             "a".repeat(64)
         );
         let (mut client, mut server) = UnixStream::pair().expect("socket pair");
@@ -1535,13 +1815,16 @@ mod tests {
             .expect("start ticks")
             .parse::<u64>()
             .expect("numeric ticks");
-        let error = assert_pid_identity(&TraceHelperTarget {
-            target_runtime: TargetRuntime::Host,
-            pid: tid,
+        let error = assert_pid_identity(
+            &TraceHelperTarget {
+                target_runtime: TargetRuntime::Host,
+                pid: tid,
+                uid,
+                start_time_ticks,
+                container: None,
+            },
             uid,
-            start_time_ticks,
-            container: None,
-        })
+        )
         .expect_err("thread TID must not be accepted as target TGID");
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
         release_sender.send(()).expect("release worker");

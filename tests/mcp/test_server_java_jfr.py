@@ -258,6 +258,7 @@ def _bridge(project: Path, policy_path: Path) -> JavaJfrAdapterBridge:
         event_surface=JavaJfrEventSurface(
             events=(
                 "jdk.DataLoss",
+                "jdk.JVMInformation",
                 "jdk.JavaMonitorEnter",
                 "jdk.JavaMonitorWait",
                 "jdk.ThreadPark",
@@ -568,6 +569,8 @@ def test_java_jfr_preview_collects_replays_persists_and_cleans_private_evidence(
         "source_format": "jfr_json_v1",
         "raw_source_sha256": expected_conversion.raw_source_sha256,
         "raw_source_bytes": expected_conversion.raw_source_bytes,
+        "origin_source_sha256": None,
+        "origin_source_bytes": None,
         "normalized_source_sha256": expected_conversion.normalized_source_sha256,
         "normalized_source_bytes": expected_conversion.normalized_source_bytes,
         "converter_version": JAVA_JFR_CONVERTER_VERSION,

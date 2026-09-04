@@ -14,6 +14,7 @@ import re
 import stat
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, cast
 
@@ -73,6 +74,8 @@ class KernelProcessIdentity:
     namespace: NamespaceIdentity
     cgroup_relative_path: str
     cgroup_inode: int
+    uid_map: tuple[tuple[int, int, int], ...] = ()
+    uid_map_sha256: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +119,8 @@ def bind_container_collection_target(
         container_pid=current.container_pid,
         host_pid=current.host_pid,
         host_uid=current.host_uid,
+        container_uid=target.container_uid,
+        uid_map_sha256=target.uid_map_sha256,
         host_start_time_ticks=current.host_start_time_ticks,
         executable_name=current.executable_name,
         namespace=ContainerCollectionNamespaceBinding(
@@ -174,8 +179,7 @@ def assert_container_target_current(
     )
     executable_changed = current.executable_name != target.executable_name
     executable_transition_allowed = (
-        allow_managed_exec_transition
-        and target.target_kind == "managed_temporary_container"
+        allow_managed_exec_transition and target.target_kind == "managed_temporary_container"
     )
     if (
         current.host_uid != target.host_uid
@@ -185,6 +189,13 @@ def assert_container_target_current(
         or len(current.nspid) < 2
         or current_namespace != expected_namespace
         or current.cgroup_inode != target.cgroup.inode
+        or (
+            target.container_uid is not None
+            and (
+                current.uid_map_sha256 != target.uid_map_sha256
+                or _mapped_host_uid(current.uid_map, target.container_uid) != current.host_uid
+            )
+        )
     ):
         raise _identity_error(
             "Docker target Linux identity changed after publication",
@@ -307,9 +318,7 @@ class LinuxContainerIdentityReader:
             ) from exc
         try:
             opened = os.fstat(descriptor)
-            start_time, cpu_ticks = _parse_stat_counters(
-                _read_proc_text(descriptor, "stat")
-            )
+            start_time, cpu_ticks = _parse_stat_counters(_read_proc_text(descriptor, "stat"))
             if opened.st_uid != identity.host_uid or start_time != identity.host_start_time_ticks:
                 raise _identity_error(
                     "Docker process identity changed during CPU observation",
@@ -342,6 +351,7 @@ class LinuxContainerIdentityReader:
         stat_text = _read_proc_text(descriptor, "stat")
         status_text = _read_proc_text(descriptor, "status")
         cgroup_text = _read_proc_text(descriptor, "cgroup")
+        uid_map_text = _read_proc_text(descriptor, "uid_map")
         comm_text = _read_proc_text(descriptor, "comm")
         start_time = _parse_start_time(stat_text)
         host_uid, nspid = _parse_status(status_text, expected_host_pid=host_pid)
@@ -384,6 +394,7 @@ class LinuxContainerIdentityReader:
             )
         cgroup_path = _parse_cgroup_v2_path(cgroup_text)
         cgroup_inode = self._read_cgroup_inode(cgroup_path)
+        uid_map = _parse_uid_map(uid_map_text)
         return KernelProcessIdentity(
             host_pid=host_pid,
             host_uid=host_uid,
@@ -394,6 +405,8 @@ class LinuxContainerIdentityReader:
             namespace=namespace,
             cgroup_relative_path=cgroup_path,
             cgroup_inode=cgroup_inode,
+            uid_map=uid_map,
+            uid_map_sha256=_uid_map_sha256(uid_map),
         )
 
     def _read_cgroup_inode(self, relative_path: str) -> int:
@@ -612,14 +625,23 @@ def classify_container_uid_mapping(
     adapter: DockerCommandAdapter,
     target: KernelProcessIdentity,
     *,
+    container_uid: int | None = None,
     invoking_uid: int | None = None,
     allow_rootful_cross_uid: bool = False,
 ) -> Literal["rootless_same_uid", "rootful_same_uid", "rootful_cross_uid"]:
     uid = os.geteuid() if invoking_uid is None else invoking_uid
     endpoint_kind = adapter.endpoint_identity.kind
+    if container_uid is not None:
+        if not target.uid_map or not target.uid_map_sha256:
+            raise _identity_error("Docker target UID-map identity is unavailable")
+        if _mapped_host_uid(target.uid_map, container_uid) != target.host_uid:
+            raise _identity_error("Container UID does not map to the verified host target UID")
     if endpoint_kind == "local_rootless":
-        if target.host_uid != uid:
-            raise _identity_error("Rootless Docker target is not owned by the invoking user")
+        if container_uid is None:
+            if target.host_uid != uid:
+                raise _identity_error("Rootless Docker target is not owned by the invoking user")
+        elif _mapped_host_uid(target.uid_map, 0) != uid:
+            raise _identity_error("Rootless Docker UID map is not owned by the invoking user")
         return "rootless_same_uid"
     if target.host_uid == uid:
         return "rootful_same_uid"
@@ -627,6 +649,8 @@ def classify_container_uid_mapping(
         raise _identity_error(
             "Rootful cross-UID Docker target requires explicit administrator policy"
         )
+    if container_uid is not None and (container_uid != 0 or target.host_uid != 0):
+        raise _identity_error("Rootful cross-UID Runtime Lock targets are limited to UID 0")
     return "rootful_cross_uid"
 
 
@@ -635,6 +659,7 @@ def build_managed_container_target_artifact(
     adapter: DockerCommandAdapter,
     instance: PrivateContainerInstance,
     target: KernelProcessIdentity,
+    container_uid: int | None = None,
     invoking_uid: int | None = None,
     allow_rootful_cross_uid: bool = False,
     created_at: datetime | None = None,
@@ -653,6 +678,7 @@ def build_managed_container_target_artifact(
     uid_mapping = classify_container_uid_mapping(
         adapter,
         target,
+        container_uid=container_uid,
         invoking_uid=invoking_uid,
         allow_rootful_cross_uid=allow_rootful_cross_uid,
     )
@@ -663,6 +689,7 @@ def build_managed_container_target_artifact(
         target_kind="managed_temporary_container",
         uid_mapping=uid_mapping,
         rootful_risk_authorized=uid_mapping == "rootful_cross_uid",
+        container_uid=container_uid,
         created_at=timestamp,
     )
 
@@ -675,13 +702,10 @@ def _build_container_target_artifact(
     target_kind: DockerTargetKind,
     uid_mapping: Literal["rootless_same_uid", "rootful_same_uid", "rootful_cross_uid"],
     rootful_risk_authorized: bool,
+    container_uid: int | None = None,
     created_at: datetime,
 ) -> ContainerTargetArtifact:
-    recipe_id = (
-        _READ_RECIPE_ID
-        if target_kind == "existing_container"
-        else _MANAGED_RECIPE_ID
-    )
+    recipe_id = _READ_RECIPE_ID if target_kind == "existing_container" else _MANAGED_RECIPE_ID
     endpoint = adapter.endpoint_identity
     container_identity = container_identity_sha256(adapter, instance)
     image_identity = instance.image_digest.removeprefix("sha256:")
@@ -719,7 +743,7 @@ def _build_container_target_artifact(
     target_id = _sha256_text("target", fingerprint, timestamp)[:20]
     provisional = ContainerTargetArtifact.model_validate(
         {
-            "schema_version": "1.0",
+            "schema_version": "1.1" if container_uid is not None else "1.0",
             "perflens_version": __version__,
             "target_id": f"container-target-{target_id}",
             "created_at": timestamp,
@@ -729,6 +753,8 @@ def _build_container_target_artifact(
             "container_pid": target.container_pid,
             "host_pid": target.host_pid,
             "host_uid": target.host_uid,
+            "container_uid": container_uid,
+            "uid_map_sha256": target.uid_map_sha256 if container_uid is not None else None,
             "host_start_time_ticks": target.host_start_time_ticks,
             "executable_name": target.executable_name,
             "namespace": {
@@ -751,9 +777,7 @@ def _build_container_target_artifact(
                 "The selected host PID was verified inside the local container instance.",
                 "The target PID incarnation, namespace, and cgroup-v2 identity were bound.",
                 *(
-                    (
-                        "The managed target was bound before its fixed Container Gate release.",
-                    )
+                    ("The managed target was bound before its fixed Container Gate release.",)
                     if target_kind == "managed_temporary_container"
                     else ()
                 ),
@@ -841,6 +865,47 @@ def _parse_status(text: str, *, expected_host_pid: int) -> tuple[int, tuple[int,
     if not 1 <= len(nspid) <= 64 or nspid[0] != expected_host_pid or any(pid <= 0 for pid in nspid):
         raise _identity_error("Docker target NSpid hierarchy is invalid")
     return uids[0], nspid
+
+
+def _parse_uid_map(text: str) -> tuple[tuple[int, int, int], ...]:
+    lines = text.splitlines()
+    if not 1 <= len(lines) <= 340:
+        raise _identity_error("Docker target UID map is empty or exceeds its fixed limit")
+    ranges: list[tuple[int, int, int]] = []
+    try:
+        for line in lines:
+            fields = line.split()
+            if len(fields) != 3:
+                raise ValueError("UID map row does not contain three fields")
+            inside, outside, length = (int(value) for value in fields)
+            if inside < 0 or outside < 0 or length <= 0:
+                raise ValueError("UID map row contains an invalid range")
+            if inside + length > 1 << 32 or outside + length > 1 << 32:
+                raise ValueError("UID map row exceeds the Linux UID range")
+            ranges.append((inside, outside, length))
+    except ValueError as exc:
+        raise _identity_error("Docker target UID map is malformed") from exc
+    if tuple(sorted(ranges)) != tuple(ranges):
+        raise _identity_error("Docker target UID map is not canonical")
+    for left, right in pairwise(ranges):
+        if left[0] + left[2] > right[0]:
+            raise _identity_error("Docker target UID map contains overlapping container ranges")
+    return tuple(ranges)
+
+
+def _uid_map_sha256(uid_map: tuple[tuple[int, int, int], ...]) -> str:
+    material = "\n".join(f"{inside}:{outside}:{length}" for inside, outside, length in uid_map)
+    return hashlib.sha256(("perflens-container-uid-map-v1\0" + material).encode()).hexdigest()
+
+
+def _mapped_host_uid(
+    uid_map: tuple[tuple[int, int, int], ...],
+    container_uid: int,
+) -> int | None:
+    for inside, outside, length in uid_map:
+        if inside <= container_uid < inside + length:
+            return outside + (container_uid - inside)
+    return None
 
 
 def _read_namespace_inode(

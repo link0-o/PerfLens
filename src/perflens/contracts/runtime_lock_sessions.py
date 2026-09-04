@@ -31,6 +31,9 @@ RuntimeLockRunFinalizationId = Annotated[
     str, Field(pattern=r"^runtime-lock-run-finalization-[a-f0-9]{20}$")
 ]
 RuntimeLockComparisonId = Annotated[str, Field(pattern=r"^runtime-lock-comparison-[a-f0-9]{20}$")]
+DockerBuildId = Annotated[str, Field(pattern=r"^docker-build-[a-f0-9]{20}$")]
+ContainerMeasurementId = Annotated[str, Field(pattern=r"^container-measurement-[a-f0-9]{20}$")]
+ContainerComparisonId = Annotated[str, Field(pattern=r"^container-comparison-[a-f0-9]{20}$")]
 RuntimeLockAdapterId = Literal[
     "native_pthread",
     "java_jfr",
@@ -71,6 +74,11 @@ RuntimeLockWorkloadKind = Literal[
 RuntimeLockSessionSchemaVersion = Literal["1.0", "1.1"]
 RuntimeLockLimitation = Annotated[str, Field(min_length=1, max_length=2048)]
 RuntimeLockRunQualityStatus = Literal["complete", "partial"]
+RuntimeLockAuthorizationKind = Literal["runtime_lock_session", "docker_optimization"]
+RuntimeLockAuthorizationSessionId = Annotated[
+    str,
+    Field(pattern=r"^(?:runtime-lock-session|docker-optimization-session)-[a-f0-9]{20}$"),
+]
 
 _UNQUALIFIED_RUNTIME_LOCK_CONCLUSION = "unqualified_runtime_lock_conclusion"
 _RUNTIME_LOCK_RUN_PARTIAL_PROMOTION_WARNING_PREFIXES: dict[
@@ -594,12 +602,15 @@ class RuntimeLockAdapterExecutionBinding(ContractModel):
         tool_names = tuple(tool.name for tool in self.tools)
         _unique_sorted(tool_names, "Runtime Lock Adapter tools")
         if self.adapter_id == "java_jfr":
+            runtime_major = self.runtime_version.split(".", 1)[0]
+            tool_majors = {tool.version.split(".", 1)[0] for tool in self.tools}
             if (
                 self.backend_id != "jfr"
                 or self.profile not in {"balanced", "deep"}
                 or self.measurement_semantics != "thresholded"
                 or tool_names != ("java", "jfr")
                 or self.runtime_payload_identity_sha256 is None
+                or tool_majors != {runtime_major}
             ):
                 raise ValueError("Java JFR execution binding has unsupported controls")
             expected_threshold = 10_000_000 if self.profile == "balanced" else 1_000_000
@@ -834,9 +845,7 @@ class RuntimeLockSessionPreviewArtifact(ContractModel):
                     self.schema_version == "1.1"
                     and self.workload.adapter_id in {"cpython_threading", "go_pprof"}
                 )
-            ) and binding_ids != (
-                self.workload.adapter_id,
-            ):
+            ) and binding_ids != (self.workload.adapter_id,):
                 raise ValueError("Managed runtime workload requires one exact execution binding")
         if self.target_scope == "host_bound_process":
             if (
@@ -848,9 +857,7 @@ class RuntimeLockSessionPreviewArtifact(ContractModel):
                 or self.allowed_semantics != ("cumulative",)
                 or binding_ids != ("go_pprof",)
             ):
-                raise ValueError(
-                    "host-bound process requires one exact Go pprof cumulative target"
-                )
+                raise ValueError("host-bound process requires one exact Go pprof cumulative target")
         elif self.process_target is not None:
             raise ValueError("Only a host-bound Runtime Lock Preview may carry a process target")
         if self.target_scope in {"managed_temporary_container", "docker_optimization"} and (
@@ -969,6 +976,35 @@ class RuntimeLockSessionArtifact(ContractModel):
         return self
 
 
+class DockerRuntimeLockRunBinding(ContractModel):
+    """Existing Docker evidence that authorizes and identifies one lock Run."""
+
+    schema_version: Literal["1.1"] = "1.1"
+    docker_optimization_session_id: Annotated[
+        str, Field(pattern=r"^docker-optimization-session-[a-f0-9]{20}$")
+    ]
+    docker_optimization_session_artifact_id: Annotated[
+        str, Field(pattern=r"^docker-optimization-session-state-[a-f0-9]{20}$")
+    ]
+    docker_optimization_session_artifact_content_sha256: Sha256
+    build_id: Annotated[str, Field(pattern=r"^docker-build-[a-f0-9]{20}$")]
+    build_content_sha256: Sha256
+    container_target_id: Annotated[str, Field(pattern=r"^container-target-[a-f0-9]{20}$")]
+    container_target_content_sha256: Sha256
+    container_run_id: Annotated[str, Field(pattern=r"^container-run-[a-f0-9]{20}$")]
+    container_run_content_sha256: Sha256
+    container_measurement_id: Annotated[str, Field(pattern=r"^container-measurement-[a-f0-9]{20}$")]
+    container_measurement_content_sha256: Sha256
+    authorized_execution_identity_sha256: Sha256
+    actual_execution_binding: RuntimeLockAdapterExecutionBinding
+    actual_runtime_characteristics: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$",
+    )
+    accounted_evidence_bytes: int = Field(ge=1, le=256 << 20)
+
+
 class RuntimeLockRunArtifact(ContractModel):
     model_config = ConfigDict(
         json_schema_extra={
@@ -1018,10 +1054,12 @@ class RuntimeLockRunArtifact(ContractModel):
     created_at: str
     started_at: str
     finished_at: str
-    session_id: RuntimeLockSessionId
-    session_artifact_id: RuntimeLockSessionArtifactId
-    session_artifact_content_sha256: Sha256
-    session_revision: int = Field(ge=0)
+    authorization_kind: RuntimeLockAuthorizationKind | None = None
+    session_id: RuntimeLockAuthorizationSessionId
+    session_artifact_id: RuntimeLockSessionArtifactId | None = None
+    session_artifact_content_sha256: Sha256 | None = None
+    session_revision: int | None = Field(default=None, ge=0)
+    docker_optimization_binding: DockerRuntimeLockRunBinding | None = None
     target_scope: RuntimeLockTargetScope
     operation_identity_sha256: Sha256
     target_identity_sha256: Sha256
@@ -1055,7 +1093,15 @@ class RuntimeLockRunArtifact(ContractModel):
         if finished < started or created < finished:
             raise ValueError("Runtime Lock Run timestamps are inconsistent")
         elapsed_seconds = math.ceil((finished - started).total_seconds())
-        if self.duration_seconds != elapsed_seconds:
+        if self.authorization_kind == "docker_optimization":
+            if (
+                self.duration_seconds > elapsed_seconds
+                or elapsed_seconds - self.duration_seconds > 1
+            ):
+                raise ValueError(
+                    "Docker Runtime Lock observation interval differs from its bounded lifecycle"
+                )
+        elif self.duration_seconds != elapsed_seconds:
             raise ValueError("Runtime Lock Run duration differs from its timestamps")
         if not self.allowed_conclusions or not self.forbidden_conclusions:
             raise ValueError("Runtime Lock Run must preserve conclusion boundaries")
@@ -1080,15 +1126,51 @@ class RuntimeLockRunArtifact(ContractModel):
             raise ValueError("exact Runtime Lock Run exceeds its hard evidence bound")
         if self.schema_version == "1.0" and self.adapter_execution_identity_sha256 is not None:
             raise ValueError("Runtime Lock Run 1.0 cannot carry an Adapter execution identity")
+        standalone_session = (
+            self.session_artifact_id,
+            self.session_artifact_content_sha256,
+            self.session_revision,
+        )
+        if self.schema_version == "1.0" and (
+            self.authorization_kind is not None
+            or self.docker_optimization_binding is not None
+            or not self.session_id.startswith("runtime-lock-session-")
+        ):
+            raise ValueError("Runtime Lock Run 1.0 requires standalone Session authority")
+        if self.schema_version == "1.1" and self.authorization_kind is None:
+            raise ValueError("Runtime Lock Run 1.1 requires an explicit authorization authority")
+        if self.authorization_kind in {None, "runtime_lock_session"}:
+            if (
+                not self.session_id.startswith("runtime-lock-session-")
+                or any(item is None for item in standalone_session)
+                or self.docker_optimization_binding is not None
+            ):
+                raise ValueError("standalone Runtime Lock Run requires its Session revision")
+        elif (
+            self.schema_version != "1.1"
+            or not self.session_id.startswith("docker-optimization-session-")
+            or any(item is not None for item in standalone_session)
+            or self.target_scope != "docker_optimization"
+            or self.docker_optimization_binding is None
+            or self.docker_optimization_binding.docker_optimization_session_id != self.session_id
+        ):
+            raise ValueError("Docker Runtime Lock Run requires its outer optimization evidence")
+        if self.docker_optimization_binding is not None and (
+            self.adapter_execution_identity_sha256
+            != self.docker_optimization_binding.actual_execution_binding.execution_identity_sha256
+            or self.adapter_id
+            != self.docker_optimization_binding.actual_execution_binding.adapter_id
+            or self.measurement_semantics
+            != self.docker_optimization_binding.actual_execution_binding.measurement_semantics
+        ):
+            raise ValueError("Docker Runtime Lock Run differs from its actual execution binding")
         if (
             self.adapter_id == "java_jfr"
             or (
                 self.schema_version == "1.1"
                 and self.adapter_id in {"cpython_threading", "go_pprof"}
             )
-        ) and (
-            self.adapter_execution_identity_sha256 is None
-        ):
+        ) and (self.adapter_execution_identity_sha256 is None):
             raise ValueError("Managed runtime Run requires its authorized execution identity")
         expected = derive_runtime_lock_run_id(
             self.session_id,
@@ -1171,16 +1253,29 @@ class RuntimeLockComparisonArtifact(ContractModel):
     perflens_version: str
     comparison_id: RuntimeLockComparisonId
     created_at: str
-    session_id: RuntimeLockSessionId
+    comparison_kind: RuntimeLockAuthorizationKind | None = None
+    session_id: RuntimeLockAuthorizationSessionId
     baseline_run_id: RuntimeLockRunId
     baseline_run_content_sha256: Sha256
     candidate_run_id: RuntimeLockRunId
     candidate_run_content_sha256: Sha256
+    baseline_build_id: DockerBuildId | None = None
+    baseline_build_content_sha256: Sha256 | None = None
+    candidate_build_id: DockerBuildId | None = None
+    candidate_build_content_sha256: Sha256 | None = None
+    baseline_measurement_id: ContainerMeasurementId | None = None
+    candidate_measurement_id: ContainerMeasurementId | None = None
+    resource_comparison_id: ContainerComparisonId | None = None
+    resource_comparison_content_sha256: Sha256 | None = None
+    docker_treatment_changed: bool | None = None
+    minimum_material_change_percent: float | None = Field(default=None, ge=1.0, le=100.0)
     adapter_match: bool
     semantics_match: bool
     threshold_or_sampling_match: bool
     workload_match: bool
     resource_environment_match: bool
+    baseline_resource_environment_sha256: Sha256 | None = None
+    candidate_resource_environment_sha256: Sha256 | None = None
     baseline_quality_status: Literal["complete", "partial"]
     candidate_quality_status: Literal["complete", "partial"]
     correctness_status: Literal["passed", "failed", "unavailable"]
@@ -1212,6 +1307,56 @@ class RuntimeLockComparisonArtifact(ContractModel):
             raise ValueError("Runtime Lock comparison needs distinct Runs")
         _unique_sorted(self.improved_metrics, "Runtime Lock improved metrics")
         _unique_sorted(self.regressed_metrics, "Runtime Lock regressed metrics")
+        environment_bindings = (
+            self.baseline_resource_environment_sha256,
+            self.candidate_resource_environment_sha256,
+        )
+        docker_bindings = (
+            self.baseline_build_id,
+            self.baseline_build_content_sha256,
+            self.candidate_build_id,
+            self.candidate_build_content_sha256,
+            self.baseline_measurement_id,
+            self.candidate_measurement_id,
+            self.resource_comparison_id,
+            self.resource_comparison_content_sha256,
+            self.docker_treatment_changed,
+        )
+        if self.schema_version == "1.0" and (
+            self.comparison_kind is not None
+            or not self.session_id.startswith("runtime-lock-session-")
+            or any(item is not None for item in environment_bindings)
+            or any(item is not None for item in docker_bindings)
+            or self.minimum_material_change_percent is not None
+        ):
+            raise ValueError("Runtime Lock comparison 1.0 requires standalone Session authority")
+        if self.schema_version == "1.1":
+            if self.comparison_kind is None:
+                raise ValueError("Runtime Lock comparison 1.1 requires an explicit authority")
+            if any(item is None for item in environment_bindings):
+                raise ValueError("Runtime Lock comparison 1.1 requires replayable environments")
+            if self.minimum_material_change_percent != 1.0:
+                raise ValueError("Runtime Lock comparison 1.1 requires the fixed materiality floor")
+            if self.resource_environment_match != (
+                self.baseline_resource_environment_sha256
+                == self.candidate_resource_environment_sha256
+            ):
+                raise ValueError("Runtime Lock environment match differs from its evidence")
+            if self.comparison_kind == "docker_optimization":
+                if any(item is None for item in docker_bindings):
+                    raise ValueError(
+                        "Docker Runtime Lock comparison requires Build, measurement, and "
+                        "resource-comparison bindings"
+                    )
+            elif any(item is not None for item in docker_bindings):
+                raise ValueError("Standalone Runtime Lock comparison cannot carry Docker bindings")
+            elif self.resource_transfer_status != "incomplete":
+                raise ValueError(
+                    "Standalone Runtime Lock comparison lacks resource-transfer evidence"
+                )
+        standalone_authority = self.comparison_kind in {None, "runtime_lock_session"}
+        if standalone_authority != self.session_id.startswith("runtime-lock-session-"):
+            raise ValueError("Runtime Lock comparison authority and Session ID disagree")
         fixed_match = all(
             (
                 self.adapter_match,
@@ -1219,6 +1364,7 @@ class RuntimeLockComparisonArtifact(ContractModel):
                 self.threshold_or_sampling_match,
                 self.workload_match,
                 self.resource_environment_match,
+                self.docker_treatment_changed is not False,
             )
         )
         if self.comparable != (
@@ -1227,15 +1373,20 @@ class RuntimeLockComparisonArtifact(ContractModel):
             raise ValueError("Runtime Lock comparison comparability is inconsistent")
         if (self.conclusion == "not_comparable") == self.comparable:
             raise ValueError("Runtime Lock comparison conclusion disagrees with comparability")
-        if self.conclusion == "verified_improvement" and (
-            not self.comparable
-            or self.baseline_quality_status != "complete"
-            or self.candidate_quality_status != "complete"
-            or self.resource_transfer_status != "no_observed_regression"
-            or not self.improved_metrics
-            or self.regressed_metrics
-        ):
-            raise ValueError("verified Runtime Lock improvement lacks matched evidence")
+        if self.conclusion == "verified_improvement":
+            if self.schema_version == "1.1":
+                raise ValueError(
+                    "one Runtime Lock comparison cannot independently verify an improvement"
+                )
+            if (
+                not self.comparable
+                or self.baseline_quality_status != "complete"
+                or self.candidate_quality_status != "complete"
+                or self.resource_transfer_status != "no_observed_regression"
+                or not self.improved_metrics
+                or self.regressed_metrics
+            ):
+                raise ValueError("verified Runtime Lock improvement lacks matched evidence")
         if not self.allowed_conclusions or not self.forbidden_conclusions:
             raise ValueError("Runtime Lock comparison must preserve conclusion boundaries")
         expected = derive_runtime_lock_comparison_id(

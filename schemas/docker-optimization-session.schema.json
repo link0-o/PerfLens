@@ -99,6 +99,429 @@
       ],
       "title": "DockerOptimizationBudget",
       "type": "object"
+    },
+    "DockerRuntimeLockAuthorizationScope": {
+      "additionalProperties": false,
+      "description": "Runtime-lock authority embedded in one Docker optimization consent.\n\nThis scope is evidence, not a second authorization.  In particular it\ncontains no confirmation token and cannot be used independently of the\nenclosing Docker optimization Preview and Session.",
+      "properties": {
+        "adapter_execution_bindings": {
+          "items": {
+            "$ref": "#/$defs/RuntimeLockAdapterExecutionBinding"
+          },
+          "title": "Adapter Execution Bindings",
+          "type": "array"
+        },
+        "allowed_adapters": {
+          "items": {
+            "enum": [
+              "native_pthread",
+              "java_jfr",
+              "cpython_threading",
+              "go_pprof",
+              "generic_ndjson_import"
+            ],
+            "type": "string"
+          },
+          "title": "Allowed Adapters",
+          "type": "array"
+        },
+        "allowed_semantics": {
+          "items": {
+            "enum": [
+              "exact",
+              "thresholded",
+              "sampled",
+              "cumulative"
+            ],
+            "type": "string"
+          },
+          "title": "Allowed Semantics",
+          "type": "array"
+        },
+        "budget": {
+          "$ref": "#/$defs/RuntimeLockSessionBudget"
+        },
+        "capability_content_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Capability Content Sha256",
+          "type": "string"
+        },
+        "capability_id": {
+          "pattern": "^runtime-lock-capability-[a-f0-9]{20}$",
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "content_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "runtime_lock_config_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Runtime Lock Config Sha256",
+          "type": "string"
+        },
+        "runtime_version_constraints": {
+          "items": {
+            "$ref": "#/$defs/DockerRuntimeLockVersionConstraint"
+          },
+          "title": "Runtime Version Constraints",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.1",
+          "default": "1.1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "runtime_lock_config_sha256",
+        "capability_id",
+        "capability_content_sha256",
+        "allowed_adapters",
+        "allowed_semantics",
+        "adapter_execution_bindings",
+        "runtime_version_constraints",
+        "budget",
+        "content_sha256"
+      ],
+      "title": "DockerRuntimeLockAuthorizationScope",
+      "type": "object"
+    },
+    "DockerRuntimeLockVersionConstraint": {
+      "additionalProperties": false,
+      "description": "Explicit target-runtime versions covered by the parent Docker consent.",
+      "properties": {
+        "adapter_id": {
+          "enum": [
+            "native_pthread",
+            "java_jfr",
+            "cpython_threading",
+            "go_pprof",
+            "generic_ndjson_import"
+          ],
+          "title": "Adapter Id",
+          "type": "string"
+        },
+        "allowed_versions": {
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^(?:glibc-)?[0-9]+(?:\\.[0-9]+)*(?:\\.\\*)?$",
+            "type": "string"
+          },
+          "title": "Allowed Versions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "adapter_id",
+        "allowed_versions"
+      ],
+      "title": "DockerRuntimeLockVersionConstraint",
+      "type": "object"
+    },
+    "RuntimeLockAdapterExecutionBinding": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "adapter_id": {
+                "const": "java_jfr"
+              }
+            },
+            "required": [
+              "adapter_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "tools": {
+                "maxItems": 2,
+                "minItems": 2
+              }
+            },
+            "required": [
+              "tools",
+              "runtime_payload_identity_sha256"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "adapter_id": {
+                "const": "cpython_threading"
+              }
+            },
+            "required": [
+              "adapter_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "tools": {
+                "maxItems": 1,
+                "minItems": 1
+              }
+            },
+            "required": [
+              "tools",
+              "runtime_payload_identity_sha256"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "adapter_id": {
+                "const": "go_pprof"
+              }
+            },
+            "required": [
+              "adapter_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "tools": {
+                "maxItems": 2,
+                "minItems": 2
+              }
+            },
+            "required": [
+              "tools"
+            ]
+          }
+        }
+      ],
+      "description": "Public, path-free identity for one active Adapter configuration.",
+      "properties": {
+        "adapter_id": {
+          "enum": [
+            "native_pthread",
+            "java_jfr",
+            "cpython_threading",
+            "go_pprof",
+            "generic_ndjson_import"
+          ],
+          "title": "Adapter Id",
+          "type": "string"
+        },
+        "adapter_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Adapter Version",
+          "type": "string"
+        },
+        "backend_id": {
+          "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+          "title": "Backend Id",
+          "type": "string"
+        },
+        "configuration_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Configuration Sha256",
+          "type": "string"
+        },
+        "duration_threshold_ns": {
+          "anyOf": [
+            {
+              "maximum": 1000000000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Threshold Ns"
+        },
+        "execution_identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Execution Identity Sha256",
+          "type": "string"
+        },
+        "limitations": {
+          "default": [],
+          "items": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "measurement_semantics": {
+          "enum": [
+            "exact",
+            "thresholded",
+            "sampled",
+            "cumulative"
+          ],
+          "title": "Measurement Semantics",
+          "type": "string"
+        },
+        "metadata_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Metadata Sha256",
+          "type": "string"
+        },
+        "profile": {
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+          "title": "Profile",
+          "type": "string"
+        },
+        "runtime_payload_identity_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Payload Identity Sha256"
+        },
+        "runtime_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Runtime Version",
+          "type": "string"
+        },
+        "toolchain_identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Toolchain Identity Sha256",
+          "type": "string"
+        },
+        "tools": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RuntimeLockAdapterToolBinding"
+          },
+          "maxItems": 16,
+          "title": "Tools",
+          "type": "array"
+        }
+      },
+      "required": [
+        "adapter_id",
+        "adapter_version",
+        "backend_id",
+        "runtime_version",
+        "profile",
+        "measurement_semantics",
+        "toolchain_identity_sha256",
+        "configuration_sha256",
+        "metadata_sha256",
+        "execution_identity_sha256"
+      ],
+      "title": "RuntimeLockAdapterExecutionBinding",
+      "type": "object"
+    },
+    "RuntimeLockAdapterToolBinding": {
+      "additionalProperties": false,
+      "description": "Path-free identity of one executable used by an active Adapter.",
+      "properties": {
+        "binary_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Binary Sha256",
+          "type": "string"
+        },
+        "name": {
+          "pattern": "^[A-Za-z0-9_.+-]{1,64}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "binary_sha256"
+      ],
+      "title": "RuntimeLockAdapterToolBinding",
+      "type": "object"
+    },
+    "RuntimeLockSessionBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "hard_expiry_seconds": {
+          "default": 3600,
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Hard Expiry Seconds",
+          "type": "integer"
+        },
+        "max_active_seconds": {
+          "default": 1200,
+          "maximum": 1200,
+          "minimum": 1,
+          "title": "Max Active Seconds",
+          "type": "integer"
+        },
+        "max_adapter_concurrency": {
+          "const": 1,
+          "default": 1,
+          "title": "Max Adapter Concurrency",
+          "type": "integer"
+        },
+        "max_artifact_bytes": {
+          "default": 67108864,
+          "maximum": 67108864,
+          "minimum": 1,
+          "title": "Max Artifact Bytes",
+          "type": "integer"
+        },
+        "max_collection_duration_seconds": {
+          "default": 30,
+          "maximum": 30,
+          "minimum": 1,
+          "title": "Max Collection Duration Seconds",
+          "type": "integer"
+        },
+        "max_evidence_bytes": {
+          "default": 536870912,
+          "maximum": 536870912,
+          "minimum": 1,
+          "title": "Max Evidence Bytes",
+          "type": "integer"
+        },
+        "max_exact_duration_seconds": {
+          "default": 3,
+          "maximum": 3,
+          "minimum": 1,
+          "title": "Max Exact Duration Seconds",
+          "type": "integer"
+        },
+        "max_exact_events": {
+          "default": 20000,
+          "maximum": 20000,
+          "minimum": 1,
+          "title": "Max Exact Events",
+          "type": "integer"
+        },
+        "max_workload_runs": {
+          "default": 6,
+          "maximum": 6,
+          "minimum": 1,
+          "title": "Max Workload Runs",
+          "type": "integer"
+        }
+      },
+      "title": "RuntimeLockSessionBudget",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -251,9 +674,98 @@
       "title": "Recoverable Retries Used",
       "type": "integer"
     },
+    "runtime_lock_active_seconds_used": {
+      "anyOf": [
+        {
+          "maximum": 1200,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Lock Active Seconds Used"
+    },
+    "runtime_lock_evidence_bytes_used": {
+      "anyOf": [
+        {
+          "maximum": 536870912,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Lock Evidence Bytes Used"
+    },
+    "runtime_lock_exact_events_used": {
+      "anyOf": [
+        {
+          "maximum": 120000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Lock Exact Events Used"
+    },
+    "runtime_lock_runs_used": {
+      "anyOf": [
+        {
+          "maximum": 6,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Lock Runs Used"
+    },
+    "runtime_lock_scope": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DockerRuntimeLockAuthorizationScope"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "runtime_lock_status": {
+      "anyOf": [
+        {
+          "enum": [
+            "not_selected",
+            "active",
+            "partial",
+            "unavailable",
+            "exhausted"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Lock Status"
+    },
     "schema_version": {
-      "const": "1.0",
       "default": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },

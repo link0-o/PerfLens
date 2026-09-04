@@ -117,6 +117,9 @@ dependencies = [
 [[package]]
 name = "perflens-container-gate"
 version = "0.3.2"
+dependencies = [
+ "nix",
+]
 
 [[package]]
 name = "perflens-privileged-helper"

@@ -46,9 +46,20 @@ from perflens.contracts.docker_build import (
     DockerOptimizationBudget,
     DockerOptimizationDispositionArtifact,
     DockerOptimizationSessionArtifact,
+    DockerRuntimeLockAuthorizationScope,
     derive_docker_build_artifact_id,
     derive_docker_optimization_disposition_id,
     derive_docker_optimization_session_artifact_id,
+    docker_runtime_lock_scope_sha256,
+    docker_runtime_lock_version_constraints,
+)
+from perflens.contracts.runtime_lock_sessions import (
+    RuntimeLockAdapterExecutionBinding,
+    RuntimeLockComparisonArtifact,
+    RuntimeLockSessionBudget,
+    derive_runtime_lock_adapter_execution_identity,
+    derive_runtime_lock_comparison_id,
+    derive_runtime_lock_toolchain_identity,
 )
 from perflens.docker.comparison import (
     build_container_measurement,
@@ -411,20 +422,39 @@ def _optimization_build(
 def _optimization_session(
     baseline: DockerBuildArtifact,
     candidate: DockerBuildArtifact,
+    *,
+    runtime_lock_scope: DockerRuntimeLockAuthorizationScope | None = None,
 ) -> DockerOptimizationSessionArtifact:
     updated_at = "2026-08-22T00:00:03+00:00"
     session_id = "docker-optimization-session-" + "1" * 20
-    provisional = DockerOptimizationSessionArtifact(
-        schema_version="1.0",
-        perflens_version=__version__,
-        session_artifact_id=derive_docker_optimization_session_artifact_id(
+    if runtime_lock_scope is None:
+        session_artifact_id = derive_docker_optimization_session_artifact_id(
             session_id,
             "active",
             updated_at,
             2,
             2,
             4096,
-        ),
+        )
+    else:
+        session_artifact_id = derive_docker_optimization_session_artifact_id(
+            session_id,
+            "active",
+            updated_at,
+            2,
+            2,
+            4096,
+            runtime_lock_scope.content_sha256,
+            2,
+            1024,
+            0,
+            runtime_lock_status="active",
+            runtime_lock_active_seconds_used=2,
+        )
+    provisional = DockerOptimizationSessionArtifact(
+        schema_version=("1.1" if runtime_lock_scope is not None else "1.0"),
+        perflens_version=__version__,
+        session_artifact_id=session_artifact_id,
         session_id=session_id,
         created_at="2026-08-22T00:00:00+00:00",
         updated_at=updated_at,
@@ -463,8 +493,133 @@ def _optimization_session(
         workload_active_seconds_used=2,
         evidence_bytes_used=4096,
         temporary_image_bytes_used=8192,
+        runtime_lock_scope=runtime_lock_scope,
+        runtime_lock_status=("active" if runtime_lock_scope is not None else None),
+        runtime_lock_runs_used=(2 if runtime_lock_scope is not None else None),
+        runtime_lock_active_seconds_used=(2 if runtime_lock_scope is not None else None),
+        runtime_lock_evidence_bytes_used=(1024 if runtime_lock_scope is not None else None),
+        runtime_lock_exact_events_used=(0 if runtime_lock_scope is not None else None),
         baseline_build_id=baseline.build_id,
         latest_candidate_build_id=candidate.build_id,
+        content_sha256="0" * 64,
+    )
+    return provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+
+
+def _runtime_lock_scope() -> DockerRuntimeLockAuthorizationScope:
+    toolchain = derive_runtime_lock_toolchain_identity(())
+    binding = RuntimeLockAdapterExecutionBinding(
+        adapter_id="native_pthread",
+        adapter_version="native-pthread-adapter-v1",
+        backend_id="pthread-preload",
+        runtime_version="glibc-2.41",
+        profile="thresholded",
+        measurement_semantics="thresholded",
+        duration_threshold_ns=1_000,
+        tools=(),
+        toolchain_identity_sha256=toolchain,
+        configuration_sha256="6" * 64,
+        metadata_sha256="7" * 64,
+        execution_identity_sha256=derive_runtime_lock_adapter_execution_identity(
+            "native_pthread",
+            "native-pthread-adapter-v1",
+            "pthread-preload",
+            "glibc-2.41",
+            "thresholded",
+            "thresholded",
+            1_000,
+            toolchain,
+            "6" * 64,
+            "7" * 64,
+        ),
+    )
+    provisional = DockerRuntimeLockAuthorizationScope.model_construct(
+        schema_version="1.1",
+        runtime_lock_config_sha256="8" * 64,
+        capability_id="runtime-lock-capability-" + "9" * 20,
+        capability_content_sha256="a" * 64,
+        allowed_adapters=("native_pthread",),
+        allowed_semantics=("thresholded",),
+        adapter_execution_bindings=(binding,),
+        runtime_version_constraints=docker_runtime_lock_version_constraints((binding,)),
+        budget=RuntimeLockSessionBudget(),
+        content_sha256="0" * 64,
+    )
+    return DockerRuntimeLockAuthorizationScope.model_validate(
+        {
+            **provisional.model_dump(mode="json"),
+            "content_sha256": docker_runtime_lock_scope_sha256(provisional),
+        }
+    )
+
+
+def _runtime_lock_comparison(
+    *,
+    session: DockerOptimizationSessionArtifact,
+    baseline_build: DockerBuildArtifact,
+    candidate_build: DockerBuildArtifact,
+    baseline_measurement: ContainerMeasurementArtifact,
+    candidate_measurement: ContainerMeasurementArtifact,
+    resource_comparison: ContainerMatchedComparisonArtifact,
+    comparable: bool,
+) -> RuntimeLockComparisonArtifact:
+    created_at = "2026-08-22T00:00:05+00:00"
+    baseline_run_sha256 = "d" * 64
+    candidate_run_sha256 = "e" * 64
+    provisional = RuntimeLockComparisonArtifact(
+        schema_version="1.1",
+        perflens_version=__version__,
+        comparison_id=derive_runtime_lock_comparison_id(
+            session.session_id,
+            baseline_run_sha256,
+            candidate_run_sha256,
+            created_at,
+        ),
+        created_at=created_at,
+        comparison_kind="docker_optimization",
+        session_id=session.session_id,
+        baseline_run_id="runtime-lock-run-" + "b" * 20,
+        baseline_run_content_sha256=baseline_run_sha256,
+        candidate_run_id="runtime-lock-run-" + "c" * 20,
+        candidate_run_content_sha256=candidate_run_sha256,
+        baseline_build_id=baseline_build.build_id,
+        baseline_build_content_sha256=baseline_build.content_sha256,
+        candidate_build_id=candidate_build.build_id,
+        candidate_build_content_sha256=candidate_build.content_sha256,
+        baseline_measurement_id=baseline_measurement.measurement_id,
+        candidate_measurement_id=candidate_measurement.measurement_id,
+        resource_comparison_id=resource_comparison.comparison_id,
+        resource_comparison_content_sha256=resource_comparison.content_sha256,
+        docker_treatment_changed=True,
+        minimum_material_change_percent=1.0,
+        adapter_match=comparable,
+        semantics_match=True,
+        threshold_or_sampling_match=True,
+        workload_match=True,
+        resource_environment_match=True,
+        baseline_resource_environment_sha256="f" * 64,
+        candidate_resource_environment_sha256="f" * 64,
+        baseline_quality_status="complete",
+        candidate_quality_status="complete",
+        correctness_status="passed",
+        deterministic_replay_passed=True,
+        resource_transfer_status="no_observed_regression",
+        comparable=comparable,
+        conclusion=("no_material_change" if comparable else "not_comparable"),
+        warnings=(
+            ()
+            if comparable
+            else ("Runtime Lock Adapter or target runtime identity differs.",)
+        ),
+        allowed_conclusions=("runtime_lock_comparison",),
+        forbidden_conclusions=("verified_improvement",),
         content_sha256="0" * 64,
     )
     return provisional.model_copy(
@@ -672,6 +827,203 @@ def test_optimization_allows_verified_build_image_as_treatment(tmp_path: Path) -
         "Container environment fingerprints differ; attribution is invalid."
         not in result.warnings
     )
+
+
+def test_runtime_lock_comparison_gates_outer_verified_improvement(tmp_path: Path) -> None:
+    _, _, _, _, measurements, analyses = _measurement_pair(tmp_path)
+    baseline_build = _optimization_build(
+        kind="baseline",
+        round_number=0,
+        image_marker="d",
+        treatment_marker="1",
+    )
+    candidate_build = _optimization_build(
+        kind="candidate",
+        round_number=1,
+        image_marker="e",
+        treatment_marker="2",
+    )
+    bound_measurements = (
+        _bind_measurement_image(measurements[0], baseline_build.final_image_digest),
+        _bind_measurement_image(measurements[1], candidate_build.final_image_digest),
+    )
+    benchmarks = (
+        _benchmark("benchmark-before", (100, 101, 99), commit="before"),
+        _benchmark("benchmark-after", (120, 121, 119), commit="after"),
+    )
+    profile_comparison = compare_profiles(analyses[0], analyses[1])
+    benchmark_comparison = compare_benchmarks(benchmarks[0], benchmarks[1])
+    source = compare_container_measurements(
+        bound_measurements[0],
+        bound_measurements[1],
+        baseline_analysis=analyses[0],
+        candidate_analysis=analyses[1],
+        profile_comparison=profile_comparison,
+        baseline_benchmark=benchmarks[0],
+        candidate_benchmark=benchmarks[1],
+        benchmark_comparison=benchmark_comparison,
+        created_at=datetime(2026, 8, 22, tzinfo=UTC),
+    )
+    session = _optimization_session(
+        baseline_build,
+        candidate_build,
+        runtime_lock_scope=_runtime_lock_scope(),
+    )
+    runtime_mismatch = _runtime_lock_comparison(
+        session=session,
+        baseline_build=baseline_build,
+        candidate_build=candidate_build,
+        baseline_measurement=bound_measurements[0],
+        candidate_measurement=bound_measurements[1],
+        resource_comparison=source,
+        comparable=False,
+    )
+
+    blocked = compare_docker_optimization_iteration(
+        session=session,
+        baseline_build=baseline_build,
+        candidate_build=candidate_build,
+        baseline_measurement=bound_measurements[0],
+        candidate_measurement=bound_measurements[1],
+        baseline_analysis=analyses[0],
+        candidate_analysis=analyses[1],
+        profile_comparison=profile_comparison,
+        baseline_benchmark=benchmarks[0],
+        candidate_benchmark=benchmarks[1],
+        benchmark_comparison=benchmark_comparison,
+        source_container_comparison=source,
+        runtime_lock_comparison=runtime_mismatch,
+    )
+
+    assert not blocked.comparable
+    assert blocked.runtime_lock_status == "partial"
+    assert blocked.runtime_lock_conclusion == "not_comparable"
+    assert blocked.conclusion == "not_comparable"
+
+    runtime_no_change = _runtime_lock_comparison(
+        session=session,
+        baseline_build=baseline_build,
+        candidate_build=candidate_build,
+        baseline_measurement=bound_measurements[0],
+        candidate_measurement=bound_measurements[1],
+        resource_comparison=source,
+        comparable=True,
+    )
+    verified = compare_docker_optimization_iteration(
+        session=session,
+        baseline_build=baseline_build,
+        candidate_build=candidate_build,
+        baseline_measurement=bound_measurements[0],
+        candidate_measurement=bound_measurements[1],
+        baseline_analysis=analyses[0],
+        candidate_analysis=analyses[1],
+        profile_comparison=profile_comparison,
+        baseline_benchmark=benchmarks[0],
+        candidate_benchmark=benchmarks[1],
+        benchmark_comparison=benchmark_comparison,
+        source_container_comparison=source,
+        runtime_lock_comparison=runtime_no_change,
+    )
+
+    assert verified.runtime_lock_status == "complete"
+    assert verified.runtime_lock_conclusion == "no_material_change"
+    assert verified.conclusion == "verified_improvement"
+
+
+def test_outer_optimization_rejects_runtime_lock_evidence_splicing(tmp_path: Path) -> None:
+    _, _, _, _, measurements, analyses = _measurement_pair(tmp_path)
+    baseline_build = _optimization_build(
+        kind="baseline",
+        round_number=0,
+        image_marker="d",
+        treatment_marker="1",
+    )
+    candidate_build = _optimization_build(
+        kind="candidate",
+        round_number=1,
+        image_marker="e",
+        treatment_marker="2",
+    )
+    bound_measurements = (
+        _bind_measurement_image(measurements[0], baseline_build.final_image_digest),
+        _bind_measurement_image(measurements[1], candidate_build.final_image_digest),
+    )
+    benchmarks = (
+        _benchmark("benchmark-before", (100, 101, 99), commit="before"),
+        _benchmark("benchmark-after", (120, 121, 119), commit="after"),
+    )
+    profile_comparison = compare_profiles(analyses[0], analyses[1])
+    benchmark_comparison = compare_benchmarks(benchmarks[0], benchmarks[1])
+    source = compare_container_measurements(
+        bound_measurements[0],
+        bound_measurements[1],
+        baseline_analysis=analyses[0],
+        candidate_analysis=analyses[1],
+        profile_comparison=profile_comparison,
+        baseline_benchmark=benchmarks[0],
+        candidate_benchmark=benchmarks[1],
+        benchmark_comparison=benchmark_comparison,
+        created_at=datetime(2026, 8, 22, tzinfo=UTC),
+    )
+    session = _optimization_session(
+        baseline_build,
+        candidate_build,
+        runtime_lock_scope=_runtime_lock_scope(),
+    )
+    comparison = _runtime_lock_comparison(
+        session=session,
+        baseline_build=baseline_build,
+        candidate_build=candidate_build,
+        baseline_measurement=bound_measurements[0],
+        candidate_measurement=bound_measurements[1],
+        resource_comparison=source,
+        comparable=True,
+    )
+    splices = (
+        {"baseline_build_content_sha256": "0" * 64},
+        {"candidate_measurement_id": "container-measurement-" + "f" * 20},
+        {"resource_comparison_id": "container-comparison-" + "f" * 20},
+        {"session_id": "docker-optimization-session-" + "f" * 20},
+    )
+
+    for updates in splices:
+        if "session_id" in updates:
+            updates = {
+                **updates,
+                "comparison_id": derive_runtime_lock_comparison_id(
+                    updates["session_id"],
+                    comparison.baseline_run_content_sha256,
+                    comparison.candidate_run_content_sha256,
+                    comparison.created_at,
+                ),
+            }
+        forged = comparison.model_copy(
+            update={**updates, "content_sha256": "0" * 64}
+        )
+        forged = forged.model_copy(
+            update={
+                "content_sha256": contract_content_sha256(
+                    forged,
+                    exclude={"content_sha256"},
+                )
+            }
+        )
+        with pytest.raises(PerfLensError, match="outside this Docker optimization Session"):
+            compare_docker_optimization_iteration(
+                session=session,
+                baseline_build=baseline_build,
+                candidate_build=candidate_build,
+                baseline_measurement=bound_measurements[0],
+                candidate_measurement=bound_measurements[1],
+                baseline_analysis=analyses[0],
+                candidate_analysis=analyses[1],
+                profile_comparison=profile_comparison,
+                baseline_benchmark=benchmarks[0],
+                candidate_benchmark=benchmarks[1],
+                benchmark_comparison=benchmark_comparison,
+                source_container_comparison=source,
+                runtime_lock_comparison=forged,
+            )
 
 
 def test_optimization_rejects_fixed_build_change_and_partial_profile(tmp_path: Path) -> None:

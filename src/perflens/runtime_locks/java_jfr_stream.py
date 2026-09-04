@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.runtime_locks.java_jfr_models import (
     JfrDataLossEvent,
+    JfrJvmInformationEvent,
     JfrLockEvent,
     JfrPrivateEvent,
     JfrStreamIdentity,
@@ -150,6 +151,8 @@ def _decode_event(raw: bytes) -> JfrPrivateEvent:
         typed = cast(dict[str, Any], value)
         if typed.get("type") == "jdk.DataLoss":
             return JfrDataLossEvent.model_validate(typed)
+        if typed.get("type") == "jdk.JVMInformation":
+            return JfrJvmInformationEvent.model_validate(typed)
         return JfrLockEvent.model_validate(typed)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError, ValidationError):
         raise _invalid("JFR event failed strict validation") from None
@@ -169,7 +172,13 @@ _KNOWN_NESTED_KEYS = frozenset(
         "group",
         "hidden",
         "javaName",
+        "javaArguments",
         "javaThreadId",
+        "jvmArguments",
+        "jvmFlags",
+        "jvmName",
+        "jvmStartTime",
+        "jvmVersion",
         "lineNumber",
         "location",
         "method",
@@ -183,6 +192,7 @@ _KNOWN_NESTED_KEYS = frozenset(
         "package",
         "parent",
         "parkedClass",
+        "pid",
         "previousOwner",
         "stackTrace",
         "startTime",

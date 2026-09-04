@@ -1284,7 +1284,7 @@ mod tests {
         let receipt = run_native_case(
             &["-c", "trap '' TERM; while :; do sleep 1; done"],
             5_000,
-            Some(Duration::from_millis(500)),
+            Some(Duration::from_secs(3)),
         );
         assert_eq!(receipt.termination_reason, TerminationReason::ParentLost);
         assert!(receipt.cleanup_complete);
@@ -1563,9 +1563,21 @@ mod tests {
             },
         };
         write_json_frame(request_write, &request);
-        if let Some(delay) = close_liveness_after {
+        if let Some(child_start_timeout) = close_liveness_after {
+            let existing_children =
+                super::process::direct_child_identities(std::process::id(), false)
+                    .expect("snapshot children before liveness test");
             thread::spawn(move || {
-                thread::sleep(delay);
+                let deadline = std::time::Instant::now() + child_start_timeout;
+                loop {
+                    let child_started =
+                        super::process::direct_child_identities(std::process::id(), false)
+                            .is_ok_and(|children| children != existing_children);
+                    if child_started || std::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
                 super::sys::close_fd(liveness_write);
             });
         }

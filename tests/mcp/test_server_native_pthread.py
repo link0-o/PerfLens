@@ -288,8 +288,7 @@ def test_native_docker_preview_is_rejected_before_authorization(
                 },
             )
             assert rejected.is_error
-            assert "not implemented" in str(rejected.content)
-            assert "Stage 7" in str(rejected.content)
+            assert "parent Docker Preview" in str(rejected.content)
             assert not list(artifacts.glob("*.runtime-lock-preview.json"))
 
             controlled_import = await client.call_tool(

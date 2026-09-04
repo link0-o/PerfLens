@@ -21,7 +21,7 @@ use crate::execution::{
     prepare_production_environment,
 };
 
-pub const HELPER_SCHEMA_VERSION: &str = "1.3";
+pub const HELPER_SCHEMA_VERSION: &str = "1.4";
 pub const MAX_HELPER_MESSAGE_BYTES: usize = 64 << 10;
 pub const MAX_HELPER_PLAN_TTL_MILLISECONDS: u64 = 120_000;
 pub const MAX_HELPER_DURATION_MILLISECONDS: u64 = 86_400_000;
@@ -99,6 +99,8 @@ pub struct ContainerTargetBinding {
     pub container_pid: u32,
     pub host_pid: u32,
     pub host_uid: u32,
+    pub container_uid: Option<u32>,
+    pub uid_map_sha256: Option<String>,
     pub host_start_time_ticks: u64,
     pub executable_name: String,
     pub namespace: ContainerNamespaceBinding,
@@ -520,6 +522,16 @@ fn target_allowed_by_policy(
                 && !container.rootful_risk_authorized
         });
     }
+    if target.target_runtime == TargetRuntime::Docker
+        && target.container.as_ref().is_some_and(|container| {
+            container.uid_mapping == DockerUidMapping::RootlessSameUid
+                && !container.rootful_risk_authorized
+                && container.container_uid.is_some()
+                && container.uid_map_sha256.is_some()
+        })
+    {
+        return true;
+    }
     allow_rootful_container_targets
         && target.target_runtime == TargetRuntime::Docker
         && target.uid == 0
@@ -741,7 +753,11 @@ fn validate_target(target: &HelperTarget, caller_uid: u32) -> Result<(), Protoco
                     container.rootful_risk_authorized && target.uid == 0 && caller_uid != target.uid
                 }
                 DockerUidMapping::RootlessSameUid | DockerUidMapping::RootfulSameUid => {
-                    !container.rootful_risk_authorized && caller_uid == target.uid
+                    !container.rootful_risk_authorized
+                        && (caller_uid == target.uid
+                            || (container.uid_mapping == DockerUidMapping::RootlessSameUid
+                                && container.container_uid.is_some()
+                                && container.uid_map_sha256.is_some()))
                 }
             };
             let hashes = [
@@ -752,6 +768,14 @@ fn validate_target(target: &HelperTarget, caller_uid: u32) -> Result<(), Protoco
                 &container.cgroup.identity_sha256,
                 &container.adapter_sha256,
             ];
+            let uid_map_fields_match = container.container_uid.is_some()
+                == container.uid_map_sha256.is_some()
+                && container
+                    .uid_map_sha256
+                    .as_ref()
+                    .is_none_or(|value| valid_sha256(value))
+                && (container.uid_mapping != DockerUidMapping::RootfulCrossUid
+                    || container.container_uid.is_none_or(|uid| uid == 0));
             if container.host_pid != target.pid
                 || container.host_uid != target.uid
                 || container.host_start_time_ticks != target.start_time_ticks
@@ -772,6 +796,7 @@ fn validate_target(target: &HelperTarget, caller_uid: u32) -> Result<(), Protoco
                     .any(|byte| byte == b'/' || byte < 0x20 || byte == 0x7f)
                 || !recipe_matches
                 || !risk_matches
+                || !uid_map_fields_match
             {
                 return Err(schema_error());
             }
@@ -969,6 +994,10 @@ mod tests {
                 "../../../tests/fixtures/privileged_helper/valid/docker-rootful-stat.jsonl"
             )
             .as_slice(),
+            include_bytes!(
+                "../../../tests/fixtures/privileged_helper/valid/docker-rootless-subordinate-stat.jsonl"
+            )
+            .as_slice(),
         ];
         let parsed = fixtures
             .iter()
@@ -980,6 +1009,7 @@ mod tests {
         assert!(matches!(parsed[2], HelperRequest::CollectPid { .. }));
         assert!(matches!(parsed[3], HelperRequest::CollectPid { .. }));
         assert!(matches!(parsed[4], HelperRequest::CollectPid { .. }));
+        assert!(matches!(parsed[5], HelperRequest::CollectPid { .. }));
     }
 
     #[test]
@@ -1090,6 +1120,14 @@ mod tests {
                 "../../../tests/fixtures/privileged_helper/invalid/managed-without-readiness.jsonl"
             )
             .as_slice(),
+            include_bytes!(
+                "../../../tests/fixtures/privileged_helper/invalid/rootless-subordinate-without-uid-map.jsonl"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../tests/fixtures/privileged_helper/invalid/incomplete-uid-map-binding.jsonl"
+            )
+            .as_slice(),
             include_bytes!("../../../tests/fixtures/privileged_helper/invalid/expired.jsonl")
                 .as_slice(),
             include_bytes!(
@@ -1120,7 +1158,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_or_multiple_frame_terminators() {
-        let frame = br#"{"schema_version":"1.3","operation":"health","request_id":"request-0123456789abcdef"}"#;
+        let frame = br#"{"schema_version":"1.4","operation":"health","request_id":"request-0123456789abcdef"}"#;
         let error = parse_request_frame(frame, NOW_MILLISECONDS).expect_err("newline is required");
         assert_eq!(error.kind(), ProtocolErrorKind::Frame);
 
@@ -1152,7 +1190,7 @@ mod tests {
             .expect("server join")
             .expect("server response");
         assert!(response.ends_with('\n'));
-        assert!(response.contains("\"schema_version\":\"1.3\""));
+        assert!(response.contains("\"schema_version\":\"1.4\""));
         assert!(response.contains("\"privilege_mode\":\"paranoid3_helper\""));
         assert!(!response.contains("profile"));
     }

@@ -49,6 +49,7 @@ from perflens.contracts.docker import (
 from perflens.contracts.docker_build import DockerOptimizationIterationArtifact
 from perflens.docker.capability import discover_docker_capability
 from perflens.docker.project_config import render_default_docker_project_policy
+from perflens.docker.workload import inspect_managed_project_root
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.server import (
     ServerConfig,
@@ -58,8 +59,14 @@ from perflens.mcp.server import (
     create_server,
 )
 from perflens.mcp.storage import ArtifactStore, PathPolicy
-from perflens.runtime_locks import import_runtime_lock_ndjson
+from perflens.runtime_locks import NativeLaunchCapability, import_runtime_lock_ndjson
+from perflens.runtime_locks.capability import inspect_runtime_lock_capability
+from perflens.runtime_locks.native_launcher import (
+    NativePthreadProbeDiscovery,
+    NativePthreadProbePolicy,
+)
 from perflens.runtime_locks.project_config import (
+    load_runtime_lock_project_policy,
     render_default_runtime_lock_project_policy,
 )
 
@@ -450,6 +457,7 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "compare_profiles",
                 "compare_benchmarks",
                 "compare_container_measurements",
+                "compare_runtime_lock_analyses",
                 "compare_docker_optimization_iterations",
                 "finalize_docker_optimization_candidate",
                 "collect_profile",
@@ -550,6 +558,9 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["compare_container_measurements"].meta == {
                 "perflens/permission": "WRITES_ARTIFACTS"
             }
+            assert tools["compare_runtime_lock_analyses"].meta == {
+                "perflens/permission": "WRITES_ARTIFACTS"
+            }
             assert tools["compare_docker_optimization_iterations"].meta == {
                 "perflens/permission": "WRITES_ARTIFACTS"
             }
@@ -605,6 +616,11 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             optimization_collection = tools["collect_docker_optimization_workload"].input_schema[
                 "properties"
             ]
+            assert {
+                "runtime_lock_adapter",
+                "runtime_lock_max_events",
+                "runtime_lock_go_profile_kind",
+            }.issubset(optimization_collection)
             assert not {
                 "image",
                 "entrypoint",
@@ -613,6 +629,9 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "network",
                 "docker_options",
                 "source_path",
+                "environment",
+                "runtime_lock_payload",
+                "runtime_lock_output_path",
             }.intersection(optimization_collection)
             optimization_comparison = tools["compare_docker_optimization_iterations"].input_schema[
                 "properties"
@@ -1667,6 +1686,254 @@ def test_docker_optimization_collection_failure_is_charged_and_stops_session(
     assert len(adapter.cleaned) == 1
 
 
+def test_docker_optimization_confirmation_binds_runtime_lock_without_second_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.unit.test_docker_optimization_runtime import make_optimization_runtime
+
+    runtime, project, adapter = make_optimization_runtime(tmp_path)
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    runtime_policy_path = project / "runtime-locks.toml"
+    runtime_policy_path.write_text(
+        render_default_runtime_lock_project_policy(docker_enabled=True),
+        encoding="utf-8",
+    )
+    runtime_policy_path.chmod(0o600)
+    runtime_policy = load_runtime_lock_project_policy(
+        runtime_policy_path,
+        allowed_roots=(project,),
+        invoking_uid=os.geteuid(),
+    )
+    project_identity = inspect_managed_project_root(
+        project,
+        invoking_uid=os.geteuid(),
+    )
+    capability = inspect_runtime_lock_capability(
+        runtime_policy,
+        project_identity_sha256=project_identity.identity_sha256,
+        native_pthread_capability=NativeLaunchCapability(
+            target_scope="host_launched_workload",
+            launch_backend="host_launcher",
+            availability="available",
+            target_identity_sha256=None,
+            target_label="native-pthread",
+            probe_sha256="2" * 64,
+            runtime_glibc_version="2.41",
+            supported_semantics=("exact", "thresholded"),
+            supported_lock_surfaces=("condition", "mutex", "rwlock_read", "rwlock_write"),
+            limitations=("Only an explicitly launched workload is visible.",),
+        ),
+    )
+    probe = project / "libperflens-pthread-probe.so"
+    probe.write_bytes(b"fixed packaged probe")
+    probe.chmod(0o644)
+    probe_policy = NativePthreadProbePolicy(
+        path=probe,
+        sha256=hashlib.sha256(probe.read_bytes()).hexdigest(),
+        owner_uid=os.geteuid(),
+    )
+    probe_discovery = NativePthreadProbeDiscovery(
+        availability="available",
+        policy=probe_policy,
+        identity=None,
+        limitations=(),
+    )
+
+    def reject_internal_session(*_args: object, **_kwargs: object) -> None:
+        raise PerfLensError(
+            ErrorCode.EXTERNAL_TOOL_FAILED,
+            "perf_control",
+            "Synthetic post-authorization collection stop",
+            recoverable=True,
+        )
+
+    monkeypatch.setattr(
+        "perflens.mcp.server.discover_native_pthread_probe_policy",
+        lambda: probe_discovery,
+    )
+    monkeypatch.setattr(
+        "perflens.mcp.server.ExistingDockerRuntime.authorize_optimization_build",
+        reject_internal_session,
+    )
+    server = create_server(
+        ServerConfig(
+            (tmp_path,),
+            artifact_root,
+            allow_writes=True,
+            allow_process_execution=True,
+            allow_active_collection=True,
+            allow_automatic_collection=True,
+            allow_docker_targets=True,
+            allow_docker_optimization=True,
+            allow_runtime_locks=True,
+            docker_project_config=project / "container-workload.toml",
+            runtime_lock_project_config=runtime_policy_path,
+            collector_socket=tmp_path / "collector.sock",
+            automatic_collection_policy=AutomaticCollectionPolicy(
+                enabled=True,
+                allowed_modes=("stat", "record"),
+            ),
+            docker_optimization_runtime_factory=lambda: runtime,
+            runtime_lock_capability_factory=lambda: capability,
+        )
+    )
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            preview_result = await client.call_tool(
+                "preview_docker_optimization_session",
+                {
+                    "allowed_modes": ["stat", "record"],
+                    "runtime_lock_adapters": ["native_pthread"],
+                },
+            )
+            assert not preview_result.is_error, str(preview_result.content)
+            preview = _structured(preview_result)
+            assert preview["schema_version"] == "1.1"
+            assert preview["runtime_lock_scope"]["allowed_adapters"] == [
+                "native_pthread"
+            ]
+            session = _structured(
+                await client.call_tool(
+                    "authorize_docker_optimization_session",
+                    {
+                        "preview_id": preview["preview_id"],
+                        "preview_content_sha256": preview["content_sha256"],
+                        "authorization_summary_sha256": preview[
+                            "authorization_summary_sha256"
+                        ],
+                        "authorization": (
+                            "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
+                        ),
+                    },
+                )
+            )
+            assert session["runtime_lock_scope"]["content_sha256"] == preview[
+                "runtime_lock_scope"
+            ]["content_sha256"]
+            baseline = _structured(
+                await client.call_tool(
+                    "build_docker_optimization_candidate",
+                    {
+                        "session_id": session["session_id"],
+                        "build_kind": "baseline",
+                        "candidate_round": 0,
+                    },
+                )
+            )
+            failed = await client.call_tool(
+                "collect_docker_optimization_workload",
+                {
+                    "session_id": session["session_id"],
+                    "build_id": baseline["artifact_id"],
+                    "mode": "stat",
+                    "duration_seconds": 1,
+                    "workload_timeout_seconds": 3,
+                    "max_output_bytes": 1 << 20,
+                    "runtime_lock_adapter": "native_pthread",
+                    "runtime_lock_max_events": 100,
+                },
+            )
+            assert failed.is_error
+            assert "Synthetic post-authorization collection stop" in str(failed.content)
+            current = runtime.snapshot(cast(str, session["session_id"]))
+            assert current.workload_runs_used == 1
+            assert current.runtime_lock_runs_used == 0
+            assert current.runtime_lock_status == "unavailable"
+
+    asyncio.run(exercise())
+    assert not tuple(artifact_root.glob("*.runtime-lock-session.json"))
+    assert len(adapter.cleaned) == 1
+
+
+def test_docker_optimization_rejects_runtime_lock_outside_parent_preview_without_charge(
+    tmp_path: Path,
+) -> None:
+    from tests.unit.test_docker_optimization_runtime import make_optimization_runtime
+
+    runtime, project, adapter = make_optimization_runtime(tmp_path)
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    server = create_server(
+        ServerConfig(
+            (tmp_path,),
+            artifact_root,
+            allow_writes=True,
+            allow_process_execution=True,
+            allow_active_collection=True,
+            allow_automatic_collection=True,
+            allow_docker_targets=True,
+            allow_docker_optimization=True,
+            docker_project_config=project / "container-workload.toml",
+            collector_socket=tmp_path / "collector.sock",
+            automatic_collection_policy=AutomaticCollectionPolicy(
+                enabled=True,
+                allowed_modes=("stat", "record"),
+            ),
+            docker_optimization_runtime_factory=lambda: runtime,
+        )
+    )
+
+    async def exercise() -> None:
+        async with Client(server) as client:
+            preview = _structured(
+                await client.call_tool(
+                    "preview_docker_optimization_session",
+                    {"allowed_modes": ["stat", "record"]},
+                )
+            )
+            assert preview["schema_version"] == "1.0"
+            assert preview["runtime_lock_scope"] is None
+            session = _structured(
+                await client.call_tool(
+                    "authorize_docker_optimization_session",
+                    {
+                        "preview_id": preview["preview_id"],
+                        "preview_content_sha256": preview["content_sha256"],
+                        "authorization_summary_sha256": preview[
+                            "authorization_summary_sha256"
+                        ],
+                        "authorization": (
+                            "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
+                        ),
+                    },
+                )
+            )
+            baseline = _structured(
+                await client.call_tool(
+                    "build_docker_optimization_candidate",
+                    {
+                        "session_id": session["session_id"],
+                        "build_kind": "baseline",
+                        "candidate_round": 0,
+                    },
+                )
+            )
+            rejected = await client.call_tool(
+                "collect_docker_optimization_workload",
+                {
+                    "session_id": session["session_id"],
+                    "build_id": baseline["artifact_id"],
+                    "mode": "stat",
+                    "duration_seconds": 1,
+                    "workload_timeout_seconds": 3,
+                    "max_output_bytes": 1 << 20,
+                    "runtime_lock_adapter": "native_pthread",
+                },
+            )
+            assert rejected.is_error
+            assert "outside the parent Docker authorization" in str(rejected.content)
+            current = runtime.snapshot(cast(str, session["session_id"]))
+            assert current.workload_runs_used == 0
+            assert current.runtime_lock_runs_used is None
+
+    asyncio.run(exercise())
+    assert not tuple(artifact_root.glob("*.runtime-lock-*.json"))
+    assert len(adapter.cleaned) == 1
+
+
 def test_docker_target_resolution_authorization_and_revocation_are_typed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2445,11 +2712,11 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
                 "broker",
                 "cgroup-2",
                 "release",
+                "wait",
+                "benchmark",
                 "cgroup-3",
                 "resource",
                 "cgroup-close",
-                "wait",
-                "benchmark",
                 "cleanup",
                 "finish",
             ]
@@ -2491,11 +2758,9 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
                 "broker",
                 "cgroup-2",
                 "release",
-                "cgroup-3",
-                "resource",
-                "cgroup-close",
                 "module-snapshot",
                 "module-root-close",
+                "cgroup-close",
                 "cleanup",
                 "finish",
             ]
@@ -2526,10 +2791,8 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
                 "broker",
                 "cgroup-2",
                 "release",
-                "cgroup-3",
-                "resource",
-                "cgroup-close",
                 "module-snapshot",
+                "cgroup-close",
                 "cleanup",
                 "finish",
             ]

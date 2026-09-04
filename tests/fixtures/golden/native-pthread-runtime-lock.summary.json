@@ -1,12 +1,12 @@
 {
   "analysis": {
-    "analysis_fingerprint": "eeb07eeff0cbbfe076ab115155a5da9bbe15eb98866c0386bdd1cd26bf9ef990",
+    "analysis_fingerprint": "d397e3bd3f154153e217d7eb9e9beac7f46633d35aadee8110c3ab71da8f727a",
     "content_bytes": 14094,
-    "content_sha256": "9cc96e06868d5f6ca7cb85ceabb6062399eef1f6a90e46d2a45eed21b21fa9a2",
+    "content_sha256": "843f2a3310ab134e8323c889f5014a05802fa3f40a53a1bc3fa1837fb3b0aff3",
     "measurement_semantics": "exact",
     "projection_sha256": "2ce98d609e599060d1bf19d0a8639fb0e92af02fdcbc2828e11eb1cf7a9d75ff",
     "quality_status": "complete",
-    "runtime_lock_analysis_id": "runtime-lock-analysis-eeb07eeff0cbbfe0",
+    "runtime_lock_analysis_id": "runtime-lock-analysis-d397e3bd3f154153",
     "totals": {
       "exact_hold_count": 3,
       "exact_hold_ns": 90,
@@ -22,9 +22,9 @@
       "observed_runtime_wait_distribution",
       "observed_runtime_hold_distribution"
     ],
-    "content_bytes": 8180,
-    "content_sha256": "8267cac34544edf6dc82638be30c1295874d57a1b22da468d06af18f2ed912d7",
-    "evidence_fingerprint": "6a32cad41bc8ba0e916c774d1647e5468fff94a0af44c6dda06d7d10791d3604",
+    "content_bytes": 8217,
+    "content_sha256": "abd146358b2486f7db9f61bfa5fcd2174f100399d3b56137c9c8abbd2b7e0438",
+    "evidence_fingerprint": "ecc830d398db8fa11ad3d24c95976791c5f88ef66421324aac3d02c0f7e8b914",
     "forbidden_conclusions": [
       "performance_root_cause",
       "verified_improvement",
@@ -70,13 +70,14 @@
         "epoch_correlation_available": false,
         "unit": "nanoseconds"
       },
-      "conversion_fingerprint": "f4ad90d85daca332b03bf23b03b1506516ba4cc8b741b1c0550c498fc3b9bf3c",
+      "conversion_fingerprint": "5c93285c5ce397d9f575ad0ba946be29dcc8e27d758d5e69413ebbfa695bc55c",
       "converter_version": "native-pthread-converter-v1",
       "fast_path_visibility": "complete",
       "hold_time_is_source_observed": true,
       "measurement_semantics": "exact",
       "owner_is_source_observed": false,
       "runtime": "c_cpp",
+      "runtime_version": "glibc-2.41",
       "schema_version": "1.1",
       "source_bytes": 4345,
       "source_format": "native_interposer_ndjson_v1",
@@ -153,13 +154,13 @@
         "status": "passed"
       }
     ],
-    "content_sha256": "5476a7625e14b20bb54789dd56a2b49410cb09a97d435a63ef1e3c435fc0e61c",
+    "content_sha256": "772a80ff87190c1b2ef87f766099aef5f312a98dd3b5a7b645157cc71766e64f",
     "created_at": "2026-08-30T00:00:00+00:00",
-    "runtime_lock_analysis_content_sha256": "9cc96e06868d5f6ca7cb85ceabb6062399eef1f6a90e46d2a45eed21b21fa9a2",
-    "runtime_lock_analysis_id": "runtime-lock-analysis-eeb07eeff0cbbfe0",
-    "runtime_lock_evidence_content_sha256": "8267cac34544edf6dc82638be30c1295874d57a1b22da468d06af18f2ed912d7",
+    "runtime_lock_analysis_content_sha256": "843f2a3310ab134e8323c889f5014a05802fa3f40a53a1bc3fa1837fb3b0aff3",
+    "runtime_lock_analysis_id": "runtime-lock-analysis-d397e3bd3f154153",
+    "runtime_lock_evidence_content_sha256": "abd146358b2486f7db9f61bfa5fcd2174f100399d3b56137c9c8abbd2b7e0438",
     "runtime_lock_evidence_id": "runtime-lock-evidence-87a8878b377a498ef687b3b5",
-    "runtime_lock_verification_id": "runtime-lock-verification-d0f255c9e1401eaf",
+    "runtime_lock_verification_id": "runtime-lock-verification-8e2ba760dd54e112",
     "schema_version": "1.1",
     "verification_status": "partial",
     "verifier_version": "runtime-lock-verifier-v2"

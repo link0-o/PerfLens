@@ -171,8 +171,21 @@ def test_trace_coordinator_preserves_complete_docker_target_binding() -> None:
     assert _trace_helper_target_from_plan(plan) == request.target
 
 
-def _docker_plan(mode: TraceMode, *, rootful: bool = False) -> CollectionPlanArtifact:
-    fixture_name = "docker-rootful-sched.jsonl" if rootful else "docker-sched.jsonl"
+def _docker_plan(
+    mode: TraceMode,
+    *,
+    rootful: bool = False,
+    rootless_subordinate: bool = False,
+) -> CollectionPlanArtifact:
+    fixture_name = (
+        "docker-rootful-sched.jsonl"
+        if rootful
+        else (
+            "docker-rootless-subordinate-sched.jsonl"
+            if rootless_subordinate
+            else "docker-sched.jsonl"
+        )
+    )
     fixture = Path(__file__).parents[1] / "fixtures/trace_helper/valid" / fixture_name
     request = parse_trace_helper_request_frame(
         fixture.read_bytes(),
@@ -350,6 +363,19 @@ def test_trace_coordinator_requires_dedicated_rootful_grant(
     )
     assert evidence.target.target_uid == 0
     assert evidence.target.container_target == plan.container_target
+
+
+def test_trace_coordinator_authorizes_rootless_subordinate_uid_binding(
+    tmp_path: Path,
+) -> None:
+    plan = _docker_plan("sched", rootless_subordinate=True)
+    coordinator = _coordinator(tmp_path, plan, allowed_uid=1000)
+
+    coordinator._authorize(1000, plan)
+
+    assert plan.target_uid == 101_000
+    assert plan.container_target is not None
+    assert plan.container_target.container_uid == 1001
 
 
 def test_trace_client_rejects_public_evidence_digest_tampering(tmp_path: Path) -> None:

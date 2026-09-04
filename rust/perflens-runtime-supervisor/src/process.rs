@@ -143,6 +143,11 @@ pub fn supervise(
     liveness_fd: RawFd,
     signal_boundary: &SupervisorSignalBoundary,
 ) -> Result<SupervisorReceipt, SupervisorError> {
+    let initial_privileges = sys::process_privilege_state()?;
+    validate_process_active_privilege_state(initial_privileges)?;
+    if initial_privileges.inheritable_capabilities != 0 {
+        sys::clear_inheritable_capabilities()?;
+    }
     validate_process_privilege_state(sys::process_privilege_state()?)?;
     set_child_subreaper()?;
     set_nonblocking(liveness_fd)?;
@@ -246,6 +251,28 @@ fn validate_process_privilege_state(
         return Err(SupervisorError::new(
             "privilege_boundary_violation",
             "runtime supervisor requires one non-root UID/GID identity and empty capability sets",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_process_active_privilege_state(
+    state: sys::ProcessPrivilegeState,
+) -> Result<(), SupervisorError> {
+    let identity_is_ordinary = state.effective_uid != 0
+        && state.effective_gid != 0
+        && state.real_uid == state.effective_uid
+        && state.saved_uid == state.effective_uid
+        && state.real_gid == state.effective_gid
+        && state.saved_gid == state.effective_gid;
+    if !identity_is_ordinary
+        || state.effective_capabilities != 0
+        || state.permitted_capabilities != 0
+        || state.ambient_capabilities != 0
+    {
+        return Err(SupervisorError::new(
+            "privilege_boundary_violation",
+            "runtime supervisor requires one non-root UID/GID identity and no active capabilities",
         ));
     }
     Ok(())
@@ -1603,7 +1630,7 @@ fn is_would_block(error: &io::Error) -> bool {
 mod tests {
     use super::{
         direct_child_identities, enforce_two_monitored_file_bounds, read_process_identity,
-        validate_process_privilege_state,
+        validate_process_active_privilege_state, validate_process_privilege_state,
     };
     use crate::sys::ProcessPrivilegeState;
     use std::fs::{self, OpenOptions};
@@ -1634,6 +1661,11 @@ mod tests {
             ambient_capabilities: 0,
         };
         validate_process_privilege_state(ordinary).expect("ordinary unprivileged identity");
+        validate_process_active_privilege_state(ProcessPrivilegeState {
+            inheritable_capabilities: 1,
+            ..ordinary
+        })
+        .expect("inheritable-only capabilities are dropped before supervision");
 
         let mut invalid = Vec::new();
         invalid.push(ProcessPrivilegeState {

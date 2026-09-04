@@ -627,7 +627,7 @@ def inspect_managed_native_pthread_capability(
     *,
     probe_policy: NativePthreadProbePolicy | None,
 ) -> NativeLaunchCapability:
-    """Describe a managed target without claiming the unimplemented active Docker path."""
+    """Describe one managed target for the typed Gate-based Docker launch path."""
 
     if probe_policy is None:
         return NativeLaunchCapability(
@@ -642,42 +642,46 @@ def inspect_managed_native_pthread_capability(
             supported_lock_surfaces=(),
             limitations=(
                 "The packaged Native pthread probe is unavailable.",
-                "Active managed-Docker Native pthread collection is not implemented before the "
-                "separately reviewed Stage 7 integration.",
                 "Controlled Runtime Lock import and deterministic analysis remain available.",
             ),
         )
     probe = inspect_native_pthread_probe(probe_policy)
     limitations = [
-        "Active managed-Docker Native pthread collection is not implemented before the "
-        "separately reviewed Stage 7 integration.",
-        "This compatibility inspection does not authorize, launch, instrument, or collect from "
-        "the described container target.",
-        "Controlled Runtime Lock import and deterministic analysis remain available.",
+        "This compatibility inspection does not authorize or launch the described container; "
+        "the parent Docker optimization Preview supplies that authority.",
         "Container identity, executable digest, namespace, and cgroup must be "
         "revalidated by the managed-Docker layer for every run.",
         "This Native adapter never receives the Docker Socket or arbitrary Docker arguments.",
         *_NATIVE_RUNTIME_LIMITATIONS,
         *_NATIVE_PROVENANCE_LIMITATIONS,
     ]
+    compatible = True
     if not target.dynamically_linked:
+        compatible = False
         limitations.append("Static pthread targets cannot be instrumented with LD_PRELOAD.")
     elif target.libc_family != "glibc":
+        compatible = False
         limitations.append("Only glibc pthread targets are supported; musl is unsupported.")
     elif target.glibc_version not in _SUPPORTED_GLIBC_RUNTIMES:
+        compatible = False
         limitations.append("The container glibc runtime is outside the 2.36/2.41 matrix.")
     elif target.interpreter not in _SUPPORTED_INTERPRETERS:
+        compatible = False
         limitations.append("The container dynamic loader is outside the reviewed amd64 matrix.")
     return NativeLaunchCapability(
         target_scope="managed_temporary_container",
         launch_backend="managed_docker",
-        availability="unavailable",
+        availability=("available" if compatible else "unavailable"),
         target_identity_sha256=target.target_identity_sha256,
         target_label=target.executable_path,
         probe_sha256=probe.sha256,
         runtime_glibc_version=target.glibc_version,
-        supported_semantics=(),
-        supported_lock_surfaces=(),
+        supported_semantics=(("exact", "thresholded") if compatible else ()),
+        supported_lock_surfaces=(
+            ("condition", "mutex", "rwlock_read", "rwlock_write")
+            if compatible
+            else ()
+        ),
         limitations=tuple(limitations),
     )
 

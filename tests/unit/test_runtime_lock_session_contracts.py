@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from perflens.contracts.runtime_lock_sessions import (
+    DockerRuntimeLockRunBinding,
     RuntimeLockAdapterCapabilityReference,
     RuntimeLockAdapterExecutionBinding,
     RuntimeLockAdapterToolBinding,
@@ -28,6 +29,7 @@ from perflens.contracts.runtime_lock_sessions import (
     derive_runtime_lock_toolchain_identity,
     derive_runtime_lock_workload_identity,
 )
+from perflens.runtime_locks.docker_capture import bind_observed_runtime_execution
 
 _ZERO = "0" * 64
 _ONE = "1" * 64
@@ -185,6 +187,45 @@ def _go_binding() -> RuntimeLockAdapterExecutionBinding:
     )
 
 
+def _cpython_binding() -> RuntimeLockAdapterExecutionBinding:
+    tools = (
+        RuntimeLockAdapterToolBinding(
+            name="python",
+            version="3.13.5",
+            binary_sha256=_FOUR,
+        ),
+    )
+    toolchain_identity = derive_runtime_lock_toolchain_identity(tools)
+    execution_identity = derive_runtime_lock_adapter_execution_identity(
+        "cpython_threading",
+        "cpython-threading-adapter-v1",
+        "threading-bootstrap",
+        "3.12-or-3.13",
+        "thresholded",
+        "thresholded",
+        10_000,
+        toolchain_identity,
+        _TWO,
+        _THREE,
+        _FOUR,
+    )
+    return RuntimeLockAdapterExecutionBinding(
+        adapter_id="cpython_threading",
+        adapter_version="cpython-threading-adapter-v1",
+        backend_id="threading-bootstrap",
+        runtime_version="3.12-or-3.13",
+        profile="thresholded",
+        measurement_semantics="thresholded",
+        duration_threshold_ns=10_000,
+        tools=tools,
+        toolchain_identity_sha256=toolchain_identity,
+        configuration_sha256=_TWO,
+        metadata_sha256=_THREE,
+        runtime_payload_identity_sha256=_FOUR,
+        execution_identity_sha256=execution_identity,
+    )
+
+
 def test_host_bound_process_preview_binds_pid_start_time_port_and_socket() -> None:
     created, expires = _times()
     capability = _capability().model_copy(
@@ -242,6 +283,8 @@ def test_host_bound_process_preview_binds_pid_start_time_port_and_socket() -> No
             socket_inode=701,
             target_identity_sha256=identity,
         )
+
+
 def test_runtime_lock_schema_1_0_session_id_derivation_remains_compatible() -> None:
     session = _session()
     legacy_id = derive_runtime_lock_session_artifact_id(
@@ -547,6 +590,89 @@ def test_runtime_lock_run_rejects_evidence_identity_mismatch() -> None:
         RuntimeLockRunArtifact.model_validate(payload)
 
 
+def _docker_run(*, candidate: bool = False) -> RuntimeLockRunArtifact:
+    run = _run(candidate=candidate)
+    session_id = "docker-optimization-session-" + "a" * 20
+    started = run.started_at
+    payload = run.model_dump(mode="json")
+    authorized_execution = _cpython_binding()
+    actual_execution = bind_observed_runtime_execution(
+        authorized_execution,
+        runtime_version="3.13.5",
+        runtime_characteristics="cpython-gil",
+    )
+    payload.update(
+        {
+            "schema_version": "1.1",
+            "authorization_kind": "docker_optimization",
+            "session_id": session_id,
+            "session_artifact_id": None,
+            "session_artifact_content_sha256": None,
+            "session_revision": None,
+            "target_scope": "docker_optimization",
+            "adapter_execution_identity_sha256": actual_execution.execution_identity_sha256,
+            "docker_optimization_binding": DockerRuntimeLockRunBinding(
+                docker_optimization_session_id=session_id,
+                docker_optimization_session_artifact_id=(
+                    "docker-optimization-session-state-" + "b" * 20
+                ),
+                docker_optimization_session_artifact_content_sha256="c" * 64,
+                build_id="docker-build-" + ("d" if not candidate else "e") * 20,
+                build_content_sha256=("d" if not candidate else "e") * 64,
+                container_target_id="container-target-" + ("1" if not candidate else "2") * 20,
+                container_target_content_sha256=("1" if not candidate else "2") * 64,
+                container_run_id="container-run-" + ("3" if not candidate else "4") * 20,
+                container_run_content_sha256=("3" if not candidate else "4") * 64,
+                container_measurement_id=(
+                    "container-measurement-" + ("5" if not candidate else "6") * 20
+                ),
+                container_measurement_content_sha256=("5" if not candidate else "6") * 64,
+                authorized_execution_identity_sha256=(
+                    authorized_execution.execution_identity_sha256
+                ),
+                actual_execution_binding=actual_execution,
+                actual_runtime_characteristics="cpython-gil",
+                accounted_evidence_bytes=4096,
+            ).model_dump(mode="json"),
+            "run_id": derive_runtime_lock_run_id(
+                session_id,
+                run.adapter_id,
+                run.runtime_lock_evidence_content_sha256,
+                started,
+            ),
+        }
+    )
+    return RuntimeLockRunArtifact.model_validate(payload)
+
+
+def test_runtime_lock_run_uses_one_outer_docker_authority_and_full_evidence_binding() -> None:
+    run = _docker_run()
+    assert run.authorization_kind == "docker_optimization"
+    assert run.session_artifact_id is None
+    assert run.docker_optimization_binding is not None
+    assert run.docker_optimization_binding.container_measurement_id.startswith(
+        "container-measurement-"
+    )
+
+    payload = run.model_dump(mode="json")
+    payload["docker_optimization_binding"]["docker_optimization_session_id"] = (
+        "docker-optimization-session-" + "f" * 20
+    )
+    with pytest.raises(ValidationError, match="outer optimization evidence"):
+        RuntimeLockRunArtifact.model_validate(payload)
+
+    payload = run.model_dump(mode="json")
+    payload["schema_version"] = "1.0"
+    with pytest.raises(ValidationError, match=r"Run 1\.0"):
+        RuntimeLockRunArtifact.model_validate(payload)
+
+
+def test_schema_1_0_runtime_lock_run_omits_new_authority_defaults() -> None:
+    payload = _run().model_dump(mode="json", exclude_none=True)
+    assert "authorization_kind" not in payload
+    assert "docker_optimization_binding" not in payload
+
+
 def test_runtime_lock_run_timestamps_and_duration_must_be_conserved() -> None:
     payload = _run().model_dump(mode="json")
     payload["duration_seconds"] = 0
@@ -644,6 +770,72 @@ def test_runtime_lock_comparison_requires_all_matched_inputs_for_verified_improv
     payload = comparison.model_dump(mode="json")
     payload["candidate_quality_status"] = "partial"
     with pytest.raises(ValidationError, match="verified Runtime Lock"):
+        RuntimeLockComparisonArtifact.model_validate(payload)
+
+
+def test_docker_runtime_lock_comparison_binds_replayable_resource_environment() -> None:
+    baseline = _docker_run()
+    candidate = _docker_run(candidate=True)
+    baseline_binding = baseline.docker_optimization_binding
+    candidate_binding = candidate.docker_optimization_binding
+    assert baseline_binding is not None
+    assert candidate_binding is not None
+    created = datetime(2026, 8, 30, 0, 2, tzinfo=UTC).isoformat()
+    comparison = RuntimeLockComparisonArtifact(
+        schema_version="1.1",
+        perflens_version="0.4.0",
+        comparison_id=derive_runtime_lock_comparison_id(
+            baseline.session_id,
+            baseline.content_sha256,
+            candidate.content_sha256,
+            created,
+        ),
+        created_at=created,
+        comparison_kind="docker_optimization",
+        session_id=baseline.session_id,
+        baseline_run_id=baseline.run_id,
+        baseline_run_content_sha256=baseline.content_sha256,
+        candidate_run_id=candidate.run_id,
+        candidate_run_content_sha256=candidate.content_sha256,
+        baseline_build_id=baseline_binding.build_id,
+        baseline_build_content_sha256=baseline_binding.build_content_sha256,
+        candidate_build_id=candidate_binding.build_id,
+        candidate_build_content_sha256=candidate_binding.build_content_sha256,
+        baseline_measurement_id=baseline_binding.container_measurement_id,
+        candidate_measurement_id=candidate_binding.container_measurement_id,
+        resource_comparison_id="container-comparison-" + "9" * 20,
+        resource_comparison_content_sha256="a" * 64,
+        docker_treatment_changed=True,
+        minimum_material_change_percent=1.0,
+        adapter_match=True,
+        semantics_match=True,
+        threshold_or_sampling_match=True,
+        workload_match=True,
+        resource_environment_match=True,
+        baseline_resource_environment_sha256="8" * 64,
+        candidate_resource_environment_sha256="8" * 64,
+        baseline_quality_status="complete",
+        candidate_quality_status="complete",
+        correctness_status="passed",
+        deterministic_replay_passed=True,
+        resource_transfer_status="no_observed_regression",
+        comparable=True,
+        conclusion="candidate_improvement",
+        improved_metrics=("total_wait_ns",),
+        allowed_conclusions=("runtime_lock_comparison",),
+        forbidden_conclusions=("performance_root_cause", "verified_improvement"),
+        content_sha256="9" * 64,
+    )
+    assert comparison.comparison_kind == "docker_optimization"
+
+    payload = comparison.model_dump(mode="json")
+    payload["candidate_resource_environment_sha256"] = "7" * 64
+    with pytest.raises(ValidationError, match="environment match differs"):
+        RuntimeLockComparisonArtifact.model_validate(payload)
+
+    payload = comparison.model_dump(mode="json")
+    payload["baseline_resource_environment_sha256"] = None
+    with pytest.raises(ValidationError, match="replayable environments"):
         RuntimeLockComparisonArtifact.model_validate(payload)
 
 

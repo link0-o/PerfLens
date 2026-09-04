@@ -10,7 +10,7 @@ from pydantic import Field, TypeAdapter, model_validator
 from perflens.contracts.artifacts import ContainerCollectionTargetBinding, ContractModel
 from perflens.domain.errors import ErrorCode, PerfLensError
 
-HELPER_SCHEMA_VERSION = "1.3"
+HELPER_SCHEMA_VERSION = "1.4"
 MAX_HELPER_MESSAGE_BYTES = 64 << 10
 MAX_HELPER_PLAN_TTL_MILLISECONDS = 120_000
 MAX_HELPER_DURATION_MILLISECONDS = 86_400_000
@@ -60,13 +60,13 @@ HelperCollectionTarget = Annotated[
 
 
 class HelperHealthRequest(ContractModel):
-    schema_version: Literal["1.3"] = HELPER_SCHEMA_VERSION
+    schema_version: Literal["1.4"] = HELPER_SCHEMA_VERSION
     operation: Literal["health"] = "health"
     request_id: str = Field(pattern=r"^request-[a-f0-9]{16,64}$")
 
 
 class HelperCollectPidRequest(ContractModel):
-    schema_version: Literal["1.3"] = HELPER_SCHEMA_VERSION
+    schema_version: Literal["1.4"] = HELPER_SCHEMA_VERSION
     operation: Literal["collect_pid"] = "collect_pid"
     request_id: str = Field(pattern=r"^request-[a-f0-9]{16,64}$")
     plan_id: str = Field(pattern=r"^plan-[a-f0-9]{20}$")
@@ -103,6 +103,14 @@ class HelperCollectPidRequest(ContractModel):
                 or self.caller_uid == self.target.uid
             ):
                 raise ValueError("Cross-UID Docker Helper target is not a bounded rootful target")
+        elif (
+            self.target.container.uid_mapping == "rootless_same_uid"
+            and self.target.container.container_uid is not None
+            and self.target.container.uid_map_sha256 is not None
+        ):
+            # A rootless container process can be owned by a subordinate host UID.  The
+            # privileged Helper independently proves both translations from /proc/<pid>/uid_map.
+            pass
         elif self.caller_uid != self.target.uid:
             raise ValueError("Same-UID Docker Helper target UID must match its caller")
         all_events = (*self.events, *self.fallback_events)
@@ -233,7 +241,7 @@ class HelperErrorBody(ContractModel):
 
 
 class HelperResponse(ContractModel):
-    schema_version: Literal["1.3"] = HELPER_SCHEMA_VERSION
+    schema_version: Literal["1.4"] = HELPER_SCHEMA_VERSION
     request_id: str = Field(pattern=r"^(unknown|request-[a-f0-9]{16,64})$")
     ok: bool
     result: (

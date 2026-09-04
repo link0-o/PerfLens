@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import socket
 import struct
@@ -16,10 +17,16 @@ import perflens.docker.managed as managed_module
 from perflens.application.evidence import contract_content_sha256
 from perflens.contracts.docker import ContainerWorkloadSpecArtifact
 from perflens.docker.adapter import (
+    CpythonDockerLaunch,
     DockerCliIdentity,
     DockerCommandAdapter,
     DockerEndpointSnapshot,
+    GoPprofDockerLaunch,
+    JavaJfrDockerLaunch,
     ManagedDockerCreateRequest,
+    NativePthreadDockerLaunch,
+    RuntimeLockDockerLaunch,
+    project_runtime_lock_docker_launch,
 )
 from perflens.docker.identity import KernelProcessIdentity, NamespaceIdentity
 from perflens.docker.managed import (
@@ -44,15 +51,16 @@ CLIENT = "a" * 64
 POLICY = "b" * 64
 CONTAINER_ID = "c" * 64
 NAMESPACE = NamespaceIdentity(pid=101, user=102, mount=103, cgroup=104)
-READY_PREFIX = b"PERFLENS_GATE_V2 READY\0"
+READY_PREFIX = b"PERFLENS_GATE_V3 READY\0"
 READY = READY_PREFIX + struct.pack(
-    "!QQQQ",
+    "!QQQQQ",
     NAMESPACE.pid,
     NAMESPACE.user,
     NAMESPACE.mount,
     NAMESPACE.cgroup,
+    os.geteuid(),
 )
-EXEC = b"PERFLENS_GATE_V2 EXEC\n"
+EXEC = b"PERFLENS_GATE_V3 EXEC\n"
 
 
 @dataclass(slots=True)
@@ -87,6 +95,10 @@ class _FakeReader:
             namespace=NAMESPACE,
             cgroup_relative_path="/docker/managed-test",
             cgroup_inode=105,
+            uid_map=((0, 0, 1 << 32),),
+            uid_map_sha256=hashlib.sha256(
+                b"perflens-container-uid-map-v1\x000:0:4294967296"
+            ).hexdigest(),
         )
 
 
@@ -122,8 +134,8 @@ class _FakeManagedAdapter:
     @property
     def endpoint_identity(self) -> DockerEndpointSnapshot:
         return DockerEndpointSnapshot(
-            path=Path("/run/user/1000/docker.sock"),
-            kind="local_rootless",
+            path=Path("/run/docker.sock"),
+            kind="local_rootful",
             device=3,
             inode=4,
             ctime_ns=5,
@@ -153,6 +165,7 @@ class _FakeManagedAdapter:
             raise AssertionError("container is unavailable")
         running = self.state == "running"
         request = self.request
+        runtime_lock_surface = project_runtime_lock_docker_launch(request.runtime_lock_launch)
         data: dict[str, Any] = {
             "Id": CONTAINER_ID,
             "Image": request.image_digest,
@@ -166,6 +179,7 @@ class _FakeManagedAdapter:
                 "Cmd": [
                     "--control",
                     "/run/perflens-gate/control.sock",
+                    *runtime_lock_surface.arguments,
                     "--",
                     request.workload_entrypoint,
                     *request.workload_arguments,
@@ -208,6 +222,10 @@ class _FakeManagedAdapter:
                     request.gate_path,
                     "/usr/lib/perflens/perflens-container-gate",
                     False,
+                ),
+                *(
+                    _mount(source, destination, False)
+                    for source, destination in runtime_lock_surface.mounts
                 ),
             ],
         }
@@ -263,9 +281,7 @@ class _FakeManagedAdapter:
             )
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
                 connection.settimeout(2)
-                connection.connect(
-                    f"/proc/self/fd/{directory_descriptor}/control.sock"
-                )
+                connection.connect(f"/proc/self/fd/{directory_descriptor}/control.sock")
                 connection.sendall(self.gate_frame)
                 response = _receive_exact(connection, len(EXEC))
                 trailing = connection.recv(1)
@@ -380,6 +396,8 @@ def _prepare(
     authority: DockerSessionAuthority,
     authorized: AuthorizedDockerSession,
     lease: DockerRunLease,
+    *,
+    runtime_lock_launch: RuntimeLockDockerLaunch | None = None,
 ):
     return coordinator.prepare(
         workload=workload,
@@ -388,15 +406,14 @@ def _prepare(
         lease=lease,
         client_connection_identity_sha256=CLIENT,
         policy_identity_sha256=POLICY,
+        runtime_lock_launch=runtime_lock_launch,
     )
 
 
 def test_managed_coordinator_binds_gate_runs_and_cleans_exact_container(
     tmp_path: Path,
 ) -> None:
-    coordinator, adapter, workload, authority, authorized, lease, runtime_root = _setup(
-        tmp_path
-    )
+    coordinator, adapter, workload, authority, authorized, lease, runtime_root = _setup(tmp_path)
     prepared = _prepare(coordinator, workload, authority, authorized, lease)
     assert prepared.state == "prepared"
     assert prepared.target.artifact.target_kind == "managed_temporary_container"
@@ -427,6 +444,52 @@ def test_managed_coordinator_binds_gate_runs_and_cleans_exact_container(
     serialized = run.model_dump_json()
     assert CONTAINER_ID not in serialized
     assert str(runtime_root) not in serialized
+
+
+@pytest.mark.parametrize(
+    "runtime_lock_launch",
+    (
+        NativePthreadDockerLaunch(
+            Path("/trusted/libperflens-pthread-probe.so"),
+            "a" * 64,
+            "exact",
+            None,
+            20_000,
+        ),
+        CpythonDockerLaunch(
+            Path("/trusted/sitecustomize.py"),
+            "b" * 64,
+            "thresholded",
+            10_000,
+            20_000,
+        ),
+        JavaJfrDockerLaunch(
+            Path("/trusted/runtime-lock.jfc"),
+            "c" * 64,
+            "balanced",
+        ),
+        GoPprofDockerLaunch(("block", "mutex")),
+    ),
+)
+def test_managed_coordinator_reconciles_every_typed_runtime_lock_surface(
+    tmp_path: Path,
+    runtime_lock_launch: RuntimeLockDockerLaunch,
+) -> None:
+    coordinator, adapter, workload, authority, authorized, lease, _runtime_root = _setup(tmp_path)
+    prepared = _prepare(
+        coordinator,
+        workload,
+        authority,
+        authorized,
+        lease,
+        runtime_lock_launch=runtime_lock_launch,
+    )
+
+    assert adapter.request is not None
+    assert adapter.request.runtime_lock_launch == runtime_lock_launch
+    coordinator.release(prepared)
+    coordinator.wait(prepared, timeout_seconds=30)
+    assert coordinator.cleanup(prepared) == "removed"
 
 
 def test_managed_coordinator_authenticates_gate_before_kernel_identity(
@@ -496,7 +559,7 @@ def test_managed_coordinator_preserves_container_when_inspect_policy_is_tampered
         b"X" * len(READY),
         READY[:-1],
         (b"PERFLENS_GATE_V1 READY\n" + (b"\0" * len(READY)))[: len(READY)],
-        READY_PREFIX + struct.pack("!QQQQ", 0, 102, 103, 104),
+        READY_PREFIX + struct.pack("!QQQQQ", 0, 102, 103, 104, os.geteuid()),
         READY + b"EXTRA",
     ),
 )
@@ -551,9 +614,7 @@ def test_managed_coordinator_rejects_gate_peer_uid_after_kernel_identity(
 def test_managed_coordinator_reconciles_stale_public_lease_before_create(
     tmp_path: Path,
 ) -> None:
-    coordinator, adapter, workload, authority, authorized, lease, runtime_root = _setup(
-        tmp_path
-    )
+    coordinator, adapter, workload, authority, authorized, lease, runtime_root = _setup(tmp_path)
     expired = replace(lease, expires_at=(NOW - timedelta(seconds=1)).isoformat())
     with pytest.raises(PerfLensError):
         _prepare(coordinator, workload, authority, authorized, expired)
@@ -575,9 +636,7 @@ def test_managed_coordinator_reconciles_stale_public_lease_before_create(
 def test_forged_private_lease_token_does_not_consume_real_active_lease(
     tmp_path: Path,
 ) -> None:
-    coordinator, adapter, workload, authority, authorized, lease, _runtime_root = _setup(
-        tmp_path
-    )
+    coordinator, adapter, workload, authority, authorized, lease, _runtime_root = _setup(tmp_path)
     tampered = replace(lease, token="forged-private-token")  # noqa: S106
     with pytest.raises(PerfLensError):
         _prepare(coordinator, workload, authority, authorized, tampered)
@@ -597,9 +656,7 @@ def test_forged_private_lease_token_does_not_consume_real_active_lease(
 def test_managed_coordinator_rejects_runtime_root_replacement_before_create(
     tmp_path: Path,
 ) -> None:
-    coordinator, adapter, workload, authority, authorized, lease, runtime_root = _setup(
-        tmp_path
-    )
+    coordinator, adapter, workload, authority, authorized, lease, runtime_root = _setup(tmp_path)
     displaced = runtime_root.with_name("runtime-displaced")
     runtime_root.rename(displaced)
     runtime_root.mkdir(mode=0o700)
@@ -611,9 +668,7 @@ def test_managed_coordinator_rejects_runtime_root_replacement_before_create(
 
 
 def test_managed_gate_release_and_cleanup_are_single_use(tmp_path: Path) -> None:
-    coordinator, _adapter, workload, authority, authorized, lease, _runtime_root = _setup(
-        tmp_path
-    )
+    coordinator, _adapter, workload, authority, authorized, lease, _runtime_root = _setup(tmp_path)
     prepared = _prepare(coordinator, workload, authority, authorized, lease)
     coordinator.release(prepared)
     with pytest.raises(PerfLensError):
@@ -627,9 +682,7 @@ def test_managed_gate_release_and_cleanup_are_single_use(tmp_path: Path) -> None
 def test_cleanup_preserves_on_receipt_change_and_allows_verified_retry(
     tmp_path: Path,
 ) -> None:
-    coordinator, adapter, workload, authority, authorized, lease, runtime_root = _setup(
-        tmp_path
-    )
+    coordinator, adapter, workload, authority, authorized, lease, runtime_root = _setup(tmp_path)
     prepared = _prepare(coordinator, workload, authority, authorized, lease)
     coordinator.release(prepared)
     coordinator.wait(prepared, timeout_seconds=30)
@@ -642,9 +695,7 @@ def test_cleanup_preserves_on_receipt_change_and_allows_verified_retry(
 
 
 def test_runtime_directory_replacement_is_never_recursively_deleted(tmp_path: Path) -> None:
-    coordinator, _adapter, workload, authority, authorized, lease, _runtime_root = _setup(
-        tmp_path
-    )
+    coordinator, _adapter, workload, authority, authorized, lease, _runtime_root = _setup(tmp_path)
     prepared = _prepare(coordinator, workload, authority, authorized, lease)
     coordinator.release(prepared)
     coordinator.wait(prepared, timeout_seconds=30)
@@ -659,9 +710,7 @@ def test_runtime_directory_replacement_is_never_recursively_deleted(tmp_path: Pa
 
 
 def test_run_artifact_rejects_duplicate_evidence_identity(tmp_path: Path) -> None:
-    coordinator, _adapter, workload, authority, authorized, lease, _runtime_root = _setup(
-        tmp_path
-    )
+    coordinator, _adapter, workload, authority, authorized, lease, _runtime_root = _setup(tmp_path)
     prepared = _prepare(coordinator, workload, authority, authorized, lease)
     coordinator.release(prepared)
     coordinator.wait(prepared, timeout_seconds=30)

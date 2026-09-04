@@ -18,6 +18,12 @@ from typing import Annotated, Literal
 from pydantic import Field, model_validator
 
 from perflens.contracts.artifacts import SCHEMA_VERSION, ContractModel
+from perflens.contracts.runtime_lock_sessions import (
+    RuntimeLockAdapterExecutionBinding,
+    RuntimeLockAdapterId,
+    RuntimeLockSessionBudget,
+)
+from perflens.contracts.runtime_locks import MeasurementSemantics
 
 Sha256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 BuildCapabilityId = Annotated[str, Field(pattern=r"^docker-build-capability-[a-f0-9]{20}$")]
@@ -52,6 +58,37 @@ OptimizationEvaluationReason = Literal[
     "comparison_unavailable",
     "user_stopped",
 ]
+DockerOptimizationSchemaVersion = Literal["1.0", "1.1"]
+DockerRuntimeLockStatus = Literal[
+    "not_selected",
+    "active",
+    "partial",
+    "unavailable",
+    "exhausted",
+]
+DockerRuntimeLockIterationStatus = Literal[
+    "not_selected",
+    "complete",
+    "partial",
+    "unavailable",
+]
+RuntimeLockComparisonConclusion = Literal[
+    "verified_improvement",
+    "candidate_improvement",
+    "candidate_regression",
+    "no_material_change",
+    "not_comparable",
+]
+RuntimeLockVersionPattern = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^(?:glibc-)?[0-9]+(?:\.[0-9]+)*(?:\.\*)?$",
+    ),
+]
+
+_RUNTIME_LOCK_CONCLUSION = "runtime_lock_performance_conclusion"
 
 
 def _timestamp(value: str, label: str) -> datetime:
@@ -161,16 +198,39 @@ def derive_docker_optimization_session_artifact_id(
     builds_used: int,
     workload_runs_used: int,
     evidence_bytes_used: int,
+    runtime_lock_scope_content_sha256: str | None = None,
+    runtime_lock_runs_used: int = 0,
+    runtime_lock_evidence_bytes_used: int = 0,
+    runtime_lock_exact_events_used: int = 0,
+    *,
+    runtime_lock_status: DockerRuntimeLockStatus | None = None,
+    runtime_lock_active_seconds_used: int = 0,
 ) -> str:
-    return _derived_id(
-        "docker-optimization-session-state",
-        "perflens-docker-optimization-session-state-v1",
+    values = (
         session_id,
         state,
         updated_at,
         str(builds_used),
         str(workload_runs_used),
         str(evidence_bytes_used),
+    )
+    # Omitting the optional suffix preserves byte-for-byte schema 1.0 IDs.
+    if runtime_lock_scope_content_sha256 is not None:
+        if runtime_lock_status is None:
+            raise ValueError("Docker Runtime Lock Session ID requires its status")
+        values = (
+            *values,
+            runtime_lock_scope_content_sha256,
+            str(runtime_lock_runs_used),
+            str(runtime_lock_evidence_bytes_used),
+            str(runtime_lock_exact_events_used),
+            runtime_lock_status,
+            str(runtime_lock_active_seconds_used),
+        )
+    return _derived_id(
+        "docker-optimization-session-state",
+        "perflens-docker-optimization-session-state-v1",
+        *values,
     )
 
 
@@ -180,15 +240,22 @@ def derive_docker_optimization_iteration_id(
     candidate_build_id: str,
     baseline_measurement_sha256: str,
     candidate_measurement_sha256: str,
+    runtime_lock_comparison_sha256: str | None = None,
 ) -> str:
-    return _derived_id(
-        "docker-optimization-iteration",
-        "perflens-docker-optimization-iteration-v1",
+    values = (
         session_id,
         baseline_build_id,
         candidate_build_id,
         baseline_measurement_sha256,
         candidate_measurement_sha256,
+    )
+    # Omitting the optional suffix preserves byte-for-byte schema 1.0 IDs.
+    if runtime_lock_comparison_sha256 is not None:
+        values = (*values, runtime_lock_comparison_sha256)
+    return _derived_id(
+        "docker-optimization-iteration",
+        "perflens-docker-optimization-iteration-v1",
+        *values,
     )
 
 
@@ -354,6 +421,116 @@ class DockerOptimizationBudget(ContractModel):
         ):
             raise ValueError("hard expiry cannot be below bounded operation time")
         return self
+
+
+class DockerRuntimeLockVersionConstraint(ContractModel):
+    """Explicit target-runtime versions covered by the parent Docker consent."""
+
+    adapter_id: RuntimeLockAdapterId
+    allowed_versions: tuple[RuntimeLockVersionPattern, ...]
+
+    @model_validator(mode="after")
+    def validate_constraint(self) -> DockerRuntimeLockVersionConstraint:
+        if not self.allowed_versions:
+            raise ValueError("Docker Runtime Lock version scope cannot be empty")
+        _unique_sorted(self.allowed_versions, "Docker Runtime Lock allowed runtime versions")
+        return self
+
+
+def docker_runtime_lock_version_constraints(
+    bindings: tuple[RuntimeLockAdapterExecutionBinding, ...],
+) -> tuple[DockerRuntimeLockVersionConstraint, ...]:
+    """Derive the reviewable target-runtime matrix from fixed Adapter bindings."""
+
+    constraints: list[DockerRuntimeLockVersionConstraint] = []
+    for binding in bindings:
+        if binding.adapter_id == "native_pthread":
+            versions = ("glibc-2.36", "glibc-2.41")
+        elif binding.adapter_id == "cpython_threading":
+            versions = ("3.12.*", "3.13.*")
+        elif binding.adapter_id == "java_jfr":
+            versions = (f"{binding.runtime_version.split('.', 1)[0]}.*",)
+        elif binding.adapter_id == "go_pprof":
+            versions = (binding.runtime_version,)
+        else:
+            raise ValueError("Docker Runtime Lock cannot authorize an import-only Adapter")
+        constraints.append(
+            DockerRuntimeLockVersionConstraint(
+                adapter_id=binding.adapter_id,
+                allowed_versions=versions,
+            )
+        )
+    return tuple(constraints)
+
+
+def docker_runtime_lock_version_is_allowed(
+    constraint: DockerRuntimeLockVersionConstraint,
+    runtime_version: str,
+) -> bool:
+    """Match one observed version against literal or terminal-wildcard consent."""
+
+    return any(
+        runtime_version.startswith(pattern[:-1])
+        if pattern.endswith("*")
+        else runtime_version == pattern
+        for pattern in constraint.allowed_versions
+    )
+
+
+class DockerRuntimeLockAuthorizationScope(ContractModel):
+    """Runtime-lock authority embedded in one Docker optimization consent.
+
+    This scope is evidence, not a second authorization.  In particular it
+    contains no confirmation token and cannot be used independently of the
+    enclosing Docker optimization Preview and Session.
+    """
+
+    schema_version: Literal["1.1"] = "1.1"
+    runtime_lock_config_sha256: Sha256
+    capability_id: str = Field(pattern=r"^runtime-lock-capability-[a-f0-9]{20}$")
+    capability_content_sha256: Sha256
+    allowed_adapters: tuple[RuntimeLockAdapterId, ...]
+    allowed_semantics: tuple[MeasurementSemantics, ...]
+    adapter_execution_bindings: tuple[RuntimeLockAdapterExecutionBinding, ...]
+    runtime_version_constraints: tuple[DockerRuntimeLockVersionConstraint, ...]
+    budget: RuntimeLockSessionBudget
+    content_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> DockerRuntimeLockAuthorizationScope:
+        _unique_sorted(self.allowed_adapters, "Docker Runtime Lock adapters")
+        _unique_sorted(self.allowed_semantics, "Docker Runtime Lock semantics")
+        if not self.allowed_adapters or not self.allowed_semantics:
+            raise ValueError("Docker Runtime Lock scope requires Adapter and semantics scopes")
+        if "generic_ndjson_import" in self.allowed_adapters:
+            raise ValueError("Docker Runtime Lock execution cannot authorize generic import")
+        binding_adapters = tuple(binding.adapter_id for binding in self.adapter_execution_bindings)
+        _unique_sorted(binding_adapters, "Docker Runtime Lock execution bindings")
+        if binding_adapters != self.allowed_adapters:
+            raise ValueError("Docker Runtime Lock scope must bind every authorized Adapter exactly")
+        binding_semantics = tuple(
+            sorted({binding.measurement_semantics for binding in self.adapter_execution_bindings})
+        )
+        if binding_semantics != self.allowed_semantics:
+            raise ValueError("Docker Runtime Lock scope semantics differ from execution bindings")
+        constraint_adapters = tuple(item.adapter_id for item in self.runtime_version_constraints)
+        _unique_sorted(constraint_adapters, "Docker Runtime Lock version constraints")
+        if constraint_adapters != self.allowed_adapters:
+            raise ValueError("Docker Runtime Lock scope must constrain every authorized Adapter")
+        if self.runtime_version_constraints != docker_runtime_lock_version_constraints(
+            self.adapter_execution_bindings
+        ):
+            raise ValueError("Docker Runtime Lock version constraints differ from Adapter bindings")
+        expected = docker_runtime_lock_scope_sha256(self)
+        if self.content_sha256 != expected:
+            raise ValueError("Docker Runtime Lock scope digest differs from its content")
+        return self
+
+
+def docker_runtime_lock_scope_sha256(scope: DockerRuntimeLockAuthorizationScope) -> str:
+    payload = scope.model_dump(mode="json", exclude={"content_sha256"})
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 class DockerBuildRecipeArtifact(ContractModel):
@@ -533,7 +710,7 @@ class DockerBuildArtifact(ContractModel):
 
 
 class DockerOptimizationPreviewArtifact(ContractModel):
-    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    schema_version: DockerOptimizationSchemaVersion = SCHEMA_VERSION
     perflens_version: str
     preview_id: OptimizationPreviewId
     created_at: str
@@ -557,6 +734,7 @@ class DockerOptimizationPreviewArtifact(ContractModel):
     mutable_dockerfile: bool
     mutable_dependency_lock: bool
     budget: DockerOptimizationBudget
+    runtime_lock_scope: DockerRuntimeLockAuthorizationScope | None = None
     planned_actions: tuple[str, ...]
     warnings: tuple[str, ...] = ()
     authorization_summary_sha256: Sha256
@@ -577,6 +755,15 @@ class DockerOptimizationPreviewArtifact(ContractModel):
             raise ValueError("Docker optimization Preview modes must be non-empty and canonical")
         if not self.planned_actions or len(self.planned_actions) > 32:
             raise ValueError("Docker optimization Preview requires bounded planned actions")
+        if self.schema_version == "1.0" and self.runtime_lock_scope is not None:
+            raise ValueError("Docker optimization Preview 1.0 cannot authorize Runtime Lock")
+        if self.runtime_lock_scope is not None and (
+            self.runtime_lock_scope.budget.max_workload_runs > self.budget.max_workload_runs
+            or self.runtime_lock_scope.budget.max_active_seconds
+            > self.budget.max_workload_active_seconds
+            or self.runtime_lock_scope.budget.max_evidence_bytes > self.budget.max_evidence_bytes
+        ):
+            raise ValueError("Docker Runtime Lock budget exceeds its optimization Session")
         _project_relative_paths(self.context_paths, "Docker optimization context paths")
         _project_relative_paths(self.mutable_paths, "Docker optimization mutable paths")
         if any(
@@ -600,7 +787,7 @@ class DockerOptimizationPreviewArtifact(ContractModel):
 
 
 class DockerOptimizationSessionArtifact(ContractModel):
-    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    schema_version: DockerOptimizationSchemaVersion = SCHEMA_VERSION
     perflens_version: str
     session_artifact_id: OptimizationSessionArtifactId
     session_id: OptimizationSessionId
@@ -627,6 +814,12 @@ class DockerOptimizationSessionArtifact(ContractModel):
     workload_active_seconds_used: int = Field(ge=0, le=1800)
     evidence_bytes_used: int = Field(ge=0, le=1 << 30)
     temporary_image_bytes_used: int = Field(ge=0, le=10 << 30)
+    runtime_lock_scope: DockerRuntimeLockAuthorizationScope | None = None
+    runtime_lock_status: DockerRuntimeLockStatus | None = None
+    runtime_lock_runs_used: int | None = Field(default=None, ge=0, le=6)
+    runtime_lock_active_seconds_used: int | None = Field(default=None, ge=0, le=1200)
+    runtime_lock_evidence_bytes_used: int | None = Field(default=None, ge=0, le=512 << 20)
+    runtime_lock_exact_events_used: int | None = Field(default=None, ge=0, le=120_000)
     baseline_build_id: BuildArtifactId | None = None
     latest_candidate_build_id: BuildArtifactId | None = None
     invalidation_reason: str | None = Field(default=None, max_length=512)
@@ -657,6 +850,58 @@ class DockerOptimizationSessionArtifact(ContractModel):
             or self.temporary_image_bytes_used > self.budget.max_temporary_image_bytes
         ):
             raise ValueError("Docker optimization Session counters exceed their budget")
+        runtime_counters = (
+            self.runtime_lock_runs_used,
+            self.runtime_lock_active_seconds_used,
+            self.runtime_lock_evidence_bytes_used,
+            self.runtime_lock_exact_events_used,
+        )
+        if self.schema_version == "1.0" and (
+            self.runtime_lock_scope is not None
+            or self.runtime_lock_status is not None
+            or any(item is not None for item in runtime_counters)
+        ):
+            raise ValueError("Docker optimization Session 1.0 cannot carry Runtime Lock state")
+        if self.schema_version == "1.1" and (
+            self.runtime_lock_status is None or any(item is None for item in runtime_counters)
+        ):
+            raise ValueError("Docker optimization Session 1.1 requires explicit Runtime Lock state")
+        if self.schema_version == "1.0":
+            runtime_runs = runtime_active = runtime_bytes = runtime_exact = 0
+            runtime_status: DockerRuntimeLockStatus = "not_selected"
+        else:
+            if (
+                self.runtime_lock_status is None
+                or self.runtime_lock_runs_used is None
+                or self.runtime_lock_active_seconds_used is None
+                or self.runtime_lock_evidence_bytes_used is None
+                or self.runtime_lock_exact_events_used is None
+            ):
+                raise ValueError("Docker optimization Session 1.1 Runtime Lock state is incomplete")
+            runtime_status = self.runtime_lock_status
+            runtime_runs = self.runtime_lock_runs_used
+            runtime_active = self.runtime_lock_active_seconds_used
+            runtime_bytes = self.runtime_lock_evidence_bytes_used
+            runtime_exact = self.runtime_lock_exact_events_used
+        if (self.runtime_lock_scope is None) != (runtime_status == "not_selected"):
+            raise ValueError("Docker Runtime Lock scope and status are inconsistent")
+        if self.runtime_lock_scope is None and any(
+            (runtime_runs, runtime_active, runtime_bytes, runtime_exact)
+        ):
+            raise ValueError("unselected Docker Runtime Lock cannot consume budget")
+        if self.runtime_lock_scope is not None:
+            runtime_budget = self.runtime_lock_scope.budget
+            if (
+                runtime_runs > runtime_budget.max_workload_runs
+                or runtime_active > runtime_budget.max_active_seconds
+                or runtime_bytes > runtime_budget.max_evidence_bytes
+                or runtime_exact
+                > runtime_budget.max_workload_runs * runtime_budget.max_exact_events
+                or runtime_runs > self.workload_runs_used
+                or runtime_active > self.workload_active_seconds_used
+                or runtime_bytes > self.evidence_bytes_used
+            ):
+                raise ValueError("Docker Runtime Lock counters exceed bound Session evidence")
         if self.builds_used == 0 and self.baseline_build_id is not None:
             raise ValueError("Docker optimization Session cannot bind a baseline before a build")
         if self.candidate_rounds_used and (
@@ -669,21 +914,37 @@ class DockerOptimizationSessionArtifact(ContractModel):
             raise ValueError("active Docker optimization Session cannot have an end reason")
         if self.state != "active" and not self.invalidation_reason:
             raise ValueError("inactive Docker optimization Session must explain why it ended")
-        expected_id = derive_docker_optimization_session_artifact_id(
-            self.session_id,
-            self.state,
-            self.updated_at,
-            self.builds_used,
-            self.workload_runs_used,
-            self.evidence_bytes_used,
-        )
+        if self.runtime_lock_scope is None:
+            expected_id = derive_docker_optimization_session_artifact_id(
+                self.session_id,
+                self.state,
+                self.updated_at,
+                self.builds_used,
+                self.workload_runs_used,
+                self.evidence_bytes_used,
+            )
+        else:
+            expected_id = derive_docker_optimization_session_artifact_id(
+                self.session_id,
+                self.state,
+                self.updated_at,
+                self.builds_used,
+                self.workload_runs_used,
+                self.evidence_bytes_used,
+                self.runtime_lock_scope.content_sha256,
+                runtime_runs,
+                runtime_bytes,
+                runtime_exact,
+                runtime_lock_status=runtime_status,
+                runtime_lock_active_seconds_used=runtime_active,
+            )
         if self.session_artifact_id != expected_id:
             raise ValueError("Docker optimization Session Artifact ID is inconsistent")
         return self
 
 
 class DockerOptimizationIterationArtifact(ContractModel):
-    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    schema_version: DockerOptimizationSchemaVersion = SCHEMA_VERSION
     perflens_version: str
     iteration_id: OptimizationIterationId
     created_at: str
@@ -713,6 +974,13 @@ class DockerOptimizationIterationArtifact(ContractModel):
     benchmark_comparison_content_sha256: Sha256
     source_container_comparison_id: str
     source_container_comparison_content_sha256: Sha256
+    runtime_lock_status: DockerRuntimeLockIterationStatus | None = None
+    runtime_lock_comparison_id: str | None = Field(
+        default=None,
+        pattern=r"^runtime-lock-comparison-[a-f0-9]{20}$",
+    )
+    runtime_lock_comparison_content_sha256: Sha256 | None = None
+    runtime_lock_conclusion: RuntimeLockComparisonConclusion | None = None
     fixed_environment_match: bool
     fixed_environment_differences: dict[str, tuple[str, str]] = Field(default_factory=dict)
     treatment_changed: bool
@@ -746,6 +1014,23 @@ class DockerOptimizationIterationArtifact(ContractModel):
             raise ValueError("Docker optimization environment match is inconsistent")
         _unique_sorted(self.improved_metrics, "Docker optimization improved metrics")
         _unique_sorted(self.regressed_metrics, "Docker optimization regressed metrics")
+        runtime_binding = (
+            self.runtime_lock_comparison_id,
+            self.runtime_lock_comparison_content_sha256,
+            self.runtime_lock_conclusion,
+        )
+        if self.schema_version == "1.0" and (
+            self.runtime_lock_status is not None
+            or any(item is not None for item in runtime_binding)
+        ):
+            raise ValueError("Docker optimization Iteration 1.0 cannot carry Runtime Lock")
+        if self.schema_version == "1.1" and self.runtime_lock_status is None:
+            raise ValueError("Docker optimization Iteration 1.1 requires Runtime Lock status")
+        if self.runtime_lock_status in {"complete", "partial"}:
+            if any(item is None for item in runtime_binding):
+                raise ValueError("selected Runtime Lock Iteration must bind its comparison")
+        elif any(item is not None for item in runtime_binding):
+            raise ValueError("unselected or unavailable Runtime Lock cannot bind a comparison")
         if self.conclusion == "verified_improvement" and (
             not self.comparable
             or not self.fixed_environment_match
@@ -755,8 +1040,19 @@ class DockerOptimizationIterationArtifact(ContractModel):
             or self.resource_transfer_status != "no_observed_regression"
             or not self.improved_metrics
             or self.regressed_metrics
+            or self.runtime_lock_status in {"partial", "unavailable"}
+            or self.runtime_lock_conclusion in {"candidate_regression", "not_comparable"}
         ):
             raise ValueError("verified Docker optimization lacks required matched evidence")
+        if (
+            self.conclusion == "verified_improvement"
+            and self.schema_version == "1.1"
+            and self.runtime_lock_status == "not_selected"
+            and _RUNTIME_LOCK_CONCLUSION not in self.forbidden_conclusions
+        ):
+            raise ValueError(
+                "Docker optimization without Runtime Lock evidence must forbid lock conclusions"
+            )
         if (self.conclusion == "not_comparable") == self.comparable:
             raise ValueError("Docker optimization comparability and conclusion disagree")
         if not self.allowed_conclusions or not self.forbidden_conclusions:
@@ -767,6 +1063,7 @@ class DockerOptimizationIterationArtifact(ContractModel):
             self.candidate_build_id,
             self.baseline_measurement_content_sha256,
             self.candidate_measurement_content_sha256,
+            self.runtime_lock_comparison_content_sha256,
         )
         if self.iteration_id != expected_id:
             raise ValueError("Docker optimization Iteration ID differs from its evidence")
@@ -828,9 +1125,7 @@ class DockerOptimizationDispositionArtifact(ContractModel):
         retaining = self.disposition == "retain_candidate"
         expected_build_id = self.candidate_build_id if retaining else self.baseline_build_id
         expected_build_content = (
-            self.candidate_build_content_sha256
-            if retaining
-            else self.baseline_build_content_sha256
+            self.candidate_build_content_sha256 if retaining else self.baseline_build_content_sha256
         )
         if (
             self.selected_build_id != expected_build_id

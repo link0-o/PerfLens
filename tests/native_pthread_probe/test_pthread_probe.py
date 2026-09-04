@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import resource
 import shutil
 import socket
 import statistics
 import subprocess
-import time
 from collections.abc import Iterator
 from io import BytesIO
 from pathlib import Path
@@ -386,6 +386,52 @@ def test_probe_accepts_private_pipe_but_rejects_socket_output_descriptor(
         sender.close()
 
 
+def test_probe_accepts_only_exportable_regular_output_in_container_mode(
+    tmp_path: Path,
+    native_assets: tuple[Path, Path],
+) -> None:
+    probe, workload = native_assets
+
+    def execute(path: Path, mode: int, container_marker: str | None) -> bytes:
+        descriptor = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+            mode,
+        )
+        os.fchmod(descriptor, mode)
+        try:
+            environment = {
+                **os.environ,
+                "LD_PRELOAD": str(probe),
+                "PERFLENS_RUNTIME_LOCK_FD": str(descriptor),
+                "PERFLENS_RUNTIME_LOCK_MODE": "exact",
+                "PERFLENS_RUNTIME_LOCK_MAX_EVENTS": "20",
+            }
+            if container_marker is not None:
+                environment["PERFLENS_RUNTIME_LOCK_CONTAINER"] = container_marker
+            result = subprocess.run(  # noqa: S603 - fixed test workload and private descriptor
+                [str(workload)],
+                check=False,
+                env=environment,
+                pass_fds=(descriptor,),
+                capture_output=True,
+                timeout=8,
+            )
+            assert result.returncode == 0
+        finally:
+            os.close(descriptor)
+        assert path.stat().st_mode & 0o777 == mode
+        return path.read_bytes()
+
+    accepted = execute(tmp_path / "container.ndjson", 0o644, "1")
+    assert b'"record_type":"probe_header"' in accepted
+    assert b'"record_type":"probe_footer"' in accepted
+
+    assert execute(tmp_path / "host-mode.ndjson", 0o600, "1") == b""
+    assert execute(tmp_path / "unmarked.ndjson", 0o644, None) == b""
+    assert execute(tmp_path / "invalid-marker.ndjson", 0o644, "true") == b""
+
+
 def test_shared_object_has_hardening_and_only_fixed_exports(
     native_assets: tuple[Path, Path],
 ) -> None:
@@ -444,7 +490,7 @@ def test_address_sanitizers_accept_probe_lifecycle(
 
 def _timings(command: list[str], environment: dict[str, str], count: int = 5) -> Iterator[float]:
     for _ in range(count):
-        started = time.perf_counter()
+        started = resource.getrusage(resource.RUSAGE_CHILDREN)
         subprocess.run(  # noqa: S603
             command,
             check=True,
@@ -453,7 +499,8 @@ def _timings(command: list[str], environment: dict[str, str], count: int = 5) ->
             stderr=subprocess.DEVNULL,
             timeout=8,
         )
-        yield time.perf_counter() - started
+        finished = resource.getrusage(resource.RUSAGE_CHILDREN)
+        yield (finished.ru_utime + finished.ru_stime) - (started.ru_utime + started.ru_stime)
 
 
 @pytest.mark.performance
@@ -478,11 +525,35 @@ def test_probe_disabled_and_thresholded_overhead_are_bounded(
             "PERFLENS_RUNTIME_LOCK_THRESHOLD_NS": "1000000000",
             "PERFLENS_RUNTIME_LOCK_MAX_EVENTS": "20000",
         }
-        baseline = statistics.median(_timings(command, base_environment))
-        disabled = statistics.median(_timings(command, disabled_environment))
-        thresholded = statistics.median(
-            _timings_with_fd(command, threshold_environment, descriptor)
-        )
+        # Interleave and rotate the three modes so CPU frequency and machine
+        # load drift cannot systematically favor whichever mode runs first.
+        # Three balanced samples keep this real-process performance gate inside
+        # the suite's fixed ten-second limit without weakening either bound.
+        baseline_samples: list[float] = []
+        disabled_samples: list[float] = []
+        thresholded_samples: list[float] = []
+        measurements = {
+            "baseline": lambda: next(_timings(command, base_environment, count=1)),
+            "disabled": lambda: next(_timings(command, disabled_environment, count=1)),
+            "thresholded": lambda: next(
+                _timings_with_fd(command, threshold_environment, descriptor, count=1)
+            ),
+        }
+        samples = {
+            "baseline": baseline_samples,
+            "disabled": disabled_samples,
+            "thresholded": thresholded_samples,
+        }
+        for order in (
+            ("baseline", "disabled", "thresholded"),
+            ("disabled", "thresholded", "baseline"),
+            ("thresholded", "baseline", "disabled"),
+        ):
+            for mode in order:
+                samples[mode].append(measurements[mode]())
+        baseline = statistics.median(baseline_samples)
+        disabled = statistics.median(disabled_samples)
+        thresholded = statistics.median(thresholded_samples)
     finally:
         os.close(descriptor)
     assert disabled - baseline <= max(0.01 * baseline, 0.002)
@@ -496,7 +567,7 @@ def _timings_with_fd(
     count: int = 5,
 ) -> Iterator[float]:
     for _ in range(count):
-        started = time.perf_counter()
+        started = resource.getrusage(resource.RUSAGE_CHILDREN)
         subprocess.run(  # noqa: S603
             command,
             check=True,
@@ -506,4 +577,5 @@ def _timings_with_fd(
             stderr=subprocess.DEVNULL,
             timeout=8,
         )
-        yield time.perf_counter() - started
+        finished = resource.getrusage(resource.RUSAGE_CHILDREN)
+        yield (finished.ru_utime + finished.ru_stime) - (started.ru_utime + started.ru_stime)

@@ -18,13 +18,19 @@ from perflens.application.analyze_runtime_locks import build_runtime_lock_analys
 from perflens.application.analyze_trace import build_trace_analysis
 from perflens.application.evidence import contract_content_sha256
 from perflens.application.verify_runtime_locks import (
+    build_runtime_lock_source_replay_receipt,
     compute_runtime_lock_analysis_content_sha256,
     verify_runtime_lock_analysis_artifact,
 )
 from perflens.application.verify_trace import compute_trace_analysis_content_sha256
 from perflens.artifacts.filesystem import serialize_json
 from perflens.classification.engine import build_diagnosis_bundle
-from perflens.contracts.docker import ContainerRunArtifact
+from perflens.contracts.docker import (
+    ContainerCgroupIdentity,
+    ContainerNamespaceIdentity,
+    ContainerRunArtifact,
+    ContainerTargetArtifact,
+)
 from perflens.contracts.runtime_lock_sessions import (
     RuntimeLockComparisonArtifact,
     RuntimeLockRunArtifact,
@@ -39,6 +45,10 @@ from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.storage import ArtifactStore, PathPolicy
 from perflens.runtime_locks import import_runtime_lock_ndjson
 from perflens.runtime_locks.capability import inspect_runtime_lock_capability
+from perflens.runtime_locks.comparison import (
+    compare_runtime_lock_analyses,
+    runtime_lock_resource_environment_sha256,
+)
 from perflens.runtime_locks.project_config import (
     load_runtime_lock_project_policy,
     render_default_runtime_lock_project_policy,
@@ -145,7 +155,11 @@ def _runtime_lock_store_with_two_runs(
     with fixture.open("rb") as source:
         evidence = import_runtime_lock_ndjson(source)
     analysis = build_runtime_lock_analysis(evidence)
-    verification = verify_runtime_lock_analysis_artifact(analysis, evidence)
+    verification = verify_runtime_lock_analysis_artifact(
+        analysis,
+        evidence,
+        source_replay_receipt=build_runtime_lock_source_replay_receipt(evidence),
+    )
     store.save(evidence, evidence.runtime_lock_evidence_id, "runtime-lock-evidence")
     store.save(analysis, analysis.runtime_lock_analysis_id, "runtime-lock-analysis")
     store.save(
@@ -199,7 +213,7 @@ def _runtime_lock_store_with_two_runs(
         started = datetime.now(tz=UTC) + timedelta(seconds=ordinal * 2)
         finished = started + timedelta(seconds=1)
         provisional = RuntimeLockRunArtifact(
-            schema_version="1.0",
+            schema_version="1.1",
             perflens_version="0.4.0",
             run_id=derive_runtime_lock_run_id(
                 lease.session_id,
@@ -210,6 +224,7 @@ def _runtime_lock_store_with_two_runs(
             created_at=finished.isoformat(),
             started_at=started.isoformat(),
             finished_at=finished.isoformat(),
+            authorization_kind="runtime_lock_session",
             session_id=lease.session_id,
             session_artifact_id=lease.session_artifact_id,
             session_artifact_content_sha256=lease.session_artifact_content_sha256,
@@ -518,6 +533,7 @@ def test_runtime_lock_storage_replays_session_revision_and_run_chains(
 
     assert store.load_runtime_lock_run(baseline.run_id) == baseline
     assert store.load_runtime_lock_run(candidate.run_id) == candidate
+    assert candidate.session_artifact_id is not None
     session = store.load_runtime_lock_session(candidate.session_artifact_id)
     assert session.revision == candidate.session_revision
     assert session.previous_session_artifact_id is not None
@@ -608,6 +624,7 @@ def test_runtime_lock_storage_rejects_session_and_run_cross_chain_tampering(
     tmp_path: Path,
 ) -> None:
     store, baseline, _ = _runtime_lock_store_with_two_runs(tmp_path)
+    assert baseline.session_artifact_id is not None
     session = store.load_runtime_lock_session(baseline.session_artifact_id)
     session_path = store.root / (f"{session.session_artifact_id}.runtime-lock-session.json")
     forged_session = session.model_copy(update={"project_identity_sha256": "f" * 64})
@@ -645,6 +662,7 @@ def test_runtime_lock_storage_rejects_impossible_session_usage_transitions(
     tmp_path: Path,
 ) -> None:
     store, baseline, _ = _runtime_lock_store_with_two_runs(tmp_path)
+    assert baseline.session_artifact_id is not None
     reserved = store.load_runtime_lock_session(baseline.session_artifact_id)
     assert reserved.previous_session_artifact_id is not None
     initial = store.load_runtime_lock_session(reserved.previous_session_artifact_id)
@@ -684,6 +702,7 @@ def test_runtime_lock_storage_rejects_run_before_bound_session_revision(
     tmp_path: Path,
 ) -> None:
     store, baseline, _ = _runtime_lock_store_with_two_runs(tmp_path)
+    assert baseline.session_artifact_id is not None
     session = store.load_runtime_lock_session(baseline.session_artifact_id)
     started = datetime.fromisoformat(session.updated_at) - timedelta(seconds=1)
     finished = started + timedelta(seconds=1)
@@ -720,6 +739,7 @@ def test_runtime_lock_storage_rejects_preview_scope_not_supported_by_capability(
     tmp_path: Path,
 ) -> None:
     store, baseline, _ = _runtime_lock_store_with_two_runs(tmp_path)
+    assert baseline.session_artifact_id is not None
     session = store.load_runtime_lock_session(baseline.session_artifact_id)
     preview = store.load_runtime_lock_preview(session.preview_id)
     provisional = preview.model_copy(
@@ -755,6 +775,7 @@ def test_runtime_lock_storage_rejects_session_schema_downgrade(
     tmp_path: Path,
 ) -> None:
     store, baseline, _ = _runtime_lock_store_with_two_runs(tmp_path)
+    assert baseline.session_artifact_id is not None
     session = store.load_runtime_lock_session(baseline.session_artifact_id)
     provisional = session.model_copy(update={"schema_version": "1.0", "content_sha256": "0" * 64})
     forged = provisional.model_copy(
@@ -777,6 +798,7 @@ def test_runtime_lock_storage_rejects_counter_rollback_without_new_workload(
     tmp_path: Path,
 ) -> None:
     store, baseline, _ = _runtime_lock_store_with_two_runs(tmp_path)
+    assert baseline.session_artifact_id is not None
     previous = store.load_runtime_lock_session(baseline.session_artifact_id)
     updated_at = (datetime.fromisoformat(previous.updated_at) + timedelta(seconds=1)).isoformat()
     revision = previous.revision + 1
@@ -952,6 +974,175 @@ def test_runtime_lock_comparison_is_fail_closed_until_independent_ab_replay(
     store.save(forged, forged.comparison_id, "runtime-lock-comparison")
     with pytest.raises(PerfLensError, match="does not match"):
         store.load_runtime_lock_comparison(forged.comparison_id)
+
+
+def test_runtime_lock_storage_independently_replays_schema_1_1_comparison(
+    tmp_path: Path,
+) -> None:
+    store, baseline, candidate = _runtime_lock_store_with_two_runs(tmp_path)
+    baseline_analysis, baseline_evidence, _ = store.load_runtime_lock_analysis(
+        baseline.runtime_lock_analysis_id
+    )
+    candidate_analysis, candidate_evidence, _ = store.load_runtime_lock_analysis(
+        candidate.runtime_lock_analysis_id
+    )
+    baseline_verification = store.load_runtime_lock_verification(
+        baseline.runtime_lock_verification_id
+    )
+    candidate_verification = store.load_runtime_lock_verification(
+        candidate.runtime_lock_verification_id
+    )
+    environment = runtime_lock_resource_environment_sha256(baseline, baseline_evidence)
+    comparison = compare_runtime_lock_analyses(
+        baseline_run=baseline,
+        baseline_analysis=baseline_analysis,
+        baseline_evidence=baseline_evidence,
+        baseline_verification=baseline_verification,
+        candidate_run=candidate,
+        candidate_analysis=candidate_analysis,
+        candidate_evidence=candidate_evidence,
+        candidate_verification=candidate_verification,
+        baseline_resource_environment_sha256=environment,
+        candidate_resource_environment_sha256=environment,
+        resource_transfer_status="incomplete",
+        created_at=datetime(2026, 8, 31, 0, 30, tzinfo=UTC),
+    )
+    store.save(comparison, comparison.comparison_id, "runtime-lock-comparison")
+    assert store.load_runtime_lock_comparison(comparison.comparison_id) == comparison
+
+    provisional = comparison.model_copy(
+        update={"warnings": (*comparison.warnings, "forged"), "content_sha256": "0" * 64}
+    )
+    forged = provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                provisional,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+    path = store.root / f"{comparison.comparison_id}.runtime-lock-comparison.json"
+    path.write_bytes(serialize_json(forged))
+    path.chmod(0o600)
+    with pytest.raises(PerfLensError, match="does not match"):
+        store.load_runtime_lock_comparison(comparison.comparison_id)
+
+
+def test_runtime_lock_docker_reference_loads_target_and_run_before_exposure(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(
+        tmp_path / "artifacts",
+        PathPolicy((tmp_path,)),
+        allow_writes=True,
+    )
+    target_provisional = ContainerTargetArtifact(
+        schema_version="1.0",
+        perflens_version=__version__,
+        target_id="container-target-" + "1" * 20,
+        created_at="2026-08-31T00:00:00+00:00",
+        target_kind="managed_temporary_container",
+        container_identity_sha256="5" * 64,
+        image_identity_sha256="6" * 64,
+        container_pid=1,
+        host_pid=100,
+        host_uid=1000,
+        host_start_time_ticks=55,
+        executable_name="worker",
+        namespace=ContainerNamespaceIdentity(
+            pid_namespace_inode=101,
+            user_namespace_inode=102,
+            mount_namespace_inode=103,
+            cgroup_namespace_inode=104,
+        ),
+        cgroup=ContainerCgroupIdentity(inode=105, identity_sha256="7" * 64),
+        uid_mapping="rootful_same_uid",
+        adapter_recipe_id="local-docker-managed-v1",
+        adapter_sha256="8" * 64,
+        identity_fingerprint="9" * 64,
+        content_sha256="0" * 64,
+    )
+    target = target_provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                target_provisional,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+    run_provisional = ContainerRunArtifact(
+        schema_version="1.0",
+        perflens_version=__version__,
+        run_id="container-run-" + "3" * 20,
+        created_at="2026-08-31T00:00:03+00:00",
+        session_id="container-session-" + "a" * 20,
+        workload_spec_sha256="b" * 64,
+        container_identity_sha256=target.container_identity_sha256,
+        image_identity_sha256=target.image_identity_sha256,
+        target_identity_sha256=target.identity_fingerprint,
+        container_pid=target.container_pid,
+        host_pid=target.host_pid,
+        host_start_time_ticks=target.host_start_time_ticks,
+        started_at="2026-08-31T00:00:00+00:00",
+        finished_at="2026-08-31T00:00:02+00:00",
+        status="exited",
+        exit_code=0,
+        cleanup_status="removed",
+        content_sha256="0" * 64,
+    )
+    run = run_provisional.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                run_provisional,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+    fixture = Path(__file__).parents[1] / "fixtures/runtime_locks/valid-v1.1.ndjson"
+    records = [json.loads(line) for line in fixture.read_text(encoding="utf-8").splitlines()]
+    records[0]["target"] = {
+        "target_pid": target.host_pid,
+        "target_uid": target.host_uid,
+        "target_start_time_ticks": target.host_start_time_ticks,
+        "observed_target_tids": [100, 101],
+        "target_kind": "docker",
+        "container_reference": {
+            "container_target_id": target.target_id,
+            "container_target_content_sha256": target.content_sha256,
+            "container_run_id": run.run_id,
+            "container_run_content_sha256": run.content_sha256,
+            "container_identity_sha256": target.container_identity_sha256,
+            "target_identity_sha256": target.identity_fingerprint,
+            "cgroup_identity_sha256": target.cgroup.identity_sha256,
+        },
+    }
+    raw = b"\n".join(
+        json.dumps(record, separators=(",", ":")).encode("utf-8") for record in records
+    )
+    evidence = import_runtime_lock_ndjson(io.BytesIO(raw + b"\n"))
+    store.save(target, target.target_id, "container-target")
+    store.save(run, run.run_id, "container-run")
+    path = store.save(
+        evidence,
+        evidence.runtime_lock_evidence_id,
+        "runtime-lock-evidence",
+    )
+    assert store.load_runtime_lock_evidence(evidence.runtime_lock_evidence_id) == evidence
+
+    forged_target = target.model_copy(update={"host_uid": 2000, "content_sha256": "0" * 64})
+    forged_target = forged_target.model_copy(
+        update={
+            "content_sha256": contract_content_sha256(
+                forged_target,
+                exclude={"content_sha256"},
+            )
+        }
+    )
+    target_path = store.root / f"{target.target_id}.container-target.json"
+    target_path.write_bytes(serialize_json(forged_target))
+    target_path.chmod(0o600)
+    with pytest.raises(PerfLensError, match="does not match"):
+        store.load_runtime_lock_evidence(path.name.split(".", maxsplit=1)[0])
 
 
 def test_docker_resource_context_is_content_verified_before_agent_paging(

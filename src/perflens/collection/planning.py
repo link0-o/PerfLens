@@ -104,6 +104,14 @@ def create_collection_plan(
                 allowed = False
                 warnings.append("The target PID is owned by a different user.")
         elif (
+            container_target.uid_mapping == "rootless_same_uid"
+            and container_target.container_uid is not None
+            and container_target.uid_map_sha256 is not None
+        ):
+            # The public Broker rechecks the UID-map identity and the privileged Helpers
+            # independently read /proc/<pid>/uid_map before collecting subordinate-UID targets.
+            pass
+        elif (
             not policy.allow_rootful_container_targets
             or target_uid != 0
             or container_target.uid_mapping != "rootful_cross_uid"

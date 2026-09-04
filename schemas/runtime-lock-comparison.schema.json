@@ -12,6 +12,45 @@
       "title": "Allowed Conclusions",
       "type": "array"
     },
+    "baseline_build_content_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Baseline Build Content Sha256"
+    },
+    "baseline_build_id": {
+      "anyOf": [
+        {
+          "pattern": "^docker-build-[a-f0-9]{20}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Baseline Build Id"
+    },
+    "baseline_measurement_id": {
+      "anyOf": [
+        {
+          "pattern": "^container-measurement-[a-f0-9]{20}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Baseline Measurement Id"
+    },
     "baseline_quality_status": {
       "enum": [
         "complete",
@@ -19,6 +58,19 @@
       ],
       "title": "Baseline Quality Status",
       "type": "string"
+    },
+    "baseline_resource_environment_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Baseline Resource Environment Sha256"
     },
     "baseline_run_content_sha256": {
       "pattern": "^[a-f0-9]{64}$",
@@ -30,6 +82,45 @@
       "title": "Baseline Run Id",
       "type": "string"
     },
+    "candidate_build_content_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate Build Content Sha256"
+    },
+    "candidate_build_id": {
+      "anyOf": [
+        {
+          "pattern": "^docker-build-[a-f0-9]{20}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate Build Id"
+    },
+    "candidate_measurement_id": {
+      "anyOf": [
+        {
+          "pattern": "^container-measurement-[a-f0-9]{20}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate Measurement Id"
+    },
     "candidate_quality_status": {
       "enum": [
         "complete",
@@ -37,6 +128,19 @@
       ],
       "title": "Candidate Quality Status",
       "type": "string"
+    },
+    "candidate_resource_environment_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate Resource Environment Sha256"
     },
     "candidate_run_content_sha256": {
       "pattern": "^[a-f0-9]{64}$",
@@ -56,6 +160,22 @@
       "pattern": "^runtime-lock-comparison-[a-f0-9]{20}$",
       "title": "Comparison Id",
       "type": "string"
+    },
+    "comparison_kind": {
+      "anyOf": [
+        {
+          "enum": [
+            "runtime_lock_session",
+            "docker_optimization"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Comparison Kind"
     },
     "conclusion": {
       "enum": [
@@ -90,6 +210,18 @@
       "title": "Deterministic Replay Passed",
       "type": "boolean"
     },
+    "docker_treatment_changed": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Docker Treatment Changed"
+    },
     "forbidden_conclusions": {
       "items": {
         "type": "string"
@@ -105,6 +237,20 @@
       "title": "Improved Metrics",
       "type": "array"
     },
+    "minimum_material_change_percent": {
+      "anyOf": [
+        {
+          "maximum": 100.0,
+          "minimum": 1.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Minimum Material Change Percent"
+    },
     "perflens_version": {
       "title": "Perflens Version",
       "type": "string"
@@ -116,6 +262,32 @@
       },
       "title": "Regressed Metrics",
       "type": "array"
+    },
+    "resource_comparison_content_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Resource Comparison Content Sha256"
+    },
+    "resource_comparison_id": {
+      "anyOf": [
+        {
+          "pattern": "^container-comparison-[a-f0-9]{20}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Resource Comparison Id"
     },
     "resource_environment_match": {
       "title": "Resource Environment Match",
@@ -144,7 +316,7 @@
       "type": "boolean"
     },
     "session_id": {
-      "pattern": "^runtime-lock-session-[a-f0-9]{20}$",
+      "pattern": "^(?:runtime-lock-session|docker-optimization-session)-[a-f0-9]{20}$",
       "title": "Session Id",
       "type": "string"
     },

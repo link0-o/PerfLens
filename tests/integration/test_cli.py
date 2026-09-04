@@ -270,8 +270,11 @@ def test_init_runtime_locks_generates_policy_without_instrumenting(tmp_path: Pat
     assert "Runtime Lock: 已启用" in initialized.output
     assert f"Runtime Lock 项目策略: {policy}" in initialized.output
     assert policy.is_file()
-    assert 'target_scopes = ["controlled_import", "host_launched_workload"]' in policy.read_text(
+    assert (
+        'target_scopes = ["controlled_import", "host_bound_process", "host_launched_workload"]'
+        in policy.read_text(
         encoding="utf-8"
+        )
     )
     config = (project / ".codex/config.toml").read_text(encoding="utf-8")
     assert '"--allow-runtime-locks"' in config

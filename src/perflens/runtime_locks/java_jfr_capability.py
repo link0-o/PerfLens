@@ -47,6 +47,16 @@ _CLASS = re.compile(r"^class [A-Za-z0-9]+ extends jdk\.jfr\.Event \{$")
 _FIELD = re.compile(r"^(?P<type>[A-Za-z][A-Za-z0-9.]*) (?P<name>[A-Za-z][A-Za-z0-9]*);$")
 _EXPECTED_FIELDS = {
     "jdk.DataLoss": (("long", "startTime"), ("long", "amount"), ("long", "total")),
+    "jdk.JVMInformation": (
+        ("long", "startTime"),
+        ("String", "jvmName"),
+        ("String", "jvmVersion"),
+        ("String", "jvmArguments"),
+        ("String", "jvmFlags"),
+        ("String", "javaArguments"),
+        ("long", "jvmStartTime"),
+        ("long", "pid"),
+    ),
     "jdk.JavaMonitorEnter": (
         ("long", "startTime"),
         ("long", "duration"),

@@ -98,6 +98,20 @@
       "title": "Container Pid",
       "type": "integer"
     },
+    "container_uid": {
+      "anyOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Container Uid"
+    },
     "content_sha256": {
       "pattern": "^[a-f0-9]{64}$",
       "title": "Content Sha256",
@@ -158,8 +172,11 @@
       "type": "boolean"
     },
     "schema_version": {
-      "const": "1.0",
       "default": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },
@@ -175,6 +192,19 @@
       ],
       "title": "Target Kind",
       "type": "string"
+    },
+    "uid_map_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Uid Map Sha256"
     },
     "uid_mapping": {
       "enum": [

@@ -19,9 +19,18 @@ from perflens.contracts.docker_build import (
     DockerBuildToolProjection,
     DockerOptimizationIterationArtifact,
     DockerOptimizationSessionArtifact,
+    DockerRuntimeLockAuthorizationScope,
     OptimizationCollectionMode,
     derive_docker_build_artifact_id,
     derive_docker_optimization_iteration_id,
+    docker_runtime_lock_scope_sha256,
+    docker_runtime_lock_version_constraints,
+)
+from perflens.contracts.runtime_lock_sessions import (
+    RuntimeLockAdapterExecutionBinding,
+    RuntimeLockSessionBudget,
+    derive_runtime_lock_adapter_execution_identity,
+    derive_runtime_lock_toolchain_identity,
 )
 from perflens.docker.build_adapter import (
     DockerBuildExecutionResult,
@@ -96,9 +105,12 @@ class _FakeBuildAdapter:
         assert started_at is not None
         context = snapshot.artifact
         recipe = context.recipe_content_sha256
-        digest = "sha256:" + hashlib.sha256(
-            f"{context.archive_sha256}:{build_kind}:{candidate_round}".encode()
-        ).hexdigest()
+        digest = (
+            "sha256:"
+            + hashlib.sha256(
+                f"{context.archive_sha256}:{build_kind}:{candidate_round}".encode()
+            ).hexdigest()
+        )
         finished_at = started_at
         data = {
             "schema_version": "1.0",
@@ -271,6 +283,53 @@ def _authorize(runtime: DockerOptimizationRuntime):
     return result, session
 
 
+def _runtime_lock_scope() -> DockerRuntimeLockAuthorizationScope:
+    toolchain = derive_runtime_lock_toolchain_identity(())
+    binding = RuntimeLockAdapterExecutionBinding(
+        adapter_id="native_pthread",
+        adapter_version="native-pthread-adapter-v1",
+        backend_id="pthread-preload",
+        runtime_version="glibc-2.41",
+        profile="thresholded",
+        measurement_semantics="thresholded",
+        duration_threshold_ns=1_000,
+        tools=(),
+        toolchain_identity_sha256=toolchain,
+        configuration_sha256="6" * 64,
+        metadata_sha256="7" * 64,
+        execution_identity_sha256=derive_runtime_lock_adapter_execution_identity(
+            "native_pthread",
+            "native-pthread-adapter-v1",
+            "pthread-preload",
+            "glibc-2.41",
+            "thresholded",
+            "thresholded",
+            1_000,
+            toolchain,
+            "6" * 64,
+            "7" * 64,
+        ),
+    )
+    provisional = DockerRuntimeLockAuthorizationScope.model_construct(
+        schema_version="1.1",
+        runtime_lock_config_sha256="8" * 64,
+        capability_id="runtime-lock-capability-" + "9" * 20,
+        capability_content_sha256="a" * 64,
+        allowed_adapters=("native_pthread",),
+        allowed_semantics=("thresholded",),
+        adapter_execution_bindings=(binding,),
+        runtime_version_constraints=docker_runtime_lock_version_constraints((binding,)),
+        budget=RuntimeLockSessionBudget(),
+        content_sha256="0" * 64,
+    )
+    return DockerRuntimeLockAuthorizationScope.model_validate(
+        {
+            **provisional.model_dump(mode="json"),
+            "content_sha256": docker_runtime_lock_scope_sha256(provisional),
+        }
+    )
+
+
 def make_optimization_iteration(
     session: DockerOptimizationSessionArtifact,
     baseline: DockerBuildArtifact,
@@ -331,9 +390,7 @@ def make_optimization_iteration(
         "deterministic_replay_passed": True,
         "comparable": comparable,
         "conclusion": conclusion,
-        "improved_metrics": (
-            ("wall_time",) if conclusion == "verified_improvement" else ()
-        ),
+        "improved_metrics": (("wall_time",) if conclusion == "verified_improvement" else ()),
         "regressed_metrics": (),
         "warnings": (),
         "allowed_conclusions": ("Bounded test conclusion.",),
@@ -349,6 +406,84 @@ def make_optimization_iteration(
                 exclude={"content_sha256"},
             ),
         }
+    )
+
+
+def test_iteration_1_1_blocks_verified_result_on_runtime_lock_regression() -> None:
+    session = DockerOptimizationSessionArtifact.model_construct(
+        session_id="docker-optimization-session-" + "a" * 20,
+        session_artifact_id="docker-optimization-session-state-" + "1" * 20,
+        content_sha256="1" * 64,
+    )
+    baseline = DockerBuildArtifact.model_construct(
+        build_id="docker-build-" + "b" * 20,
+        candidate_round=0,
+        content_sha256="2" * 64,
+    )
+    candidate = DockerBuildArtifact.model_construct(
+        build_id="docker-build-" + "c" * 20,
+        candidate_round=1,
+        content_sha256="3" * 64,
+    )
+    original = make_optimization_iteration(
+        session,
+        baseline,
+        candidate,
+        conclusion="verified_improvement",
+    )
+    comparison_sha = "d" * 64
+    payload = original.model_dump(mode="json")
+    payload.update(
+        {
+            "schema_version": "1.1",
+            "runtime_lock_status": "complete",
+            "runtime_lock_comparison_id": "runtime-lock-comparison-" + "e" * 20,
+            "runtime_lock_comparison_content_sha256": comparison_sha,
+            "runtime_lock_conclusion": "candidate_regression",
+            "iteration_id": derive_docker_optimization_iteration_id(
+                original.session_id,
+                original.baseline_build_id,
+                original.candidate_build_id,
+                original.baseline_measurement_content_sha256,
+                original.candidate_measurement_content_sha256,
+                comparison_sha,
+            ),
+        }
+    )
+    with pytest.raises(ValidationError, match="lacks required matched evidence"):
+        DockerOptimizationIterationArtifact.model_validate(payload)
+
+
+def test_iteration_1_1_without_runtime_lock_forbids_lock_conclusions() -> None:
+    session = DockerOptimizationSessionArtifact.model_construct(
+        session_id="docker-optimization-session-" + "a" * 20,
+        session_artifact_id="docker-optimization-session-state-" + "1" * 20,
+        content_sha256="1" * 64,
+    )
+    baseline = DockerBuildArtifact.model_construct(
+        build_id="docker-build-" + "b" * 20,
+        candidate_round=0,
+        content_sha256="2" * 64,
+    )
+    candidate = DockerBuildArtifact.model_construct(
+        build_id="docker-build-" + "c" * 20,
+        candidate_round=1,
+        content_sha256="3" * 64,
+    )
+    payload = make_optimization_iteration(
+        session,
+        baseline,
+        candidate,
+        conclusion="verified_improvement",
+    ).model_dump(mode="json")
+    payload["schema_version"] = "1.1"
+    payload["runtime_lock_status"] = "not_selected"
+    with pytest.raises(ValidationError, match="must forbid lock conclusions"):
+        DockerOptimizationIterationArtifact.model_validate(payload)
+
+    payload["forbidden_conclusions"].append("runtime_lock_performance_conclusion")
+    assert DockerOptimizationIterationArtifact.model_validate(payload).conclusion == (
+        "verified_improvement"
     )
 
 
@@ -398,6 +533,68 @@ def test_runtime_requires_preview_before_build_and_allows_one_consent_flow(
     revoked = runtime.revoke(session.session_id)
     assert revoked.state == "revoked"
     assert adapter.cleaned == [baseline.build.build_id, candidate.build.build_id]
+
+
+def test_runtime_preview_and_session_embed_one_runtime_lock_authority(
+    tmp_path: Path,
+) -> None:
+    runtime, _, _ = make_optimization_runtime(tmp_path)
+    scope = _runtime_lock_scope()
+    preview = runtime.preview(
+        allowed_modes=("stat", "record"),
+        runtime_lock_scope=scope,
+    )
+    assert preview.preview.schema_version == "1.1"
+    assert preview.preview.runtime_lock_scope == scope
+    assert any(
+        "do not create a second Runtime Lock session" in action
+        for action in preview.preview.planned_actions
+    )
+    session = runtime.authorize(
+        preview_id=preview.preview.preview_id,
+        preview_content_sha256=preview.preview.content_sha256,
+        authorization_summary_sha256=preview.preview.authorization_summary_sha256,
+        explicit_authorization=EXPLICIT_DOCKER_OPTIMIZATION_AUTHORIZATION,
+    )
+    assert session.runtime_lock_scope == scope
+    assert session.runtime_lock_status == "active"
+
+    baseline = runtime.build(
+        session.session_id,
+        build_kind="baseline",
+        candidate_round=0,
+    )
+    lease = runtime.begin_workload(
+        session.session_id,
+        build_id=baseline.build.build_id,
+        mode="stat",
+        reserve_active_seconds=5,
+        reserve_evidence_bytes=500,
+    )
+    runtime.finish_workload(
+        session.session_id,
+        lease,
+        actual_active_seconds=4,
+        actual_evidence_bytes=400,
+    )
+    charged = runtime.charge_runtime_lock_use(
+        session.session_id,
+        lease,
+        actual_active_seconds=2,
+        actual_evidence_bytes=200,
+        exact_event_count=0,
+    )
+    assert charged.runtime_lock_runs_used == 1
+    assert charged.runtime_lock_evidence_bytes_used == 200
+
+
+def test_runtime_preview_without_runtime_lock_preserves_schema_1_0(tmp_path: Path) -> None:
+    runtime, _, _ = make_optimization_runtime(tmp_path)
+    preview = runtime.preview(allowed_modes=("stat",))
+    public = preview.preview.model_dump(mode="json", exclude_none=True)
+
+    assert preview.preview.schema_version == "1.0"
+    assert "runtime_lock_scope" not in public
 
 
 def test_failed_workload_is_charged_and_blocks_unchanged_session_retries(
@@ -454,6 +651,61 @@ def test_failed_workload_is_charged_and_blocks_unchanged_session_retries(
     assert adapter.cleaned == [baseline.build.build_id]
 
 
+def test_failed_runtime_lock_workload_poisoned_nested_scope_once(
+    tmp_path: Path,
+) -> None:
+    runtime, _, _ = make_optimization_runtime(tmp_path)
+    preview = runtime.preview(
+        allowed_modes=("stat",),
+        runtime_lock_scope=_runtime_lock_scope(),
+    )
+    session = runtime.authorize(
+        preview_id=preview.preview.preview_id,
+        preview_content_sha256=preview.preview.content_sha256,
+        authorization_summary_sha256=preview.preview.authorization_summary_sha256,
+        explicit_authorization=EXPLICIT_DOCKER_OPTIMIZATION_AUTHORIZATION,
+    )
+    baseline = runtime.build(
+        session.session_id,
+        build_kind="baseline",
+        candidate_round=0,
+    )
+    lease = runtime.begin_workload(
+        session.session_id,
+        build_id=baseline.build.build_id,
+        mode="stat",
+        reserve_active_seconds=5,
+        reserve_evidence_bytes=500,
+    )
+
+    failed = runtime.fail_workload(
+        session.session_id,
+        lease,
+        actual_active_seconds=1,
+        actual_evidence_bytes=0,
+        reason="Runtime Lock capture failed",
+        runtime_lock_requested=True,
+    )
+
+    assert failed.workload_runs_used == 1
+    assert failed.runtime_lock_status == "unavailable"
+    assert failed.runtime_lock_runs_used == 0
+    with pytest.raises(PerfLensError, match="stopped after a failed attempt"):
+        runtime.begin_workload(
+            session.session_id,
+            build_id=baseline.build.build_id,
+            mode="stat",
+            reserve_active_seconds=5,
+            reserve_evidence_bytes=500,
+        )
+    with pytest.raises(PerfLensError, match="failed-finalization was replayed"):
+        runtime.fail_completed_runtime_lock_use(
+            session.session_id,
+            lease,
+            reason="duplicate",
+        )
+
+
 def test_runtime_finalizes_unevaluated_candidate_after_collection_failure(
     tmp_path: Path,
 ) -> None:
@@ -497,9 +749,7 @@ def test_runtime_finalizes_unevaluated_candidate_after_collection_failure(
         candidate_build_id=candidate.build.build_id,
         evaluation_reason="collection_failed",
         disposition="retain_candidate",
-        explicit_unverified_acceptance=(
-            EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE
-        ),
+        explicit_unverified_acceptance=(EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE),
     )
 
     assert failed_session.workload_runs_used == 1
@@ -635,9 +885,7 @@ def test_runtime_requires_fresh_consent_to_retain_unverified_candidate(
         authorized.session_id,
         iteration=iteration,
         disposition="retain_candidate",
-        explicit_unverified_acceptance=(
-            EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE
-        ),
+        explicit_unverified_acceptance=(EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE),
     )
 
     assert result.session.state == "revoked"
@@ -695,9 +943,7 @@ def test_runtime_finalizes_restored_baseline_without_unverified_acceptance(
             authorized.session_id,
             iteration=iteration,
             disposition="restore_baseline",
-            explicit_unverified_acceptance=(
-                EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE
-            ),
+            explicit_unverified_acceptance=(EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE),
         )
 
     result = runtime.finalize_candidate(
@@ -761,9 +1007,7 @@ def test_runtime_rejects_disposition_when_workspace_or_iteration_changed(
             authorized.session_id,
             iteration=wrong_session,
             disposition="retain_candidate",
-            explicit_unverified_acceptance=(
-                EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE
-            ),
+            explicit_unverified_acceptance=(EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE),
         )
     wrong_build = iteration.model_copy(
         update={
@@ -784,9 +1028,7 @@ def test_runtime_rejects_disposition_when_workspace_or_iteration_changed(
             authorized.session_id,
             iteration=wrong_build,
             disposition="retain_candidate",
-            explicit_unverified_acceptance=(
-                EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE
-            ),
+            explicit_unverified_acceptance=(EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE),
         )
     forged = iteration.model_copy(update={"content_sha256": "0" * 64})
     with pytest.raises(PerfLensError, match="content digest does not match"):
@@ -794,9 +1036,7 @@ def test_runtime_rejects_disposition_when_workspace_or_iteration_changed(
             authorized.session_id,
             iteration=forged,
             disposition="retain_candidate",
-            explicit_unverified_acceptance=(
-                EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE
-            ),
+            explicit_unverified_acceptance=(EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE),
         )
     assert runtime.snapshot(authorized.session_id).state == "active"
 
@@ -829,9 +1069,7 @@ def test_runtime_revokes_finalization_after_immutable_context_drift(
             authorized.session_id,
             iteration=iteration,
             disposition="retain_candidate",
-            explicit_unverified_acceptance=(
-                EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE
-            ),
+            explicit_unverified_acceptance=(EXPLICIT_UNVERIFIED_DOCKER_CANDIDATE_ACCEPTANCE),
         )
 
     assert runtime.snapshot(authorized.session_id).state == "revoked"

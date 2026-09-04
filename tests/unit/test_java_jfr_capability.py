@@ -23,6 +23,17 @@ class DataLoss extends jdk.jfr.Event {
   long amount;
   long total;
 }
+@Name("jdk.JVMInformation")
+class JVMInformation extends jdk.jfr.Event {
+  long startTime;
+  String jvmName;
+  String jvmVersion;
+  String jvmArguments;
+  String jvmFlags;
+  String javaArguments;
+  long jvmStartTime;
+  long pid;
+}
 @Name("jdk.JavaMonitorEnter")
 class JavaMonitorEnter extends jdk.jfr.Event {
   long startTime;
@@ -479,7 +490,7 @@ def test_local_jdk25_metadata_has_reviewed_surface() -> None:
             jfr,
             "metadata",
             "--events",
-            "jdk.DataLoss,jdk.JavaMonitorEnter,jdk.JavaMonitorWait,jdk.ThreadPark",
+            "jdk.DataLoss,jdk.JVMInformation,jdk.JavaMonitorEnter,jdk.JavaMonitorWait,jdk.ThreadPark",
         ],
         check=True,
         capture_output=True,
@@ -488,7 +499,7 @@ def test_local_jdk25_metadata_has_reviewed_surface() -> None:
     )
     surface = parse_java_jfr_metadata(result.stdout)
     assert surface.data_loss_disclosed is True
-    assert len(surface.events) == 4
+    assert len(surface.events) == 5
 
 
 @pytest.mark.skipif(
@@ -502,7 +513,7 @@ def test_local_jdk21_metadata_has_reviewed_surface() -> None:
             jfr,
             "metadata",
             "--events",
-            "jdk.DataLoss,jdk.JavaMonitorEnter,jdk.JavaMonitorWait,jdk.ThreadPark",
+            "jdk.DataLoss,jdk.JVMInformation,jdk.JavaMonitorEnter,jdk.JavaMonitorWait,jdk.ThreadPark",
         ],
         check=True,
         capture_output=True,
@@ -511,4 +522,4 @@ def test_local_jdk21_metadata_has_reviewed_surface() -> None:
     )
     surface = parse_java_jfr_metadata(result.stdout)
     assert surface.data_loss_disclosed is True
-    assert len(surface.events) == 4
+    assert len(surface.events) == 5

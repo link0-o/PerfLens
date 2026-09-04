@@ -197,7 +197,7 @@ class ContainerCgroupIdentity(ContractModel):
 class ContainerTargetArtifact(ContractModel):
     """Public proof that one container process maps to one immutable host PID."""
 
-    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1"] = SCHEMA_VERSION
     perflens_version: str
     target_id: ContainerTargetId
     created_at: str
@@ -207,6 +207,8 @@ class ContainerTargetArtifact(ContractModel):
     container_pid: int = Field(gt=0)
     host_pid: int = Field(gt=0)
     host_uid: int = Field(ge=0)
+    container_uid: int | None = Field(default=None, ge=0, le=4_294_967_295)
+    uid_map_sha256: Sha256 | None = None
     host_start_time_ticks: int = Field(gt=0)
     executable_name: str = Field(pattern=r"^[^/\x00]{1,255}$")
     namespace: ContainerNamespaceIdentity
@@ -236,6 +238,16 @@ class ContainerTargetArtifact(ContractModel):
             )
         if self.uid_mapping != "rootful_cross_uid" and self.rootful_risk_authorized:
             raise ValueError("same-UID Docker targets cannot claim cross-UID risk authorization")
+        if (self.container_uid is None) != (self.uid_map_sha256 is None):
+            raise ValueError("container UID and UID-map identity must be supplied together")
+        if self.schema_version == "1.0" and self.container_uid is not None:
+            raise ValueError("Container Target 1.0 cannot carry container UID-map evidence")
+        if (
+            self.schema_version == "1.1"
+            and self.target_kind == "managed_temporary_container"
+            and self.container_uid is None
+        ):
+            raise ValueError("managed Container Target 1.1 requires container UID-map evidence")
         return self
 
 
@@ -1057,9 +1069,7 @@ class ContainerMeasurementArtifact(ContractModel):
         benchmark_binding_count = sum(value is not None for value in benchmark_binding)
         if benchmark_binding_count not in {0, len(benchmark_binding)}:
             raise ValueError("container benchmark contract and evidence bindings disagree")
-        if not managed and (
-            any(value is not None for value in benchmark_binding)
-        ):
+        if not managed and (any(value is not None for value in benchmark_binding)):
             raise ValueError(
                 "existing container measurement cannot claim managed benchmark evidence"
             )

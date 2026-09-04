@@ -722,6 +722,8 @@ class ContainerCollectionTargetBinding(ContractModel):
     container_pid: int = Field(gt=0)
     host_pid: int = Field(gt=0)
     host_uid: int = Field(ge=0)
+    container_uid: int | None = Field(default=None, ge=0, le=4_294_967_295)
+    uid_map_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     host_start_time_ticks: int = Field(gt=0)
     executable_name: str = Field(pattern=r"^[^/\x00]{1,255}$")
     namespace: ContainerCollectionNamespaceBinding
@@ -748,6 +750,10 @@ class ContainerCollectionTargetBinding(ContractModel):
             raise ValueError("cross-UID Docker collection requires explicit rootful risk approval")
         if self.uid_mapping != "rootful_cross_uid" and self.rootful_risk_authorized:
             raise ValueError("same-UID Docker collection cannot claim cross-UID risk approval")
+        if (self.container_uid is None) != (self.uid_map_sha256 is None):
+            raise ValueError("container UID and UID-map identity must be supplied together")
+        if self.uid_mapping == "rootful_cross_uid" and self.container_uid not in {None, 0}:
+            raise ValueError("cross-UID rootful Docker collection is limited to container UID 0")
         return self
 
 

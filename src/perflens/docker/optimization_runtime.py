@@ -31,6 +31,7 @@ from perflens.contracts.docker_build import (
     DockerOptimizationIterationArtifact,
     DockerOptimizationPreviewArtifact,
     DockerOptimizationSessionArtifact,
+    DockerRuntimeLockAuthorizationScope,
     OptimizationCollectionMode,
     OptimizationEvaluationReason,
     derive_docker_optimization_disposition_id,
@@ -140,9 +141,9 @@ class DockerOptimizationRuntime:
         self._build_adapter_factory = build_adapter_factory
         self._collector_available = collector_available
         self._collector_modes = _canonical_modes(collector_modes)
-        self._client_identity = client_connection_identity_sha256 or hashlib.sha256(
-            secrets.token_bytes(32)
-        ).hexdigest()
+        self._client_identity = (
+            client_connection_identity_sha256 or hashlib.sha256(secrets.token_bytes(32)).hexdigest()
+        )
         _validate_sha256(self._client_identity, "Docker optimization client connection")
         self._wall_clock = wall_clock or (lambda: datetime.now(tz=UTC))
         self._monotonic_clock = monotonic_clock or time.monotonic
@@ -175,9 +176,11 @@ class DockerOptimizationRuntime:
             buildx_tool = adapter.buildx_tool_projection
             builder = adapter.builder_projection
             tiers = adapter.available_network_tiers
-            base_present = adapter.base_image_present(
-                self._policy.optimization.base_image_digest
-            ) if self._policy.optimization.base_image_digest else False
+            base_present = (
+                adapter.base_image_present(self._policy.optimization.base_image_digest)
+                if self._policy.optimization.base_image_digest
+                else False
+            )
         except PerfLensError:
             docker_tool = None
             buildx_tool = None
@@ -205,8 +208,13 @@ class DockerOptimizationRuntime:
         self,
         *,
         allowed_modes: tuple[OptimizationCollectionMode, ...],
+        runtime_lock_scope: DockerRuntimeLockAuthorizationScope | None = None,
     ) -> DockerOptimizationPreviewResult:
         modes = _canonical_modes(allowed_modes)
+        if runtime_lock_scope is not None:
+            runtime_lock_scope = DockerRuntimeLockAuthorizationScope.model_validate(
+                runtime_lock_scope.model_dump(mode="json")
+            )
         if any(mode not in self._collector_modes for mode in modes):
             raise _authorization_error(
                 "Docker optimization Preview requests a mode unavailable from the Collector"
@@ -263,15 +271,14 @@ class DockerOptimizationRuntime:
                     recipe=recipe,
                     context=snapshot.artifact,
                     modes=modes,
+                    runtime_lock_scope=runtime_lock_scope,
                 )
                 pending = _PendingPreview(
                     result=result,
                     snapshot=snapshot,
                     adapter=adapter,
                     private_directory=private_directory,
-                    monotonic_expires_at=(
-                        self._monotonic_clock() + _PREVIEW_EXPIRY_SECONDS
-                    ),
+                    monotonic_expires_at=(self._monotonic_clock() + _PREVIEW_EXPIRY_SECONDS),
                 )
                 self._pending[result.preview.preview_id] = pending
                 self._schedule_cleanup_locked()
@@ -361,9 +368,7 @@ class DockerOptimizationRuntime:
                     runtime_session.latest_treatment_manifest_sha256
                 ):
                     _discard_snapshot(snapshot)
-                    raise _authorization_error(
-                        "Docker candidate has no new authorized Treatment"
-                    )
+                    raise _authorization_error("Docker candidate has no new authorized Treatment")
             lease = self._authority.begin_build(
                 runtime_session.access,
                 project_identity_sha256=self._project.identity_sha256,
@@ -497,8 +502,7 @@ class DockerOptimizationRuntime:
                     or iteration.session_artifact_id != source_session.session_artifact_id
                     or iteration.session_artifact_content_sha256 != source_session.content_sha256
                     or iteration.baseline_build_id != source_session.baseline_build_id
-                    or iteration.candidate_build_id
-                    != source_session.latest_candidate_build_id
+                    or iteration.candidate_build_id != source_session.latest_candidate_build_id
                 ):
                     raise _authorization_error(
                         "Docker optimization disposition differs from the current Session"
@@ -515,9 +519,7 @@ class DockerOptimizationRuntime:
                 )
                 iteration_conclusion = iteration.conclusion
             retaining = disposition == "retain_candidate"
-            requires_acceptance = (
-                retaining and iteration_conclusion != "verified_improvement"
-            )
+            requires_acceptance = retaining and iteration_conclusion != "verified_improvement"
             if requires_acceptance:
                 if explicit_unverified_acceptance is None or not hmac.compare_digest(
                     explicit_unverified_acceptance,
@@ -541,20 +543,14 @@ class DockerOptimizationRuntime:
                 created_at=self._wall_now(),
             )
             try:
-                if (
-                    current.artifact.immutable_manifest_sha256
-                    != selected.immutable_manifest_sha256
-                ):
+                if current.artifact.immutable_manifest_sha256 != selected.immutable_manifest_sha256:
                     self._authority.revoke(runtime_session.access)
                     self._release_runtime_session_locked(session_id, runtime_session)
                     self._schedule_cleanup_locked()
                     raise _authorization_error(
                         "Docker optimization immutable context changed before finalization"
                     )
-                if (
-                    current.artifact.mutable_manifest_sha256
-                    != selected.treatment_manifest_sha256
-                ):
+                if current.artifact.mutable_manifest_sha256 != selected.treatment_manifest_sha256:
                     raise _authorization_error(
                         "Docker optimization workspace does not match the selected final Build"
                     )
@@ -641,9 +637,7 @@ class DockerOptimizationRuntime:
     ) -> DockerBuildArtifact:
         result = runtime_session.builds.get(build_id)
         if result is None:
-            raise _authorization_error(
-                "Docker optimization Build is outside the current Session"
-            )
+            raise _authorization_error("Docker optimization Build is outside the current Session")
         _verify_contract_content(result.artifact, "Docker Build")
         return result.artifact
 
@@ -676,20 +670,14 @@ class DockerOptimizationRuntime:
                 created_at=self._wall_now(),
             )
             try:
-                if (
-                    current.artifact.immutable_manifest_sha256
-                    != build.immutable_manifest_sha256
-                ):
+                if current.artifact.immutable_manifest_sha256 != build.immutable_manifest_sha256:
                     self._authority.revoke(runtime_session.access)
                     self._release_runtime_session_locked(session_id, runtime_session)
                     self._schedule_cleanup_locked()
                     raise _authorization_error(
                         "Docker optimization immutable context changed before collection"
                     )
-                if (
-                    current.artifact.mutable_manifest_sha256
-                    != build.treatment_manifest_sha256
-                ):
+                if current.artifact.mutable_manifest_sha256 != build.treatment_manifest_sha256:
                     raise _authorization_error(
                         "Docker optimization workspace no longer matches the selected Build"
                     )
@@ -729,13 +717,72 @@ class DockerOptimizationRuntime:
                 self._schedule_cleanup_locked()
             return artifact
 
+    def charge_runtime_lock_use(
+        self,
+        session_id: str,
+        lease: DockerOptimizationWorkloadLease,
+        *,
+        actual_active_seconds: float,
+        actual_evidence_bytes: int,
+        exact_event_count: int,
+        result_status: Literal["active", "partial", "unavailable"] = "active",
+    ) -> DockerOptimizationSessionArtifact:
+        """Charge Runtime Lock as a replay-safe subset of one completed workload."""
+        with self._lock:
+            runtime_session = self._require_runtime_session_locked(session_id)
+            return self._authority.charge_runtime_lock_use(
+                runtime_session.access,
+                lease,
+                actual_active_seconds=actual_active_seconds,
+                actual_evidence_bytes=actual_evidence_bytes,
+                exact_event_count=exact_event_count,
+                result_status=result_status,
+            )
+
+    def fail_completed_runtime_lock_use(
+        self,
+        session_id: str,
+        lease: DockerOptimizationWorkloadLease,
+        *,
+        reason: str,
+    ) -> DockerOptimizationSessionArtifact:
+        """Stop further collection after Runtime Lock post-processing failed."""
+
+        with self._lock:
+            runtime_session = self._require_runtime_session_locked(session_id)
+            artifact = self._authority.fail_completed_runtime_lock_use(
+                runtime_session.access,
+                lease,
+            )
+            runtime_session.workload_collection_blocked = True
+            runtime_session.workload_failure_reason = reason.strip()[:512] or (
+                "Docker Runtime Lock finalization failed."
+            )
+            return artifact
+
+    def mark_runtime_lock_published(
+        self,
+        session_id: str,
+        lease: DockerOptimizationWorkloadLease,
+    ) -> DockerOptimizationSessionArtifact:
+        """Seal a Runtime Lock result only after both public artifacts exist."""
+
+        with self._lock:
+            runtime_session = self._require_runtime_session_locked(session_id)
+            return self._authority.mark_runtime_lock_published(
+                runtime_session.access,
+                lease,
+            )
+
     def fail_workload(
         self,
         session_id: str,
         lease: DockerOptimizationWorkloadLease,
         *,
         actual_active_seconds: float,
+        actual_evidence_bytes: int = 0,
         reason: str,
+        runtime_lock_requested: bool = False,
     ) -> DockerOptimizationSessionArtifact:
         """Charge one failed attempt, release its reservation, and stop collection in-session."""
         with self._lock:
@@ -744,8 +791,13 @@ class DockerOptimizationRuntime:
                 runtime_session.access,
                 lease,
                 actual_active_seconds=actual_active_seconds,
-                actual_evidence_bytes=0,
+                actual_evidence_bytes=actual_evidence_bytes,
             )
+            if runtime_lock_requested and artifact.state == "active":
+                artifact = self._authority.fail_completed_runtime_lock_use(
+                    runtime_session.access,
+                    lease,
+                )
             runtime_session.workload_collection_blocked = True
             runtime_session.workload_failure_reason = reason.strip()[:512] or (
                 "Docker optimization collection failed."
@@ -800,6 +852,7 @@ class DockerOptimizationRuntime:
         recipe: DockerBuildRecipeArtifact,
         context: DockerBuildContextArtifact,
         modes: tuple[OptimizationCollectionMode, ...],
+        runtime_lock_scope: DockerRuntimeLockAuthorizationScope | None,
     ) -> DockerOptimizationPreviewResult:
         now = self._wall_now()
         expires = now + timedelta(seconds=_PREVIEW_EXPIRY_SECONDS)
@@ -821,12 +874,22 @@ class DockerOptimizationRuntime:
                 0,
                 "After consent, fetch only the administrator-pinned base image digest.",
             )
+        if runtime_lock_scope is not None:
+            planned.append(
+                "Reuse this consent for bounded Runtime Lock evidence from the same authorized "
+                "container workload; do not create a second Runtime Lock session."
+            )
         warnings: list[str] = []
         if recipe.mutable_dockerfile:
             warnings.append("The Dockerfile is mutable inside this authorization and is high risk.")
         if recipe.mutable_dependency_lock:
             warnings.append(
                 "A dependency lock file is mutable inside this authorization and is high risk."
+            )
+        if runtime_lock_scope is not None and "exact" in runtime_lock_scope.allowed_semantics:
+            warnings.append(
+                "Exact Runtime Lock evidence is short-lived, event-bounded, and may add "
+                "diagnostic overhead."
             )
         preview_id = derive_docker_optimization_preview_id(
             self._project.identity_sha256,
@@ -850,10 +913,17 @@ class DockerOptimizationRuntime:
                 "budget": recipe.budget.model_dump(mode="json"),
                 "actions": planned,
                 "warnings": warnings,
+                **(
+                    {
+                        "runtime_lock_scope": runtime_lock_scope.model_dump(mode="json"),
+                    }
+                    if runtime_lock_scope is not None
+                    else {}
+                ),
             }
         )
         data = {
-            "schema_version": "1.0",
+            "schema_version": "1.1" if runtime_lock_scope is not None else "1.0",
             "perflens_version": __version__,
             "preview_id": preview_id,
             "created_at": now.isoformat(),
@@ -877,6 +947,7 @@ class DockerOptimizationRuntime:
             "mutable_dockerfile": recipe.mutable_dockerfile,
             "mutable_dependency_lock": recipe.mutable_dependency_lock,
             "budget": recipe.budget,
+            "runtime_lock_scope": runtime_lock_scope,
             "planned_actions": tuple(planned),
             "warnings": tuple(warnings),
             "authorization_summary_sha256": summary,
@@ -982,8 +1053,10 @@ class DockerOptimizationRuntime:
         delays.extend(
             max(
                 0.0,
-                (datetime.fromisoformat(self._authority.snapshot(session.access).expires_at)
-                - wall_now).total_seconds(),
+                (
+                    datetime.fromisoformat(self._authority.snapshot(session.access).expires_at)
+                    - wall_now
+                ).total_seconds(),
             )
             for session in self._sessions.values()
             if self._authority.snapshot(session.access).state == "active"
@@ -1185,9 +1258,7 @@ def _build_disposition_artifact(
         "final_session_artifact_content_sha256": final_session.content_sha256,
         "final_session_state": "revoked",
         "iteration_id": iteration.iteration_id if iteration is not None else None,
-        "iteration_content_sha256": (
-            iteration.content_sha256 if iteration is not None else None
-        ),
+        "iteration_content_sha256": (iteration.content_sha256 if iteration is not None else None),
         "iteration_conclusion": (
             iteration.conclusion if iteration is not None else "not_evaluated"
         ),

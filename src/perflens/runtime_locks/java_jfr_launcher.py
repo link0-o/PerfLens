@@ -596,6 +596,30 @@ class _DirectoryIdentity:
     mode: int
 
 
+def inspect_java_jfr_tool_identity(policy: JavaJfrFilePolicy) -> JavaJfrFileIdentity:
+    """Revalidate one authorized JFR executable before private Docker conversion."""
+
+    return _inspect_policy_file(policy, executable=True, max_bytes=256 << 20)
+
+
+def assert_java_jfr_launch_policy_current(policy: JavaJfrLaunchPolicy) -> None:
+    """Reopen every file and directory bound by a Java launch Preview."""
+
+    _inspect_policy_file(policy.java_tool, executable=True, max_bytes=256 << 20)
+    _inspect_policy_file(policy.jfr_tool, executable=True, max_bytes=256 << 20)
+    _inspect_policy_file(policy.jfc_profile, executable=False, max_bytes=1 << 20)
+    for directory in (
+        policy.runtime_payload.jdk_root,
+        policy.runtime_payload.bin_directory,
+        policy.runtime_payload.lib_directory,
+    ):
+        _inspect_runtime_directory(directory)
+    _inspect_runtime_payload_file(policy.runtime_payload.release_file, max_bytes=1 << 20)
+    _inspect_runtime_payload_file(policy.runtime_payload.modules_file, max_bytes=512 << 20)
+    for library in policy.runtime_payload.native_libraries:
+        _inspect_runtime_native_library(library)
+
+
 class JavaJfrLauncher:
     """Launch one content-bound executable JAR with fixed startup JFR."""
 

@@ -37,9 +37,7 @@ _MAX_PROFILE_BYTES = 64 << 20
 _MAX_ARGUMENTS = 128
 _MAX_ARGUMENT_BYTES = 32 << 10
 _GO_BUILD_VERSION = re.compile(r"^[^\n]+: go(1\.(?:24|25|26|27)(?:\.[0-9]+)?)$")
-_MEMFD_SEALS = (
-    fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
-)
+_MEMFD_SEALS = fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,9 +342,7 @@ class GoPprofLauncher:
             if receipt.termination_reason != "exited" or receipt.exit_code != 0:
                 raise _error("fixed go tool pprof -raw conversion failed")
             os.fsync(raw_fd)
-            raw_sha256, raw_size, raw_device, raw_inode = _inspect_profile_fd(
-                raw_fd, self._uid
-            )
+            raw_sha256, raw_size, raw_device, raw_inode = _inspect_profile_fd(raw_fd, self._uid)
             os.close(raw_fd)
             raw_fd = -1
             os.fsync(output_root_fd)
@@ -436,6 +432,25 @@ def inspect_go_target(
         go_version=go_version,
         identity_sha256=identity,
     )
+
+
+def inspect_pinned_go_executable_version(
+    go_tool: GoToolIdentity,
+    executable_fd: int,
+) -> str:
+    """Read a descriptor-pinned container executable with the fixed local Go tool."""
+
+    try:
+        metadata = os.fstat(executable_fd)
+    except OSError as exc:
+        raise _error("Pinned Go target descriptor is unavailable") from exc
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) & 0o111 == 0:
+        raise _error("Pinned Go target is not an executable regular file")
+    _assert_go_tool(go_tool)
+    version = _go_binary_version(go_tool, executable_fd)
+    if not version.startswith(tuple(f"1.{minor}" for minor in range(24, 28))):
+        raise _error("Go target version is outside the reviewed 1.24-1.27 matrix")
+    return version
 
 
 def open_go_pprof_raw(result: GoPprofRawResult) -> int:
@@ -586,10 +601,16 @@ def _directory(path: Path, uid: int, required_mode: int | None) -> tuple[Path, o
 def _open_directory(identity: tuple[Path, os.stat_result]) -> int:
     descriptor = os.open(identity[0], os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY)
     metadata = os.fstat(descriptor)
-    if (metadata.st_dev, metadata.st_ino, metadata.st_uid) != (
+    if (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_uid,
+        stat.S_IMODE(metadata.st_mode),
+    ) != (
         identity[1].st_dev,
         identity[1].st_ino,
         identity[1].st_uid,
+        stat.S_IMODE(identity[1].st_mode),
     ):
         os.close(descriptor)
         raise _error("Go launcher directory identity changed")
@@ -686,6 +707,12 @@ def _open_go_tool(tool: GoToolIdentity) -> int:
 def _assert_go_tool(tool: GoToolIdentity) -> None:
     descriptor = _open_go_tool(tool)
     os.close(descriptor)
+
+
+def assert_go_tool_identity(tool: GoToolIdentity) -> None:
+    """Revalidate an authorized Go/pprof executable without invoking it."""
+
+    _assert_go_tool(tool)
 
 
 def _hash_fd(descriptor: int) -> str:

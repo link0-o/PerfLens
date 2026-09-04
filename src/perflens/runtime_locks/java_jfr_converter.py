@@ -23,13 +23,19 @@ from perflens.contracts.runtime_lock_sessions import (
 from perflens.contracts.runtime_locks import RuntimeLockEvidenceArtifact, RuntimeToolIdentity
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.runtime_locks.importer import import_runtime_lock_ndjson
-from perflens.runtime_locks.java_jfr_models import JfrDataLossEvent, JfrLockEvent, JfrThread
+from perflens.runtime_locks.java_jfr_models import (
+    JfrDataLossEvent,
+    JfrJvmInformationEvent,
+    JfrLockEvent,
+    JfrThread,
+)
 from perflens.runtime_locks.java_jfr_stream import JfrJsonEventStream
 
 JAVA_JFR_CONVERTER_VERSION = "java-jfr-converter-v1"
 _DURATION = re.compile(r"^PT([0-9]+)(?:\.([0-9]{1,9}))?S$")
 _TIMESTAMP = re.compile(r"^(.*?)(?:\.([0-9]{1,9}))?([+-][0-9]{2}:[0-9]{2}|Z)$")
 _SUPPORTED_JDKS = frozenset({17, 21, 25})
+_JVM_RUNTIME_VERSION = re.compile(r"\bJRE \(((?:17|21|25)\.[A-Za-z0-9.+_-]+)\)")
 _MAX_NORMALIZED_SOURCE_BYTES = 67_108_864
 _MAX_TIME_NS = (1 << 63) - 1
 
@@ -89,6 +95,7 @@ def convert_java_jfr_json(
     target_uid: int,
     target_start_time_ticks: int,
     created_at: str,
+    require_jvm_information: bool = False,
 ) -> JavaJfrConversionReceipt:
     jdk_major, duration_threshold_ns, jfr_tool = _validate_execution_binding(execution_binding)
     if jdk_major not in _SUPPORTED_JDKS:
@@ -103,7 +110,16 @@ def convert_java_jfr_json(
     stack_tokens: dict[str, str] = {}
     stack_truncated = False
     empty_stack_trace_count = 0
+    target_runtime_version: str | None = None
     for source_index, event in enumerate(reader):
+        if isinstance(event, JfrJvmInformationEvent):
+            if target_runtime_version is not None or event.values.pid != target_pid:
+                raise _invalid("JFR JVMInformation does not identify exactly one target JVM")
+            match = _JVM_RUNTIME_VERSION.search(event.values.jvmVersion)
+            if match is None or int(match.group(1).split(".", 1)[0]) != jdk_major:
+                raise _invalid("JFR JVMInformation runtime is outside the authorized JDK")
+            target_runtime_version = match.group(1)
+            continue
         if isinstance(event, JfrDataLossEvent):
             lost_bytes += event.values.amount
             continue
@@ -171,6 +187,9 @@ def convert_java_jfr_json(
         projected.append(record)
     if reader.identity is None:
         raise _invalid("JFR JSON stream did not reach a complete footer")
+    if require_jvm_information and target_runtime_version is None:
+        raise _invalid("JFR evidence lacks required JVMInformation runtime identity")
+    observed_runtime_version = target_runtime_version or execution_binding.runtime_version
     projected.sort(
         key=lambda record: (cast(int, record["timestamp_ns"]), cast(str, record["source_event_id"]))
     )
@@ -178,7 +197,7 @@ def convert_java_jfr_json(
         "schema_version": "1.1",
         "record_type": "runtime_lock_header",
         "runtime": "java",
-        "runtime_version": execution_binding.runtime_version,
+        "runtime_version": observed_runtime_version,
         "adapter_id": "java_jfr",
         "adapter_version": execution_binding.adapter_version,
         "backend_id": "jfr",
@@ -247,6 +266,7 @@ def convert_java_jfr_json(
         empty_stack_trace_count=empty_stack_trace_count,
         execution_binding=execution_binding,
         jfr_tool=jfr_tool,
+        runtime_version=observed_runtime_version,
     )
     return JavaJfrConversionReceipt(
         evidence=evidence,
@@ -266,6 +286,7 @@ def verify_java_jfr_replay(
     target_uid: int,
     target_start_time_ticks: int,
     created_at: str,
+    require_jvm_information: bool = False,
 ) -> JavaJfrConversionReceipt | None:
     """Replay conversion and return the complete receipt only on exact identity.
 
@@ -282,6 +303,7 @@ def verify_java_jfr_replay(
         target_uid=target_uid,
         target_start_time_ticks=target_start_time_ticks,
         created_at=created_at,
+        require_jvm_information=require_jvm_information,
     )
     if (
         serialize_json(replay.evidence) != serialize_json(expected.evidence)
@@ -418,6 +440,7 @@ def _bind_raw_source(
     empty_stack_trace_count: int,
     execution_binding: RuntimeLockAdapterExecutionBinding,
     jfr_tool: RuntimeLockAdapterToolBinding,
+    runtime_version: str,
 ) -> RuntimeLockEvidenceArtifact:
     source0 = evidence.source.model_copy(
         update={
@@ -428,6 +451,7 @@ def _bind_raw_source(
             "adapter_version": execution_binding.adapter_version,
             "backend_id": "jfr",
             "backend_version": execution_binding.runtime_version,
+            "runtime_version": runtime_version,
             "source_sha256": raw_sha256,
             "source_bytes": raw_bytes,
             "target_scope": "bound_pid",

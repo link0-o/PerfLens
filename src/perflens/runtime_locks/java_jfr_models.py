@@ -8,7 +8,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, model_validator
 
 JFR_LOCK_EVENT_TYPES = frozenset(
-    {"jdk.JavaMonitorEnter", "jdk.JavaMonitorWait", "jdk.ThreadPark", "jdk.DataLoss"}
+    {
+        "jdk.JavaMonitorEnter",
+        "jdk.JavaMonitorWait",
+        "jdk.ThreadPark",
+        "jdk.DataLoss",
+        "jdk.JVMInformation",
+    }
 )
 
 
@@ -140,7 +146,23 @@ class JfrDataLossEvent(_StrictModel):
     values: JfrDataLossValues
 
 
-type JfrPrivateEvent = JfrLockEvent | JfrDataLossEvent
+class JfrJvmInformationValues(_StrictModel):
+    startTime: StrictStr = Field(max_length=128)
+    jvmName: StrictStr = Field(min_length=1, max_length=1024)
+    jvmVersion: StrictStr = Field(min_length=1, max_length=8192)
+    jvmArguments: StrictStr | None = Field(default=None, max_length=65_536)
+    jvmFlags: StrictStr | None = Field(default=None, max_length=65_536)
+    javaArguments: StrictStr | None = Field(default=None, max_length=65_536)
+    jvmStartTime: StrictStr = Field(max_length=128)
+    pid: StrictInt = Field(gt=0)
+
+
+class JfrJvmInformationEvent(_StrictModel):
+    type: Literal["jdk.JVMInformation"]
+    values: JfrJvmInformationValues
+
+
+type JfrPrivateEvent = JfrLockEvent | JfrDataLossEvent | JfrJvmInformationEvent
 
 
 @dataclass(frozen=True, slots=True)

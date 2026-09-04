@@ -52,6 +52,7 @@ from perflens.contracts.docker import (
     ContainerResourceContextArtifact,
     ContainerRunArtifact,
     ContainerSymbolContextArtifact,
+    ContainerTargetArtifact,
     ContainerWorkloadSpecArtifact,
     derive_container_module_snapshot_id,
     derive_container_symbol_context_id,
@@ -96,6 +97,12 @@ from perflens.docker.optimization_comparison import (
 )
 from perflens.docker.symbols import assert_public_container_analysis
 from perflens.domain.errors import ErrorCode, PerfLensError
+from perflens.runtime_locks.comparison import (
+    compare_runtime_lock_analyses,
+    docker_runtime_lock_fixed_environment_sha256,
+    runtime_lock_resource_environment_sha256,
+)
+from perflens.runtime_locks.docker_capture import bind_observed_runtime_execution
 from perflens.security.paths import validate_new_output_file
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -355,7 +362,68 @@ class ArtifactStore:
             "runtime-lock-evidence",
         )
         validate_runtime_lock_evidence_invariants(evidence)
+        self._verify_runtime_lock_container_reference(evidence)
         return evidence
+
+    def load_container_target(self, target_id: str) -> ContainerTargetArtifact:
+        target = self._load(target_id, "container-target", ContainerTargetArtifact)
+        self._require_embedded_id(target.target_id, target_id, "container-target")
+        self._verify_docker_content(
+            target,
+            target.content_sha256,
+            target_id,
+            "container-target",
+        )
+        return target
+
+    def _verify_runtime_lock_container_reference(
+        self,
+        evidence: RuntimeLockEvidenceArtifact,
+    ) -> None:
+        reference = evidence.target.container_reference
+        if evidence.target.target_kind != "docker":
+            if reference is not None:
+                raise self._identity_error(
+                    evidence.runtime_lock_evidence_id,
+                    "runtime-lock-evidence",
+                )
+            return
+        if reference is None:
+            raise self._identity_error(
+                evidence.runtime_lock_evidence_id,
+                "runtime-lock-evidence",
+            )
+        target = self.load_container_target(reference.container_target_id)
+        run = self.load_container_run(reference.container_run_id)
+        # v0.3.x targets recorded only the host-side PID/UID.  Schema 1.1 adds
+        # the container-visible UID and binds Runtime Lock evidence to the
+        # container namespace.  Keep strict legacy replay without confusing
+        # the two identities for new artifacts.
+        expected_target_pid = (
+            target.container_pid if target.container_uid is not None else target.host_pid
+        )
+        expected_target_uid = (
+            target.container_uid if target.container_uid is not None else target.host_uid
+        )
+        if (
+            target.content_sha256 != reference.container_target_content_sha256
+            or run.content_sha256 != reference.container_run_content_sha256
+            or target.container_identity_sha256 != reference.container_identity_sha256
+            or run.container_identity_sha256 != reference.container_identity_sha256
+            or target.identity_fingerprint != reference.target_identity_sha256
+            or run.target_identity_sha256 != reference.target_identity_sha256
+            or target.cgroup.identity_sha256 != reference.cgroup_identity_sha256
+            or expected_target_pid != evidence.target.target_pid
+            or expected_target_uid != evidence.target.target_uid
+            or target.host_start_time_ticks != evidence.target.target_start_time_ticks
+            or run.host_pid != target.host_pid
+            or run.host_start_time_ticks != target.host_start_time_ticks
+            or run.status == "failed_before_exec"
+        ):
+            raise self._identity_error(
+                evidence.runtime_lock_evidence_id,
+                "runtime-lock-evidence",
+            )
 
     def load_runtime_adapter_capability(
         self,
@@ -817,6 +885,10 @@ class ArtifactStore:
             run_id,
             "runtime-lock-run",
         )
+        if run.authorization_kind == "docker_optimization":
+            self._verify_docker_runtime_lock_run(run)
+            return run
+        assert run.session_artifact_id is not None
         session = self.load_runtime_lock_session(run.session_artifact_id)
         preview = self.load_runtime_lock_preview(session.preview_id)
         analysis, evidence, _ = self.load_runtime_lock_analysis(run.runtime_lock_analysis_id)
@@ -981,6 +1053,179 @@ class ArtifactStore:
             raise self._identity_error(run_id, "runtime-lock-run")
         return run
 
+    def _verify_docker_runtime_lock_run(self, run: RuntimeLockRunArtifact) -> None:
+        binding = run.docker_optimization_binding
+        if binding is None:
+            raise self._identity_error(run.run_id, "runtime-lock-run")
+        session = self.load_docker_optimization_session(
+            binding.docker_optimization_session_artifact_id
+        )
+        build = self.load_docker_build(binding.build_id)
+        target = self.load_container_target(binding.container_target_id)
+        container_run = self.load_container_run(binding.container_run_id)
+        measurement = self.load_container_measurement(binding.container_measurement_id)
+        analysis, evidence, _ = self.load_runtime_lock_analysis(run.runtime_lock_analysis_id)
+        verification = self.load_runtime_lock_verification(run.runtime_lock_verification_id)
+        target_reference = evidence.target.container_reference
+        scope = session.runtime_lock_scope
+        source = evidence.source
+        execution_bindings = (
+            {item.adapter_id: item for item in scope.adapter_execution_bindings}
+            if scope is not None
+            else {}
+        )
+        authorized_execution_binding = execution_bindings.get(run.adapter_id)
+        actual_execution_binding = binding.actual_execution_binding
+        recomputed_actual_binding = (
+            bind_observed_runtime_execution(
+                authorized_execution_binding,
+                runtime_version=actual_execution_binding.runtime_version,
+                runtime_characteristics=binding.actual_runtime_characteristics,
+            )
+            if authorized_execution_binding is not None
+            else None
+        )
+        source_tool_binding = next(
+            (
+                tool
+                for tool in actual_execution_binding.tools
+                if source.tool is not None and tool.name == source.tool.name
+            ),
+            None,
+        )
+        source_backend_matches = source.backend_id == actual_execution_binding.backend_id or (
+            run.adapter_id == "go_pprof"
+            and source.backend_id in {"pprof-block", "pprof-mutex"}
+            and actual_execution_binding.backend_id == "pprof"
+        )
+        source_tool_matches = source.tool is None or (
+            source_tool_binding is not None
+            and source.tool.version == source_tool_binding.version
+            and source.tool.binary_sha256 == source_tool_binding.binary_sha256
+            and source.tool.status == "available"
+        )
+        build_is_authorized = build.build_id in {
+            session.baseline_build_id,
+            session.latest_candidate_build_id,
+        }
+        benchmark = (
+            self.load_benchmark(container_run.benchmark_id)
+            if container_run.benchmark_id is not None
+            else None
+        )
+        if (
+            container_run.status != "exited"
+            or container_run.exit_code != 0
+            or (benchmark is not None and benchmark.error_count not in {None, 0})
+        ):
+            expected_correctness = "failed"
+        elif benchmark is not None and benchmark.error_count == 0:
+            expected_correctness = "passed"
+        else:
+            expected_correctness = "unavailable"
+        try:
+            expected_run_boundaries = derive_runtime_lock_run_boundaries(
+                adapter_id=run.adapter_id,
+                analysis_quality_status=analysis.quality_status,
+                analysis_allowed_conclusions=analysis.allowed_conclusions,
+                analysis_forbidden_conclusions=analysis.forbidden_conclusions,
+                warnings=run.warnings,
+            )
+        except ValueError:
+            expected_run_boundaries = None
+        run_started = datetime.fromisoformat(run.started_at)
+        run_finished = datetime.fromisoformat(run.finished_at)
+        container_started = datetime.fromisoformat(container_run.started_at)
+        container_finished = datetime.fromisoformat(container_run.finished_at)
+        exact_events = run.event_count if run.measurement_semantics == "exact" else 0
+        if (
+            run.schema_version != "1.1"
+            or run.session_id != session.session_id
+            or binding.docker_optimization_session_id != session.session_id
+            or binding.docker_optimization_session_artifact_content_sha256 != session.content_sha256
+            or binding.build_content_sha256 != build.content_sha256
+            or binding.container_target_content_sha256 != target.content_sha256
+            or binding.container_run_content_sha256 != container_run.content_sha256
+            or binding.container_measurement_content_sha256 != measurement.content_sha256
+            or not build_is_authorized
+            or scope is None
+            or run.adapter_id not in scope.allowed_adapters
+            or run.measurement_semantics not in scope.allowed_semantics
+            or authorized_execution_binding is None
+            or binding.authorized_execution_identity_sha256
+            != authorized_execution_binding.execution_identity_sha256
+            or recomputed_actual_binding != actual_execution_binding
+            or run.adapter_execution_identity_sha256
+            != actual_execution_binding.execution_identity_sha256
+            or source.adapter_execution_identity_sha256
+            != actual_execution_binding.execution_identity_sha256
+            or source.adapter_id != actual_execution_binding.adapter_id
+            or source.adapter_version != actual_execution_binding.adapter_version
+            or not source_backend_matches
+            or source.backend_version != actual_execution_binding.runtime_version
+            or source.runtime_version != actual_execution_binding.runtime_version
+            or source.measurement_semantics != actual_execution_binding.measurement_semantics
+            or source.duration_threshold_ns != actual_execution_binding.duration_threshold_ns
+            or source.configuration_sha256 != actual_execution_binding.configuration_sha256
+            or source.metadata_sha256 != actual_execution_binding.metadata_sha256
+            or not source_tool_matches
+            or target_reference is None
+            or target_reference.container_target_id != target.target_id
+            or target_reference.container_target_content_sha256 != target.content_sha256
+            or target_reference.container_run_id != container_run.run_id
+            or target_reference.container_run_content_sha256 != container_run.content_sha256
+            or target_reference.container_identity_sha256 != target.container_identity_sha256
+            or target_reference.target_identity_sha256 != target.identity_fingerprint
+            or target_reference.cgroup_identity_sha256 != target.cgroup.identity_sha256
+            or container_run.container_identity_sha256 != target.container_identity_sha256
+            or container_run.target_identity_sha256 != target.identity_fingerprint
+            or container_run.host_pid != target.host_pid
+            or container_run.host_start_time_ticks != target.host_start_time_ticks
+            or measurement.source_run_id != container_run.run_id
+            or measurement.source_run_content_sha256 != container_run.content_sha256
+            or measurement.environment.image_identity_sha256
+            != build.final_image_digest.removeprefix("sha256:")
+            or evidence.target.target_pid != target.container_pid
+            or target.container_uid is None
+            or evidence.target.target_uid != target.container_uid
+            or evidence.target.target_start_time_ticks != target.host_start_time_ticks
+            or run.target_identity_sha256 != target.identity_fingerprint
+            or run.workload_identity_sha256 != session.recipe_content_sha256
+            or run.correctness_status != expected_correctness
+            or run.runtime_lock_evidence_id != evidence.runtime_lock_evidence_id
+            or run.runtime_lock_evidence_content_sha256 != evidence.content_sha256
+            or run.runtime_lock_analysis_content_sha256 != analysis.content_sha256
+            or run.runtime_lock_verification_id != verification.runtime_lock_verification_id
+            or run.runtime_lock_verification_content_sha256 != verification.content_sha256
+            or verification.runtime_lock_analysis_id != analysis.runtime_lock_analysis_id
+            or verification.runtime_lock_analysis_content_sha256 != analysis.content_sha256
+            or run.measurement_semantics != analysis.measurement_semantics
+            or expected_run_boundaries
+            != (run.quality_status, run.allowed_conclusions, run.forbidden_conclusions)
+            or run.event_count != len(evidence.events)
+            or run.evidence_bytes != len(serialize_json(evidence))
+            or verification.source_replay_receipt is None
+            or verification.source_replay_receipt.origin_source_bytes is None
+            or binding.accounted_evidence_bytes
+            != (
+                run.evidence_bytes
+                + verification.source_replay_receipt.origin_source_bytes
+                + verification.source_replay_receipt.raw_source_bytes
+                + verification.source_replay_receipt.normalized_source_bytes
+            )
+            or not (container_started <= run_started < run_finished <= container_finished)
+            or run.created_at != run.finished_at
+            or session.runtime_lock_runs_used is None
+            or session.runtime_lock_runs_used < 1
+            or session.runtime_lock_active_seconds_used is None
+            or session.runtime_lock_active_seconds_used < run.duration_seconds
+            or session.runtime_lock_evidence_bytes_used is None
+            or session.runtime_lock_evidence_bytes_used < binding.accounted_evidence_bytes
+            or session.runtime_lock_exact_events_used is None
+            or session.runtime_lock_exact_events_used < exact_events
+        ):
+            raise self._identity_error(run.run_id, "runtime-lock-run")
+
     def load_runtime_lock_comparison(
         self,
         comparison_id: str,
@@ -1003,10 +1248,118 @@ class ArtifactStore:
         )
         baseline = self.load_runtime_lock_run(comparison.baseline_run_id)
         candidate = self.load_runtime_lock_run(comparison.candidate_run_id)
-        _, baseline_evidence, _ = self.load_runtime_lock_analysis(baseline.runtime_lock_analysis_id)
-        _, candidate_evidence, _ = self.load_runtime_lock_analysis(
+        baseline_analysis, baseline_evidence, _ = self.load_runtime_lock_analysis(
+            baseline.runtime_lock_analysis_id
+        )
+        candidate_analysis, candidate_evidence, _ = self.load_runtime_lock_analysis(
             candidate.runtime_lock_analysis_id
         )
+        baseline_verification = self.load_runtime_lock_verification(
+            baseline.runtime_lock_verification_id
+        )
+        candidate_verification = self.load_runtime_lock_verification(
+            candidate.runtime_lock_verification_id
+        )
+        comparison_kind = comparison.comparison_kind or "runtime_lock_session"
+        baseline_authorization = baseline.authorization_kind or "runtime_lock_session"
+        candidate_authorization = candidate.authorization_kind or "runtime_lock_session"
+        if (
+            baseline.content_sha256 != comparison.baseline_run_content_sha256
+            or candidate.content_sha256 != comparison.candidate_run_content_sha256
+            or baseline.session_id != comparison.session_id
+            or candidate.session_id != comparison.session_id
+            or baseline_authorization != comparison_kind
+            or candidate_authorization != comparison_kind
+        ):
+            raise self._identity_error(comparison_id, "runtime-lock-comparison")
+        if comparison.schema_version == "1.1":
+            if comparison.comparison_kind == "docker_optimization":
+                baseline_binding = baseline.docker_optimization_binding
+                candidate_binding = candidate.docker_optimization_binding
+                if baseline_binding is None or candidate_binding is None:
+                    raise self._identity_error(comparison_id, "runtime-lock-comparison")
+                baseline_measurement = self.load_container_measurement(
+                    baseline_binding.container_measurement_id
+                )
+                candidate_measurement = self.load_container_measurement(
+                    candidate_binding.container_measurement_id
+                )
+                baseline_environment = docker_runtime_lock_fixed_environment_sha256(
+                    baseline_measurement
+                )
+                candidate_environment = docker_runtime_lock_fixed_environment_sha256(
+                    candidate_measurement
+                )
+                if (
+                    comparison.resource_comparison_id is None
+                    or comparison.resource_comparison_content_sha256 is None
+                ):
+                    raise self._identity_error(comparison_id, "runtime-lock-comparison")
+                resource_comparison = self.load_container_matched_comparison(
+                    comparison.resource_comparison_id
+                )
+                baseline_build = self.load_docker_build(baseline_binding.build_id)
+                candidate_build = self.load_docker_build(candidate_binding.build_id)
+                if (
+                    resource_comparison.content_sha256
+                    != comparison.resource_comparison_content_sha256
+                    or resource_comparison.baseline_measurement_id
+                    != baseline_binding.container_measurement_id
+                    or resource_comparison.candidate_measurement_id
+                    != candidate_binding.container_measurement_id
+                    or comparison.baseline_build_id != baseline_binding.build_id
+                    or comparison.baseline_build_content_sha256
+                    != baseline_binding.build_content_sha256
+                    or comparison.candidate_build_id != candidate_binding.build_id
+                    or comparison.candidate_build_content_sha256
+                    != candidate_binding.build_content_sha256
+                    or comparison.baseline_measurement_id
+                    != baseline_binding.container_measurement_id
+                    or comparison.candidate_measurement_id
+                    != candidate_binding.container_measurement_id
+                ):
+                    raise self._identity_error(comparison_id, "runtime-lock-comparison")
+                resource_transfer_status = resource_comparison.resource_transfer_status
+            else:
+                baseline_environment = runtime_lock_resource_environment_sha256(
+                    baseline,
+                    baseline_evidence,
+                )
+                candidate_environment = runtime_lock_resource_environment_sha256(
+                    candidate,
+                    candidate_evidence,
+                )
+                resource_comparison = None
+                baseline_build = None
+                candidate_build = None
+                resource_transfer_status = "incomplete"
+            replayed = compare_runtime_lock_analyses(
+                baseline_run=baseline,
+                baseline_analysis=baseline_analysis,
+                baseline_evidence=baseline_evidence,
+                baseline_verification=baseline_verification,
+                candidate_run=candidate,
+                candidate_analysis=candidate_analysis,
+                candidate_evidence=candidate_evidence,
+                candidate_verification=candidate_verification,
+                baseline_resource_environment_sha256=baseline_environment,
+                candidate_resource_environment_sha256=candidate_environment,
+                resource_transfer_status=resource_transfer_status,
+                resource_comparison_id=(
+                    resource_comparison.comparison_id if resource_comparison is not None else None
+                ),
+                resource_comparison_content_sha256=(
+                    resource_comparison.content_sha256 if resource_comparison is not None else None
+                ),
+                baseline_build=baseline_build,
+                candidate_build=candidate_build,
+                created_at=datetime.fromisoformat(comparison.created_at),
+            )
+            if replayed != comparison:
+                raise self._identity_error(comparison_id, "runtime-lock-comparison")
+            return comparison
+
+        # Schema 1.0 is retained strictly as the historical fail-closed shape.
         expected_correctness = (
             "failed"
             if "failed" in {baseline.correctness_status, candidate.correctness_status}
@@ -1021,11 +1374,7 @@ class ArtifactStore:
             baseline_evidence,
         ) == self._runtime_lock_measurement_controls(candidate, candidate_evidence)
         if (
-            baseline.content_sha256 != comparison.baseline_run_content_sha256
-            or candidate.content_sha256 != comparison.candidate_run_content_sha256
-            or baseline.session_id != comparison.session_id
-            or candidate.session_id != comparison.session_id
-            or comparison.adapter_match != (baseline.adapter_id == candidate.adapter_id)
+            comparison.adapter_match != (baseline.adapter_id == candidate.adapter_id)
             or comparison.semantics_match
             != (baseline.measurement_semantics == candidate.measurement_semantics)
             or comparison.workload_match
@@ -1346,6 +1695,16 @@ class ArtifactStore:
         source_comparison = self.load_container_matched_comparison(
             iteration.source_container_comparison_id
         )
+        runtime_lock_comparison = (
+            self.load_runtime_lock_comparison(iteration.runtime_lock_comparison_id)
+            if iteration.runtime_lock_comparison_id is not None
+            else None
+        )
+        if runtime_lock_comparison is not None and (
+            iteration.runtime_lock_comparison_content_sha256
+            != runtime_lock_comparison.content_sha256
+        ):
+            raise self._identity_error(iteration_id, "docker-optimization-iteration")
         replayed = compare_docker_optimization_iteration(
             session=session,
             baseline_build=baseline_build,
@@ -1359,6 +1718,7 @@ class ArtifactStore:
             candidate_benchmark=candidate_benchmark,
             benchmark_comparison=benchmark_comparison,
             source_container_comparison=source_comparison,
+            runtime_lock_comparison=runtime_lock_comparison,
             created_at=datetime.fromisoformat(iteration.created_at),
         )
         if replayed != iteration:
@@ -1438,6 +1798,15 @@ class ArtifactStore:
             != final_session.workload_active_seconds_used
             or source_session.evidence_bytes_used != final_session.evidence_bytes_used
             or source_session.temporary_image_bytes_used != final_session.temporary_image_bytes_used
+            or source_session.runtime_lock_scope != final_session.runtime_lock_scope
+            or source_session.runtime_lock_status != final_session.runtime_lock_status
+            or source_session.runtime_lock_runs_used != final_session.runtime_lock_runs_used
+            or source_session.runtime_lock_active_seconds_used
+            != final_session.runtime_lock_active_seconds_used
+            or source_session.runtime_lock_evidence_bytes_used
+            != final_session.runtime_lock_evidence_bytes_used
+            or source_session.runtime_lock_exact_events_used
+            != final_session.runtime_lock_exact_events_used
             or baseline.content_sha256 != disposition.baseline_build_content_sha256
             or candidate.content_sha256 != disposition.candidate_build_content_sha256
             or selected.build_id != disposition.selected_build_id
@@ -1509,6 +1878,7 @@ class ArtifactStore:
             "runtime-lock-run",
             "runtime-lock-run-finalization",
             "runtime-lock-comparison",
+            "container-target",
             "container-resource-context",
             "container-run",
             "container-workload-spec",
@@ -1694,6 +2064,16 @@ class ArtifactStore:
             self._require_embedded_id(comparison.comparison_id, artifact_id, artifact_type)
             if self.load_runtime_lock_comparison(artifact_id) != comparison:
                 raise self._identity_error(artifact_id, artifact_type)
+            return
+        if artifact_type == "container-target":
+            target = ContainerTargetArtifact.model_validate_json(payload)
+            self._require_embedded_id(target.target_id, artifact_id, artifact_type)
+            self._verify_docker_content(
+                target,
+                target.content_sha256,
+                artifact_id,
+                artifact_type,
+            )
             return
         if artifact_type in _TRACE_ANALYSIS_TYPES:
             model, id_attribute = _TRACE_ANALYSIS_TYPES[artifact_type]

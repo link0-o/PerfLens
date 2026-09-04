@@ -51,6 +51,10 @@ def test_trace_helper_valid_golden_frames_and_unavailable_health() -> None:
         (fixture_root / "valid/docker-rootful-sched.jsonl").read_bytes(),
         now_unix_milliseconds=_NOW_MILLISECONDS,
     )
+    subordinate_collect = parse_trace_helper_request_frame(
+        (fixture_root / "valid/docker-rootless-subordinate-sched.jsonl").read_bytes(),
+        now_unix_milliseconds=_NOW_MILLISECONDS,
+    )
     response = parse_trace_helper_response_frame(
         (fixture_root / "responses/health-unavailable.jsonl").read_bytes()
     )
@@ -64,6 +68,10 @@ def test_trace_helper_valid_golden_frames_and_unavailable_health() -> None:
     assert isinstance(rootful_collect.target, TraceHelperDockerTarget)
     assert rootful_collect.target.uid == 0
     assert rootful_collect.target.container.rootful_risk_authorized is True
+    assert isinstance(subordinate_collect, TraceHelperCollectPidRequest)
+    assert isinstance(subordinate_collect.target, TraceHelperDockerTarget)
+    assert subordinate_collect.target.uid == 101_000
+    assert subordinate_collect.target.container.container_uid == 1001
     assert isinstance(response.result, TraceHelperHealthResult)
     assert response.result.capture_backend_status == "unavailable"
     assert response.result.supported_modes == ()
@@ -107,9 +115,9 @@ def test_trace_helper_invalid_golden_frames_are_rejected(fixture: Path) -> None:
 @pytest.mark.parametrize(
     "frame",
     [
-        b'{"schema_version":"1.1","operation":"health","request_id":"request-0123456789abcdef"}',
-        b'{"schema_version":"1.1","operation":"health","request_id":"request-0123456789abcdef"}\n{}\n',
-        b'{"schema_version":"1.1","operation":"health","request_id":"request-0123456789abcdef","request_id":"request-fedcba9876543210"}\n',
+        b'{"schema_version":"1.2","operation":"health","request_id":"request-0123456789abcdef"}',
+        b'{"schema_version":"1.2","operation":"health","request_id":"request-0123456789abcdef"}\n{}\n',
+        b'{"schema_version":"1.2","operation":"health","request_id":"request-0123456789abcdef","request_id":"request-fedcba9876543210"}\n',
     ],
 )
 def test_trace_helper_rejects_missing_extra_and_duplicate_frames(frame: bytes) -> None:

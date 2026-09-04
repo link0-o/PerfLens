@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -18,11 +19,13 @@ from perflens.docker.adapter import (
     DockerEndpointSnapshot,
 )
 from perflens.docker.identity import (
+    KernelProcessIdentity,
     LinuxContainerIdentityReader,
     NamespaceIdentity,
     assert_container_target_current,
     bind_container_collection_target,
     build_managed_container_target_artifact,
+    classify_container_uid_mapping,
     parse_container_instance,
     parse_container_top,
     resolve_existing_container_target,
@@ -123,6 +126,7 @@ def _write_process(
     )
     (process / "comm").write_text(f"{executable_name}\n", encoding="ascii")
     (process / "cgroup").write_text(f"0::{cgroup_path}\n", encoding="ascii")
+    (process / "uid_map").write_text("0 0 4294967295\n", encoding="ascii")
     namespaces = process / "ns"
     namespaces.mkdir()
     for index, name in enumerate(("pid", "user", "mnt", "cgroup"), start=1):
@@ -206,6 +210,99 @@ def test_reader_binds_pid_uid_start_time_namespace_and_cgroup(tmp_path: Path) ->
     assert identity.cgroup_relative_path == "/docker/test-container"
 
 
+def test_reader_uid_map_digest_matches_the_cross_language_contract(tmp_path: Path) -> None:
+    reader, proc_root, _cgroup_root = _identity_filesystem(tmp_path)
+    _write_process(
+        proc_root,
+        host_pid=1002,
+        container_pid=12,
+        start_time=9876,
+        executable_name="worker",
+    )
+    (proc_root / "1002/uid_map").write_text(
+        "0 1000 1\n1 101000 1\n",
+        encoding="ascii",
+    )
+
+    identity = reader.inspect_process(1002)
+
+    assert identity.uid_map_sha256 == (
+        "e935c1650fa4d6814f224a5a7e11185acc5f2710639cf8e987ea2951d23bdc19"
+    )
+
+
+def test_runtime_lock_uid_mapping_supports_rootless_subordinate_uid() -> None:
+    invoking_uid = 1000
+    uid_map = ((0, invoking_uid, 1), (1, 100_000, 65_535))
+    uid_map_sha256 = hashlib.sha256(b"0:1000:1\n1:100000:65535").hexdigest()
+    target = KernelProcessIdentity(
+        host_pid=20_001,
+        host_uid=101_000,
+        host_start_time_ticks=50,
+        container_pid=1001,
+        nspid=(20_001, 1001),
+        executable_name="worker",
+        namespace=NamespaceIdentity(pid=11, user=12, mount=13, cgroup=14),
+        cgroup_relative_path="/user.slice/test",
+        cgroup_inode=15,
+        uid_map=uid_map,
+        uid_map_sha256=uid_map_sha256,
+    )
+
+    assert (
+        classify_container_uid_mapping(
+            _adapter(endpoint_kind="local_rootless"),
+            target,
+            container_uid=1001,
+            invoking_uid=invoking_uid,
+        )
+        == "rootless_same_uid"
+    )
+    with pytest.raises(PerfLensError, match="does not map"):
+        classify_container_uid_mapping(
+            _adapter(endpoint_kind="local_rootless"),
+            target,
+            container_uid=1002,
+            invoking_uid=invoking_uid,
+        )
+
+
+def test_runtime_lock_uid_mapping_limits_rootful_cross_uid_to_container_root() -> None:
+    uid_map = ((0, 0, 4_294_967_295),)
+    target = KernelProcessIdentity(
+        host_pid=20_002,
+        host_uid=0,
+        host_start_time_ticks=51,
+        container_pid=1,
+        nspid=(20_002, 1),
+        executable_name="worker",
+        namespace=NamespaceIdentity(pid=21, user=22, mount=23, cgroup=24),
+        cgroup_relative_path="/system.slice/test",
+        cgroup_inode=25,
+        uid_map=uid_map,
+        uid_map_sha256=hashlib.sha256(b"0:0:4294967295").hexdigest(),
+    )
+
+    assert (
+        classify_container_uid_mapping(
+            _adapter(endpoint_kind="local_rootful"),
+            target,
+            container_uid=0,
+            invoking_uid=1000,
+            allow_rootful_cross_uid=True,
+        )
+        == "rootful_cross_uid"
+    )
+    with pytest.raises(PerfLensError, match="limited to UID 0"):
+        classify_container_uid_mapping(
+            _adapter(endpoint_kind="local_rootful"),
+            replace(target, host_uid=1),
+            container_uid=1,
+            invoking_uid=1000,
+            allow_rootful_cross_uid=True,
+        )
+
+
 def test_reader_uses_real_nsfs_inodes_from_a_pinned_proc_descriptor() -> None:
     process = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(30)"],
@@ -215,22 +312,34 @@ def test_reader_uses_real_nsfs_inodes_from_a_pinned_proc_descriptor() -> None:
     )
     try:
         identity = LinuxContainerIdentityReader().inspect_process(process.pid)
-        assert identity.namespace.pid == os.stat(
-            f"/proc/{process.pid}/ns/pid",
-            follow_symlinks=True,
-        ).st_ino
-        assert identity.namespace.user == os.stat(
-            f"/proc/{process.pid}/ns/user",
-            follow_symlinks=True,
-        ).st_ino
-        assert identity.namespace.mount == os.stat(
-            f"/proc/{process.pid}/ns/mnt",
-            follow_symlinks=True,
-        ).st_ino
-        assert identity.namespace.cgroup == os.stat(
-            f"/proc/{process.pid}/ns/cgroup",
-            follow_symlinks=True,
-        ).st_ino
+        assert (
+            identity.namespace.pid
+            == os.stat(
+                f"/proc/{process.pid}/ns/pid",
+                follow_symlinks=True,
+            ).st_ino
+        )
+        assert (
+            identity.namespace.user
+            == os.stat(
+                f"/proc/{process.pid}/ns/user",
+                follow_symlinks=True,
+            ).st_ino
+        )
+        assert (
+            identity.namespace.mount
+            == os.stat(
+                f"/proc/{process.pid}/ns/mnt",
+                follow_symlinks=True,
+            ).st_ino
+        )
+        assert (
+            identity.namespace.cgroup
+            == os.stat(
+                f"/proc/{process.pid}/ns/cgroup",
+                follow_symlinks=True,
+            ).st_ino
+        )
     finally:
         process.terminate()
         try:

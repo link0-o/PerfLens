@@ -776,7 +776,7 @@ def test_unsupported_glibc_disables_only_active_native_instrumentation(
     assert any("self-observed" in item for item in capability.limitations)
 
 
-def test_managed_docker_capability_is_inspection_only_before_stage7(
+def test_managed_docker_capability_exposes_typed_gate_launch(
     native_files: tuple[Path, Path, Path, NativePthreadProbePolicy],
 ) -> None:
     _project, _output, _target, policy = native_files
@@ -785,15 +785,19 @@ def test_managed_docker_capability_is_inspection_only_before_stage7(
         probe_policy=policy,
     )
 
-    assert capability.availability == "unavailable"
+    assert capability.availability == "available"
     assert capability.launch_backend == "managed_docker"
     assert capability.target_identity_sha256 == "3" * 64
-    assert capability.supported_semantics == ()
-    assert capability.supported_lock_surfaces == ()
-    assert any("Stage 7" in limitation for limitation in capability.limitations)
+    assert capability.supported_semantics == ("exact", "thresholded")
+    assert capability.supported_lock_surfaces == (
+        "condition",
+        "mutex",
+        "rwlock_read",
+        "rwlock_write",
+    )
     assert any("does not authorize" in limitation for limitation in capability.limitations)
     assert any(
-        "import and deterministic analysis remain available" in limitation
+        "parent Docker optimization Preview" in limitation
         for limitation in capability.limitations
     )
     assert all("socket" not in field.lower() for field in capability.__dataclass_fields__)
@@ -809,7 +813,6 @@ def test_managed_docker_capability_without_probe_keeps_import_available() -> Non
     assert capability.probe_sha256 is None
     assert capability.supported_semantics == ()
     assert capability.supported_lock_surfaces == ()
-    assert any("Stage 7" in limitation for limitation in capability.limitations)
     assert any(
         "import and deterministic analysis remain available" in limitation
         for limitation in capability.limitations
@@ -839,7 +842,6 @@ def test_managed_docker_unsupported_targets_are_unavailable(
     assert capability.availability == "unavailable"
     assert capability.supported_semantics == ()
     assert capability.supported_lock_surfaces == ()
-    assert any("Stage 7" in limitation for limitation in capability.limitations)
     assert any(expected in limitation for limitation in capability.limitations)
 
 

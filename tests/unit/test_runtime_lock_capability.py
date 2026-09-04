@@ -122,10 +122,9 @@ def test_runtime_lock_capability_reports_safely_discovered_native_backend(
     assert any("cooperatively" in limitation for limitation in native.limitations)
     assert any("not tamper-proof" in limitation for limitation in native.limitations)
     assert any("host_launched_workload" in limitation for limitation in native.limitations)
-    assert any("managed_temporary_container" in limitation for limitation in native.limitations)
-    assert any("docker_optimization" in limitation for limitation in native.limitations)
+    assert any("managed Docker optimization" in limitation for limitation in native.limitations)
     assert any(
-        "host_launched_workload" in limitation for limitation in inspection.capability.limitations
+        "launched workload" in limitation for limitation in inspection.capability.limitations
     )
 
 
@@ -145,7 +144,7 @@ def test_runtime_lock_capability_preserves_partial_native_limitations(
     assert native.measurement_semantics == ("exact", "thresholded")
     assert native.limitations[0] == "Fast paths below the configured threshold are not emitted."
     assert any("not tamper-proof" in limitation for limitation in native.limitations)
-    assert any("Stage 7" in limitation for limitation in native.limitations)
+    assert any("existing process or container" in limitation for limitation in native.limitations)
 
 
 def test_runtime_lock_capability_does_not_assume_native_probe_when_absent(

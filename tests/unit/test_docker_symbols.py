@@ -571,6 +571,43 @@ def test_pinned_container_workspace_survives_nested_mount_retirement(
     assert charged_bytes > 0
 
 
+def test_runtime_executable_is_descriptor_pinned_and_rejects_symlinks(
+    fixture_root: Path,
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    binding = _binding(identity)
+    proc_root = tmp_path / "proc"
+    executable = proc_root / str(identity.host_pid) / "root" / "workspace" / "build" / "app"
+    _compile_module(executable, fixture_root / "symbols" / "sample.c")
+    executable.chmod(0o755)
+    alias = executable.parent / "alias"
+    alias.symlink_to(executable.name)
+    pinned = pin_container_process_root(
+        binding,
+        proc_root=proc_root,
+        reader=cast(LinuxContainerIdentityReader, _Reader(identity)),
+    )
+    descriptor = -1
+    try:
+        descriptor, digest, size = pinned.open_runtime_executable(
+            "/workspace/build/app"
+        )
+        original = os.pread(descriptor, size, 0)
+        assert hashlib.sha256(original).hexdigest() == digest
+        replacement = executable.with_suffix(".replacement")
+        replacement.write_bytes(b"replacement executable")
+        replacement.chmod(0o755)
+        replacement.replace(executable)
+        assert os.pread(descriptor, size, 0) == original
+        with pytest.raises(PerfLensError, match="safely opened"):
+            pinned.open_runtime_executable("/workspace/build/alias")
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        pinned.close()
+
+
 def test_pinned_container_root_rejects_a_different_collection_binding(
     fixture_root: Path,
     tmp_path: Path,

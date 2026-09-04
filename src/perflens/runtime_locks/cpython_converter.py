@@ -503,6 +503,7 @@ def _rebind_source(
         adapter_version=binding.adapter_version,
         backend_id="threading-bootstrap",
         backend_version=binding.runtime_version,
+        runtime_version=header.runtime_version,
         measurement_semantics=header.semantics,
         source_format="cpython_threading_ndjson_v1",
         converter_version=CPYTHON_THREADING_CONVERTER_VERSION,

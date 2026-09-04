@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -28,9 +31,7 @@ from perflens.runtime_locks.project_config import (
 from perflens.runtime_locks.supervisor import RuntimeSupervisorClient
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-BOOTSTRAP = (
-    PROJECT_ROOT / "src/perflens/runtime_locks/cpython/cpython_threading_bootstrap.py"
-)
+BOOTSTRAP = PROJECT_ROOT / "src/perflens/runtime_locks/cpython/cpython_threading_bootstrap.py"
 
 WORKLOAD = """
 import threading
@@ -145,9 +146,7 @@ def test_real_supervisor_runs_public_threading_surface_and_cleans_private_stream
     }
     assert len(evidence.execution_contexts) >= 2
     assert any(
-        frame.source_file == "workload.py"
-        for stack in evidence.stacks
-        for frame in stack.frames
+        frame.source_file == "workload.py" for stack in evidence.stacks for frame in stack.frames
     )
     cleanup_cpython_launch_result(result)
     assert not result.stream_path.exists()
@@ -183,9 +182,7 @@ def test_fork_child_is_not_allowed_to_write_parent_runtime_lock_evidence(
     source_fd = open_cpython_private_stream(result)
     try:
         with os.fdopen(os.dup(source_fd), "rb") as source:
-            evidence = convert_cpython_threading_stream(
-                source, execution_binding=binding
-            ).evidence
+            evidence = convert_cpython_threading_stream(source, execution_binding=binding).evidence
     finally:
         os.close(source_fd)
     assert result.exit_code == 0
@@ -222,9 +219,7 @@ def test_thresholded_bootstrap_never_emits_release_for_an_omitted_acquire(
     source_fd = open_cpython_private_stream(result)
     try:
         with os.fdopen(os.dup(source_fd), "rb") as source:
-            evidence = convert_cpython_threading_stream(
-                source, execution_binding=binding
-            ).evidence
+            evidence = convert_cpython_threading_stream(source, execution_binding=binding).evidence
     finally:
         os.close(source_fd)
     acquired: set[str] = set()
@@ -234,9 +229,7 @@ def test_thresholded_bootstrap_never_emits_release_for_an_omitted_acquire(
         if event.event_kind == "release":
             assert event.lock_id in acquired
     assert all(
-        event.duration_ns >= 10_000
-        for event in evidence.events
-        if event.event_kind == "wait_end"
+        event.duration_ns >= 10_000 for event in evidence.events if event.event_kind == "wait_end"
     )
     cleanup_cpython_launch_result(result)
 
@@ -288,3 +281,57 @@ def test_launch_request_has_fixed_exact_and_threshold_budgets() -> None:
             duration_seconds=30,
             max_events=20_000,
         )
+
+
+def test_container_bootstrap_requires_exportable_regular_output(
+    tmp_path: Path,
+) -> None:
+    site = tmp_path / "site"
+    site.mkdir(mode=0o700)
+    shutil.copyfile(BOOTSTRAP, site / "sitecustomize.py")
+    (site / "sitecustomize.py").chmod(0o644)
+
+    def execute(name: str, mode: int) -> tuple[subprocess.CompletedProcess[bytes], Path]:
+        output = tmp_path / name
+        descriptor = os.open(
+            output,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+            mode,
+        )
+        os.fchmod(descriptor, mode)
+        try:
+            environment = {
+                **os.environ,
+                "PYTHONPATH": str(site),
+                "PERFLENS_RUNTIME_LOCK_CONTAINER": "1",
+                "PERFLENS_RUNTIME_LOCK_FD": str(descriptor),
+                "PERFLENS_RUNTIME_LOCK_MODE": "exact",
+                "PERFLENS_RUNTIME_LOCK_THRESHOLD_NS": "none",
+                "PERFLENS_RUNTIME_LOCK_MAX_EVENTS": "20",
+            }
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import threading; lock=threading.Lock(); lock.acquire(); lock.release()",
+                ],
+                check=False,
+                env=environment,
+                pass_fds=(descriptor,),
+                capture_output=True,
+                timeout=8,
+            )
+        finally:
+            os.close(descriptor)
+        return result, output
+
+    accepted, output = execute("container.ndjson", 0o644)
+    assert accepted.returncode == 0, accepted.stderr.decode(errors="replace")
+    assert stat.S_IMODE(output.stat().st_mode) == 0o644
+    records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+    assert records[0]["record_type"] == "cpython_header"
+    assert records[-1]["record_type"] == "cpython_footer"
+
+    rejected, private_output = execute("private.ndjson", 0o600)
+    assert rejected.returncode == 64
+    assert private_output.read_bytes() == b""

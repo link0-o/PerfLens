@@ -16,6 +16,7 @@ from perflens.domain.errors import ErrorCode, PerfLensError
 JavaJfrProfileId = Literal["balanced", "deep"]
 JFR_EVENT_SURFACE = (
     "jdk.DataLoss",
+    "jdk.JVMInformation",
     "jdk.JavaMonitorEnter",
     "jdk.JavaMonitorWait",
     "jdk.ThreadPark",
@@ -147,7 +148,7 @@ def _validate_profile_xml(raw: bytes, *, profile_id: JavaJfrProfileId) -> None:
     threshold = "10 ms" if profile_id == "balanced" else "1 ms"
     for name in JFR_EVENT_SURFACE:
         expected = {"enabled": "true"}
-        if name != "jdk.DataLoss":
+        if name not in {"jdk.DataLoss", "jdk.JVMInformation"}:
             expected.update({"stackTrace": "true", "threshold": threshold})
         if events[name] != expected:
             raise _profile_error("Packaged JFR profile settings are not fixed")

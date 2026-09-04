@@ -125,6 +125,8 @@ def _docker_plan(
         "rootful_cross_uid",
     ],
     rootful_risk_authorized: bool,
+    container_uid: int | None = None,
+    uid_map_sha256: str | None = None,
 ) -> CollectionPlanArtifact:
     target = ContainerCollectionTargetBinding(
         target_id="container-target-0123456789abcdefabcd",
@@ -136,6 +138,8 @@ def _docker_plan(
         container_pid=1,
         host_pid=4242,
         host_uid=target_uid,
+        container_uid=container_uid,
+        uid_map_sha256=uid_map_sha256,
         host_start_time_ticks=12345,
         executable_name="worker",
         namespace=ContainerCollectionNamespaceBinding(
@@ -256,6 +260,27 @@ def test_broker_authorizes_rootless_and_requires_dedicated_rootful_policy(
         rootful_risk_authorized=False,
     )
     _broker_with_policy(base_policy)._authorize(peer_uid, rootless)
+
+    subordinate = _docker_plan(
+        target_uid=101_000,
+        uid_mapping="rootless_same_uid",
+        rootful_risk_authorized=False,
+        container_uid=1001,
+        uid_map_sha256="9" * 64,
+    )
+    _broker_with_policy(base_policy)._authorize(peer_uid, subordinate)
+
+    legacy_subordinate = subordinate.model_copy(
+        update={
+            "container_target": subordinate.container_target.model_copy(
+                update={"container_uid": None, "uid_map_sha256": None}
+            )
+            if subordinate.container_target is not None
+            else None
+        }
+    )
+    with pytest.raises(PerfLensError, match="dedicated policy"):
+        _broker_with_policy(base_policy)._authorize(peer_uid, legacy_subordinate)
 
     rootful = _docker_plan(
         target_uid=0,

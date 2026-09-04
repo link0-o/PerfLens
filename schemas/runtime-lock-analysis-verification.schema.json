@@ -39,6 +39,33 @@
           "title": "Normalized Source Sha256",
           "type": "string"
         },
+        "origin_source_bytes": {
+          "anyOf": [
+            {
+              "maximum": 67108864,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Origin Source Bytes"
+        },
+        "origin_source_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Origin Source Sha256"
+        },
         "raw_source_bytes": {
           "maximum": 67108864,
           "minimum": 0,

@@ -794,6 +794,14 @@ class CollectorBrokerServer:
                         "Cross-UID Docker identity cannot be used as a same-UID target",
                         recoverable=True,
                     )
+            elif (
+                container.uid_mapping == "rootless_same_uid"
+                and container.container_uid is not None
+                and container.uid_map_sha256 is not None
+            ):
+                # The plan was bound to a subordinate host UID.  Python revalidates the
+                # published UID map and the Rust Helper repeats that check from /proc.
+                pass
             else:
                 if (
                     not self._policy.allow_rootful_container_targets

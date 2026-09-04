@@ -272,6 +272,12 @@ class TraceCollectionCoordinator:
                     container.uid_mapping != "rootful_cross_uid"
                     and not container.rootful_risk_authorized
                 )
+            elif (
+                container.uid_mapping == "rootless_same_uid"
+                and container.container_uid is not None
+                and container.uid_map_sha256 is not None
+            ):
+                target_allowed = True
             else:
                 target_allowed = (
                     self._allow_rootful_container_targets

@@ -13,7 +13,7 @@ int main(void) {
         if (pthread_mutex_lock(&mutex) != 0) {
             return 1;
         }
-        for (work = 0; work < UINT64_C(6000); ++work) {
+        for (work = 0; work < UINT64_C(8000); ++work) {
             sink = sink * UINT64_C(6364136223846793005) + work + iteration;
         }
         if (pthread_mutex_unlock(&mutex) != 0) {

@@ -21,7 +21,7 @@ from perflens.contracts.docker import (
     ContainerWorkloadSpecArtifact,
 )
 from perflens.contracts.docker_build import DockerBuildArtifact, DockerBuildRecipeArtifact
-from perflens.docker.adapter import DockerCommandAdapter
+from perflens.docker.adapter import DockerCommandAdapter, RuntimeLockDockerLaunch
 from perflens.docker.benchmark import (
     benchmark_output_contract_sha256,
     workload_command_contract_sha256,
@@ -458,6 +458,7 @@ class ExistingDockerRuntime:
         requested_modes: tuple[CollectionMode, ...],
         reserve_active_seconds: int,
         reserve_evidence_bytes: int,
+        runtime_lock_launch: RuntimeLockDockerLaunch | None = None,
     ) -> CoordinatedManagedRun:
         """Consume one run lease and freeze its container at the package Gate."""
         self._assert_context_current()
@@ -514,6 +515,7 @@ class ExistingDockerRuntime:
             lease=lease,
             client_connection_identity_sha256=self._client_identity,
             policy_identity_sha256=self._project_policy.sha256,
+            runtime_lock_launch=runtime_lock_launch,
         )
         return CoordinatedManagedRun(authorization, coordinator, prepared)
 

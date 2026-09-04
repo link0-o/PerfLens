@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -24,6 +25,7 @@ from perflens.contracts.docker_build import (
     DockerOptimizationSessionArtifact,
     derive_docker_optimization_iteration_id,
 )
+from perflens.contracts.runtime_lock_sessions import RuntimeLockComparisonArtifact
 from perflens.docker.comparison import (
     CONTAINER_ENVIRONMENT_MISMATCH_WARNING,
     compare_container_measurements,
@@ -52,6 +54,7 @@ def compare_docker_optimization_iteration(
     candidate_benchmark: BenchmarkArtifact,
     benchmark_comparison: BenchmarkComparison,
     source_container_comparison: ContainerMatchedComparisonArtifact,
+    runtime_lock_comparison: RuntimeLockComparisonArtifact | None = None,
     created_at: datetime | None = None,
 ) -> DockerOptimizationIterationArtifact:
     """Verify all source evidence and allow only image/workload treatment changes."""
@@ -134,9 +137,58 @@ def compare_docker_optimization_iteration(
     regressed_metrics = source_container_comparison.regressed_metrics
     resource_status = source_container_comparison.resource_transfer_status
     correctness_status = source_container_comparison.correctness_status
+    runtime_lock_status: Literal["not_selected", "complete", "partial", "unavailable"]
+    runtime_lock_conclusion = None
+    if session.runtime_lock_scope is None:
+        if runtime_lock_comparison is not None:
+            raise _comparison_error(
+                "unselected Runtime Lock evidence cannot be added after authorization"
+            )
+        runtime_lock_status = "not_selected"
+    elif runtime_lock_comparison is None:
+        runtime_lock_status = "unavailable"
+        comparable = False
+    else:
+        _verify_content(
+            runtime_lock_comparison,
+            runtime_lock_comparison.content_sha256,
+            "Runtime Lock comparison",
+        )
+        if (
+            runtime_lock_comparison.schema_version != "1.1"
+            or runtime_lock_comparison.comparison_kind != "docker_optimization"
+            or runtime_lock_comparison.session_id != session.session_id
+            or runtime_lock_comparison.baseline_build_id != baseline_build.build_id
+            or runtime_lock_comparison.baseline_build_content_sha256
+            != baseline_build.content_sha256
+            or runtime_lock_comparison.candidate_build_id != candidate_build.build_id
+            or runtime_lock_comparison.candidate_build_content_sha256
+            != candidate_build.content_sha256
+            or runtime_lock_comparison.baseline_measurement_id
+            != baseline_measurement.measurement_id
+            or runtime_lock_comparison.candidate_measurement_id
+            != candidate_measurement.measurement_id
+            or runtime_lock_comparison.resource_comparison_id
+            != source_container_comparison.comparison_id
+            or runtime_lock_comparison.resource_comparison_content_sha256
+            != source_container_comparison.content_sha256
+        ):
+            raise _comparison_error(
+                "Runtime Lock comparison is outside this Docker optimization Session"
+            )
+        runtime_lock_conclusion = runtime_lock_comparison.conclusion
+        runtime_lock_status = (
+            "complete"
+            if runtime_lock_comparison.baseline_quality_status == "complete"
+            and runtime_lock_comparison.candidate_quality_status == "complete"
+            and runtime_lock_comparison.comparable
+            else "partial"
+        )
+        if not runtime_lock_comparison.comparable:
+            comparable = False
     if not comparable:
         conclusion = "not_comparable"
-    elif regressed_metrics:
+    elif runtime_lock_conclusion == "candidate_regression" or regressed_metrics:
         conclusion = "candidate_regression"
     elif improved_metrics:
         verified = (
@@ -146,6 +198,8 @@ def compare_docker_optimization_iteration(
             and analyses_verified
             and baseline_measurement.quality_status == "verified"
             and candidate_measurement.quality_status == "verified"
+            and runtime_lock_status not in {"partial", "unavailable"}
+            and runtime_lock_conclusion not in {"candidate_regression", "not_comparable"}
         )
         conclusion = "verified_improvement" if verified else "candidate_improvement"
     else:
@@ -173,11 +227,20 @@ def compare_docker_optimization_iteration(
         warnings.append("Partial or failed profile evidence cannot establish Verified Improvement.")
     if not actual_event_source_match:
         warnings.append("Actual perf event sources differ between baseline and candidate.")
+    if runtime_lock_status == "unavailable":
+        warnings.append(
+            "Runtime Lock evidence authorized for this Session is unavailable; the iteration "
+            "is not comparable."
+        )
+    elif runtime_lock_status == "partial":
+        warnings.append(
+            "Partial or mismatched Runtime Lock evidence cannot establish Verified Improvement."
+        )
     timestamp = created_at or datetime.now(tz=UTC)
     if timestamp.tzinfo is None:
         raise _comparison_error("Docker optimization comparison time must include a timezone")
     provisional = DockerOptimizationIterationArtifact(
-        schema_version="1.0",
+        schema_version=("1.1" if session.schema_version == "1.1" else "1.0"),
         perflens_version=__version__,
         iteration_id=derive_docker_optimization_iteration_id(
             session.session_id,
@@ -185,6 +248,7 @@ def compare_docker_optimization_iteration(
             candidate_build.build_id,
             baseline_measurement.content_sha256,
             candidate_measurement.content_sha256,
+            runtime_lock_comparison.content_sha256 if runtime_lock_comparison else None,
         ),
         created_at=timestamp.isoformat(),
         session_id=session.session_id,
@@ -213,6 +277,16 @@ def compare_docker_optimization_iteration(
         benchmark_comparison_content_sha256=contract_content_sha256(benchmark_comparison),
         source_container_comparison_id=source_container_comparison.comparison_id,
         source_container_comparison_content_sha256=source_container_comparison.content_sha256,
+        runtime_lock_status=(
+            runtime_lock_status if session.schema_version == "1.1" else None
+        ),
+        runtime_lock_comparison_id=(
+            runtime_lock_comparison.comparison_id if runtime_lock_comparison else None
+        ),
+        runtime_lock_comparison_content_sha256=(
+            runtime_lock_comparison.content_sha256 if runtime_lock_comparison else None
+        ),
+        runtime_lock_conclusion=runtime_lock_conclusion,
         fixed_environment_match=fixed_environment_match,
         fixed_environment_differences=fixed_differences,
         treatment_changed=treatment_changed,
@@ -225,14 +299,35 @@ def compare_docker_optimization_iteration(
         improved_metrics=improved_metrics,
         regressed_metrics=regressed_metrics,
         warnings=tuple(dict.fromkeys(warnings)),
-        allowed_conclusions=(
-            "Verified Improvement may be reported only when conclusion is verified_improvement.",
-            "Different final image digests are allowed only as Build-bound Treatment evidence.",
+        allowed_conclusions=tuple(
+            sorted(
+                {
+                    "Verified Improvement may be reported only when conclusion is "
+                    "verified_improvement.",
+                    "Different final image digests are allowed only as Build-bound Treatment "
+                    "evidence.",
+                    *(
+                        runtime_lock_comparison.allowed_conclusions
+                        if runtime_lock_comparison
+                        else ()
+                    ),
+                }
+            )
         ),
-        forbidden_conclusions=(
-            "Partial, mismatched, or failed evidence must not be presented as "
-            "Verified Improvement.",
-            "A performance change does not by itself prove a microarchitectural mechanism.",
+        forbidden_conclusions=tuple(
+            sorted(
+                {
+                    "Partial, mismatched, or failed evidence must not be presented as "
+                    "Verified Improvement.",
+                    "A performance change does not by itself prove a microarchitectural "
+                    "mechanism.",
+                    *(
+                        runtime_lock_comparison.forbidden_conclusions
+                        if runtime_lock_comparison
+                        else ("runtime_lock_performance_conclusion",)
+                    ),
+                }
+            )
         ),
         content_sha256="0" * 64,
     )

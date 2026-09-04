@@ -47,6 +47,12 @@ def test_privileged_helper_valid_golden_frames() -> None:
     assert isinstance(parsed["stat.jsonl"], HelperCollectPidRequest)
     assert isinstance(parsed["docker-stat.jsonl"], HelperCollectPidRequest)
     assert isinstance(parsed["docker-rootful-stat.jsonl"], HelperCollectPidRequest)
+    subordinate_request = parsed["docker-rootless-subordinate-stat.jsonl"]
+    assert isinstance(subordinate_request, HelperCollectPidRequest)
+    subordinate = subordinate_request.target
+    assert isinstance(subordinate, HelperDockerTarget)
+    assert subordinate.uid == 101_000
+    assert subordinate.container.container_uid == 1001
     assert parsed["docker-stat.jsonl"].target.target_runtime == "docker"
     rootful_target = parsed["docker-rootful-stat.jsonl"].target
     assert isinstance(rootful_target, HelperDockerTarget)
@@ -91,7 +97,7 @@ def test_privileged_helper_invalid_golden_frames_are_rejected(fixture: Path) -> 
 
 
 def test_privileged_helper_rejects_missing_newline_and_trailing_frame() -> None:
-    valid = b'{"schema_version":"1.3","operation":"health","request_id":"request-0123456789abcdef"}'
+    valid = b'{"schema_version":"1.4","operation":"health","request_id":"request-0123456789abcdef"}'
     with pytest.raises(PerfLensError):
         parse_helper_request_frame(valid, now_unix_milliseconds=_NOW_MILLISECONDS)
     with pytest.raises(PerfLensError):

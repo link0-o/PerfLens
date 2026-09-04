@@ -10,9 +10,12 @@ PerfLens converter and is never a public Artifact.
 
 from __future__ import annotations
 
+import atexit
+import fcntl
 import json
 import os
 import runpy
+import stat
 import sys
 import sysconfig
 import threading
@@ -456,6 +459,29 @@ def _start_ticks() -> int:
     return int(fields[21])
 
 
+def _output_descriptor_is_safe(output_fd: int, *, container_output: bool) -> bool:
+    """Accept the host relay or the exportable file inside a private Docker run root."""
+
+    try:
+        metadata = os.fstat(output_fd)
+        flags = fcntl.fcntl(output_fd, fcntl.F_GETFL)
+    except OSError:
+        return False
+    expected_mode = 0o644 if container_output else 0o600
+    expected_type = (
+        stat.S_ISREG(metadata.st_mode) if container_output else stat.S_ISFIFO(metadata.st_mode)
+    )
+    return bool(
+        output_fd >= 3
+        and expected_type
+        and metadata.st_uid == os.getuid()
+        and metadata.st_nlink == 1
+        and stat.S_IMODE(metadata.st_mode) == expected_mode
+        and flags & os.O_ACCMODE in {os.O_WRONLY, os.O_RDWR}
+        and not flags & os.O_APPEND
+    )
+
+
 def main() -> None:
     if len(sys.argv) < 6:
         raise SystemExit(64)
@@ -465,7 +491,11 @@ def main() -> None:
     semantics = sys.argv[3]
     threshold_raw = sys.argv[4]
     max_events = int(sys.argv[5])
-    if output_fd < 3 or script_fd < 3 or semantics not in {"exact", "thresholded"}:
+    if (
+        not _output_descriptor_is_safe(output_fd, container_output=False)
+        or script_fd < 3
+        or semantics not in {"exact", "thresholded"}
+    ):
         raise SystemExit(64)
     threshold_ns = None if threshold_raw == "none" else int(threshold_raw)
     if (semantics == "exact") != (threshold_ns is None):
@@ -528,5 +558,76 @@ def main() -> None:
     raise SystemExit(exit_code)
 
 
+def _container_finalize() -> None:
+    global _recorder
+    _uninstall()
+    if _recorder.enabled:
+        with _recorder.guard:
+            _recorder.write(
+                {
+                    "schema_version": "1.0",
+                    "record_type": "cpython_footer",
+                    "protocol": "cpython_threading_probe",
+                    "pid": os.getpid(),
+                    "sequence": _recorder.sequence,
+                    "declared_event_count": _recorder.sequence,
+                    "lost_event_count": _recorder.lost_events,
+                    "truncated": _recorder.truncated,
+                    "observed_target_tids": sorted(_recorder.observed_tids),
+                }
+            )
+
+
+def _initialize_container_sitecustomize() -> None:
+    """Activate only when the package Gate supplies its fixed descriptor contract."""
+
+    try:
+        output_fd = int(os.environ["PERFLENS_RUNTIME_LOCK_FD"])
+        semantics = os.environ["PERFLENS_RUNTIME_LOCK_MODE"]
+        threshold_raw = os.environ["PERFLENS_RUNTIME_LOCK_THRESHOLD_NS"]
+        max_events = int(os.environ["PERFLENS_RUNTIME_LOCK_MAX_EVENTS"])
+    except (KeyError, ValueError):
+        os._exit(64)
+    threshold_ns = None if threshold_raw == "none" else int(threshold_raw)
+    if (
+        not _output_descriptor_is_safe(output_fd, container_output=True)
+        or semantics not in {"exact", "thresholded"}
+        or (semantics == "exact") != (threshold_ns is None)
+        or not 1 <= max_events <= 20_000
+        or (threshold_ns is not None and not 1 <= threshold_ns <= 1_000_000_000)
+    ):
+        os._exit(64)
+    global _recorder, _script_fd_path, _script_label
+    _script_fd_path = ""
+    _script_label = "<container-workload>"
+    _recorder = _Recorder(output_fd, semantics, threshold_ns, max_events)
+    os.register_at_fork(
+        before=_recorder.disable_before_fork,
+        after_in_parent=_recorder.enable_after_fork_in_parent,
+        after_in_child=_recorder.disable_after_fork_in_child,
+    )
+    _recorder.write(
+        {
+            "schema_version": "1.0",
+            "record_type": "cpython_header",
+            "protocol": "cpython_threading_probe",
+            "protocol_version": "1.0",
+            "runtime_version": ".".join(map(str, sys.version_info[:3])),
+            "free_threaded": bool(sysconfig.get_config_var("Py_GIL_DISABLED")),
+            "pid": os.getpid(),
+            "uid": os.getuid(),
+            "target_start_time_ticks": _start_ticks(),
+            "semantics": semantics,
+            "duration_threshold_ns": threshold_ns,
+            "max_events": max_events,
+            "visible_lock_kinds": ["condition", "mutex", "recursive_mutex", "semaphore"],
+        }
+    )
+    _install()
+    atexit.register(_container_finalize)
+
+
 if __name__ == "__main__":
     main()
+elif os.environ.get("PERFLENS_RUNTIME_LOCK_CONTAINER") == "1":
+    _initialize_container_sitecustomize()

@@ -6,7 +6,7 @@ import os
 import shutil
 import socket
 import tempfile
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -16,9 +16,14 @@ import pytest
 
 from perflens.application.evidence import contract_content_sha256
 from perflens.docker.adapter import (
+    CpythonDockerLaunch,
     DockerCommandAdapter,
     DockerEndpointSnapshot,
+    GoPprofDockerLaunch,
+    JavaJfrDockerLaunch,
     ManagedDockerCreateRequest,
+    NativePthreadDockerLaunch,
+    RuntimeLockDockerLaunch,
     inspect_docker_cli,
 )
 from perflens.docker.capability import (
@@ -111,9 +116,7 @@ def _docker_sandbox(*, variant: str = "normal") -> Generator[_DockerSandbox]:
     cli = root / "docker"
     log = root / "commands.ndjson"
     cli.write_text(
-        _FAKE_DOCKER.replace("{variant!r}", repr(variant)).replace(
-            "{log_path!r}", repr(str(log))
-        ),
+        _FAKE_DOCKER.replace("{variant!r}", repr(variant)).replace("{log_path!r}", repr(str(log))),
         encoding="utf-8",
     )
     os.chmod(cli, 0o500)
@@ -155,8 +158,7 @@ def _observed_commands(sandbox: _DockerSandbox) -> list[list[str]]:
     return [
         list(value)
         for value in (
-            json.loads(line)
-            for line in sandbox.log.read_text(encoding="utf-8").splitlines()
+            json.loads(line) for line in sandbox.log.read_text(encoding="utf-8").splitlines()
         )
     ]
 
@@ -165,8 +167,13 @@ def _managed_request(sandbox: _DockerSandbox) -> ManagedDockerCreateRequest:
     project = sandbox.root / "project"
     scratch = sandbox.root / "scratch"
     control = sandbox.root / "control"
-    for directory in (project, scratch, control):
-        directory.mkdir(mode=0o700)
+    project.mkdir(mode=0o700)
+    scratch.mkdir(mode=0o733)
+    control.mkdir(mode=0o711)
+    # mkdir honors the caller's umask, while the managed-container contract
+    # requires exact traversal/write modes for mapped container UIDs.
+    scratch.chmod(0o733)
+    control.chmod(0o711)
     gate = sandbox.root / "perflens-container-gate"
     gate.write_bytes(b"fixed-gate")
     gate.chmod(0o500)
@@ -188,6 +195,34 @@ def _managed_request(sandbox: _DockerSandbox) -> ManagedDockerCreateRequest:
         session_identity_sha256="3" * 64,
         workload_spec_sha256="4" * 64,
         creation_receipt_sha256="5" * 64,
+    )
+
+
+def _native_launch(path: Path, digest: str) -> RuntimeLockDockerLaunch:
+    return NativePthreadDockerLaunch(
+        probe_path=path,
+        probe_sha256=digest,
+        semantics="thresholded",
+        duration_threshold_ns=1_000,
+        max_events=20_000,
+    )
+
+
+def _cpython_launch(path: Path, digest: str) -> RuntimeLockDockerLaunch:
+    return CpythonDockerLaunch(
+        bootstrap_path=path,
+        bootstrap_sha256=digest,
+        semantics="exact",
+        duration_threshold_ns=None,
+        max_events=500,
+    )
+
+
+def _java_launch(path: Path, digest: str) -> RuntimeLockDockerLaunch:
+    return JavaJfrDockerLaunch(
+        configuration_path=path,
+        configuration_sha256=digest,
+        profile="balanced",
     )
 
 
@@ -251,9 +286,7 @@ def test_managed_adapter_derives_one_fixed_sandbox_and_lifecycle() -> None:
             "3",
         ]
         mounts = tuple(
-            create[index + 1]
-            for index, value in enumerate(create)
-            if value == "--mount"
+            create[index + 1] for index, value in enumerate(create) if value == "--mount"
         )
         assert mounts == (
             f"type=bind,src={request.project_root},dst=/workspace,readonly",
@@ -274,6 +307,87 @@ def test_managed_adapter_derives_one_fixed_sandbox_and_lifecycle() -> None:
             ("container", "stop", "--time"),
             ("container", "rm", container_id),
         )
+
+
+@pytest.mark.parametrize(
+    ("launch_factory", "adapter_name", "destination"),
+    (
+        (
+            _native_launch,
+            "native_pthread",
+            "/usr/lib/perflens/libperflens-pthread-probe.so",
+        ),
+        (
+            _cpython_launch,
+            "cpython_threading",
+            "/usr/lib/perflens/python-runtime-lock/sitecustomize.py",
+        ),
+        (
+            _java_launch,
+            "java_jfr",
+            "/usr/lib/perflens/runtime-lock.jfc",
+        ),
+    ),
+)
+def test_managed_adapter_derives_typed_runtime_lock_payload_mount(
+    launch_factory: Callable[[Path, str], RuntimeLockDockerLaunch],
+    adapter_name: str,
+    destination: str,
+) -> None:
+    with _docker_sandbox() as sandbox:
+        payload = sandbox.root / "runtime-lock-payload"
+        payload.write_bytes(b"fixed-runtime-lock-payload")
+        payload.chmod(0o400)
+        digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+        request = replace(
+            _managed_request(sandbox),
+            runtime_lock_launch=launch_factory(payload, digest),
+        )
+        _adapter(sandbox).create_managed_container(request)
+        create = _observed_commands(sandbox)[-1][4:]
+        assert f"type=bind,src={payload},dst={destination},readonly" in create
+        runtime_index = create.index("--runtime-lock")
+        assert create[runtime_index + 1] == adapter_name
+        assert "--env" not in create
+
+
+def test_managed_adapter_derives_go_runtime_lock_scope_without_payload_mount() -> None:
+    with _docker_sandbox() as sandbox:
+        request = replace(
+            _managed_request(sandbox),
+            runtime_lock_launch=GoPprofDockerLaunch(profile_kinds=("block", "mutex")),
+        )
+        _adapter(sandbox).create_managed_container(request)
+        create = _observed_commands(sandbox)[-1][4:]
+        runtime_index = create.index("--runtime-lock")
+        assert create[runtime_index : runtime_index + 4] == [
+            "--runtime-lock",
+            "go_pprof",
+            "--runtime-lock-profiles",
+            "block,mutex",
+        ]
+        assert create.count("--mount") == 4
+
+
+def test_managed_adapter_rejects_runtime_lock_payload_replacement() -> None:
+    with _docker_sandbox() as sandbox:
+        payload = sandbox.root / "runtime-lock-payload"
+        payload.write_bytes(b"fixed")
+        payload.chmod(0o400)
+        request = replace(
+            _managed_request(sandbox),
+            runtime_lock_launch=NativePthreadDockerLaunch(
+                probe_path=payload,
+                probe_sha256=hashlib.sha256(payload.read_bytes()).hexdigest(),
+                semantics="exact",
+                duration_threshold_ns=None,
+                max_events=20_000,
+            ),
+        )
+        payload.chmod(0o600)
+        payload.write_bytes(b"replaced")
+        with pytest.raises(PerfLensError, match="package payload"):
+            _adapter(sandbox).create_managed_container(request)
 
 
 def test_managed_adapter_rejects_unsafe_recipe_before_docker_exec() -> None:

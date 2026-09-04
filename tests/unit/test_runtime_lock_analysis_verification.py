@@ -17,6 +17,7 @@ from perflens.application.runtime_lock_evidence import (
     compute_runtime_source_conversion_fingerprint,
 )
 from perflens.application.verify_runtime_locks import (
+    build_runtime_lock_source_replay_receipt,
     require_usable_runtime_lock_analysis,
     verify_runtime_lock_analysis_artifact,
 )
@@ -307,6 +308,29 @@ def test_non_replayable_source_still_binds_retained_raw_bytes(fixture_root: Path
     assert checks["source_conversion_replay"] == "skipped"
     assert verification.verification_status == "partial"
     require_usable_runtime_lock_analysis(verification)
+
+
+def test_persisted_replay_receipt_does_not_claim_a_fresh_conversion(
+    fixture_root: Path,
+) -> None:
+    evidence = _evidence(fixture_root)
+    analysis = build_runtime_lock_analysis(evidence)
+    receipt = build_runtime_lock_source_replay_receipt(evidence)
+
+    verification = verify_runtime_lock_analysis_artifact(
+        analysis,
+        evidence,
+        source_replay_receipt=receipt,
+    )
+
+    replay_check = next(
+        check for check in verification.checks if check.name == "source_conversion_replay"
+    )
+    assert replay_check.status == "passed"
+    assert "content-bound receipt attests" in replay_check.detail
+    assert "reran" not in replay_check.detail
+    assert "reproduced" not in replay_check.detail
+    assert "reproduced" not in replay_check.detail
 
 
 def test_non_replayable_source_still_fails_closed_on_forbidden_conclusion_tampering(

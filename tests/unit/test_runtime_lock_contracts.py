@@ -17,6 +17,7 @@ from perflens.contracts.runtime_locks import (
     RuntimeLockAnalysisVerificationArtifact,
     RuntimeLockEvidenceArtifact,
     RuntimeLockImportHeader,
+    RuntimeLockSourceReplayReceipt,
     RuntimeLockVerificationCheck,
     RuntimeNanosecondDistribution,
     RuntimeSourceManifest,
@@ -83,6 +84,7 @@ def _source(*, semantics: str = "exact", **overrides: Any) -> dict[str, Any]:
         "adapter_version": "runtime-lock-adapter-v1",
         "backend_id": "strict-ndjson-import",
         "backend_version": "1",
+        "runtime_version": "3.13.5",
         "measurement_semantics": semantics,
         "source_format": "perflens_runtime_lock_ndjson_v1",
         "converter_version": "runtime-lock-ndjson-v1.1",
@@ -212,6 +214,7 @@ def _schema_1_0_evidence() -> dict[str, Any]:
     payload["schema_version"] = "1.0"
     payload["source"]["schema_version"] = "1.0"
     payload["source"].pop("converter_version")
+    payload["source"].pop("runtime_version")
     payload["target"].pop("target_kind")
     payload.pop("execution_contexts")
     for field in (
@@ -779,10 +782,12 @@ def test_evidence_and_source_schema_versions_match_in_json_schema_and_model() ->
     current_with_legacy_source = _evidence()
     current_with_legacy_source["source"]["schema_version"] = "1.0"
     current_with_legacy_source["source"].pop("converter_version")
+    current_with_legacy_source["source"].pop("runtime_version")
 
     legacy_with_current_source = _schema_1_0_evidence()
     legacy_with_current_source["source"]["schema_version"] = "1.1"
     legacy_with_current_source["source"]["converter_version"] = "runtime-lock-ndjson-v1.1"
+    legacy_with_current_source["source"]["runtime_version"] = "3.13.5"
 
     for payload in (current_with_legacy_source, legacy_with_current_source):
         with pytest.raises(JsonSchemaValidationError):
@@ -831,6 +836,7 @@ def test_runtime_source_converter_json_schema_matches_model_version_rules() -> N
     legacy = _source()
     legacy["schema_version"] = "1.0"
     legacy.pop("converter_version")
+    legacy.pop("runtime_version")
     _validate_json_schema(RuntimeSourceManifest.model_json_schema(), legacy)
     assert RuntimeSourceManifest.model_validate(legacy).schema_version == "1.0"
 
@@ -1269,3 +1275,27 @@ def test_verifier_version_defaults_and_json_schema_follow_the_artifact_schema() 
             _validate_json_schema(schema, payload)
         with pytest.raises(ValidationError, match="contradicts"):
             RuntimeLockAnalysisVerificationArtifact.model_validate(payload)
+
+
+def test_source_replay_origin_identity_is_pairwise_and_path_free() -> None:
+    payload = {
+        "source_format": "jfr_json_v1",
+        "raw_source_sha256": "2" * 64,
+        "raw_source_bytes": 128,
+        "origin_source_sha256": "3" * 64,
+        "origin_source_bytes": 4096,
+        "normalized_source_sha256": "4" * 64,
+        "normalized_source_bytes": 96,
+        "converter_version": "java-jfr-converter-v1",
+        "conversion_fingerprint": "5" * 64,
+        "adapter_execution_identity_sha256": "6" * 64,
+        "runtime_lock_evidence_id": EVIDENCE_ID,
+        "runtime_lock_evidence_content_sha256": "7" * 64,
+    }
+    receipt = RuntimeLockSourceReplayReceipt.model_validate(payload)
+    assert receipt.origin_source_bytes == 4096
+    assert all("path" not in field for field in RuntimeLockSourceReplayReceipt.model_fields)
+
+    incomplete = {**payload, "origin_source_bytes": None}
+    with pytest.raises(ValidationError, match="one pair"):
+        RuntimeLockSourceReplayReceipt.model_validate(incomplete)

@@ -15,12 +15,12 @@ from perflens.runtime_locks.go_pprof_adapter import (
     build_go_pprof_adapter_bridge,
     inspect_go_pprof_installation,
 )
-from perflens.runtime_locks.go_pprof_converter import convert_go_pprof_raw
+from perflens.runtime_locks.go_pprof_converter import GoProfileKind, convert_go_pprof_raw
 from perflens.runtime_locks.go_pprof_launcher import (
     GoPprofLauncher,
     GoPprofLaunchRequest,
-    GoPprofRawResult,
     cleanup_go_pprof_result,
+    inspect_pinned_go_executable_version,
     open_go_pprof_raw,
 )
 from perflens.runtime_locks.project_config import (
@@ -38,6 +38,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"sync"
+	"time"
 )
 
 func writeProfile(name, destination string) {
@@ -58,9 +59,9 @@ func main() {
 		go func() {
 			defer wg.Done()
 			<-start
-			for n := 0; n < 20000; n++ {
+			for n := 0; n < 100; n++ {
 				lock.Lock()
-				for spin := 0; spin < 100; spin++ {}
+				time.Sleep(100 * time.Microsecond)
 				lock.Unlock()
 			}
 		}()
@@ -129,10 +130,17 @@ def _build_workload(project: Path) -> Path:
     return target
 
 
-def test_real_supervisor_collects_mutex_and_block_profiles(
+@pytest.mark.parametrize("profile_kind", ["mutex", "block"])
+@pytest.mark.timeout(30)
+def test_real_supervisor_collects_profile(
     tmp_path: Path,
     runtime_supervisor_client: RuntimeSupervisorClient,
+    profile_kind: GoProfileKind,
 ) -> None:
+    # Building and launching a real Go workload is intentionally covered here.
+    # The supervisor still enforces its own fixed workload/tool deadlines; this
+    # test-only allowance prevents Python coverage instrumentation and a cold Go
+    # build cache from consuming pytest's unrelated ten-second unit-test limit.
     installation = _go_installation()
     bridge = build_go_pprof_adapter_bridge(_policy(tmp_path), installation)
     assert bridge.execution_binding is not None
@@ -159,33 +167,30 @@ def test_real_supervisor_collects_mutex_and_block_profiles(
 
     assert launch.exit_code == 0
     assert launch.termination_reason == "exited"
-    raw_results: list[GoPprofRawResult] = []
-    for kind in ("mutex", "block"):
-        raw = launcher.render_raw(launch, kind)
-        raw_results.append(raw)
-        raw_fd = open_go_pprof_raw(raw)
-        try:
-            with os.fdopen(os.dup(raw_fd), "rb") as stream:
-                receipt = convert_go_pprof_raw(
-                    stream,
-                    execution_binding=bridge.execution_binding,
-                    profile_kind=kind,
-                    target_pid=launch.target_pid,
-                    target_uid=launch.target_uid,
-                    target_start_time_ticks=launch.target_start_ticks,
-                    mutex_profile_fraction=(1 if kind == "mutex" else None),
-                    block_profile_rate_ns=(1 if kind == "block" else None),
-                )
-        finally:
-            os.close(raw_fd)
-        assert receipt.evidence.events
-        assert receipt.evidence.execution_contexts[0].kind == "process_aggregate"
-        assert all("owner" not in event.model_dump() for event in receipt.evidence.events)
+    raw = launcher.render_raw(launch, profile_kind)
+    raw_fd = open_go_pprof_raw(raw)
+    try:
+        with os.fdopen(os.dup(raw_fd), "rb") as stream:
+            receipt = convert_go_pprof_raw(
+                stream,
+                execution_binding=bridge.execution_binding,
+                profile_kind=profile_kind,
+                target_pid=launch.target_pid,
+                target_uid=launch.target_uid,
+                target_start_time_ticks=launch.target_start_ticks,
+                mutex_profile_fraction=(1 if profile_kind == "mutex" else None),
+                block_profile_rate_ns=(1 if profile_kind == "block" else None),
+            )
+    finally:
+        os.close(raw_fd)
+    assert receipt.evidence.events
+    assert receipt.evidence.execution_contexts[0].kind == "process_aggregate"
+    assert all("owner" not in event.model_dump() for event in receipt.evidence.events)
     foreign_root = tmp_path / "foreign"
     foreign_root.mkdir(mode=0o700)
     with pytest.raises(PerfLensError, match="different private root"):
-        open_go_pprof_raw(replace(raw_results[0], private_root=foreign_root))
-    cleanup_go_pprof_result(launch, tuple(raw_results))
+        open_go_pprof_raw(replace(raw, private_root=foreign_root))
+    cleanup_go_pprof_result(launch, (raw,))
     assert not launch.mutex_profile_path.exists()
     assert not launch.block_profile_path.exists()
 
@@ -238,3 +243,23 @@ def test_launch_request_is_bounded() -> None:
         GoPprofLaunchRequest(arguments=(), duration_seconds=31)
     with pytest.raises(PerfLensError, match="safe bound"):
         GoPprofLaunchRequest(arguments=("bad\0argument",), duration_seconds=1)
+
+
+def test_container_go_version_is_read_from_a_descriptor_pinned_executable(
+    tmp_path: Path,
+) -> None:
+    installation = _go_installation()
+    assert installation.tool is not None
+    project = tmp_path / "project"
+    project.mkdir(mode=0o700)
+    target = _build_workload(project)
+    descriptor = os.open(target, os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        version = inspect_pinned_go_executable_version(
+            installation.tool,
+            descriptor,
+        )
+    finally:
+        os.close(descriptor)
+
+    assert version == installation.tool.version

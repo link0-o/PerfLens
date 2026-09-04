@@ -8,6 +8,9 @@ repository.workspace = true
 description = "Fixed startup gate for bounded PerfLens Docker workloads"
 publish = false
 
+[dependencies]
+nix.workspace = true
+
 [lints.rust]
 unsafe_code = "forbid"
 

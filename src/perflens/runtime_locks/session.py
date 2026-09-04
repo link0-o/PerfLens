@@ -773,6 +773,11 @@ class RuntimeLockSessionRuntime:
         warnings: tuple[str, ...] = (),
         expires_in_seconds: int = _PREVIEW_EXPIRY_SECONDS,
     ) -> RuntimeLockSessionPreviewArtifact:
+        if target_scope in {"managed_temporary_container", "docker_optimization"}:
+            raise _authorization_error(
+                "Docker Runtime Lock scope requires one content-bound parent Docker "
+                "authorization"
+            )
         with self._lock:
             self._ensure_open()
             self._prune_pending()
@@ -1013,6 +1018,10 @@ def build_runtime_lock_session_preview(
     created_at: datetime | None = None,
     expires_in_seconds: int = _PREVIEW_EXPIRY_SECONDS,
 ) -> RuntimeLockSessionPreviewArtifact:
+    if target_scope in {"managed_temporary_container", "docker_optimization"}:
+        raise _authorization_error(
+            "Docker Runtime Lock scope requires one content-bound parent Docker authorization"
+        )
     _verify_content(capability)
     _validate_sha256(client_connection_identity_sha256, "Runtime Lock client connection")
     _validate_sha256(runtime_lock_config_sha256, "Runtime Lock configuration")
@@ -1325,6 +1334,9 @@ def _run_matches_lease(
     run_started = datetime.fromisoformat(run.started_at)
     run_finished = datetime.fromisoformat(run.finished_at)
     run_created = datetime.fromisoformat(run.created_at)
+    run_session_content_sha256 = run.session_artifact_content_sha256
+    if run_session_content_sha256 is None:
+        return False
     return (
         lease.session_id == session.session_id
         and lease.session_artifact_id == session.session_artifact_id
@@ -1336,7 +1348,7 @@ def _run_matches_lease(
         and run.session_id == session.session_id
         and run.session_artifact_id == session.session_artifact_id
         and hmac.compare_digest(
-            run.session_artifact_content_sha256,
+            run_session_content_sha256,
             session.content_sha256,
         )
         and run.session_revision == session.revision

@@ -76,6 +76,33 @@ class CpythonAdapterBridge:
         )
 
 
+def assert_cpython_launch_policy_current(policy: CpythonLaunchPolicy) -> None:
+    """Reopen and verify the authorized interpreter and bootstrap identities.
+
+    A Docker optimization Preview binds immutable file identities.  Comparing a
+    launch request only with the cached bridge would miss an on-disk replacement
+    between Preview and workload-lease issuance.
+    """
+
+    trusted_owner_uids = tuple(
+        sorted({policy.interpreter.owner_uid, policy.bootstrap.owner_uid})
+    )
+    interpreter = _inspect_file(
+        policy.interpreter.path,
+        executable=True,
+        maximum_size=512 << 20,
+        trusted_owner_uids=trusted_owner_uids,
+    )
+    bootstrap = _inspect_file(
+        policy.bootstrap.path,
+        executable=False,
+        maximum_size=1 << 20,
+        trusted_owner_uids=trusted_owner_uids,
+    )
+    if interpreter != policy.interpreter or bootstrap != policy.bootstrap:
+        raise _error("CPython runtime payload changed after capability inspection")
+
+
 def inspect_cpython_installation(
     *,
     interpreter_path: Path | None = None,

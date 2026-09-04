@@ -21,6 +21,7 @@ const MAX_SPOOL_BYTES: u64 = 4 << 30;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraceExecutionPlan {
     pub plan_id: String,
+    pub authorized_uid: u32,
     pub target: TraceHelperTarget,
     pub mode: TraceMode,
     pub duration_milliseconds: u64,
@@ -49,7 +50,7 @@ pub fn execute_plan<R>(
 where
     R: FnMut() -> io::Result<()>,
 {
-    crate::assert_pid_identity(&plan.target)?;
+    crate::assert_pid_identity(&plan.target, plan.authorized_uid)?;
     let spool = trusted_spool(Path::new(TRACE_SPOOL_ROOT), artifact_gid)?;
     validate_spool_capacity(&spool, plan.max_output_bytes, artifact_gid)?;
     consume_plan(&spool, &plan.plan_id)?;
@@ -68,6 +69,7 @@ where
     let capture = match backend::capture(
         plan.mode,
         &plan.target,
+        plan.authorized_uid,
         Duration::from_millis(plan.duration_milliseconds),
         plan.max_output_bytes,
         &key,
