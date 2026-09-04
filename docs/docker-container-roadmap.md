@@ -23,10 +23,12 @@ The release sequence is fixed as follows:
 - `v0.3.0`: complete the host `stat/record/sched/off_cpu/lock` loop;
 - `v0.3.1`: add collection, analysis, and container resource context for one explicit process in a
   local Docker container;
-- `v0.4.0`: complete the C/C++, Java, Python, and Go user-space lock adapters.
+- `v0.4.0`: add bounded C/C++, Java, Python, and Go Runtime Lock adapters and integrate them with
+  managed/optimization Docker launches.
 
-The checked-in Runtime Lock public contracts are groundwork for v0.4.0. They do not mean that the
-four runtime adapters are available and do not change the v0.3.1 Docker boundary.
+The repository now contains that v0.4.0 prerelease implementation, but published v0.3.2 packages
+do not. It does not change the v0.3.1 fixed-image boundary and does not inject into arbitrary
+existing containers. See the [Runtime Lock guide](runtime-locks.md).
 
 ## 1. Decision summary
 

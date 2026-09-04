@@ -20,6 +20,8 @@
 [《Docker 进程采集与分析指南》](docs/docker-container-roadmap.zh-CN.md)。
 `v0.3.2` 的一次授权构建与自动优化合同见
 [《Docker 自动优化指南》](docs/docker-optimization-roadmap.zh-CN.md)。
+仓库中的 v0.4.0 预发布 Runtime Lock 工作流见
+[《用户态锁工作流》](docs/runtime-locks.zh-CN.md)；它不属于已发布的 v0.3.2 安装包。
 perf 原始证据如何转换、校验并带着质量边界交给 Agent，见
 [《Perf 原始证据到 Agent 数据的可信链路》](docs/evidence-pipeline.zh-CN.md)。
 
@@ -49,6 +51,11 @@ PerfLens 不包含 LLM API、Web UI、源码补丁工具、通用 Benchmark 执�
 在明确授权的优化会话中，外部 Agent 只能编辑已审阅的 mutable 路径，固定 workload 合同负责
 产出正确性和 Benchmark 证据。
 
+当前仓库还包含 v0.4.0 预发布 Runtime Lock 实现：严格的 Evidence Schema 1.1 与重放验证、
+有界会话、Native pthread、Java JFR、CPython threading、Go pprof Adapter，以及 Docker
+optimization 集成。在 v0.4.0 发布门和 `0.4.0-1` 安装包完成前，它仍属于源码预发布能力；
+最新已发布稳定版本仍是 v0.3.2。
+
 ## 安装
 
 需要 Python 3.12 或更高版本。
@@ -77,6 +84,17 @@ perflens init --docker
 该命令只生成项目级 `perflens-setup/container-workload.toml` 策略，不安装或启动 Docker、
 不加入 Docker 用户组、不 build/pull 镜像、不部署 Collector，也不授予执行权限。之后 Skill
 只会在用户确认单次授权或内存中的有界会话后，调用类型化 MCP 工具完成发现、采集和比较。
+
+如需使用仓库中的 v0.4.0 预发布 Runtime Lock 工作流，须显式生成项目策略；Docker
+optimization 可组合两个参数：
+
+```bash
+perflens init --runtime-locks
+perflens init --docker --runtime-locks
+```
+
+该命令只启用能力发现，不会插桩或附加目标、导入证据、启动负载或访问 pprof。详见
+[《用户态锁工作流》](docs/runtime-locks.zh-CN.md)。
 
 `init` 默认只在当前项目激活 Codex 和 Claude Code 集成，并开启受策略约束的自动采集。
 只使用一个默认客户端时传 `--client codex` 或 `--client claude-code`；OpenCode 使用
@@ -115,10 +133,10 @@ root Rust Helper；该模式不会自动启用，必须由管理员确认受限 
 确定性分析和 `full_diagnostics` 生命周期；原有特权 stat/record Helper 仍严格限制为
 `stat/record`。详细边界见
 [《Collector 与用户态锁能力路线图（v0.3.0 / v0.4.0）》](docs/collector-capability-roadmap.zh-CN.md)。
-发布版 `v0.3.1` 增加本地 Docker 单进程目标运行时，四类用户态锁 Adapter 仍计划进入
-`v0.4.0`。Docker 能力只覆盖本地 Linux Engine、cgroup v2、明确进程和固定项目策略；
+发布版 `v0.3.1` 增加本地 Docker 单进程目标运行时。Docker 能力只覆盖本地 Linux Engine、
+cgroup v2、明确进程和固定项目策略；
 不支持任意 Docker 参数、远程 Engine、Compose/Kubernetes、自动 build/pull 或整容器 perf
-聚合。已经提交的 Runtime Lock 公共合同只是前置骨架，不代表 Adapter 已可用。详见
+聚合。详见
 [《v0.3.1 Docker 进程采集与分析指南》](docs/docker-container-roadmap.zh-CN.md)。
 发布版 `v0.3.2` 另行提供默认关闭、必须绑定 Benchmark 的
 `bounded_optimization_session`：用户审阅并确认一次后，Agent 可在硬预算和
@@ -127,6 +145,9 @@ root Rust Helper；该模式不会自动启用，必须由管理员确认受限 
 构建，会话不授予任意 Docker 访问，也不授权 commit、push、Tag 或 Release。最终候选如果
 没有达到 verified，只有在人工再次选择后才会保留；该选择会被记录，但不会升级原始证据结论。详见
 [《v0.3.2 Docker 自动优化指南》](docs/docker-optimization-roadmap.zh-CN.md)。
+仓库中的 v0.4.0 预发布实现增加有界 Runtime Lock 会话和四类 Adapter，但不支持向任意运行
+中进程或已有容器注入。Native、CPython、Java 主动采集只在启动时插桩；Go 还允许显式授权、
+同 UID、本机字面量 loopback pprof。详见[《用户态锁工作流》](docs/runtime-locks.zh-CN.md)。
 
 随时可以运行只读状态检查，不需要记住多条排错命令：
 
@@ -515,3 +536,4 @@ uv run pip-audit
 - [已知问题与临时处理](docs/known-issues.zh-CN.md)
 - [故障排查](docs/troubleshooting.zh-CN.md)
 - [v0.3.2 Docker 优化链路防回归手册](docs/v0.3.2-regression-playbook.zh-CN.md)
+- [v0.4.0 用户态锁工作流](docs/runtime-locks.zh-CN.md)

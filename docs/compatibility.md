@@ -21,7 +21,9 @@
 | paranoid=3 Helper | The existing Rust Helper remains permanently limited to `record/stat`; v0.3.0 uses another service/protocol/socket/spool for its Trace Helper |
 | Target runtime | Linux host PID, or one explicit process in a local Linux Docker Engine with cgroup v2; no remote Engine, Docker Desktop VM, Compose, or whole-container aggregation |
 | Native DEB | Debian 13 `amd64`, system Python 3.13; split exact-version Collector package |
-| Artifact schema | Public artifacts 1.0; Docker project policy accepts strict 1.0 and 1.1 |
+| Runtime Lock (repository v0.4.0 prerelease) | Native pthread: Debian 12/13 amd64 + glibc 2.36/2.41; Java JFR: JDK 17/21/25; CPython: 3.12/3.13 including free-threaded detection; Go pprof: 1.24-1.27 |
+| Runtime Lock target | Reviewed host launch, managed/optimization Docker launch, controlled import, or explicit same-UID loopback Go pprof; no arbitrary live injection |
+| Artifact schema | Existing public artifacts 1.0; Docker project policy accepts strict 1.0/1.1; Runtime Lock Evidence reads strict 1.0/1.1 and new Adapters write 1.1 |
 
 PerfLens does not parse `perf.data` directly. Binary compatibility is delegated
 to the selected system `perf`; use a matching perf build when a profile cannot
@@ -42,8 +44,15 @@ and maps bounded module/source evidence. Docker remains optional and external: P
 install Docker, and the v0.3.1 path does not build/pull images. The opt-in v0.3.2 optimization
 session can run only typed, recipe-bound builds after confirmation. Rootful UID-0 targets stay disabled until an administrator
 explicitly enables the dedicated policy boundary. See the [Docker process guide](docker-container-roadmap.md)
-for the complete compatibility and denial matrix. C/C++, Java, Python, and Go user-space-lock
-adapters remain planned for v0.4.0.
+for the complete compatibility and denial matrix.
+
+The repository v0.4.0 prerelease exposes Runtime Lock capability discovery, content-bound
+sessions, strict conversion/import, deterministic analysis, independent replay verification, and
+the four Adapter families listed above. It is not a compatibility promise for published v0.3.2
+packages. JDK and Go tools are optional external dependencies; the native DEB supplies the fixed
+pthread probe and supervisor without activating them. Docker optimization can include one reviewed
+Runtime Lock scope in its existing confirmation. See the
+[Runtime Lock guide](runtime-locks.md) for backend and partial/unsupported boundaries.
 
 Run `perflens status --project /absolute/path/to/project` for a read-only summary
 of onboarding files, Skill, generated MCP configuration, Collector assets,

@@ -74,6 +74,13 @@ Docker remains an optional external runtime. Neither package depends on or activ
 a Docker group, writes daemon configuration, or enables project Docker policy. The Container Gate
 in the main package is inert until an ordinary-user managed workflow has explicit authorization.
 Use `perflens init --docker` only in projects that intentionally opt in.
+The repository v0.4.0 prerelease main package additionally carries the fixed, capability-free
+pthread probe and Runtime Lock supervisor. They remain inert after installation. A project must
+run `perflens init --runtime-locks` (or combine it with `--docker`), review
+`runtime-locks.toml`, reload its Agent client, and confirm a content-bound session before any
+instrumentation or collection. Optional JDK and Go toolchains are detected rather than downloaded.
+Published `0.3.2-1` packages do not include this prerelease capability; see the
+[Runtime Lock guide](runtime-locks.md).
 After the user's new login session, `perflens status --project <project>` checks
 runtime readiness and `perflens-admin spool-status` reports Collector storage
 headroom. Both are read-only; add `--json` to the latter for a versioned artifact.

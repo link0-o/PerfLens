@@ -91,6 +91,26 @@ Docker `record` 会请求记录 mmap Build ID。采集时模块快照只有在 `
 摘要、Build ID、大小和 SHA-256 全部验证通过后，后续分析才会把该模块的精确副本放入私有
 临时 `symfs`。转换结束会再次校验并删除副本，公开 provenance 只保留内容身份；模块缺失或
 发生变化时仍标记为 `partial`，不会猜测某个宿主文件就是目标模块。
+
+仓库 v0.4.0 预发布 Runtime Lock 工作流需要显式初始化：
+
+```bash
+perflens init --runtime-locks
+perflens init --docker --runtime-locks
+```
+
+生成的 `runtime-locks.toml` 只启用能力发现。Skill 会先调用
+`inspect_runtime_lock_capability`，生成内容绑定 Preview，展示精确目标、Adapter/语义、
+payload/工具、路径和预算，然后结束响应并等待用户一次新的明确确认。确认后才允许授权、
+采集或导入、分析、独立校验、查询、比较和撤销有界会话。Native pthread、Java JFR、
+CPython 主动采集只支持启动时插桩；Go 还允许显式启用、同 UID、本机字面量 loopback pprof。
+不支持向任意运行中进程或已有容器注入。
+
+Runtime Lock 若明确进入 Docker optimization Preview，则由父级一次确认会话覆盖；采集费用
+绑定同一个 workload lease，并绑定精确 Build、Run、Measurement、运行时、payload 与工具
+身份。它不能独立产生外层 Docker `verified_improvement`。详见
+[《用户态锁工作流》](runtime-locks.zh-CN.md)。
+
 需要调整时可在首次 `init` 或后续 `init --update` 中使用：
 
 ```bash
@@ -354,6 +374,7 @@ on-CPU 热点，但不得用软件结果推断 IPC、硬件缓存或分支未命
 | `AUTOMATIC_COLLECTION` | 执行短期、单次、PID 绑定计划 | MCP 分类授权与 Collector 独立策略必须同时允许 |
 | `PROJECT_EXECUTION` | 启动一个已确认的项目可执行文件并采集其新 PID | 还需要自动采集、`--allow-project-execution`、逐次执行授权和项目路径边界 |
 | `DOCKER_COLLECTION` | 发现、授权并采集一个本地容器进程或一个固定托管 workload | 需要 `perflens init --docker`、项目 Docker 策略、自动采集、匹配的内存会话、独立 Linux 身份复核，以及 Docker/Collector 策略交集 |
+| `RUNTIME_LOCK_SESSION` | 发现、Preview、授权、采集/导入、校验、查询、比较并撤销一个有界 Runtime Lock 范围 | 需要 `perflens init --runtime-locks`、严格项目策略、当前连接 Preview、一次新的明确确认、固定 Adapter/工具/payload/目标身份、单次 lease 和独立重放验证 |
 
 客户端显示的工具注解只是提示；真正的权限检查始终在 PerfLens MCP Server 内执行。
 

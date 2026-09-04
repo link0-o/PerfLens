@@ -191,3 +191,30 @@ and matched A/B gates are specified in the
 [v0.3.1 Docker process guide](docker-container-roadmap.md).
 The build and disposition path is specified in the
 [v0.3.2 optimization guide](docker-optimization-roadmap.md).
+
+## Runtime Lock evidence boundary (v0.4.0 prerelease)
+
+The repository v0.4.0 implementation adds another ordinary-user Adapter layer without expanding
+either Rust perf Helper or the Trace Helper:
+
+```text
+project runtime-lock policy + content-bound Preview/authorization
+        -> launch-time Adapter or controlled import
+        -> private raw capture / fixed external converter
+        -> redacted Runtime Lock Evidence 1.1
+        -> deterministic Analyzer + independent replay Verifier
+        -> bounded lock/context/call-path/outcome/kind projections
+```
+
+Native pthread, CPython, and Java active collection launch a reviewed workload under the ordinary
+user; they do not attach to an arbitrary process. Go accepts private file profiles and an explicit
+same-UID literal-loopback pprof target. Docker managed/optimization collection binds the Adapter
+payload and actual runtime identity before the Gate releases the workload. A Docker optimization
+Preview that explicitly includes Runtime Lock reuses the same one-confirmation parent authority;
+each capture still receives one short-lived workload lease and its own evidence budget.
+
+Raw addresses, source paths, authorization tokens, environments, and credentials stay private.
+Public lock IDs are opaque and Artifact-local. Evidence semantics remain exact, thresholded,
+sampled, or cumulative without cross-mixing. Analysis and replay artifacts are append-only and
+content-bound to their source, target, tool, runtime, and session. See the
+[v0.4.0 Runtime Lock guide](runtime-locks.md).

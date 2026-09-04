@@ -571,12 +571,22 @@ trace 策略、启用 Trace Helper 或扩展 `allowed_modes`。管理员完成�
 再单独审查并执行 `switch-profile full_diagnostics`。这条迁移规则优先于“完整配置是新安装
 推荐项”，避免升级过程静默扩大已有主机权限。
 
-`v0.4.0` 计划在完整配置上增加 C/C++、Java、Python 和 Go 用户态锁 Adapter。已经提交的
-Runtime Lock 公共合同只是前置骨架，不代表四类 Adapter 当前可用。JDK、Go、
-async-profiler、SystemTap 等保持可选外部依赖，由 PerfLens 检测并提供中文安装/启用说明，
-不随核心两个 DEB 隐式下载或捆绑。项目必须显式运行计划中的
-`perflens init --runtime-locks`，而 `LD_PRELOAD`、JVM/JFR 附加、pprof 访问或 probe 部署
-仍需要每次明确授权。
+仓库中的 `v0.4.0` 预发布实现已经包含有界 Native pthread、Java JFR、CPython threading
+和 Go pprof Runtime Lock Adapter；已发布的 v0.3.2 安装包不包含该能力。项目通过下面的
+命令只启用能力发现：
+
+```bash
+perflens init --runtime-locks
+perflens init --docker --runtime-locks  # 同时使用 Docker optimization 时
+```
+
+初始化会生成并保留项目所有的 `perflens-setup/runtime-locks.toml`，但不会插桩、附加、导入、
+采集或启用服务。JDK、Go、async-profiler、DTrace、SystemTap 等仍是可选外部依赖，不由两个
+核心 DEB 下载。v0.4.0 主原生 DEB 计划携带固定、无 capability 的 pthread probe 和 Runtime
+Lock supervisor，但安装过程仍不会激活它们。Native/CPython/JFR 主动采集只支持启动时插桩，
+不部署任意运行中进程或已有容器注入。执行前必须建立内容绑定的
+`bounded_runtime_lock_session`，或由父 Docker optimization Preview 明确纳入同一授权范围。
+详见[《用户态锁工作流》](runtime-locks.zh-CN.md)。
 
 ## 面向其他用户的正式发行
 

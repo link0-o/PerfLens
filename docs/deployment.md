@@ -352,12 +352,24 @@ acceptance, the administrator separately reviews and runs `switch-profile full_d
 This migration rule overrides the fresh-install recommendation so upgrades never widen privilege
 silently.
 
-Planned `v0.4.0` adds native C/C++, Java, Python, and Go user-space lock adapters on top of full
-diagnostics. The checked-in Runtime Lock public contracts are groundwork, not available adapters.
-JDK, Go, async-profiler, and SystemTap remain optional external dependencies detected
-with Chinese setup guidance; they are not downloaded or bundled in the two core DEBs. Projects
-explicitly opt in with planned `perflens init --runtime-locks`, and `LD_PRELOAD`, JVM/JFR
-attachment, pprof access, or probe deployment still requires explicit per-operation authorization.
+The repository `v0.4.0` prerelease implements bounded Native pthread, Java JFR, CPython threading,
+and Go pprof Runtime Lock Adapters. Published v0.3.2 packages do not contain this capability.
+Projects opt in to capability discovery with:
+
+```bash
+perflens init --runtime-locks
+perflens init --docker --runtime-locks  # when Docker optimization also applies
+```
+
+Initialization writes and preserves a project-owned `perflens-setup/runtime-locks.toml`; it does
+not instrument, attach, import, collect, or enable a service. JDK, Go, async-profiler, DTrace, and
+SystemTap remain optional external dependencies and are not downloaded by the two core DEBs. The
+v0.4.0 main native DEB is intended to carry the fixed capability-free pthread probe and Runtime
+Lock supervisor, but package installation still does not activate either. Native/CPython/JFR
+active collection is launch-time only; no arbitrary running-process or existing-container
+injection is deployed. A content-bound `bounded_runtime_lock_session` or an explicitly scoped
+parent Docker optimization Preview is required before execution. See the
+[Runtime Lock guide](runtime-locks.md).
 
 For backward compatibility, a retained policy without `allow_software_fallback` is read as
 `false`; package upgrade never silently expands its event policy. To opt in, review a candidate

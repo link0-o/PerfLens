@@ -231,6 +231,50 @@ most six runs, active-time/evidence budgets, and short single-use collection pla
 image recipe, existing target, client connection, namespace, cgroup, UID mapping, or resource
 scope change requires new authorization.
 
+## Runtime Lock workflow
+
+Read [lock-analysis.md](references/lock-analysis.md) before Runtime Lock capability discovery,
+authorization, collection, import, or interpretation. This workflow requires a project initialized
+with `perflens init --runtime-locks`; initialization enables discovery only and is never consent to
+instrument, attach, import, access pprof, or run a workload.
+
+Use the native MCP tools from the current project connection. If they are absent, ask the user to
+reload that connection; do not start another MCP process or create a protocol bridge.
+
+1. Call `inspect_runtime_lock_capability`. Select only an Adapter, target scope, and measurement
+   semantics that are both available and necessary for the evidence gap.
+2. Call `preview_runtime_lock_session`. Show the exact target/workload, Adapter, runtime payload,
+   fixed tools, semantics/threshold, import roots, and budgets returned by the Preview. End the
+   response and wait for a fresh explicit user confirmation.
+3. Only after that reply call `authorize_runtime_lock_session` with the exact Preview hashes and
+   fixed authorization token. Client auto-approval is tool access, not target consent.
+4. Use `collect_runtime_lock_evidence` for a reviewed launched workload, or
+   `import_runtime_lock_evidence` for a policy-authorized source. Never substitute direct
+   `LD_PRELOAD`, `java -XX:StartFlightRecording`, pprof HTTP, perf/uprobe, or shell execution.
+5. Call `analyze_runtime_lock_evidence`, then `verify_runtime_lock_analysis`; do not interpret a
+   failed verification. Query only bounded pages with `list_runtime_lock_hotspots` and
+   `get_runtime_lock_call_paths`, and build a diagnosis bundle only when durable evidence is useful.
+6. Compare only Run-bound analyses from the same authority with
+   `compare_runtime_lock_analyses`. Preserve exact, thresholded, sampled, and cumulative meanings;
+   do not compare or add their raw counts as if they were one measurement model.
+
+Native pthread, CPython, and Java active evidence is launch-time only. Do not attach or inject into
+an arbitrary running process or existing container. Go may use an explicitly enabled same-UID
+literal-loopback pprof endpoint after its Socket/PID identity is bound; Docker defaults to private
+file profiles and opens no network. Controlled import never authorizes target execution.
+
+When an authorized Docker optimization Preview explicitly includes Runtime Lock, use the parent
+Docker session and its returned Build/Run/Measurement binding; do not create a second implicit
+Runtime Lock authorization. Check combined budget before container creation, and stop if capture,
+conversion, replay, or persistence marks Runtime Lock unavailable for the parent. Runtime Lock
+comparison alone is candidate evidence: final `Verified Improvement` still requires the outer
+Docker correctness, Benchmark, perf, resource-transfer, and replay gates.
+
+Always report Adapter/runtime versions, source semantics, threshold or sampling configuration,
+visibility/fast-path limits, loss/truncation, owner/hold provenance, verification status, and
+allowed/forbidden conclusions. An Artifact-local opaque lock ID must never be correlated across
+Artifacts. Revoke the session when work is complete or cannot continue safely.
+
 ## Automatic live collection
 
 Read [active-collection-safety.md](references/active-collection-safety.md) before using a live target.

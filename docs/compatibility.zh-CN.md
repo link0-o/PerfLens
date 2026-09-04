@@ -21,7 +21,9 @@
 | paranoid=3 Helper | 现有 Rust Helper 永远只支持 `record/stat`；v0.3.0 用另一套服务/协议/Socket/spool 的 Trace Helper 处理高级模式 |
 | 目标运行时 | Linux 宿主 PID，或本地 Linux Docker Engine + cgroup v2 中的一个明确进程；不支持远程 Engine、Docker Desktop VM、Compose 或整容器聚合 |
 | 原生 DEB | Debian 13 `amd64`、系统 Python 3.13；主包和完全同版本 Collector 包分离 |
-| 产物 Schema | 公共产物 1.0；Docker 项目策略严格读取 1.0 与 1.1 |
+| Runtime Lock（仓库 v0.4.0 预发布） | Native pthread：Debian 12/13 amd64 + glibc 2.36/2.41；Java JFR：JDK 17/21/25；CPython：3.12/3.13（含 free-threaded 检测）；Go pprof：1.24-1.27 |
+| Runtime Lock 目标 | 已审阅宿主启动、托管/优化 Docker 启动、受控导入，或显式同 UID loopback Go pprof；不支持任意 live 注入 |
+| 产物 Schema | 现有公共产物 1.0；Docker 项目策略严格读取 1.0/1.1；Runtime Lock Evidence 严格读取 1.0/1.1，新 Adapter 写入 1.1 |
 
 PerfLens 不直接解析 `perf.data`。二进制兼容性由选定的系统 `perf` 负责；无法解码
 Profile 时，应使用与采集环境匹配的 perf。GNU addr2line 后备流程已使用 Binutils 2.44
@@ -38,8 +40,13 @@ LSM 或高级 trace 模式都兼容；每台 `full_diagnostics` 主机仍须单�
 可选外部环境：PerfLens 不安装 Docker，v0.3.1 路径也不 build/pull 镜像；默认关闭的
 v0.3.2 优化会话只能在确认后执行绑定 Recipe 的类型化构建。rootful UID 0 默认关闭，
 只有管理员明确启用专用策略边界后才允许。详细兼容与拒绝矩阵见
-[Docker 进程采集与分析指南](docker-container-roadmap.zh-CN.md)。C/C++、Java、Python 和 Go
-用户态锁 Adapter 仍计划进入 v0.4.0。
+[Docker 进程采集与分析指南](docker-container-roadmap.zh-CN.md)。
+
+仓库中的 v0.4.0 预发布实现提供 Runtime Lock 能力发现、内容绑定会话、严格转换/导入、
+确定性分析、独立重放验证和上述四类 Adapter，但这不代表已发布 v0.3.2 安装包具备该兼容性。
+JDK 与 Go 工具属于可选外部依赖；原生 DEB 会提供固定 pthread probe 与 supervisor，但安装
+不会激活它们。Docker optimization 可以把一个已审阅 Runtime Lock 范围纳入原有一次确认。
+各后端的 partial/unsupported 边界见[《用户态锁工作流》](runtime-locks.zh-CN.md)。
 
 运行下面的命令，可以只读汇总引导文件、Skill、生成的 MCP 配置、Collector 资产、
 Socket 访问、用户组成员关系和主机 perf 能力：

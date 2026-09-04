@@ -20,6 +20,8 @@ current maturity boundary and phased extension plan. Release v0.3.1 local-Docker
 support is specified separately in the [Docker process guide](docs/docker-container-roadmap.md).
 The v0.3.2 bounded build-and-optimize contract is tracked in the
 [Docker optimization guide](docs/docker-optimization-roadmap.md).
+The repository's v0.4.0 prerelease Runtime Lock workflow is documented in the
+[Runtime Lock guide](docs/runtime-locks.md); it is not part of published v0.3.2 packages.
 See the [trustworthy perf evidence pipeline](docs/evidence-pipeline.md) for raw-input binding,
 conversion provenance, quality gates, and Agent-facing verification.
 
@@ -58,6 +60,12 @@ Release v0.3.2 supports Milestones 0 through 9:
   choice; that choice is recorded without upgrading the evidence verdict. The Agent/client
   sandbox, not PerfLens, enforces filesystem write permission.
 
+The current repository additionally contains the v0.4.0 prerelease Runtime Lock implementation:
+strict evidence schema 1.1 and replay verification, bounded sessions, Native pthread, Java JFR,
+CPython threading, and Go pprof Adapters, plus Docker optimization integration. This is a source
+checkout capability until the v0.4.0 release gates and `0.4.0-1` packages are complete; the latest
+published stable release remains v0.3.2.
+
 It does **not** include an AI/LLM API, Web UI, source-code patch tool, general-purpose benchmark
 runner, or custom agent framework. In an authorized optimization session, the external Agent edits
 only reviewed mutable paths and the fixed workload contract supplies correctness/Benchmark output.
@@ -91,6 +99,17 @@ This writes a project-owned `perflens-setup/container-workload.toml` policy. It 
 or start Docker, join the Docker group, build/pull an image, deploy a Collector, or grant execution.
 The Skill uses typed MCP discovery, authorization, collection, and comparison tools only after the
 user confirms either one run or a bounded in-memory session.
+
+For the repository v0.4.0 prerelease Runtime Lock workflow, explicitly initialize its project
+policy (combine both flags for Docker optimization):
+
+```bash
+perflens init --runtime-locks
+perflens init --docker --runtime-locks
+```
+
+This enables capability discovery only. It does not instrument or attach a target, import
+evidence, start a workload, or access pprof. See the [Runtime Lock guide](docs/runtime-locks.md).
 
 This activates Codex and Claude Code by default. Select one of them with
 `--client codex` or `--client claude-code`; use `--client opencode` for OpenCode,
@@ -139,16 +158,19 @@ Release v0.3.0 adds a separate Trace Helper, in-kernel target filtering, determi
 sched/off-CPU/lock analysis, and the `full_diagnostics` lifecycle. The existing privileged
 stat/record Helper remains limited to stat/record. See the
 [Collector and user-space-lock roadmap](docs/collector-capability-roadmap.md). Release v0.3.1
-adds the local-Docker single-process target runtime while the four runtime-lock adapters remain
-planned for v0.4.0. Docker support is limited to a local Linux Engine, cgroup v2, an explicit
+adds the local-Docker single-process target runtime. Docker support is limited to a local Linux
+Engine, cgroup v2, an explicit
 process, and fixed project policy; it excludes arbitrary Docker arguments, remote engines,
-Compose/Kubernetes, image build/pull, and whole-container perf aggregation. Checked-in Runtime
-Lock public contracts are groundwork, not available adapters. See the
+Compose/Kubernetes, image build/pull, and whole-container perf aggregation. See the
 [v0.3.1 Docker process guide](docs/docker-container-roadmap.md).
 Release v0.3.2 adds the separately opt-in, benchmark-required bounded Docker optimization session.
 It does not build during preview, does not grant arbitrary Docker access, and never authorizes
 commit, push, tags, or releases. See the
 [v0.3.2 Docker optimization guide](docs/docker-optimization-roadmap.md).
+The repository v0.4.0 prerelease adds bounded Runtime Lock sessions and four Adapter families, but
+does not support arbitrary live-process or existing-container injection. Native, CPython, and Java
+active collection is launch-time only; Go additionally supports an explicitly authorized same-UID
+literal-loopback pprof endpoint. See the [Runtime Lock guide](docs/runtime-locks.md).
 
 Run a read-only readiness summary at any time:
 
@@ -507,6 +529,7 @@ See [release readiness](docs/release-readiness.md),
 [troubleshooting](docs/troubleshooting.md), the
 [v0.3.2 Docker optimization regression playbook](docs/v0.3.2-regression-playbook.md), and the
 [Collector and user-space-lock roadmap](docs/collector-capability-roadmap.md), the
+[v0.4.0 Runtime Lock workflow](docs/runtime-locks.md), the
 [v0.3.1 Docker process roadmap](docs/docker-container-roadmap.md), plus the
 [perf evidence pipeline](docs/evidence-pipeline.md) for final verification evidence,
 published-version workarounds, and operational failure guidance.
@@ -543,3 +566,8 @@ Chinese version.
   cgroup v2 and explicit project/session authorization. It excludes remote Engines, Docker Desktop
   VMs, Compose/Kubernetes, image build/pull, arbitrary Docker arguments, and whole-container perf
   aggregation; container-wide cgroup deltas are context rather than process-exclusive evidence.
+- The repository v0.4.0 Runtime Lock prerelease observes only the surface exposed by its selected
+  Adapter and semantics. Thresholded, sampled, and cumulative inputs are not exact event logs;
+  invisible fast paths, custom atomics, missing owners, and unpaired acquire/release events remain
+  explicit limitations. It does not authorize arbitrary running-process or existing-container
+  injection.

@@ -129,6 +129,20 @@ perflens init --docker
 不 build/pull 镜像，也不接受任意 Docker 参数。另行启用 schema 1.1 优化合同后，只有经过
 独立审阅授权的类型化构建会话才能执行构建。
 
+仓库中的 v0.4.0 预发布版本另有 Runtime Lock 项目策略。下面的初始化只启用能力发现，
+不会执行插桩或采集：
+
+```bash
+perflens init --runtime-locks
+# 托管/优化 Docker 项目可以组合启用：
+perflens init --docker --runtime-locks
+```
+
+请审查 `perflens-setup/runtime-locks.toml`，重启所选 Agent 客户端以重新加载项目 MCP 配置，
+再运行 `perflens status --project "$PWD"`。Runtime Lock 执行仍要求内容绑定的 Preview 和一次
+新的明确确认；初始化永远不会向运行中进程注入或附加。已发布的 v0.3.2 wheel/DEB 不包含
+该预发布功能，详见[《v0.4.0 用户态锁工作流》](docs/runtime-locks.zh-CN.md)。
+
 默认同时激活 Codex 和 Claude Code，并启用有界项目运行与自动采集。也可以明确选择：
 
 ```bash

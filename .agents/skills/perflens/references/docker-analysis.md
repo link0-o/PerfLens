@@ -150,6 +150,28 @@ and filesystem sandboxing remain separate boundaries from the single PerfLens co
 Explicit revocation, bounded expiry cleanup, later runtime interaction, and MCP connection shutdown
 all conservatively release only identity-verified session resources; never substitute global prune.
 
+### Runtime Lock inside Docker optimization
+
+The v0.4.0 Runtime Lock extension is included only when the Docker optimization Preview explicitly
+binds an Adapter, measurement semantics, payload/configuration identities, and supported runtime
+matrix. The user's one confirmation then covers both the Docker loop and that bounded Runtime Lock
+scope; do not request or create a second hidden Runtime Lock session.
+
+Before creating a container, require enough parent workload/evidence budget for perf plus Runtime
+Lock. Capture is charged to the same completed single-use workload lease. The Gate must receive only
+the typed Adapter payload produced by the Preview. Before release, bind the actual runtime: glibc
+from the Native probe header, CPython version/free-threaded state from the bootstrap header, JVM
+version from JFR `JVMInformation`, or Go executable identity plus fixed `go version -m` output.
+Payload, tool, runtime, Build, Run, Measurement, namespace/cgroup, or session substitution fails
+closed.
+
+Analyze and independently replay the captured evidence. If capture, conversion, replay, or
+persistence fails, stop the parent session rather than continuing with a misleading active state.
+For A/B, require matching Adapter/runtime/semantics/threshold/tool and fixed Docker environment,
+plus different authorized mutable Treatment and final image digest. A Runtime Lock comparison alone
+cannot produce final `verified_improvement`; it joins the outer correctness, Benchmark, perf, and
+resource-transfer gates.
+
 ## Evidence and reporting
 
 For each result report target runtime, container and image identity digests, container PID, actual

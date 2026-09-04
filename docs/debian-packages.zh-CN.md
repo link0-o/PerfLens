@@ -75,6 +75,12 @@ Docker 始终是可选外部运行时。两个包都不依赖或启动 Docker，
 不写 daemon 配置，也不启用项目 Docker 策略。主包中的 Container Gate 默认不执行；只有
 普通用户明确授权托管工作流时才使用。需要 Docker 的项目单独运行 `perflens init --docker`。
 
+仓库中的 v0.4.0 预发布主包还会携带固定、无 capability 的 pthread probe 与 Runtime Lock
+supervisor；安装后它们仍保持不活动。项目必须运行 `perflens init --runtime-locks`（需要时与
+`--docker` 组合）、审查 `runtime-locks.toml`、重新加载 Agent 客户端，并确认内容绑定的会话，
+才会执行任何插桩或采集。JDK、Go 等可选工具链只检测、不下载。已发布的 `0.3.2-1` 安装包
+不包含该预发布能力，详见[《用户态锁工作流》](runtime-locks.zh-CN.md)。
+
 ```bash
 sudo perflens-admin deploy \
   --config /绝对路径/你的项目/perflens-setup/collector-assets/collector.toml

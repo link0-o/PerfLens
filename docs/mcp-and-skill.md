@@ -95,6 +95,28 @@ Docker `record` requests capture mmap Build IDs. When the capture-time module sn
 exact module into a private temporary `symfs`. The copy is reverified and removed after conversion,
 and public provenance contains only its content identity. Unavailable or changed modules remain
 `partial`; PerfLens does not guess a matching host file.
+
+For the repository v0.4.0 prerelease Runtime Lock workflow, initialize explicitly:
+
+```bash
+perflens init --runtime-locks
+perflens init --docker --runtime-locks
+```
+
+The generated `runtime-locks.toml` enables discovery only. The Skill calls
+`inspect_runtime_lock_capability`, creates a content-bound Preview, shows the exact target,
+Adapter/semantics, payload/tools, paths, and budgets, then ends its response until the user gives
+one fresh confirmation. Only then may it authorize, collect or import, analyze, independently
+verify, query, compare, and revoke the bounded session. Native pthread, Java JFR, and CPython
+active collection is launch-time only; Go also permits an explicitly enabled same-UID literal
+loopback pprof target. Arbitrary live-process or existing-container injection is not supported.
+
+When Runtime Lock is explicitly part of a Docker optimization Preview, the parent one-confirmation
+session covers it. The capture is charged to the same workload lease and is bound to the exact
+Build, Run, Measurement, runtime, payload, and tool identities. It cannot independently establish
+the outer Docker `verified_improvement` verdict. See the
+[Runtime Lock guide](runtime-locks.md).
+
 An unchanged v0.1.2 Skill is migrated to the shorter `perflens` directory by
 `perflens init --update`, while user-modified content is preserved and refused.
 
@@ -282,6 +304,7 @@ their own explicit authorization.
 | `AUTOMATIC_COLLECTION` | Execute a short-lived PID-bound plan through the Collector | Requires explicit MCP startup gates and an independent Collector policy. |
 | `PROJECT_EXECUTION` | Launch one confirmed project executable and collect its new PID | Also requires automatic collection, `--allow-project-execution`, exact per-call authorization, and project path checks. |
 | `DOCKER_COLLECTION` | Discover, authorize, and collect one local-container process or one fixed managed workload | Requires `perflens init --docker`, project Docker policy, automatic collection, a matching in-memory session, independently verified Linux identity, and Docker/Collector policy intersection. |
+| `RUNTIME_LOCK_SESSION` | Discover, preview, authorize, collect/import, verify, query, compare, and revoke one bounded Runtime Lock scope | Requires `perflens init --runtime-locks`, strict project policy, current-connection Preview, a fresh explicit confirmation, fixed Adapter/tool/payload/target identity, single-use leases, and independent replay verification. |
 
 Tool annotations are client hints. The authorization checks above are independent server-side controls.
 

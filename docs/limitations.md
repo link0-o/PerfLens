@@ -64,9 +64,7 @@ Docker arguments. Existing-container sessions bind one concrete process incarnat
 temporary containers use only a local immutable image and a fixed project recipe. cgroup deltas
 describe the whole container and must not be reported as target-process-exclusive values. Symbol
 or source evidence becomes `partial` when the verified container root/module snapshot cannot be
-preserved. See the [v0.3.1 Docker guide](docker-container-roadmap.md). The C/C++, Java, Python, and
-Go user-space-lock adapters remain planned for v0.4.0; their public contract groundwork does not
-make those adapters available.
+preserved. See the [v0.3.1 Docker guide](docker-container-roadmap.md).
 
 Release v0.3.2 adds an opt-in bounded optimization session with typed, recipe-bound
 baseline/candidate builds. Preview does not build or pull, the session never accepts arbitrary
@@ -78,3 +76,11 @@ than claiming complete resource-transfer evidence. A human may explicitly retain
 candidate, but that disposition never changes the Iteration verdict. See
 [Known issues](known-issues.md) and the
 [v0.3.2 optimization guide](docker-optimization-roadmap.md).
+
+The repository v0.4.0 prerelease implements bounded Native pthread, Java JFR, CPython threading,
+and Go pprof Runtime Lock Adapters. It is not present in published v0.3.2 packages and does not
+claim universal lock visibility. Native fast paths, spin/custom atomics, C-extension locks,
+threshold-omitted JFR events, and Go cumulative samples remain partial or invisible according to
+their source semantics. Owner and hold time require real source pairs. Active Native, Java, and
+CPython collection is launch-time only; arbitrary running-process and existing-container injection
+is unsupported. See the [v0.4.0 Runtime Lock guide](runtime-locks.md).

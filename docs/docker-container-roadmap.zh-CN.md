@@ -21,10 +21,12 @@
 
 - `v0.3.0`：完成宿主机 `stat/record/sched/off_cpu/lock` 闭环；
 - `v0.3.1`：增加本地 Docker 容器内单个明确进程的采集、分析和容器资源上下文；
-- `v0.4.0`：完成 C/C++、Java、Python 和 Go 用户态锁 Adapter。
+- `v0.4.0`：增加有界 C/C++、Java、Python、Go Runtime Lock Adapter，并集成到托管/优化
+  Docker 启动链路。
 
-已经提交的 Runtime Lock 公共合同是 v0.4.0 的前置基础，不代表四类运行时 Adapter
-已可用，也不改变 v0.3.1 的 Docker 边界。
+仓库中已经包含该 v0.4.0 预发布实现，但已发布的 v0.3.2 安装包不包含。它不会改变
+v0.3.1 固定镜像边界，也不会向任意已有容器注入。详见
+[《用户态锁工作流》](runtime-locks.zh-CN.md)。
 
 ## 1. 决策摘要
 

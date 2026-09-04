@@ -31,7 +31,9 @@ v0.3.0 的 Linux 宿主机 `stat/record/sched/off_cpu/lock` 与 v0.3.1 固定镜
   与本地 Copilot Skill/MCP 集成。
 
 本版本不包含远程 Docker、Docker Desktop VM、Compose/Kubernetes、任意 Docker 参数、
-整容器 perf 聚合，也不包含计划进入 v0.4.0 的 C/C++、Java、Python、Go 运行时锁 Adapter。
+整容器 perf 聚合，也不包含当时计划进入 v0.4.0 的 C/C++、Java、Python、Go 运行时锁
+Adapter。这些 Adapter 现在只存在于仓库 v0.4.0 预发布实现中，不会追溯成为本 v0.3.2
+验收记录的一部分。
 优化构建只能通过类型化本地 Build Adapter 和三种明确网络层级之一执行。
 
 ## 自动化本地门禁

@@ -22,6 +22,9 @@ context.
 The session is a Docker target workflow, not a Collector privilege mode. The existing
 `cpu_only/full_diagnostics` feature profile and `cap_perfmon/paranoid3_helper` privilege mode still
 determine which perf evidence is available. The v0.4.0 runtime-lock adapters are outside v0.3.2.
+The repository v0.4.0 prerelease can add one explicitly previewed Runtime Lock Adapter/semantics
+scope to this same confirmation. That extension is documented separately in the
+[Runtime Lock guide](runtime-locks.md) and is not retroactively available in v0.3.2 packages.
 
 ## Project contract
 

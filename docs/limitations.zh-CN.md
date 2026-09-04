@@ -48,8 +48,7 @@ Profile 比较描述所选事件的相对分布，不能证明绝对耗时发生
 Kubernetes、自动 build/pull 镜像或任意 Docker 参数。已有容器会话绑定一个具体进程实例；
 托管临时容器只使用本地不可变镜像和固定项目配方。cgroup 差值属于整个容器，不能写成
 目标进程独占指标；无法保留已验证的容器 root/module 快照时，符号和源码证据必须标记为
-`partial`。详见 [v0.3.1 Docker 指南](docker-container-roadmap.zh-CN.md)。C/C++、Java、
-Python 和 Go 用户态锁 Adapter 仍计划进入 v0.4.0；公共合同骨架不代表 Adapter 当前可用。
+`partial`。详见 [v0.3.1 Docker 指南](docker-container-roadmap.zh-CN.md)。
 
 发布版 v0.3.2 增加默认关闭的有界优化会话，可执行绑定 Recipe 的类型化 baseline/candidate
 构建。Preview 不 build/pull，会话不接受任意 Docker 参数或源码路径；只有经过 Artifact
@@ -59,3 +58,10 @@ PerfLens 只保留最后一次已验证周期快照并标记为 partial 下界�
 人工可以明确选择保留未验证候选，但该处置不会改变 Iteration 结论。详见
 [已知问题](known-issues.zh-CN.md)和
 [v0.3.2 优化指南](docker-optimization-roadmap.zh-CN.md)。
+
+仓库中的 v0.4.0 预发布实现已经包含有界的 Native pthread、Java JFR、CPython threading
+和 Go pprof Runtime Lock Adapter，但它不属于已发布的 v0.3.2 安装包，也不宣称所有锁都
+可见。Native 快路径、自旋/自定义原子锁、C 扩展锁、被 JFR 阈值省略的事件和 Go 累计抽样
+仍须按来源语义报告 partial 或不可见；owner 与持锁时间必须有真实配对证据。Native、Java、
+CPython 主动采集只支持启动时插桩，不支持向任意运行中进程或已有容器注入。详见
+[《v0.4.0 用户态锁工作流》](runtime-locks.zh-CN.md)。

@@ -2,20 +2,22 @@
 
 简体中文 | [English](collector-capability-roadmap.md)
 
-状态：**v0.3.0 已实现；v0.4.0 计划中**
+状态：**v0.3.0 已发布；v0.4.0 已在仓库中实现为预发布能力**
 
-最后审计：2026-08-21，基于 v0.3.0 发布元数据更新
+最后审计：2026-09-04，基于 v0.4.0 预发布实现
 
-覆盖版本：`v0.3.0` 与计划中的 `v0.4.0`
+覆盖版本：已发布 `v0.3.0` 与预发布 `v0.4.0`
 
-本文是实现、测试和发布说明的设计合同，严格区分“历史 `0.2.0` 基线”“v0.3.0 已实现”
-和“v0.4.0 计划实现”。源码存在本身不等于稳定能力；下列 CI、Rust、DEB、升级/回滚和
-真实 Debian 主机门禁继续作为 v0.3.0 已发布能力的验收合同。
+本文是实现、测试和发布说明的设计合同，严格区分“历史 `0.2.0` 基线”“已发布 v0.3.0”
+和“仓库 v0.4.0 预发布实现”。源码存在本身不等于稳定能力；下列 CI、Rust、DEB、
+升级/回滚和真实运行时门禁仍是发布 v0.4.0 安装包之前的验收合同。
 
 当前源码已经完成 v0.3.0 的版本化 Trace 合同、目标内核过滤 Rust Trace Helper、三类
 确定性分析器和 verifier、独立策略/Socket/spool、`setup/switch-profile/status/upgrade/
-undeploy` 事务，以及 `accept-collector` 三模式真实验收。仍待本路线图末尾的完整发布门禁。
-Runtime Lock 公共合同骨架已经存在，但 v0.4.0 的四类用户态锁 Adapter 尚未实现。
+undeploy` 事务，以及 `accept-collector` 三模式真实验收。源码还已经包含 Runtime Lock 1.1
+合同、有界会话、独立 verifier、四类 Adapter 和 Docker optimization 集成；在版本、安装包
+和真实运行时门禁完成前，这些仍是预发布能力。详见
+[《用户态锁工作流》](runtime-locks.zh-CN.md)。
 
 `v0.3.1` 已改为本地 Docker 容器内单个明确进程的采集与分析版本；它不属于本文的
 用户态锁发布目标。完整设计见
@@ -316,8 +318,8 @@ Skill 的默认证据选择为：
 的“完整覆盖”指四类正式运行时 Adapter 都有能力检测、采集、规范化分析和质量说明，
 而不是声称任意自定义锁、lock-free 算法或不可观察快路径都能被看见。
 
-`v0.4.0` 计划在已经提交的公共合同骨架上固定以下公共产物名称。合同存在只代表边界模型
-可审查，不代表对应运行时 Adapter 已经能够采集或分析真实程序：
+仓库中的 v0.4.0 预发布实现已经固定以下内容绑定的公共产物；产物存在不等于尚未发布的
+源码检出已经成为稳定发行版：
 
 - `RuntimeAdapterCapabilityArtifact`：运行时、版本、Adapter/后端版本、可用状态、支持的
   锁和事件、所需外部工具、是否需要启动插桩/附加/特权、快路径可见性和限制；
@@ -326,6 +328,8 @@ Skill 的默认证据选择为：
 - `RuntimeLockAnalysisArtifact`：按锁、线程、调用路径和等待类型聚合的结果及证据质量；
 - `RuntimeLockAnalysisVerificationArtifact`：独立复核输入身份、转换 manifest、事件数量、
   等待/持有守恒、聚合和 Agent 可见内容摘要。
+- `RuntimeLockSessionArtifact / RuntimeLockRunArtifact / RuntimeLockComparisonArtifact`：有界
+  授权、单次 workload lease 计费，以及 standalone 或 Docker 匹配 A/B 来源。
 
 每条规范化事件使用严格枚举：
 
@@ -405,11 +409,12 @@ CPython 探针名称和参数属于实现细节，Adapter 必须记录解释器�
 JDK、Go、async-profiler、SystemTap 等是可选外部依赖。PerfLens 自动检测版本和能力，
 给出中文安装/启用说明，但不在核心两个 DEB 中隐式下载或捆绑。
 
-所有运行时 Adapter 默认关闭。JFR、pprof 和普通启动插桩必须以目标普通用户身份运行，
-不得使用 root。`LD_PRELOAD`、JVM 附加、JFR 启动、pprof 端点访问或 probe 部署都需要
-独立的运行时插桩/附加授权，不能因为用户说“优化项目”就自动扩大。需要 eBPF/uprobe
+项目初始化默认只启用能力发现，不授予执行。JFR、pprof 和普通启动插桩必须以目标普通
+用户身份运行，不得使用 root。`LD_PRELOAD`、启动时 JFR、pprof 端点访问或受控导入都需要
+内容绑定授权。Docker optimization Preview 可以把 Runtime Lock 明确纳入同一个一次确认的
+父会话，但不会建立第二个隐藏授权。需要 eBPF/uprobe
 特权的后端属于独立、默认关闭的管理员风险边界，不能扩大 MCP、Skill、Python Broker、
-现有 stat/record Helper 或 v0.3.0 Trace Helper。计划中的项目级入口为：
+现有 stat/record Helper 或 v0.3.0 Trace Helper。项目级入口为：
 
 ```bash
 perflens init --runtime-locks
@@ -425,18 +430,18 @@ Skill 才升级到运行时专用证据。
 帧、非法或不匹配 PID、逆序时间、未声明语义、事件/聚合不守恒和伪造 owner 能力必须在
 发布 Artifact 前拒绝。
 
-### 7.7 v0.4.0 实施提交顺序
+### 7.7 v0.4.0 实施检查点
 
-后续实现拆成以下独立、可回滚提交，不把四个运行时和公共 Schema 混入一个大提交：
+仓库实现已拆成独立、可审查的提交；最终门禁通过前仍不得宣称正式发布：
 
 1. 公共产物 Schema、能力发现、质量模型、NDJSON 合同和 verifier；
 2. C/C++ pthread Adapter、ABI 能力检测和目标普通用户插桩；
 3. Java JFR Adapter、固定配置及可选 async-profiler/JVMTI 导入接口；
 4. CPython Adapter、GIL/内部锁/threading 分层和 free-threaded 能力检测；
 5. Go mutex/block pprof Adapter及两类采样语义；
-6. CLI、MCP、Skill 自动选择、统一报告和分页/诊断包；
-7. 安全拒绝路径、插桩开销、兼容矩阵和四类真实运行时验收；
-8. 中英文发布文档、两个 DEB 的升级/卸载 smoke test 和 `v0.4.0` 发布门。
+6. Docker optimization 集成、CLI/MCP 自动选择、统一报告和分页/诊断包；
+7. 中英文发布文档与 Skill 行为；
+8. 安全/开销/运行时矩阵、两个 DEB 生命周期 smoke test 和 `v0.4.0` 发布门。
 
 ## 8. 安全、性能和发布门槛
 

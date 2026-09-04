@@ -2,20 +2,22 @@
 
 English | [简体中文](collector-capability-roadmap.zh-CN.md)
 
-Status: **v0.3.0 implemented; v0.4.0 planned**
+Status: **v0.3.0 released; v0.4.0 implemented in the repository as a prerelease**
 
-Last audited: 2026-08-21 for the v0.3.0 release metadata update
+Last audited: 2026-09-04 against the v0.4.0 prerelease implementation
 
-Covered releases: `v0.3.0` and planned `v0.4.0`
+Covered releases: released `v0.3.0` and prerelease `v0.4.0`
 
-This document separates the historical `0.2.0` baseline, the v0.3.0 implementation, and planned
-v0.4.0 work. Source presence alone is never a stable release claim; the gates below remain the
-acceptance contract for the shipped v0.3.0 capability.
+This document separates the historical `0.2.0` baseline, the released v0.3.0 implementation, and
+the repository's v0.4.0 prerelease. Source presence alone is never a stable release claim; the
+gates below remain the acceptance contract before v0.4.0 packages may be published.
 
 The source tree now contains the versioned Trace contracts, target-filtered Rust Trace Helper,
 three deterministic analyzers and verifier, separate policy/socket/spool, transactional setup and
-profile lifecycle, and three-mode `accept-collector` probe. The Runtime Lock public contract
-skeleton is checked in, but the four v0.4.0 runtime adapters remain unimplemented.
+profile lifecycle, and three-mode `accept-collector` probe. The source tree now also contains the
+Runtime Lock 1.1 contracts, bounded sessions, independent verifier, four Adapter families, and
+Docker optimization integration. These remain prerelease until the version/package/real-runtime
+gates complete. See the [Runtime Lock workflow](runtime-locks.md).
 
 `v0.3.1` is now reserved for collection and analysis of one explicit process in a local Docker
 container; it is not the user-space-lock release target. See the
@@ -263,9 +265,8 @@ collection/import, normalized deterministic analysis, and explicit quality bound
 mean that arbitrary custom locks, lock-free algorithms, inlined paths, or invisible fast paths are
 observable.
 
-`v0.4.0` plans to build on the checked-in public contract skeleton with these artifacts. Contract
-presence means that the boundary model can be reviewed; it does not mean that any runtime adapter
-can already collect or analyze a real program:
+The repository v0.4.0 prerelease implements the following content-bound artifacts. Their presence
+does not turn the unpublished source checkout into a stable release claim:
 
 - **RuntimeAdapterCapabilityArtifact:** runtime/version, adapter/backend version, availability,
   supported locks/events, required external tools, launch-instrumentation/attach/privilege needs,
@@ -276,6 +277,8 @@ can already collect or analyze a real program:
   wait type.
 - **RuntimeLockAnalysisVerificationArtifact:** independent input, converter, event-count,
   wait/hold conservation, aggregate, and Agent-visible-content verification.
+- **RuntimeLockSessionArtifact / RuntimeLockRunArtifact / RuntimeLockComparisonArtifact:** bounded
+  authority, one charged workload lease, and matched standalone or Docker A/B provenance.
 
 Normalized events use strict enums:
 
@@ -356,11 +359,13 @@ The canonical semantics are the official [Go runtime](https://pkg.go.dev/runtime
 
 JDK, Go, async-profiler, and SystemTap remain optional external dependencies. PerfLens detects
 versions and gives Chinese setup guidance but neither downloads nor bundles them into the two core
-DEBs. Every runtime adapter is disabled by default. JFR, pprof, and ordinary launch-time
-instrumentation must run as the target ordinary user, never root. `LD_PRELOAD`, JVM/JFR attachment,
-pprof access, or probe deployment always needs a separate explicit authorization. Privileged
+DEBs. Project initialization enables capability discovery, not execution. JFR, pprof, and ordinary
+launch-time instrumentation must run as the target ordinary user, never root. `LD_PRELOAD`,
+startup JFR, pprof access, or controlled import always needs content-bound authorization. A Docker
+optimization Preview may explicitly include Runtime Lock in the same one-confirmation parent
+session; it never creates a second hidden authorization. Privileged
 eBPF/uprobe is an independent, default-off administrator boundary and cannot widen the MCP, Skill,
-Python Broker, current stat/record Helper, or `v0.3.0` Trace Helper. The planned project opt-in is
+Python Broker, current stat/record Helper, or `v0.3.0` Trace Helper. The project opt-in is
 `perflens init --runtime-locks`.
 
 Custom locks may use a versioned NDJSON import contract. A strict header declares source/version,
@@ -371,18 +376,21 @@ frames, invalid/mismatched PIDs, reversed time, undeclared semantics, non-conser
 and fabricated owner capability are rejected before artifact publication. This remains an adapter
 boundary, not a new Agent or plugin framework.
 
-### 7.7 `v0.4.0` implementation commit order
+### 7.7 `v0.4.0` implementation checkpoints
 
-Implementation is split into independent, reviewable, reversible commits:
+The repository implementation was split into independent, reviewable commits; release validation
+and packaging remain open until the final gate:
 
 1. Public artifact Schemas, capability discovery, quality model, NDJSON contract, and verifier.
 2. Native pthread adapter, ABI capability detection, and ordinary-user instrumentation.
 3. Java JFR adapter, fixed settings, and optional async-profiler/JVMTI import interface.
 4. CPython adapter, GIL/internal/threading layers, and free-threaded capability discovery.
 5. Go mutex/block pprof adapter with both sampling models.
-6. CLI/MCP/Skill selection, unified reports, paging, and diagnosis bundles.
-7. Security denials, instrumentation overhead, compatibility matrix, and four real runtimes.
-8. Bilingual release docs, both-DEB upgrade/removal smoke tests, and the `v0.4.0` release gate.
+6. Docker optimization integration, CLI/MCP selection, unified reports, paging, and diagnosis
+   bundles.
+7. Bilingual release docs and Skill behavior.
+8. Security/overhead/runtime matrices, both-DEB lifecycle smoke tests, and the `v0.4.0` release
+   gate.
 
 ## 8. Acceptance and release wording
 

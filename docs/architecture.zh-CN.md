@@ -170,6 +170,31 @@ build/pull 镜像；另行启用的 v0.3.2 优化 Adapter 只能在独立审阅�
 门禁见[《v0.3.1 Docker 进程采集与分析指南》](docker-container-roadmap.zh-CN.md)。
 构建与处置链路见[《v0.3.2 Docker 自动优化指南》](docker-optimization-roadmap.zh-CN.md)。
 
+## Runtime Lock 证据边界（v0.4.0 预发布）
+
+仓库中的 v0.4.0 实现在普通用户侧增加一层 Adapter，但不扩大 stat/record Rust Helper 或
+Trace Helper 的权限：
+
+```text
+项目 runtime-lock 策略 + 内容绑定 Preview/授权
+        -> 启动时 Adapter 或受控导入
+        -> 私有原始采集 / 固定外部转换器
+        -> 脱敏 Runtime Lock Evidence 1.1
+        -> 确定性 Analyzer + 独立重放 Verifier
+        -> 有界锁/上下文/调用路径/结果/锁类型投影
+```
+
+Native pthread、CPython、Java 主动采集会以普通用户身份启动已审阅负载，不会附加任意进程。
+Go 接受私有文件 Profile，也可显式授权同 UID 的本机字面量 loopback pprof。Docker 托管/优化
+采集会在 Gate 放行负载前绑定 Adapter payload 和真实运行时身份。Docker optimization Preview
+若明确包含 Runtime Lock，则复用同一个一次确认的父授权；每次采集仍有一个短期 workload
+lease 和独立证据预算。
+
+原始地址、来源路径、授权 token、环境变量和凭据保持私有。公开锁 ID 为 opaque 且只在单个
+Artifact 内稳定。exact、thresholded、sampled、cumulative 语义不得混算；Analysis 与重放
+产物保持只追加，并绑定来源、目标、工具、运行时和会话。详见
+[《v0.4.0 用户态锁工作流》](runtime-locks.zh-CN.md)。
+
 ## 依赖方向
 
 ```text

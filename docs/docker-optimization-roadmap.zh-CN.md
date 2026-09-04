@@ -17,6 +17,9 @@ Build 绑定采集、确定性 A/B 比较、人工候选处置及 Agent 策略�
 优化会话是 Docker 目标工作流，不是 Collector 权限模式。现有 `cpu_only/full_diagnostics`
 功能配置和 `cap_perfmon/paranoid3_helper` 权限模式仍决定可取得哪些 perf 证据。v0.4.0
 用户态锁 Adapter 不属于 v0.3.2。
+仓库中的 v0.4.0 预发布实现可以把一个明确写入 Preview 的 Runtime Lock Adapter/语义范围
+纳入同一次确认；该扩展见[《用户态锁工作流》](runtime-locks.zh-CN.md)，不会追溯加入
+v0.3.2 安装包。
 
 ## 项目合同
 

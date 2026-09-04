@@ -35,8 +35,10 @@ with cgroup v2:
   `perflens init --docker` and explicit client selection.
 
 The release does not include remote Docker, Docker Desktop VMs, Compose/Kubernetes, arbitrary
-Docker arguments, whole-container perf aggregation, or the planned v0.4.0
-C/C++/Java/Python/Go runtime-lock adapters. Optimization builds are available only through the
+Docker arguments, whole-container perf aggregation, or the then-planned v0.4.0
+C/C++/Java/Python/Go runtime-lock adapters. Those Adapters are now implemented only in the
+repository v0.4.0 prerelease and are not retroactively part of this v0.3.2 validation record.
+Optimization builds are available only through the
 typed local Build Adapter and one of its three explicit network tiers.
 
 ## Automated local gates

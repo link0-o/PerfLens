@@ -63,6 +63,21 @@ project MCP. Onboarding does not install/start Docker, join its group, build/pul
 arbitrary Docker arguments. A separately enabled schema-1.1 optimization contract may perform a
 typed build only after its own reviewed authorization.
 
+The repository v0.4.0 prerelease adds a separate Runtime Lock project policy. Enable discovery
+without performing instrumentation or collection with:
+
+```bash
+perflens init --runtime-locks
+# or, for a managed/optimization Docker project:
+perflens init --docker --runtime-locks
+```
+
+Review `perflens-setup/runtime-locks.toml`, restart the selected Agent client so it reloads the
+project MCP configuration, then run `perflens status --project "$PWD"`. Runtime Lock execution
+still requires a content-bound Preview and a fresh confirmation. Initialization never injects or
+attaches to a running process. The published v0.3.2 wheel and DEBs do not contain this prerelease
+feature; see the [v0.4.0 Runtime Lock guide](docs/runtime-locks.md).
+
 `init` activates only this project for Codex and Claude Code by default. It installs the
 selected project Skills, creates or updates the marked PerfLens block in
 `.codex/config.toml`, safely merges the Claude Code `.mcp.json`, and creates
