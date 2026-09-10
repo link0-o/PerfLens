@@ -29,15 +29,18 @@ def _policy(tmp_path: Path, *, disabled: bool = False):
 def _installation(tmp_path: Path):
     tmp_path.mkdir(parents=True, exist_ok=True)
     interpreter = tmp_path / "python3"
+    runtime_home = tmp_path / "runtime-home"
     bootstrap = tmp_path / "bootstrap.py"
+    runtime_home.mkdir(mode=0o755)
     interpreter.write_bytes(b"fixed interpreter identity")
     bootstrap.write_bytes(b"fixed bootstrap identity")
     interpreter.chmod(0o755)
     bootstrap.chmod(0o644)
     return inspect_cpython_installation(
         interpreter_path=interpreter,
+        runtime_home_path=runtime_home,
         bootstrap_path=bootstrap,
-        trusted_owner_uids=(os.geteuid(),),
+        trusted_owner_uids=tuple(dict.fromkeys((0, os.geteuid()))),
     )
 
 
@@ -103,3 +106,65 @@ def test_disabled_policy_and_unsafe_runtime_files_never_offer_active_launch(
     unsafe = _installation(tmp_path / "unsafe")
     assert unsafe.availability == "unavailable"
     assert any("file capabilities" in item for item in unsafe.limitations)
+
+
+def test_default_discovery_canonicalizes_distribution_python_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    interpreter = tmp_path / "python3.13"
+    interpreter.write_bytes(b"fixed interpreter identity")
+    interpreter.chmod(0o755)
+    alias = tmp_path / "python3"
+    alias.symlink_to(interpreter.name)
+    bootstrap = tmp_path / "bootstrap.py"
+    runtime_home = tmp_path / "runtime-home"
+    runtime_home.mkdir(mode=0o755)
+    bootstrap.write_bytes(b"fixed bootstrap identity")
+    bootstrap.chmod(0o644)
+    monkeypatch.setattr(adapter.sys, "executable", str(alias))
+
+    installation = inspect_cpython_installation(
+        bootstrap_path=bootstrap,
+        runtime_home_path=runtime_home,
+        trusted_owner_uids=tuple(dict.fromkeys((0, os.geteuid()))),
+    )
+
+    assert installation.availability == "available"
+    assert installation.interpreter is not None
+    assert installation.interpreter.path == interpreter
+
+
+def test_explicit_cpython_interpreter_symlink_remains_rejected(tmp_path: Path) -> None:
+    interpreter = tmp_path / "python3.13"
+    interpreter.write_bytes(b"fixed interpreter identity")
+    interpreter.chmod(0o755)
+    alias = tmp_path / "python3"
+    alias.symlink_to(interpreter.name)
+    bootstrap = tmp_path / "bootstrap.py"
+    runtime_home = tmp_path / "runtime-home"
+    runtime_home.mkdir(mode=0o755)
+    bootstrap.write_bytes(b"fixed bootstrap identity")
+    bootstrap.chmod(0o644)
+
+    installation = inspect_cpython_installation(
+        interpreter_path=alias,
+        runtime_home_path=runtime_home,
+        bootstrap_path=bootstrap,
+        trusted_owner_uids=tuple(dict.fromkeys((0, os.geteuid()))),
+    )
+
+    assert installation.availability == "unavailable"
+    assert any("absolute non-symlink" in item for item in installation.limitations)
+
+
+def test_runtime_home_is_content_bound_without_exposing_its_path(tmp_path: Path) -> None:
+    installation = _installation(tmp_path)
+    assert installation.runtime_home is not None
+    bridge = build_cpython_adapter_bridge(_policy(tmp_path), installation)
+    assert bridge.launch_policy is not None
+    assert bridge.launch_policy.runtime_home == installation.runtime_home
+    assert str(installation.runtime_home.path) not in bridge.capability.model_dump_json()
+
+    installation.runtime_home.path.chmod(0o775)
+    with pytest.raises(adapter.PerfLensError, match="runtime home owner or mode"):
+        adapter.assert_cpython_launch_policy_current(bridge.launch_policy)

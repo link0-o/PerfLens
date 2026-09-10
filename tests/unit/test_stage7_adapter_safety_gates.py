@@ -796,7 +796,9 @@ def test_cpython_installation_and_file_gates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     interpreter = tmp_path / "python"
+    runtime_home = tmp_path / "runtime-home"
     bootstrap = tmp_path / "bootstrap.py"
+    runtime_home.mkdir(mode=0o755)
     interpreter.write_bytes(b"python")
     bootstrap.write_bytes(b"bootstrap")
     interpreter.chmod(0o755)
@@ -804,14 +806,17 @@ def test_cpython_installation_and_file_gates(
     trusted = (os.geteuid(),)
     installation = cpython.inspect_cpython_installation(
         interpreter_path=interpreter,
+        runtime_home_path=runtime_home,
         bootstrap_path=bootstrap,
         trusted_owner_uids=trusted,
     )
     assert installation.availability == "available"
     assert installation.interpreter is not None
+    assert installation.runtime_home is not None
     assert installation.bootstrap is not None
     policy = cpython.CpythonLaunchPolicy(
         installation.interpreter,
+        installation.runtime_home,
         installation.bootstrap,
         installation.runtime_version or "",
         bool(installation.free_threaded),
@@ -825,6 +830,7 @@ def test_cpython_installation_and_file_gates(
     monkeypatch.setattr(cpython.sys, "version_info", (3, 11, 0))
     unsupported = cpython.inspect_cpython_installation(
         interpreter_path=interpreter,
+        runtime_home_path=runtime_home,
         bootstrap_path=bootstrap,
         trusted_owner_uids=trusted,
     )

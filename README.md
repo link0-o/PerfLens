@@ -20,8 +20,9 @@ current maturity boundary and phased extension plan. Release v0.3.1 local-Docker
 support is specified separately in the [Docker process guide](docs/docker-container-roadmap.md).
 The v0.3.2 bounded build-and-optimize contract is tracked in the
 [Docker optimization guide](docs/docker-optimization-roadmap.md).
-The repository's v0.4.0 prerelease Runtime Lock workflow is documented in the
-[Runtime Lock guide](docs/runtime-locks.md); it is not part of published v0.3.2 packages.
+The repository's v0.4.0 release-candidate Runtime Lock workflow is documented in the
+[Runtime Lock guide](docs/runtime-locks.md); it is not part of published v0.3.2 packages and has
+not yet been tagged or published.
 See the [trustworthy perf evidence pipeline](docs/evidence-pipeline.md) for raw-input binding,
 conversion provenance, quality gates, and Agent-facing verification.
 
@@ -60,11 +61,12 @@ Release v0.3.2 supports Milestones 0 through 9:
   choice; that choice is recorded without upgrading the evidence verdict. The Agent/client
   sandbox, not PerfLens, enforces filesystem write permission.
 
-The current repository additionally contains the v0.4.0 prerelease Runtime Lock implementation:
+The current repository additionally contains the v0.4.0 release-candidate Runtime Lock implementation:
 strict evidence schema 1.1 and replay verification, bounded sessions, Native pthread, Java JFR,
-CPython threading, and Go pprof Adapters, plus Docker optimization integration. This is a source
-checkout capability until the v0.4.0 release gates and `0.4.0-1` packages are complete; the latest
-published stable release remains v0.3.2.
+CPython threading, and Go pprof Adapters, plus Docker optimization integration. Final local gates,
+reproducible `0.4.0-1` candidate packages, real-host/runtime-matrix acceptance, and remote CI/tag
+gates are still required; the latest published stable release remains v0.3.2. See the
+[v0.4.0 release-candidate readiness record](docs/v0.4.0-release-readiness.md).
 
 It does **not** include an AI/LLM API, Web UI, source-code patch tool, general-purpose benchmark
 runner, or custom agent framework. In an authorized optimization session, the external Agent edits
@@ -77,9 +79,9 @@ PerfLens requires Python 3.12 or newer.
 For a GitHub release, download the wheel and install it as an isolated tool:
 
 ```bash
-pipx install ./perflens-0.3.2-py3-none-any.whl
+pipx install ./perflens-0.4.0-py3-none-any.whl
 # or
-uv tool install ./perflens-0.3.2-py3-none-any.whl
+uv tool install ./perflens-0.4.0-py3-none-any.whl
 ```
 
 Then opt one project in. Other projects do not see the Skill or MCP server:
@@ -522,7 +524,8 @@ uv run python tests/performance/benchmark_folded.py \
 
 See `docs/performance-budget.md` for the recorded environment and baseline.
 
-See [release readiness](docs/release-readiness.md),
+See the historical [v0.3.2 release readiness](docs/release-readiness.md), the
+[v0.4.0 release-candidate readiness record](docs/v0.4.0-release-readiness.md),
 [release process](docs/releasing.md),
 [real-world profile acceptance](docs/real-world-acceptance.md), and
 [known issues](docs/known-issues.md), and

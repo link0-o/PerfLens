@@ -157,8 +157,8 @@ class _ValidatedPolicy(TypedDict):
 
 def render_default_docker_project_policy() -> str:
     """Return the bilingual, inactive-by-default managed-container policy."""
-    return """# PerfLens v0.3.2 local Docker target and optimization policy.
-# PerfLens v0.3.2 本地 Docker 目标与优化策略。
+    return """# PerfLens v0.4.0 local Docker target and optimization policy.
+# PerfLens v0.4.0 本地 Docker 目标与优化策略。
 # This file grants no target by itself. The Agent must still request per-run or bounded-session
 # authorization, and every container/PID is independently rebound by the Broker and Helper.
 # 本文件本身不授权任何目标; Agent 仍须请求单次或本轮对话授权,
@@ -205,11 +205,11 @@ benchmark_format = "auto"
 benchmark_name = ""
 
 [optimization]
-# A v0.3.2 optimization session remains disabled until every field below is reviewed. Enabling it
+# The optimization session remains disabled until every field below is reviewed. Enabling it
 # permits one explicitly confirmed, bounded session to build a baseline, admit only mutable_paths
 # changes into candidate snapshots, collect evidence, and run matched A/B checks. The Agent's
 # actual editor permissions remain controlled by its client sandbox. It never grants commit/push.
-# v0.3.2 优化会话默认关闭。审查下列全部字段后显式开启, 才允许一次确认覆盖基线构建、
+# 优化会话默认关闭。审查下列全部字段后显式开启, 才允许一次确认覆盖基线构建、
 # 仅把 mutable_paths 的改动纳入候选快照、证据采集与匹配 A/B。Agent 的实际编辑权限仍由
 # 客户端沙箱控制; 优化会话永远不授权 commit 或 push。
 enabled = false

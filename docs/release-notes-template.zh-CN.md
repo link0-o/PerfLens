@@ -46,6 +46,13 @@ uv tool install ./perflens-{version}-py3-none-any.whl
 绑定 Recipe 的构建。远程 Engine、Compose/Kubernetes、任意 Docker 参数和整容器 perf
 聚合仍不受支持。
 
+v0.4.0 新增有界 Runtime Lock 证据链与 Native pthread、Java JFR、CPython threading、Go
+pprof 四类 Adapter。项目必须显式运行 `perflens init --runtime-locks`；需要 Docker
+optimization 时可与 `--docker` 组合。初始化只启用能力发现，不会插桩、附加、导入或启动
+负载。Native、CPython、Java 主动采集只支持启动时插桩，不支持向任意运行中进程或已有容器
+注入；Go loopback pprof 仍要求同 UID、字面量本机端点和显式策略授权。Docker Preview 若
+明确包含 Runtime Lock，则原有一次确认覆盖该有界范围，不会产生第二个隐式授权。
+
 ## 资源怎么选
 
 - `perflens-{version}-py3-none-any.whl`：安装 CLI、MCP、Skill、Collector 和

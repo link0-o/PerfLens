@@ -16,7 +16,12 @@ from pathlib import Path
 from typing import Literal
 
 from perflens.domain.errors import ErrorCode, PerfLensError
-from perflens.runtime_locks.cpython_adapter import CpythonFileIdentity, CpythonLaunchPolicy
+from perflens.runtime_locks.cpython_adapter import (
+    CpythonDirectoryIdentity,
+    CpythonFileIdentity,
+    CpythonLaunchPolicy,
+)
+from perflens.runtime_locks.linux_memfd import F_ADD_SEALS, IMMUTABLE_MEMFD_SEALS
 from perflens.runtime_locks.supervisor import (
     RuntimeSupervisorClient,
     RuntimeSupervisorCpythonThreadingRequest,
@@ -104,6 +109,7 @@ class CpythonThreadingLauncher:
         self._output_root = _directory(private_output_root, self._uid, 0o700)
         self._policy = policy
         _assert_runtime_file(policy.interpreter)
+        _assert_runtime_home(policy.runtime_home)
         _assert_runtime_file(policy.bootstrap)
         if supervisor_client is None:
             discovered = discover_runtime_supervisor_policy()
@@ -126,8 +132,10 @@ class CpythonThreadingLauncher:
         if target.identity_sha256 != expected_target_identity_sha256:
             raise _error("CPython script differs from the authorized Preview")
         _assert_runtime_file(self._policy.interpreter)
+        _assert_runtime_home(self._policy.runtime_home)
         _assert_runtime_file(self._policy.bootstrap)
-        script_fd = interpreter_fd = bootstrap_fd = project_fd = root_fd = output_fd = -1
+        script_fd = interpreter_fd = runtime_home_fd = bootstrap_fd = -1
+        project_fd = root_fd = output_fd = -1
         stream_name = f"cpython-threading-{os.urandom(10).hex()}.ndjson"
         stream_path = self._output_root[0] / stream_name
         created = False
@@ -136,6 +144,7 @@ class CpythonThreadingLauncher:
         try:
             script_fd = _sealed_script_snapshot(self._project_root[0], target)
             interpreter_fd = _open_identity(self._policy.interpreter)
+            runtime_home_fd = _open_runtime_home(self._policy.runtime_home)
             bootstrap_fd = _open_identity(self._policy.bootstrap)
             project_fd = _open_directory(self._project_root)
             root_fd = _open_directory(self._output_root)
@@ -159,6 +168,7 @@ class CpythonThreadingLauncher:
                 arguments=request.arguments,
                 timeout_milliseconds=math.ceil(request.duration_seconds * 1_000),
                 request=RuntimeSupervisorCpythonThreadingRequest(
+                    runtime_home=runtime_supervisor_directory_identity(runtime_home_fd),
                     bootstrap=runtime_supervisor_file_identity(bootstrap_fd),
                     script=runtime_supervisor_file_identity(script_fd),
                     script_label=target.project_relative_path,
@@ -213,6 +223,7 @@ class CpythonThreadingLauncher:
                 output_fd,
                 script_fd,
                 interpreter_fd,
+                runtime_home_fd,
                 bootstrap_fd,
                 project_fd,
                 root_fd,
@@ -393,11 +404,7 @@ def _sealed_script_snapshot(project_root: Path, target: CpythonTargetIdentity) -
         ):
             raise _error("CPython target changed before launch")
         os.fchmod(snapshot, 0o400)
-        fcntl.fcntl(
-            snapshot,
-            fcntl.F_ADD_SEALS,
-            fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL,
-        )
+        fcntl.fcntl(snapshot, F_ADD_SEALS, IMMUTABLE_MEMFD_SEALS)
         os.lseek(snapshot, 0, os.SEEK_SET)
         return snapshot
     except Exception:
@@ -495,6 +502,42 @@ def _open_identity(identity: CpythonFileIdentity) -> int:
 def _assert_runtime_file(identity: CpythonFileIdentity) -> None:
     descriptor = _open_identity(identity)
     os.close(descriptor)
+
+
+def _assert_runtime_home(identity: CpythonDirectoryIdentity) -> None:
+    descriptor = _open_runtime_home(identity)
+    os.close(descriptor)
+
+
+def _open_runtime_home(identity: CpythonDirectoryIdentity) -> int:
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = -1
+    try:
+        descriptor = os.open(identity.path, flags)
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_dev != identity.device
+            or metadata.st_ino != identity.inode
+            or metadata.st_uid != identity.owner_uid
+            or stat.S_IMODE(metadata.st_mode) != identity.mode
+            or identity.mode & 0o022
+        ):
+            raise _error("CPython runtime home identity changed")
+        return descriptor
+    except OSError as exc:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise _error("CPython runtime home cannot be opened safely") from exc
+    except PerfLensError:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
 
 
 def _target_file_identity(metadata: os.stat_result) -> tuple[int, ...]:

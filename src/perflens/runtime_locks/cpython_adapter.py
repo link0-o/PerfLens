@@ -42,11 +42,21 @@ class CpythonFileIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class CpythonDirectoryIdentity:
+    path: Path
+    device: int
+    inode: int
+    owner_uid: int
+    mode: int
+
+
+@dataclass(frozen=True, slots=True)
 class CpythonInstallation:
     availability: Literal["available", "partial", "unavailable"]
     runtime_version: str | None
     free_threaded: bool | None
     interpreter: CpythonFileIdentity | None
+    runtime_home: CpythonDirectoryIdentity | None
     bootstrap: CpythonFileIdentity | None
     metadata_sha256: str | None
     limitations: tuple[str, ...]
@@ -55,6 +65,7 @@ class CpythonInstallation:
 @dataclass(frozen=True, slots=True)
 class CpythonLaunchPolicy:
     interpreter: CpythonFileIdentity
+    runtime_home: CpythonDirectoryIdentity
     bootstrap: CpythonFileIdentity
     runtime_version: str
     free_threaded: bool
@@ -85,12 +96,22 @@ def assert_cpython_launch_policy_current(policy: CpythonLaunchPolicy) -> None:
     """
 
     trusted_owner_uids = tuple(
-        sorted({policy.interpreter.owner_uid, policy.bootstrap.owner_uid})
+        sorted(
+            {
+                policy.interpreter.owner_uid,
+                policy.runtime_home.owner_uid,
+                policy.bootstrap.owner_uid,
+            }
+        )
     )
     interpreter = _inspect_file(
         policy.interpreter.path,
         executable=True,
         maximum_size=512 << 20,
+        trusted_owner_uids=trusted_owner_uids,
+    )
+    runtime_home = _inspect_runtime_home(
+        policy.runtime_home.path,
         trusted_owner_uids=trusted_owner_uids,
     )
     bootstrap = _inspect_file(
@@ -99,13 +120,18 @@ def assert_cpython_launch_policy_current(policy: CpythonLaunchPolicy) -> None:
         maximum_size=1 << 20,
         trusted_owner_uids=trusted_owner_uids,
     )
-    if interpreter != policy.interpreter or bootstrap != policy.bootstrap:
+    if (
+        interpreter != policy.interpreter
+        or runtime_home != policy.runtime_home
+        or bootstrap != policy.bootstrap
+    ):
         raise _error("CPython runtime payload changed after capability inspection")
 
 
 def inspect_cpython_installation(
     *,
     interpreter_path: Path | None = None,
+    runtime_home_path: Path | None = None,
     bootstrap_path: Path = DEFAULT_CPYTHON_BOOTSTRAP_PATH,
     trusted_owner_uids: tuple[int, ...] = (0,),
 ) -> CpythonInstallation:
@@ -119,16 +145,44 @@ def inspect_cpython_installation(
             runtime_version=version,
             free_threaded=free_threaded,
             interpreter=None,
+            runtime_home=None,
             bootstrap=None,
             metadata_sha256=None,
             limitations=("Active CPython instrumentation requires CPython 3.12 or 3.13.",),
         )
     candidate = interpreter_path or Path(sys.executable)
+    if interpreter_path is None:
+        # ``sys.executable`` is commonly the distribution-managed
+        # ``/usr/bin/python3`` symlink.  Treat it only as a discovery hint and
+        # bind the inspected launch policy to the canonical regular file.  An
+        # explicitly supplied path remains subject to the stricter no-symlink
+        # contract so callers cannot silently change an authorized identity.
+        try:
+            candidate = candidate.resolve(strict=True)
+        except OSError as exc:
+            return CpythonInstallation(
+                availability="unavailable",
+                runtime_version=version,
+                free_threaded=free_threaded,
+                interpreter=None,
+                runtime_home=None,
+                bootstrap=None,
+                metadata_sha256=None,
+                limitations=(
+                    "Active CPython threading instrumentation is unavailable: "
+                    f"the running interpreter cannot be resolved ({type(exc).__name__}).",
+                    "Controlled Runtime Lock import and analysis remain available.",
+                ),
+            )
     try:
         interpreter = _inspect_file(
             candidate,
             executable=True,
             maximum_size=512 << 20,
+            trusted_owner_uids=trusted_owner_uids,
+        )
+        runtime_home = _inspect_runtime_home(
+            runtime_home_path or Path(sys.base_prefix),
             trusted_owner_uids=trusted_owner_uids,
         )
         bootstrap = _inspect_file(
@@ -143,6 +197,7 @@ def inspect_cpython_installation(
             runtime_version=version,
             free_threaded=free_threaded,
             interpreter=None,
+            runtime_home=None,
             bootstrap=None,
             metadata_sha256=None,
             limitations=(
@@ -159,6 +214,10 @@ def inspect_cpython_installation(
                 str(int(free_threaded)),
                 sysconfig.get_config_var("SOABI") or "",
                 sysconfig.get_config_var("ABIFLAGS") or "",
+                str(runtime_home.device),
+                str(runtime_home.inode),
+                str(runtime_home.owner_uid),
+                str(runtime_home.mode),
             )
         ).encode("utf-8")
     ).hexdigest()
@@ -182,6 +241,7 @@ def inspect_cpython_installation(
         runtime_version=version,
         free_threaded=free_threaded,
         interpreter=interpreter,
+        runtime_home=runtime_home,
         bootstrap=bootstrap,
         metadata_sha256=metadata,
         limitations=limitations,
@@ -228,12 +288,14 @@ def build_cpython_adapter_bridge(
     if availability in {"available", "partial"}:
         assert installation is not None
         assert installation.interpreter is not None
+        assert installation.runtime_home is not None
         assert installation.bootstrap is not None
         assert installation.runtime_version is not None
         assert installation.free_threaded is not None
         assert installation.metadata_sha256 is not None
         launch_policy = CpythonLaunchPolicy(
             interpreter=installation.interpreter,
+            runtime_home=installation.runtime_home,
             bootstrap=installation.bootstrap,
             runtime_version=installation.runtime_version,
             free_threaded=installation.free_threaded,
@@ -424,6 +486,64 @@ def _inspect_file(
             mode=mode,
             links=before.st_nlink,
             size=before.st_size,
+        )
+    finally:
+        os.close(descriptor)
+
+
+def _inspect_runtime_home(
+    path: Path,
+    *,
+    trusted_owner_uids: tuple[int, ...],
+) -> CpythonDirectoryIdentity:
+    """Bind the CPython standard-library root without exposing it publicly.
+
+    Descriptor-bound execution hides the interpreter's original pathname.
+    CPython distributions whose compiled prefix is relocated (including uv's
+    portable builds) therefore need an authenticated runtime home.  The
+    supervisor receives only this already-open directory descriptor and
+    constructs a fixed ``PYTHONHOME=/proc/self/fd/<n>`` value itself.
+    """
+
+    if not path.is_absolute():
+        raise _error("CPython runtime home must be an absolute directory")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise _error("CPython runtime home cannot be resolved") from exc
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = os.open(resolved, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        mode = stat.S_IMODE(metadata.st_mode)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid not in trusted_owner_uids
+            or mode not in {0o555, 0o755}
+        ):
+            raise _error("CPython runtime home owner or mode is unsafe")
+        try:
+            after = resolved.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise _error("CPython runtime home cannot be revalidated") from exc
+        if (
+            after.st_dev != metadata.st_dev
+            or after.st_ino != metadata.st_ino
+            or after.st_uid != metadata.st_uid
+            or stat.S_IMODE(after.st_mode) != mode
+        ):
+            raise _error("CPython runtime home changed while it was inspected")
+        return CpythonDirectoryIdentity(
+            path=resolved,
+            device=metadata.st_dev,
+            inode=metadata.st_ino,
+            owner_uid=metadata.st_uid,
+            mode=mode,
         )
     finally:
         os.close(descriptor)

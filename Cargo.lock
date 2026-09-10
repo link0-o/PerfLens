@@ -116,14 +116,14 @@ dependencies = [
 
 [[package]]
 name = "perflens-container-gate"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "nix",
 ]
 
 [[package]]
 name = "perflens-privileged-helper"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "nix",
  "serde",
@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "perflens-runtime-supervisor"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "libc",
  "nix",
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "perflens-trace-helper"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "nix",
  "serde",

@@ -2,9 +2,10 @@
 
 [简体中文](runtime-locks.zh-CN.md) | English
 
-Status: **implemented in the repository as a v0.4.0 prerelease; not part of the published v0.3.2 packages**.
-The feature becomes a stable release claim only after the v0.4.0 version, package, runtime-matrix,
-and real-host gates pass. Release v0.3.2 remains the published baseline.
+Status: **implemented as a v0.4.0 release candidate; not part of the published v0.3.2 packages**.
+The version and reproducible candidate packages are prepared, but the runtime-matrix, real-host,
+remote CI, and tag gates must still pass before publication. Release v0.3.2 remains the published
+baseline. See the [v0.4.0 readiness record](v0.4.0-release-readiness.md).
 
 Runtime Lock is a deterministic evidence pipeline for language-level waiting and contention. It
 does not treat every futex as a language lock, does not infer an owner or hold interval that the
@@ -65,6 +66,13 @@ PerfLens does not inject into an arbitrary running process or arbitrary existing
 CPython, and Java active collection is launch-time only. There is no live JVM attach or stable
 eBPF/uprobe path in v0.4.0.
 
+For host CPython, authorization binds the canonical interpreter, package bootstrap, and a
+non-group-writable Runtime Home directory identity. The unprivileged supervisor receives those as
+already-open descriptors and constructs its fixed `PYTHONHOME=/proc/self/fd/<n>` itself. This
+supports safely installed relocatable CPython distributions without accepting an Agent-supplied
+environment or falling back to pathname execution. A replaced or writable Runtime Home is
+`unavailable`; controlled import and offline analysis remain usable.
+
 ## Evidence semantics
 
 Runtime Lock Evidence schema 1.1 represents OS threads, Java platform/virtual threads, Go
@@ -91,9 +99,9 @@ automatically upgraded to a root cause or Verified Improvement.
 | Adapter | Repository v0.4.0 prerelease boundary | Important limits |
 |---|---|---|
 | Native pthread | Debian 12/13 amd64, glibc 2.36/2.41, dynamically linked pthread mutex/rwlock/condition; launch-time fixed `LD_PRELOAD`; thresholded 1 us and bounded exact modes | Static/musl/setuid/file-cap targets, inline/custom atomics, spinlocks, and invisible fast paths are partial or unsupported; no live uprobe/eBPF |
-| Java JFR | JDK 17/21/25; launch-time JFR; fixed `balanced` 10 ms or `deep` 1 ms configuration; `JavaMonitorEnter`, `JavaMonitorWait`, `ThreadPark`, and metadata-discovered virtual-thread events | No live attach; the matching JDK `jfr print --json` performs bounded conversion; threshold omission is not “no wait”; absent acquire/release pairs forbid owner/hold claims |
-| CPython threading | CPython 3.12/3.13 public `threading.Lock`, `RLock`, `Condition`, and `Semaphore`; ordinary-user launch bootstrap; thresholded 10 us and bounded exact modes | Does not impersonate every `_thread` or C-extension lock; GIL/internal/application locks stay separate; free-threaded 3.13 forbids traditional-GIL conclusions |
-| Go pprof | Go 1.24-1.27 fixed `go tool pprof -raw`; private file mutex/block profiles; same-UID literal-loopback host pprof when explicitly enabled | Docker defaults to the file backend and opens no network; PerfLens does not enable runtime profile rates or modify source; mutex/block remain separate cumulative Evidence whose rows are sampled contention observations, without fabricated TID, owner, or lock object |
+| Java JFR | Target matrix JDK 17/21/25; launch-time JFR; fixed `balanced` 10 ms or `deep` 1 ms configuration; `JavaMonitorEnter`, `JavaMonitorWait`, `ThreadPark`, and metadata-discovered virtual-thread events | No live attach; the matching JDK `jfr print --json` performs bounded conversion; threshold omission is not “no wait”; absent acquire/release pairs forbid owner/hold claims; local release evidence currently covers JDK 21/25, while JDK 17 remains a release blocker |
+| CPython threading | CPython 3.12/3.13 public `threading.Lock`, `RLock`, `Condition`, and `Semaphore`; ordinary-user launch bootstrap; thresholded 10 us and bounded exact modes | Does not impersonate every `_thread` or C-extension lock; GIL/internal/application locks stay separate; free-threaded 3.13 forbids traditional-GIL conclusions and remains a release-matrix blocker until its real environment passes |
+| Go pprof | Target matrix Go 1.24-1.27 fixed `go tool pprof -raw`; private file mutex/block profiles; same-UID literal-loopback host pprof when explicitly enabled | Docker defaults to the file backend and opens no network; PerfLens does not enable runtime profile rates or modify source; mutex/block remain separate cumulative Evidence without fabricated TID, owner, or lock object; only Go 1.24 currently has the required local Golden, so 1.25-1.27 remain `partial` and block release |
 | Generic NDJSON | Strict schema 1.0/1.1 controlled import with bounded streaming and replay | Import source must declare its exact/thresholded/sampled/cumulative meaning, clocks, visibility, loss, owner and hold provenance; malformed, cross-target, out-of-order, or non-conserving input is rejected |
 
 JDK, Go, async-profiler, DTrace/SystemTap, and other runtime tools are optional external

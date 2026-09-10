@@ -25,6 +25,13 @@
   "timeout_milliseconds": 3000,
   "request": {
     "adapter": "cpython_threading",
+    "runtime_home": {
+      "descriptor": 15,
+      "device": 2049,
+      "inode": 206,
+      "owner_uid": 0,
+      "mode": 365
+    },
     "bootstrap": {
       "descriptor": 12,
       "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",

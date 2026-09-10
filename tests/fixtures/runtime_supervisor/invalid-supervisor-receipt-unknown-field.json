@@ -2,7 +2,7 @@
   "schema_version": "1.0",
   "protocol_version": "1.0",
   "request_id": "0123456789abcdefabcd",
-  "supervisor_version": "0.3.2",
+  "supervisor_version": "0.4.0",
   "supervisor_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "workload_pid": 1300,
   "workload_start_ticks": 987654,

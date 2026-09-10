@@ -21,7 +21,7 @@
 | paranoid=3 Helper | The existing Rust Helper remains permanently limited to `record/stat`; v0.3.0 uses another service/protocol/socket/spool for its Trace Helper |
 | Target runtime | Linux host PID, or one explicit process in a local Linux Docker Engine with cgroup v2; no remote Engine, Docker Desktop VM, Compose, or whole-container aggregation |
 | Native DEB | Debian 13 `amd64`, system Python 3.13; split exact-version Collector package |
-| Runtime Lock (repository v0.4.0 prerelease) | Native pthread: Debian 12/13 amd64 + glibc 2.36/2.41; Java JFR: JDK 17/21/25; CPython: 3.12/3.13 including free-threaded detection; Go pprof: 1.24-1.27 |
+| Runtime Lock (repository v0.4.0 prerelease) | Implemented target matrix: Native pthread on Debian 12/13 amd64 + glibc 2.36/2.41; Java JFR on JDK 17/21/25; CPython 3.12/3.13 including free-threaded detection; Go pprof 1.24-1.27. Local release evidence currently covers JDK 21/25, non-free-threaded CPython 3.12/3.13, and Go 1.24; JDK 17, free-threaded CPython 3.13, and Go 1.25-1.27 remain release blockers, with unvalidated Go versions reported as `partial`. |
 | Runtime Lock target | Reviewed host launch, managed/optimization Docker launch, controlled import, or explicit same-UID loopback Go pprof; no arbitrary live injection |
 | Artifact schema | Existing public artifacts 1.0; Docker project policy accepts strict 1.0/1.1; Runtime Lock Evidence reads strict 1.0/1.1 and new Adapters write 1.1 |
 

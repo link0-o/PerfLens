@@ -115,6 +115,7 @@ class RuntimeSupervisorJavaJfrPrintRequest(_StrictSupervisorModel):
 
 class RuntimeSupervisorCpythonThreadingRequest(_StrictSupervisorModel):
     adapter: Literal["cpython_threading"] = "cpython_threading"
+    runtime_home: RuntimeSupervisorDirectoryIdentity
     bootstrap: RuntimeSupervisorFileIdentity
     script: RuntimeSupervisorFileIdentity
     script_label: str = Field(min_length=1, max_length=4096)
@@ -518,7 +519,12 @@ def runtime_supervisor_request_descriptors(request: RuntimeSupervisorRequest) ->
         )
     elif adapter.adapter == "cpython_threading":
         descriptors.extend(
-            (adapter.bootstrap.descriptor, adapter.script.descriptor, adapter.output.descriptor)
+            (
+                adapter.runtime_home.descriptor,
+                adapter.bootstrap.descriptor,
+                adapter.script.descriptor,
+                adapter.output.descriptor,
+            )
         )
     elif adapter.adapter == "go_pprof_workload":
         descriptors.extend((adapter.mutex_profile.descriptor, adapter.block_profile.descriptor))

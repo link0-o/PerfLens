@@ -36,6 +36,7 @@
 #define PROBE_DESTRUCTOR __attribute__((destructor))
 #define PROBE_PUBLIC __attribute__((visibility("default")))
 #define PROBE_UNUSED __attribute__((unused))
+#define PROBE_NOINLINE __attribute__((noinline))
 
 #define PROBE_DEFAULT_THRESHOLD_NS UINT64_C(1000)
 #define PROBE_HARD_EVENT_LIMIT UINT64_C(20000)
@@ -116,6 +117,11 @@ static struct probe_state probe = {
     .output_lock = ATOMIC_FLAG_INIT,
 };
 static struct probe_real_functions real_functions;
+/* Once construction proves that no bounded evidence descriptor was supplied,
+ * exported wrappers use this immutable pass-through table.  That keeps the
+ * disabled path to one checked tail call without weakening active-session
+ * identity, truncation, or fork handling. */
+static struct probe_real_functions pass_through_functions;
 static _Thread_local bool probe_recursing;
 static _Thread_local struct probe_held_lock held_locks[PROBE_HELD_SLOTS];
 static _Thread_local size_t held_lock_count;
@@ -703,6 +709,7 @@ static void atfork_child(void) {
         (void)syscall(SYS_close, probe.output_fd);
         probe.output_fd = -1;
     }
+    pass_through_functions = real_functions;
 }
 
 static void ensure_process_identity(void) {
@@ -716,7 +723,13 @@ static void ensure_process_identity(void) {
 static void probe_initialize(void) PROBE_CONSTRUCTOR;
 static void probe_initialize(void) {
     probe_recursing = true;
-    if (!resolve_symbols() || !configure_from_environment()) {
+    if (!resolve_symbols()) {
+        probe_recursing = false;
+        return;
+    }
+    if (!configure_from_environment()) {
+        probe.output_fd = -1;
+        pass_through_functions = real_functions;
         probe_recursing = false;
         return;
     }
@@ -861,6 +874,14 @@ static bool record_release(uint64_t token, uint64_t timestamp_ns) {
 }
 
 static bool enter_probe(void) {
+    /* A launch without the fixed evidence descriptor is the disabled mode.
+     * Check the constructor-owned descriptor before touching TLS or atomics so
+     * merely preloading the packaged probe has a genuinely minimal hot path.
+     * The descriptor changes only during process construction or in the
+     * single-threaded post-fork child path. */
+    if (probe.output_fd < 0) {
+        return false;
+    }
     if (probe_recursing || !atomic_load_explicit(&probe.active, memory_order_acquire)) {
         return false;
     }
@@ -878,16 +899,13 @@ static bool enter_probe(void) {
 static void leave_probe(void) { probe_recursing = false; }
 
 #define SIMPLE_LOCK_WRAPPER(function_name, real_member, lock_type, kind_expression, arguments, call) \
-    PROBE_PUBLIC int function_name arguments {                                                       \
+    static PROBE_NOINLINE int function_name##_observed arguments {                                   \
         uint64_t begin_ns;                                                                            \
         uint64_t end_ns;                                                                              \
         uint64_t token;                                                                               \
         uint64_t begin_sequence;                                                                      \
         enum probe_lock_kind kind;                                                                    \
         int result;                                                                                   \
-        if (real_functions.real_member == NULL) {                                                     \
-            return ENOSYS;                                                                            \
-        }                                                                                             \
         if (!enter_probe()) {                                                                         \
             return real_functions.real_member call;                                                   \
         }                                                                                             \
@@ -909,6 +927,15 @@ static void leave_probe(void) { probe_recursing = false; }
         }                                                                                             \
         leave_probe();                                                                                \
         return result;                                                                                \
+    }                                                                                                 \
+    PROBE_PUBLIC int function_name arguments {                                                       \
+        if (pass_through_functions.real_member != NULL) {                                            \
+            return pass_through_functions.real_member call;                                          \
+        }                                                                                             \
+        if (real_functions.real_member == NULL) {                                                     \
+            return ENOSYS;                                                                            \
+        }                                                                                             \
+        return function_name##_observed call;                                                        \
     }
 
 SIMPLE_LOCK_WRAPPER(pthread_mutex_lock, mutex_lock, mutex, mutex_lock_kind(mutex),
@@ -943,12 +970,9 @@ SIMPLE_LOCK_WRAPPER(pthread_rwlock_clockwrlock, rwlock_clockwrlock, rwlock,
                     (pthread_rwlock_t *rwlock, clockid_t clock, const struct timespec *timeout),
                     (rwlock, clock, timeout))
 
-PROBE_PUBLIC int pthread_mutex_unlock(pthread_mutex_t *mutex) {
+static PROBE_NOINLINE int mutex_unlock_observed(pthread_mutex_t *mutex) {
     int result;
     uint64_t token;
-    if (real_functions.mutex_unlock == NULL) {
-        return ENOSYS;
-    }
     if (!enter_probe()) {
         return real_functions.mutex_unlock(mutex);
     }
@@ -961,12 +985,19 @@ PROBE_PUBLIC int pthread_mutex_unlock(pthread_mutex_t *mutex) {
     return result;
 }
 
-PROBE_PUBLIC int pthread_rwlock_unlock(pthread_rwlock_t *rwlock) {
-    int result;
-    uint64_t token;
-    if (real_functions.rwlock_unlock == NULL) {
+PROBE_PUBLIC int pthread_mutex_unlock(pthread_mutex_t *mutex) {
+    if (pass_through_functions.mutex_unlock != NULL) {
+        return pass_through_functions.mutex_unlock(mutex);
+    }
+    if (real_functions.mutex_unlock == NULL) {
         return ENOSYS;
     }
+    return mutex_unlock_observed(mutex);
+}
+
+static PROBE_NOINLINE int rwlock_unlock_observed(pthread_rwlock_t *rwlock) {
+    int result;
+    uint64_t token;
     if (!enter_probe()) {
         return real_functions.rwlock_unlock(rwlock);
     }
@@ -981,6 +1012,16 @@ PROBE_PUBLIC int pthread_rwlock_unlock(pthread_rwlock_t *rwlock) {
     }
     leave_probe();
     return result;
+}
+
+PROBE_PUBLIC int pthread_rwlock_unlock(pthread_rwlock_t *rwlock) {
+    if (pass_through_functions.rwlock_unlock != NULL) {
+        return pass_through_functions.rwlock_unlock(rwlock);
+    }
+    if (real_functions.rwlock_unlock == NULL) {
+        return ENOSYS;
+    }
+    return rwlock_unlock_observed(rwlock);
 }
 
 static void condition_cancel_cleanup(void *unused) {
@@ -1078,11 +1119,9 @@ static int cond_clockwait_adapter(pthread_cond_t *condition, pthread_mutex_t *mu
     return real_functions.cond_clockwait(condition, mutex, timed->clock, timed->timeout);
 }
 
-PROBE_PUBLIC int pthread_cond_wait(pthread_cond_t *condition, pthread_mutex_t *mutex) {
+static PROBE_NOINLINE int cond_wait_observed(pthread_cond_t *condition,
+                                             pthread_mutex_t *mutex) {
     int result;
-    if (real_functions.cond_wait == NULL) {
-        return ENOSYS;
-    }
     if (!enter_probe()) {
         return real_functions.cond_wait(condition, mutex);
     }
@@ -1091,13 +1130,21 @@ PROBE_PUBLIC int pthread_cond_wait(pthread_cond_t *condition, pthread_mutex_t *m
     return result;
 }
 
-PROBE_PUBLIC int pthread_cond_timedwait(pthread_cond_t *condition, pthread_mutex_t *mutex,
-                                        const struct timespec *timeout) {
-    struct timed_condition_arguments argument = {.timeout = timeout};
-    int result;
-    if (real_functions.cond_timedwait == NULL) {
+PROBE_PUBLIC int pthread_cond_wait(pthread_cond_t *condition, pthread_mutex_t *mutex) {
+    if (pass_through_functions.cond_wait != NULL) {
+        return pass_through_functions.cond_wait(condition, mutex);
+    }
+    if (real_functions.cond_wait == NULL) {
         return ENOSYS;
     }
+    return cond_wait_observed(condition, mutex);
+}
+
+static PROBE_NOINLINE int cond_timedwait_observed(pthread_cond_t *condition,
+                                                  pthread_mutex_t *mutex,
+                                                  const struct timespec *timeout) {
+    struct timed_condition_arguments argument = {.timeout = timeout};
+    int result;
     if (!enter_probe()) {
         return real_functions.cond_timedwait(condition, mutex, timeout);
     }
@@ -1106,17 +1153,37 @@ PROBE_PUBLIC int pthread_cond_timedwait(pthread_cond_t *condition, pthread_mutex
     return result;
 }
 
-PROBE_PUBLIC int pthread_cond_clockwait(pthread_cond_t *condition, pthread_mutex_t *mutex,
-                                        clockid_t clock, const struct timespec *timeout) {
-    struct clock_condition_arguments argument = {.clock = clock, .timeout = timeout};
-    int result;
-    if (real_functions.cond_clockwait == NULL) {
+PROBE_PUBLIC int pthread_cond_timedwait(pthread_cond_t *condition, pthread_mutex_t *mutex,
+                                        const struct timespec *timeout) {
+    if (pass_through_functions.cond_timedwait != NULL) {
+        return pass_through_functions.cond_timedwait(condition, mutex, timeout);
+    }
+    if (real_functions.cond_timedwait == NULL) {
         return ENOSYS;
     }
+    return cond_timedwait_observed(condition, mutex, timeout);
+}
+
+static PROBE_NOINLINE int cond_clockwait_observed(pthread_cond_t *condition,
+                                                  pthread_mutex_t *mutex, clockid_t clock,
+                                                  const struct timespec *timeout) {
+    struct clock_condition_arguments argument = {.clock = clock, .timeout = timeout};
+    int result;
     if (!enter_probe()) {
         return real_functions.cond_clockwait(condition, mutex, clock, timeout);
     }
     result = record_condition_wait(condition, mutex, cond_clockwait_adapter, &argument);
     leave_probe();
     return result;
+}
+
+PROBE_PUBLIC int pthread_cond_clockwait(pthread_cond_t *condition, pthread_mutex_t *mutex,
+                                        clockid_t clock, const struct timespec *timeout) {
+    if (pass_through_functions.cond_clockwait != NULL) {
+        return pass_through_functions.cond_clockwait(condition, mutex, clock, timeout);
+    }
+    if (real_functions.cond_clockwait == NULL) {
+        return ENOSYS;
+    }
+    return cond_clockwait_observed(condition, mutex, clock, timeout);
 }

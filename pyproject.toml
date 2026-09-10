@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "perflens"
-version = "0.3.2"
+version = "0.4.0"
 description = "Evidence-driven performance analysis toolkit for Linux applications"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -23,6 +23,7 @@ classifiers = [
   "Topic :: System :: Benchmark",
 ]
 dependencies = [
+  "defusedxml>=0.7.1,<1",
   "jinja2>=3.1.6,<4",
   "mcp>=2,<3",
   "pydantic>=2.11,<3",

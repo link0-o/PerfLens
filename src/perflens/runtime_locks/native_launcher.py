@@ -29,6 +29,11 @@ from elftools.elf.sections import SymbolTableSection
 
 from perflens.contracts.runtime_locks import MeasurementSemantics
 from perflens.domain.errors import ErrorCode, PerfLensError
+from perflens.runtime_locks.linux_memfd import (
+    F_ADD_SEALS,
+    F_GET_SEALS,
+    IMMUTABLE_MEMFD_SEALS,
+)
 from perflens.runtime_locks.native_pthread_abi import (
     NATIVE_PTHREAD_PROBE_ABI_VERSION,
     NATIVE_PTHREAD_PROBE_EXPORTS,
@@ -89,9 +94,7 @@ _REVIEWED_TARGET_NEEDED_LIBRARIES = frozenset(
     }
 )
 _SESSION_ESCAPE_SYMBOLS = frozenset({"daemon", "setpgid", "setsid"})
-_MEMFD_REQUIRED_SEALS = (
-    fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
-)
+_MEMFD_REQUIRED_SEALS = IMMUTABLE_MEMFD_SEALS
 _CONTAINER_TARGET_ID = re.compile(r"^container-target-[a-f0-9]{20}$")
 _CONTAINER_RUN_ID = re.compile(r"^container-run-[a-f0-9]{20}$")
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
@@ -678,9 +681,7 @@ def inspect_managed_native_pthread_capability(
         runtime_glibc_version=target.glibc_version,
         supported_semantics=(("exact", "thresholded") if compatible else ()),
         supported_lock_surfaces=(
-            ("condition", "mutex", "rwlock_read", "rwlock_write")
-            if compatible
-            else ()
+            ("condition", "mutex", "rwlock_read", "rwlock_write") if compatible else ()
         ),
         limitations=tuple(limitations),
     )
@@ -1420,8 +1421,8 @@ def _sealed_target_snapshot(
             != expected.visible_lock_surfaces
         ):
             raise _native_error("Native pthread executable snapshot ABI identity changed")
-        fcntl.fcntl(snapshot_fd, fcntl.F_ADD_SEALS, _MEMFD_REQUIRED_SEALS)
-        applied_seals = fcntl.fcntl(snapshot_fd, fcntl.F_GET_SEALS)
+        fcntl.fcntl(snapshot_fd, F_ADD_SEALS, _MEMFD_REQUIRED_SEALS)
+        applied_seals = fcntl.fcntl(snapshot_fd, F_GET_SEALS)
         if applied_seals & _MEMFD_REQUIRED_SEALS != _MEMFD_REQUIRED_SEALS:
             raise _native_error("Native pthread executable snapshot could not be sealed")
         os.lseek(snapshot_fd, 0, os.SEEK_SET)

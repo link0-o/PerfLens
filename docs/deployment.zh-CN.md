@@ -144,7 +144,7 @@ Agent 客户端的 MCP 权限弹窗、持久工具允许列表或自动批准模
 ```bash
 sudo python3 -m venv /opt/perflens
 sudo /opt/perflens/bin/python -m pip install \
-  ./dist/perflens-0.3.2-py3-none-any.whl
+  ./dist/perflens-0.4.0-py3-none-any.whl
 ```
 
 这里的版本号只是示例，应替换为实际构建版本。正式离线部署应同时提供 wheelhouse 或完整系统包，不应在安装脚本中隐式访问网络。
@@ -582,7 +582,7 @@ perflens init --docker --runtime-locks  # 同时使用 Docker optimization 时
 
 初始化会生成并保留项目所有的 `perflens-setup/runtime-locks.toml`，但不会插桩、附加、导入、
 采集或启用服务。JDK、Go、async-profiler、DTrace、SystemTap 等仍是可选外部依赖，不由两个
-核心 DEB 下载。v0.4.0 主原生 DEB 计划携带固定、无 capability 的 pthread probe 和 Runtime
+核心 DEB 下载。v0.4.0 主原生 DEB 携带固定、无 capability 的 pthread probe 和 Runtime
 Lock supervisor，但安装过程仍不会激活它们。Native/CPython/JFR 主动采集只支持启动时插桩，
 不部署任意运行中进程或已有容器注入。执行前必须建立内容绑定的
 `bounded_runtime_lock_session`，或由父 Docker optimization Preview 明确纳入同一授权范围。

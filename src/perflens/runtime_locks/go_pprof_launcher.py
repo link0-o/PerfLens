@@ -20,6 +20,7 @@ from typing import Literal
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.runtime_locks.go_pprof_adapter import GoToolIdentity
 from perflens.runtime_locks.go_pprof_converter import GoProfileKind
+from perflens.runtime_locks.linux_memfd import F_ADD_SEALS, IMMUTABLE_MEMFD_SEALS
 from perflens.runtime_locks.supervisor import (
     RuntimeSupervisorClient,
     RuntimeSupervisorGoPprofRawRequest,
@@ -37,7 +38,7 @@ _MAX_PROFILE_BYTES = 64 << 20
 _MAX_ARGUMENTS = 128
 _MAX_ARGUMENT_BYTES = 32 << 10
 _GO_BUILD_VERSION = re.compile(r"^[^\n]+: go(1\.(?:24|25|26|27)(?:\.[0-9]+)?)$")
-_MEMFD_SEALS = fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
+_MEMFD_SEALS = IMMUTABLE_MEMFD_SEALS
 
 
 @dataclass(frozen=True, slots=True)
@@ -565,7 +566,7 @@ def _sealed_target_snapshot(root: Path, target: GoTargetIdentity) -> int:
             if digest.hexdigest() != target.binary_sha256:
                 raise _error("Go target content changed after Preview")
             os.fchmod(snapshot, 0o500)
-            fcntl.fcntl(snapshot, fcntl.F_ADD_SEALS, _MEMFD_SEALS)
+            fcntl.fcntl(snapshot, F_ADD_SEALS, _MEMFD_SEALS)
             os.lseek(snapshot, 0, os.SEEK_SET)
             return snapshot
         except BaseException:

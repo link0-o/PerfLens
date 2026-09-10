@@ -301,13 +301,17 @@ def _four_adapter_server(
 
     java_bridge = _java_bridge(project, policy_path)
     interpreter = project / "python3"
+    runtime_home = project / "cpython-home"
     bootstrap = project / "cpython-bootstrap.py"
     interpreter.write_bytes(b"reviewed CPython interpreter identity\n")
+    runtime_home.mkdir()
     bootstrap.write_bytes(b"reviewed CPython bootstrap identity\n")
     interpreter.chmod(0o755)
+    runtime_home.chmod(0o755)
     bootstrap.chmod(0o644)
     cpython_installation = inspect_cpython_installation(
         interpreter_path=interpreter,
+        runtime_home_path=runtime_home,
         bootstrap_path=bootstrap,
         trusted_owner_uids=(os.geteuid(),),
     )

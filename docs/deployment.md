@@ -364,7 +364,7 @@ perflens init --docker --runtime-locks  # when Docker optimization also applies
 Initialization writes and preserves a project-owned `perflens-setup/runtime-locks.toml`; it does
 not instrument, attach, import, collect, or enable a service. JDK, Go, async-profiler, DTrace, and
 SystemTap remain optional external dependencies and are not downloaded by the two core DEBs. The
-v0.4.0 main native DEB is intended to carry the fixed capability-free pthread probe and Runtime
+The v0.4.0 main native DEB carries the fixed capability-free pthread probe and Runtime
 Lock supervisor, but package installation still does not activate either. Native/CPython/JFR
 active collection is launch-time only; no arbitrary running-process or existing-container
 injection is deployed. A content-bound `bounded_runtime_lock_session` or an explicitly scoped

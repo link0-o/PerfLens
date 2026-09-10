@@ -17,6 +17,11 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol, cast
 
 from perflens.domain.errors import ErrorCode, PerfLensError
+from perflens.runtime_locks.linux_memfd import (
+    F_ADD_SEALS,
+    F_GET_SEALS,
+    IMMUTABLE_MEMFD_SEALS,
+)
 from perflens.runtime_locks.supervisor import (
     RuntimeSupervisorClient,
     RuntimeSupervisorJavaJfrPrintRequest,
@@ -59,7 +64,7 @@ _FORBIDDEN_MANIFEST_KEYS = frozenset(
         "premain-class",
     }
 )
-_REQUIRED_SEALS = fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
+_REQUIRED_SEALS = IMMUTABLE_MEMFD_SEALS
 
 JavaJfrProfile = Literal["balanced", "deep"]
 JavaJfrTerminationReason = Literal["exited", "duration_limit", "identity_unavailable"]
@@ -2305,8 +2310,8 @@ def _sealed_jar_snapshot(target: JavaExecutableJarIdentity) -> int:
             raise _java_error("Java JFR JAR snapshot digest is invalid")
         if _inspect_jar_manifest(snapshot_fd, target.size) != target.main_class:
             raise _java_error("Java JFR JAR snapshot manifest changed")
-        fcntl.fcntl(snapshot_fd, fcntl.F_ADD_SEALS, _REQUIRED_SEALS)
-        if fcntl.fcntl(snapshot_fd, fcntl.F_GET_SEALS) & _REQUIRED_SEALS != _REQUIRED_SEALS:
+        fcntl.fcntl(snapshot_fd, F_ADD_SEALS, _REQUIRED_SEALS)
+        if fcntl.fcntl(snapshot_fd, F_GET_SEALS) & _REQUIRED_SEALS != _REQUIRED_SEALS:
             raise _java_error("Java JFR JAR snapshot could not be sealed")
         os.lseek(snapshot_fd, 0, os.SEEK_SET)
         result = snapshot_fd

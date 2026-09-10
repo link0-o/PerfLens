@@ -49,6 +49,12 @@ Adapter boundaries:
   loopback pprof endpoint. PerfLens does not enable profiling rates or modify application source.
   Missing TID, owner, or lock identity stays missing.
 
+Treat those versions as the target matrix, not proof that every entry passed the current release
+gate. Follow the capability Artifact exactly: Go versions without a reviewed matching Golden are
+`partial`, and a release-readiness blocker must not be described as stable merely because its
+version is recognized. The current candidate evidence and blockers are recorded in
+`docs/v0.4.0-release-readiness.md`.
+
 Call the independent Runtime Lock verifier before any interpretation. A verified `partial` result
 can support only its explicit allowed conclusions. Runtime Lock A/B must bind target, Adapter,
 runtime/tool/payload, workload, semantics/threshold, resource environment, and correctness. A

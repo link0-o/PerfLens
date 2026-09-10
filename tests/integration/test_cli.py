@@ -294,7 +294,9 @@ def test_init_runtime_locks_generates_policy_without_instrumenting(tmp_path: Pat
     assert status.exit_code == 0, status.output
     assert "Runtime Lock 策略状态: enabled" in status.output
     assert "Runtime Lock Adapter generic_ndjson_import: available" in status.output
-    assert "Runtime Lock Adapter native_pthread: unavailable" in status.output
+    # Availability reflects the package/runtime installed on the host.  The
+    # init contract only requires truthful discovery without instrumentation.
+    assert "Runtime Lock Adapter native_pthread:" in status.output
 
 
 def test_init_activates_selected_clients_only_inside_the_project(tmp_path: Path) -> None:

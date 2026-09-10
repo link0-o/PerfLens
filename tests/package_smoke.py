@@ -34,10 +34,13 @@ def main() -> None:
     assert "--automatic-plan-ttl-seconds" in init_help
     assert "--allow-existing-pid-attach" in init_help
     assert "--docker" in init_help
+    assert "--runtime-locks" in init_help
     mcp_help = _run(perflens_mcp, "--help")
     assert "--allow-docker-targets" in mcp_help
     assert "--docker-project-config" in mcp_help
     assert "--docker-gate-path" in mcp_help
+    assert "--allow-runtime-locks" in mcp_help
+    assert "--runtime-lock-project-config" in mcp_help
     detach_help = _run(perflens, "detach", "--help")
     assert "--dry-run" in detach_help
     assert "--json" in detach_help
@@ -228,6 +231,7 @@ def main() -> None:
             "--client",
             "all",
             "--read-only",
+            "--runtime-locks",
             "--mcp-command",
             perflens_mcp,
             "--perf-path",
@@ -235,9 +239,15 @@ def main() -> None:
         )
         assert (initialized_project / ".agents/skills/perflens/SKILL.md").is_file()
         assert (initialized_project / ".claude/skills/perflens/SKILL.md").is_file()
+        assert (initialized_project / "perflens-setup/runtime-locks.toml").is_file()
         assert (initialized_project / ".codex/config.toml").is_file()
         claude_project = json.loads((initialized_project / ".mcp.json").read_text(encoding="utf-8"))
         assert claude_project["mcpServers"]["perflens"]["type"] == "stdio"
+        runtime_lock_config = (initialized_project / ".codex/config.toml").read_text(
+            encoding="utf-8"
+        )
+        assert '"--allow-runtime-locks"' in runtime_lock_config
+        assert '"--runtime-lock-project-config"' in runtime_lock_config
         _run(
             perflens,
             "init",

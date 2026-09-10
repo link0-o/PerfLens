@@ -9,6 +9,7 @@ import os
 import pwd
 import stat
 import tomllib
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,8 +31,21 @@ from perflens.distribution.codex import validate_mcp_executable
 from perflens.distribution.skill import recorded_project_skill_path
 from perflens.docker.workload import inspect_managed_project_root
 from perflens.domain.errors import ErrorCode, PerfLensError
-from perflens.runtime_locks.capability import inspect_runtime_lock_capability
-from perflens.runtime_locks.project_config import load_runtime_lock_project_policy
+from perflens.runtime_locks.capability import (
+    RuntimeLockCapabilityInspection,
+    inspect_runtime_lock_capability,
+)
+from perflens.runtime_locks.cpython_adapter import discover_cpython_adapter_bridge
+from perflens.runtime_locks.go_pprof_adapter import discover_go_pprof_adapter_bridge
+from perflens.runtime_locks.java_jfr_adapter import discover_java_jfr_adapter_bridge
+from perflens.runtime_locks.native_launcher import (
+    discover_native_pthread_probe_policy,
+    inspect_native_pthread_installation,
+)
+from perflens.runtime_locks.project_config import (
+    RuntimeLockProjectPolicy,
+    load_runtime_lock_project_policy,
+)
 
 _MAX_SETUP_BYTES = 1 << 20
 SetupStatus = Literal["missing", "incomplete", "ready"]
@@ -118,25 +132,33 @@ def inspect_runtime_status(
                 setup / "runtime-locks.toml",
                 allowed_roots=(project,),
             )
-            runtime_lock_policy_status = "enabled" if runtime_lock_policy.enabled else "disabled"
-            runtime_lock_capability = inspect_runtime_lock_capability(
-                runtime_lock_policy,
-                project_identity_sha256=inspect_managed_project_root(project).identity_sha256,
-            ).capability
-            runtime_lock_adapter_statuses = tuple(
-                RuntimeLockAdapterRuntimeStatus(
-                    adapter_id=item.adapter_id,
-                    availability=item.availability,
-                    limitations=item.limitations,
-                )
-                for item in runtime_lock_capability.adapters
-            )
-            runtime_lock_limitations = runtime_lock_capability.limitations
         except PerfLensError:
             runtime_lock_policy_status = "invalid"
             runtime_lock_limitations = (
-                "Runtime Lock project policy or capability could not be inspected safely.",
+                "Runtime Lock project policy could not be inspected safely.",
             )
+        else:
+            runtime_lock_policy_status = "enabled" if runtime_lock_policy.enabled else "disabled"
+            try:
+                runtime_lock_capability = _inspect_runtime_lock_capability_snapshot(
+                    runtime_lock_policy,
+                    project_identity_sha256=inspect_managed_project_root(project).identity_sha256,
+                ).capability
+            except PerfLensError:
+                runtime_lock_limitations = (
+                    "Runtime Lock Adapter capability could not be inspected safely; the "
+                    "project policy remains valid and no instrumentation was attempted.",
+                )
+            else:
+                runtime_lock_adapter_statuses = tuple(
+                    RuntimeLockAdapterRuntimeStatus(
+                        adapter_id=item.adapter_id,
+                        availability=item.availability,
+                        limitations=item.limitations,
+                    )
+                    for item in runtime_lock_capability.adapters
+                )
+                runtime_lock_limitations = runtime_lock_capability.limitations
     trace_modes_ready = health.artifact is not None and {
         "sched",
         "off_cpu",
@@ -259,6 +281,36 @@ def inspect_runtime_status(
         automatic_collection_status=automatic_status,
         issues=tuple(dict.fromkeys(issues)),
         next_steps=next_steps,
+    )
+
+
+def _inspect_runtime_lock_capability_snapshot(
+    policy: RuntimeLockProjectPolicy,
+    *,
+    project_identity_sha256: str,
+) -> RuntimeLockCapabilityInspection:
+    """Run the same read-only Adapter discovery used by an executable MCP server."""
+
+    native_capability = None
+    java_bridge = None
+    cpython_bridge = None
+    go_bridge = None
+    with suppress(PerfLensError):
+        native_discovery = discover_native_pthread_probe_policy()
+        native_capability = inspect_native_pthread_installation(native_discovery.policy)
+    with suppress(PerfLensError):
+        java_bridge = discover_java_jfr_adapter_bridge(policy)
+    with suppress(PerfLensError):
+        cpython_bridge = discover_cpython_adapter_bridge(policy)
+    with suppress(PerfLensError):
+        go_bridge = discover_go_pprof_adapter_bridge(policy)
+    return inspect_runtime_lock_capability(
+        policy,
+        project_identity_sha256=project_identity_sha256,
+        native_pthread_capability=native_capability,
+        java_jfr_bridge=java_bridge,
+        cpython_bridge=cpython_bridge,
+        go_pprof_bridge=go_bridge,
     )
 
 

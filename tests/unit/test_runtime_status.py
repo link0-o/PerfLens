@@ -9,9 +9,12 @@ import pytest
 
 from perflens.collection.capabilities import inspect_collection_capabilities
 from perflens.contracts.artifacts import CollectorHealthArtifact, RuntimeStatusArtifact
+from perflens.distribution import status as status_module
 from perflens.distribution.onboarding import run_project_setup
 from perflens.distribution.status import inspect_runtime_status
 from perflens.domain.errors import ErrorCode, PerfLensError
+from perflens.runtime_locks.capability import RuntimeLockCapabilityInspection
+from perflens.runtime_locks.project_config import RuntimeLockProjectPolicy
 
 
 def _prepare_automatic_setup(tmp_path: Path) -> None:
@@ -49,12 +52,28 @@ def test_runtime_status_reports_missing_setup_without_mutation(tmp_path: Path) -
     assert not (tmp_path / "perflens-setup").exists()
 
 
-def test_runtime_status_reports_runtime_lock_project_activation(tmp_path: Path) -> None:
+def test_runtime_status_reports_runtime_lock_project_activation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     run_project_setup(
         tmp_path,
         enable_runtime_locks=True,
         mcp_command=Path(sys.executable),
         perf_path=Path("/bin/true"),
+    )
+
+    def static_capability(
+        policy: RuntimeLockProjectPolicy, *, project_identity_sha256: str
+    ) -> RuntimeLockCapabilityInspection:
+        return status_module.inspect_runtime_lock_capability(
+            policy,
+            project_identity_sha256=project_identity_sha256,
+        )
+
+    monkeypatch.setattr(
+        status_module,
+        "_inspect_runtime_lock_capability_snapshot",
+        static_capability,
     )
 
     artifact = inspect_runtime_status(
@@ -73,6 +92,12 @@ def test_runtime_status_reports_runtime_lock_project_activation(tmp_path: Path) 
     ].limitations[0]
     assert adapter_status["native_pthread"].availability == "unavailable"
     assert adapter_status["native_pthread"].limitations
+    for adapter_id in ("cpython_threading", "go_pprof"):
+        assert adapter_status[adapter_id].availability == "unavailable"
+        assert "not implemented" not in " ".join(adapter_status[adapter_id].limitations)
+        assert "safely discovered execution backend" in " ".join(
+            adapter_status[adapter_id].limitations
+        )
 
     (tmp_path / "perflens-setup/runtime-locks.toml").unlink()
     incomplete = inspect_runtime_status(
@@ -84,6 +109,82 @@ def test_runtime_status_reports_runtime_lock_project_activation(tmp_path: Path) 
     assert incomplete.runtime_lock_policy_status == "invalid"
     assert incomplete.runtime_lock_limitations
     assert "runtime_lock_project_policy_invalid" in incomplete.issues
+
+
+def test_runtime_status_keeps_valid_policy_when_adapter_discovery_is_unsafe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_project_setup(
+        tmp_path,
+        enable_runtime_locks=True,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+
+    def reject_capability(
+        _policy: RuntimeLockProjectPolicy, *, project_identity_sha256: str
+    ) -> RuntimeLockCapabilityInspection:
+        assert project_identity_sha256
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "runtime_lock_capability",
+            "unsafe Adapter payload",
+        )
+
+    monkeypatch.setattr(
+        status_module,
+        "_inspect_runtime_lock_capability_snapshot",
+        reject_capability,
+    )
+
+    artifact = inspect_runtime_status(
+        tmp_path,
+        collector_socket=tmp_path / "missing.sock",
+        perf_path=Path("/bin/true"),
+    )
+
+    assert artifact.setup_status == "ready"
+    assert artifact.runtime_lock_policy_status == "enabled"
+    assert artifact.runtime_lock_adapter_statuses == ()
+    assert artifact.runtime_lock_limitations == (
+        "Runtime Lock Adapter capability could not be inspected safely; the project policy "
+        "remains valid and no instrumentation was attempted.",
+    )
+
+
+def test_runtime_status_isolates_one_unsafe_adapter_discovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_project_setup(
+        tmp_path,
+        enable_runtime_locks=True,
+        mcp_command=Path(sys.executable),
+        perf_path=Path("/bin/true"),
+    )
+
+    def reject_cpython(_policy: RuntimeLockProjectPolicy) -> object:
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            "cpython_threading_capability",
+            "unsafe CPython payload",
+        )
+
+    monkeypatch.setattr(
+        status_module,
+        "discover_cpython_adapter_bridge",
+        reject_cpython,
+    )
+
+    artifact = inspect_runtime_status(
+        tmp_path,
+        collector_socket=tmp_path / "missing.sock",
+        perf_path=Path("/bin/true"),
+    )
+
+    adapters = {item.adapter_id: item for item in artifact.runtime_lock_adapter_statuses}
+    assert artifact.runtime_lock_policy_status == "enabled"
+    assert adapters["generic_ndjson_import"].availability == "available"
+    assert adapters["cpython_threading"].availability == "unavailable"
 
 
 def test_runtime_status_artifact_accepts_pre_health_fields_payload(tmp_path: Path) -> None:

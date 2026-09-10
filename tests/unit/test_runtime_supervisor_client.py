@@ -65,7 +65,7 @@ def test_python_models_accept_every_shared_valid_request_fixture() -> None:
         payload["expected_parent_pid"] = os.getpid()
         request = RuntimeSupervisorRequest.model_validate(payload)
         assert request.expected_parent_pid == os.getpid()
-        assert len(runtime_supervisor_request_descriptors(request)) in {4, 5}
+        assert len(runtime_supervisor_request_descriptors(request)) in {4, 5, 6}
 
 
 def test_python_models_reject_shared_invalid_request_and_receipt() -> None:

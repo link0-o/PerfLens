@@ -4,11 +4,65 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-04
+
+### Added
+
+- Runtime Lock Evidence schema 1.1, execution-context modeling, strict 1.0 compatibility, bounded
+  streaming import, deterministic aggregation, independent replay verification, and content-bound
+  Session, Run, Comparison, diagnosis, paging, and MCP artifacts.
+- Explicit `perflens init --runtime-locks` onboarding plus bounded Preview/authorization, lease,
+  expiry, revocation, concurrency, event-count, active-time, and evidence-byte budgets. Project
+  initialization enables discovery only and does not instrument, attach, import, or run a target.
+- Four ordinary-user Runtime Lock Adapter families: a hardened Native pthread launch probe,
+  launch-time Java JFR for JDK 17/21/25, a CPython 3.12/3.13 public-threading bootstrap, and Go
+  1.24-1.27 mutex/block pprof file or explicitly authorized same-UID loopback conversion.
+- Docker optimization integration that can include one reviewed Runtime Lock scope in its existing
+  confirmation, then bind each capture to the exact Build, Container Run, Measurement, runtime,
+  payload, tool, and single-use workload lease.
+
+### Changed
+
+- Runtime Lock evidence keeps exact, thresholded, sampled, and cumulative meanings separate;
+  Artifact-local opaque lock IDs replace raw addresses, and missing owner/hold provenance remains
+  absent rather than inferred.
+- Docker Runtime Lock A/B requires matching runtime, Adapter, semantics, tools, immutable build
+  environment, and resource evidence plus a real mutable Treatment. Runtime Lock evidence alone
+  can report only a candidate or `no_material_change`; the outer Docker correctness, Benchmark,
+  perf, resource-transfer, and replay gates still decide `verified_improvement`.
+- The main native DEB now carries the fixed capability-free pthread probe, CPython bootstrap, and
+  unprivileged Runtime Lock supervisor. Package installation leaves them inactive and continues to
+  avoid installing runtimes or expanding Collector/Helper privilege.
+
+### Security
+
+- Active Native, CPython, and Java collection is launch-time only; v0.4.0 does not add arbitrary
+  live-process or existing-container injection, live JVM attach, or a privileged eBPF/uprobe path.
+- Capability, payload, converter, runtime, target, UID, namespace/cgroup, source, Build, Run,
+  Measurement, session, replay, and persistence identities are independently checked. Replacement,
+  cross-target splicing, malformed input, unsafe paths, budget exhaustion, and failed
+  post-processing fail closed without exposing raw paths, addresses, environments, or credentials.
+- A Docker parent session reserves combined perf and Runtime Lock evidence before container
+  creation. Runtime Lock charges only the same completed workload lease, and any unreliable
+  capture/conversion/replay/persistence state blocks misleading continuation.
+
+### Fixed
+
+- Recursive exact-lock pairing now uses LIFO order, unknown lock cardinality and omitted
+  count/weight remain conservative, and unpaired evidence cannot fabricate owner or hold time.
+- Java replay receipts bind both raw JFR and converted JSON identities; Go receipts bind raw pprof,
+  converter output, and normalized Evidence. Runtime versions come from target-produced metadata
+  rather than host guesses.
+- Docker comparisons reject swapped Build/Run/Measurement/session artifacts, unchanged Treatments,
+  mismatched immutable manifests, and incompatible baseline/candidate runtimes.
+
 ### Documentation
 
 - Added a bilingual v0.3.2 Docker optimization regression playbook that preserves the formal
   perf/Gate ordering, PMU fallback boundary, failed-lease accounting, unevaluated-candidate
   disposition, evidence-quality rules, focused test map, and real-host acceptance assertions.
+- Added bilingual v0.4.0 Runtime Lock installation, architecture, compatibility, limitation,
+  authorization, Adapter-matrix, Docker-integration, and Skill guidance.
 
 ## [0.3.2] - 2026-08-26
 

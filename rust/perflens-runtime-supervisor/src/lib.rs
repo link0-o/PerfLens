@@ -119,6 +119,7 @@ pub enum AdapterRequest {
         output: WritableFileIdentity,
     },
     CpythonThreading {
+        runtime_home: DirectoryIdentity,
         bootstrap: FileIdentity,
         script: FileIdentity,
         script_label: String,
@@ -465,6 +466,7 @@ fn validate_request(
             }
         }
         AdapterRequest::CpythonThreading {
+            runtime_home,
             bootstrap,
             script,
             script_label,
@@ -473,10 +475,16 @@ fn validate_request(
             threshold_ns,
             max_events,
         } => {
+            validate_directory(runtime_home)?;
             validate_regular_file(bootstrap, false, MAX_CPYTHON_BOOTSTRAP_BYTES)?;
             validate_regular_file(script, false, MAX_CPYTHON_SCRIPT_BYTES)?;
             validate_writable_file(output)?;
-            for descriptor in [bootstrap.descriptor, script.descriptor, output.descriptor] {
+            for descriptor in [
+                runtime_home.descriptor,
+                bootstrap.descriptor,
+                script.descriptor,
+                output.descriptor,
+            ] {
                 insert_unique(&mut descriptors, descriptor)?;
             }
             validate_cpython_controls(
@@ -486,11 +494,20 @@ fn validate_request(
                 request.timeout_milliseconds,
             )?;
             validate_cpython_script_label(script_label)?;
-            retained.extend([bootstrap.descriptor, script.descriptor]);
+            retained.extend([
+                runtime_home.descriptor,
+                bootstrap.descriptor,
+                script.descriptor,
+            ]);
+            environment.push(c_string(&format!(
+                "PYTHONHOME=/proc/self/fd/{}",
+                runtime_home.descriptor
+            ))?);
             executable_arguments.extend(strings_to_c(&[
                 "python".to_owned(),
-                "-I".to_owned(),
+                "-P".to_owned(),
                 "-B".to_owned(),
+                "-s".to_owned(),
                 format!("/proc/self/fd/{}", bootstrap.descriptor),
                 script.descriptor.to_string(),
                 script_label.clone(),

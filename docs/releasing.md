@@ -24,12 +24,12 @@ archive. A release contains:
 
 ## Validate locally
 
-The commands below use v0.3.2 as a concrete example. For any later release, set
+The commands below use v0.4.0 as a concrete example. For any later release, set
 `perflens_release_version` to the exact version already written in both source
 files before running them.
 
 ```bash
-perflens_release_version=0.3.2
+perflens_release_version=0.4.0
 perflens_release_tag="v${perflens_release_version}"
 uv sync --all-groups --frozen
 uv run ruff check .
@@ -43,8 +43,18 @@ cargo deny check
 cargo build --release --locked \
   --package perflens-privileged-helper \
   --package perflens-trace-helper
-RUSTFLAGS='-C target-feature=+crt-static' \
-  cargo build --release --locked --package perflens-container-gate
+cargo rustc --release --locked \
+  --package perflens-container-gate \
+  --bin perflens-container-gate -- \
+  -C target-feature=+crt-static
+cargo rustc --release --locked \
+  --package perflens-runtime-supervisor \
+  --bin perflens-runtime-supervisor -- \
+  -C target-feature=+crt-static
+cmake -S native/pthread_probe -B build/native-pthread \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=/usr/bin/gcc
+cmake --build build/native-pthread --parallel
 perflens_source_epoch="$(git log -1 --format=%ct)"
 perflens_repro_dir="$(mktemp -d)"
 SOURCE_DATE_EPOCH="$perflens_source_epoch" uv build --no-sources --out-dir dist
@@ -70,6 +80,19 @@ uv export --locked --no-dev --no-emit-project \
   --preview-features sbom-export \
   --format cyclonedx1.5 \
   --output-file dist/sbom.cdx.json
+uv run python scripts/normalize_sbom.py \
+  --input dist/sbom.cdx.json \
+  --output dist/sbom.cdx.json \
+  --source-date-epoch "$perflens_source_epoch"
+uv export --locked --no-dev --no-emit-project \
+  --preview-features sbom-export \
+  --format cyclonedx1.5 \
+  --output-file "$perflens_repro_dir/sbom.cdx.json"
+uv run python scripts/normalize_sbom.py \
+  --input "$perflens_repro_dir/sbom.cdx.json" \
+  --output "$perflens_repro_dir/sbom.cdx.json" \
+  --source-date-epoch "$perflens_source_epoch"
+cmp dist/sbom.cdx.json "$perflens_repro_dir/sbom.cdx.json"
 uv run python scripts/prepare_release.py --tag "$perflens_release_tag"
 uv run python scripts/render_release_notes.py \
   --tag "$perflens_release_tag" \
@@ -85,6 +108,8 @@ stale or unexpected files, requires a CycloneDX JSON SBOM, and checksums only
 the intended wheel, sdist, two DEBs, Skill zip, and SBOM. Official DEBs are
 built on Debian 13 `amd64` with system Python 3.13; permissions and timestamps
 are normalized before extracted-package command smoke tests.
+The normalization step replaces only volatile SBOM time/UUID metadata with
+`SOURCE_DATE_EPOCH` and a content-derived UUID; both independent exports must then be byte-identical.
 `render_release_notes.py` renders beginner-oriented installation instructions
 from the checked-in Chinese template. Use that file as the GitHub Release body
 instead of showing generated commit notes alone.
@@ -95,7 +120,7 @@ Create and push an annotated version tag only after the release commit is on
 `main`:
 
 ```bash
-perflens_release_tag=v0.3.2
+perflens_release_tag=v0.4.0
 git tag -a "$perflens_release_tag" -m "PerfLens ${perflens_release_tag}"
 git push origin "$perflens_release_tag"
 ```
@@ -130,7 +155,7 @@ publisher runs only after attestation succeeds. After publication, spot-check
 at least one asset:
 
 ```bash
-perflens_release_version=0.3.2
+perflens_release_version=0.4.0
 gh attestation verify "./dist/perflens-${perflens_release_version}-py3-none-any.whl" \
   --repo link0-o/PerfLens \
   --signer-workflow link0-o/PerfLens/.github/workflows/release.yml \
@@ -144,7 +169,7 @@ before enabling automated publication. Publish only the Python distributions,
 not the Skill archive or SBOM:
 
 ```bash
-perflens_release_version=0.3.2
+perflens_release_version=0.4.0
 uv publish \
   "dist/perflens-${perflens_release_version}-py3-none-any.whl" \
   "dist/perflens-${perflens_release_version}.tar.gz"

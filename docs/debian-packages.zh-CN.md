@@ -17,7 +17,7 @@ PerfLens 为 Debian 13 `amd64` 提供两个职责分离的原生安装包：
 只分析已有 Profile、不需要自动采集时，只安装主包：
 
 ```bash
-sudo apt install ./perflens_0.3.2-1_amd64.deb
+sudo apt install ./perflens_0.4.0-1_amd64.deb
 cd /绝对路径/你的项目
 perflens init
 ```
@@ -26,8 +26,8 @@ perflens init
 
 ```bash
 sudo apt install \
-  ./perflens_0.3.2-1_amd64.deb \
-  ./perflens-collector_0.3.2-1_amd64.deb
+  ./perflens_0.4.0-1_amd64.deb \
+  ./perflens-collector_0.4.0-1_amd64.deb
 
 perflens setup \
   --project /绝对路径/你的项目 \
@@ -64,9 +64,9 @@ perflens init --prepare-collector \
 不会让 Python Broker、MCP、Skill 或 Agent 变成 root，也不会自动修改 sysctl；只有
 固定 Rust Helper unit 获得收窄后的 capability bounding set。
 
-上一条 `0.2.0` 修复线保持上游版本不变，仅把 Debian 修订号从 `1` 增加到 `2`，因此已经安装
-`0.3.2` 发布包把 Debian 修订号重置为 `1`；APT 会先比较上游版本 `0.3.2`，因此
-它仍高于所有 `0.3.1-*` 安装包，而所有 PerfLens 命令显示 `0.3.2`。文件名只是示例，
+上一条 `0.2.0` 修复线保持上游版本不变，仅把 Debian 修订号从 `1` 增加到 `2`。`0.4.0`
+发布包把 Debian 修订号重置为 `1`；APT 会先比较上游版本 `0.4.0`，因此它仍高于所有
+`0.3.2-*` 安装包，而所有 PerfLens 命令显示 `0.4.0`。文件名只是示例，
 应以实际下载文件为准。安装包不会自动启动服务、写入
 `/etc/perflens`、修改 sysctl/capability 或授予用户权限。检查引导生成的双语
 `collector.toml` 后，由管理员明确执行：
@@ -75,11 +75,11 @@ Docker 始终是可选外部运行时。两个包都不依赖或启动 Docker，
 不写 daemon 配置，也不启用项目 Docker 策略。主包中的 Container Gate 默认不执行；只有
 普通用户明确授权托管工作流时才使用。需要 Docker 的项目单独运行 `perflens init --docker`。
 
-仓库中的 v0.4.0 预发布主包还会携带固定、无 capability 的 pthread probe 与 Runtime Lock
+v0.4.0 主包还会携带固定、无 capability 的 pthread probe 与 Runtime Lock
 supervisor；安装后它们仍保持不活动。项目必须运行 `perflens init --runtime-locks`（需要时与
 `--docker` 组合）、审查 `runtime-locks.toml`、重新加载 Agent 客户端，并确认内容绑定的会话，
 才会执行任何插桩或采集。JDK、Go 等可选工具链只检测、不下载。已发布的 `0.3.2-1` 安装包
-不包含该预发布能力，详见[《用户态锁工作流》](runtime-locks.zh-CN.md)。
+不包含该能力，详见[《用户态锁工作流》](runtime-locks.zh-CN.md)。
 
 ```bash
 sudo perflens-admin deploy \

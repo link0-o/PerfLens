@@ -21,7 +21,7 @@
 | paranoid=3 Helper | 现有 Rust Helper 永远只支持 `record/stat`；v0.3.0 用另一套服务/协议/Socket/spool 的 Trace Helper 处理高级模式 |
 | 目标运行时 | Linux 宿主 PID，或本地 Linux Docker Engine + cgroup v2 中的一个明确进程；不支持远程 Engine、Docker Desktop VM、Compose 或整容器聚合 |
 | 原生 DEB | Debian 13 `amd64`、系统 Python 3.13；主包和完全同版本 Collector 包分离 |
-| Runtime Lock（仓库 v0.4.0 预发布） | Native pthread：Debian 12/13 amd64 + glibc 2.36/2.41；Java JFR：JDK 17/21/25；CPython：3.12/3.13（含 free-threaded 检测）；Go pprof：1.24-1.27 |
+| Runtime Lock（仓库 v0.4.0 预发布） | 已实现目标矩阵：Debian 12/13 amd64 + glibc 2.36/2.41 的 Native pthread；JDK 17/21/25 的 Java JFR；CPython 3.12/3.13（含 free-threaded 检测）；Go pprof 1.24-1.27。本地发布证据目前覆盖 JDK 21/25、非 free-threaded CPython 3.12/3.13 与 Go 1.24；JDK 17、free-threaded CPython 3.13、Go 1.25-1.27 仍是发布阻断，未验证的 Go 版本会报告为 `partial`。 |
 | Runtime Lock 目标 | 已审阅宿主启动、托管/优化 Docker 启动、受控导入，或显式同 UID loopback Go pprof；不支持任意 live 注入 |
 | 产物 Schema | 现有公共产物 1.0；Docker 项目策略严格读取 1.0/1.1；Runtime Lock Evidence 严格读取 1.0/1.1，新 Adapter 写入 1.1 |
 

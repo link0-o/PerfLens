@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import resource
 import shutil
 import socket
 import statistics
@@ -310,11 +309,9 @@ def test_event_budget_reports_truncation_without_overflow(
 
 
 def test_invalid_probe_configuration_fails_open_without_evidence(
-    tmp_path: Path,
     native_assets: tuple[Path, Path],
 ) -> None:
     probe, workload = native_assets
-    evidence = tmp_path / "invalid.ndjson"
     environment = dict(os.environ)
     environment.update(
         {
@@ -331,7 +328,34 @@ def test_invalid_probe_configuration_fails_open_without_evidence(
         timeout=8,
     )
     assert result.returncode == 0
-    assert not evidence.exists()
+
+
+def test_probe_without_evidence_fd_passes_through_supported_calls_and_fork(
+    native_assets: tuple[Path, Path],
+) -> None:
+    probe, workload = native_assets
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith("PERFLENS_RUNTIME_LOCK_")
+    }
+    environment["LD_PRELOAD"] = str(probe)
+
+    # The fixed workload exercises contended and recursive mutexes, read/write
+    # locks, a timed condition wait, and a post-fork child.  With no evidence
+    # descriptor the constructor must select the immutable pass-through table,
+    # preserve every pthread result, and emit no diagnostics or evidence.
+    result = subprocess.run(  # noqa: S603
+        [str(workload)],
+        check=False,
+        env=environment,
+        capture_output=True,
+        timeout=8,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == b""
+    assert result.stderr == b""
 
 
 def test_probe_accepts_private_pipe_but_rejects_socket_output_descriptor(
@@ -488,21 +512,35 @@ def test_address_sanitizers_accept_probe_lifecycle(
     assert records[-1]["record_type"] == "probe_footer"
 
 
+def _wait4_cpu_seconds(
+    command: list[str],
+    environment: dict[str, str],
+    *,
+    inherited_fd: int | None = None,
+) -> float:
+    file_actions: list[tuple[int, int, int]] = []
+    if inherited_fd is not None:
+        # POSIX_SPAWN_DUP2 clears FD_CLOEXEC on the duplicated descriptor while
+        # retaining the exact numeric descriptor bound into the probe policy.
+        file_actions.append((os.POSIX_SPAWN_DUP2, inherited_fd, inherited_fd))
+    pid = os.posix_spawn(
+        command[0],
+        command,
+        environment,
+        file_actions=file_actions,
+    )
+    waited_pid, status, usage = os.wait4(pid, 0)
+    assert waited_pid == pid
+    assert os.waitstatus_to_exitcode(status) == 0
+    return usage.ru_utime + usage.ru_stime
+
+
 def _timings(command: list[str], environment: dict[str, str], count: int = 5) -> Iterator[float]:
     for _ in range(count):
-        started = resource.getrusage(resource.RUSAGE_CHILDREN)
-        subprocess.run(  # noqa: S603
-            command,
-            check=True,
-            env=environment,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=8,
-        )
-        finished = resource.getrusage(resource.RUSAGE_CHILDREN)
-        yield (finished.ru_utime + finished.ru_stime) - (started.ru_utime + started.ru_stime)
+        yield _wait4_cpu_seconds(command, environment)
 
 
+@pytest.mark.timeout(30)
 @pytest.mark.performance
 def test_probe_disabled_and_thresholded_overhead_are_bounded(
     tmp_path: Path,
@@ -527,11 +565,16 @@ def test_probe_disabled_and_thresholded_overhead_are_bounded(
         }
         # Interleave and rotate the three modes so CPU frequency and machine
         # load drift cannot systematically favor whichever mode runs first.
-        # Three balanced samples keep this real-process performance gate inside
-        # the suite's fixed ten-second limit without weakening either bound.
+        # Repeat a balanced rotation three times so transient CPU-frequency
+        # changes and isolated child-process jitter cannot dominate a 1% gate.
+        # Every mode occupies every position equally; the published limits are
+        # unchanged and are applied to the median of the three balanced-block
+        # deltas, so measurements from different load epochs are not mixed.
         baseline_samples: list[float] = []
         disabled_samples: list[float] = []
         thresholded_samples: list[float] = []
+        disabled_block_deltas: list[float] = []
+        thresholded_block_deltas: list[float] = []
         measurements = {
             "baseline": lambda: next(_timings(command, base_environment, count=1)),
             "disabled": lambda: next(_timings(command, disabled_environment, count=1)),
@@ -544,20 +587,35 @@ def test_probe_disabled_and_thresholded_overhead_are_bounded(
             "disabled": disabled_samples,
             "thresholded": thresholded_samples,
         }
-        for order in (
+        orders = (
             ("baseline", "disabled", "thresholded"),
             ("disabled", "thresholded", "baseline"),
             ("thresholded", "baseline", "disabled"),
-        ):
-            for mode in order:
-                samples[mode].append(measurements[mode]())
+        )
+        for _ in range(3):
+            for order in orders:
+                for mode in order:
+                    samples[mode].append(measurements[mode]())
+            block_baseline = statistics.median(baseline_samples[-3:])
+            disabled_block_deltas.append(
+                statistics.median(disabled_samples[-3:]) - block_baseline
+            )
+            thresholded_block_deltas.append(
+                statistics.median(thresholded_samples[-3:]) - block_baseline
+            )
         baseline = statistics.median(baseline_samples)
-        disabled = statistics.median(disabled_samples)
-        thresholded = statistics.median(thresholded_samples)
+        disabled_overhead = statistics.median(disabled_block_deltas)
+        thresholded_overhead = statistics.median(thresholded_block_deltas)
     finally:
         os.close(descriptor)
-    assert disabled - baseline <= max(0.01 * baseline, 0.002)
-    assert thresholded - baseline <= max(0.15 * baseline, 0.002)
+    assert disabled_overhead <= max(0.01 * baseline, 0.002), (
+        f"baseline={baseline_samples!r}, disabled={disabled_samples!r}, "
+        f"block_deltas={disabled_block_deltas!r}"
+    )
+    assert thresholded_overhead <= max(0.15 * baseline, 0.002), (
+        f"baseline={baseline_samples!r}, thresholded={thresholded_samples!r}, "
+        f"block_deltas={thresholded_block_deltas!r}"
+    )
 
 
 def _timings_with_fd(
@@ -567,15 +625,4 @@ def _timings_with_fd(
     count: int = 5,
 ) -> Iterator[float]:
     for _ in range(count):
-        started = resource.getrusage(resource.RUSAGE_CHILDREN)
-        subprocess.run(  # noqa: S603
-            command,
-            check=True,
-            env=environment,
-            pass_fds=(descriptor,),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=8,
-        )
-        finished = resource.getrusage(resource.RUSAGE_CHILDREN)
-        yield (finished.ru_utime + finished.ru_stime) - (started.ru_utime + started.ru_stime)
+        yield _wait4_cpu_seconds(command, environment, inherited_fd=descriptor)

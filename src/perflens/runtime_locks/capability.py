@@ -297,7 +297,10 @@ def _adapter_capability(
     elif not enabled:
         limitations = ("This Runtime Lock Adapter is disabled by project policy.",)
     elif not implemented:
-        limitations = ("This Runtime Lock Adapter is not implemented in the current milestone.",)
+        limitations = (
+            "No safely discovered execution backend was supplied for this Runtime Lock Adapter "
+            "capability snapshot; use the MCP capability inspection before active collection.",
+        )
     else:
         limitations = ("Controlled import is disabled for this Runtime Lock Adapter.",)
     runtime, runtime_name = _ADAPTER_RUNTIME[adapter_id]
@@ -342,7 +345,7 @@ def _adapter_capability(
         next_steps=(
             "Authorize a controlled-import Session and supply one versioned NDJSON source."
             if availability == "available"
-            else "Complete this Adapter milestone before active collection.",
+            else "Run Adapter-specific safe capability discovery before active collection.",
         ),
         content_sha256="0" * 64,
     )

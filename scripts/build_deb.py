@@ -284,8 +284,8 @@ def _build_main_tree(
         description=(
             "Evidence-driven Linux performance analysis toolkit\n"
             " PerfLens provides an unprivileged CLI, MCP server, bundled Skill,\n"
-            " deterministic profile analysis, a bounded Docker workload gate,\n"
-            " and guided project setup."
+            " deterministic profile and Runtime Lock analysis, bounded Docker and\n"
+            " runtime-workload gates, and guided project setup."
         ),
     )
     _install_control(root, control)

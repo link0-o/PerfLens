@@ -20,8 +20,9 @@
 [《Docker 进程采集与分析指南》](docs/docker-container-roadmap.zh-CN.md)。
 `v0.3.2` 的一次授权构建与自动优化合同见
 [《Docker 自动优化指南》](docs/docker-optimization-roadmap.zh-CN.md)。
-仓库中的 v0.4.0 预发布 Runtime Lock 工作流见
-[《用户态锁工作流》](docs/runtime-locks.zh-CN.md)；它不属于已发布的 v0.3.2 安装包。
+仓库中的 v0.4.0 发布候选 Runtime Lock 工作流见
+[《用户态锁工作流》](docs/runtime-locks.zh-CN.md)；它不属于已发布的 v0.3.2 安装包，且尚未
+创建 Tag 或发布。
 perf 原始证据如何转换、校验并带着质量边界交给 Agent，见
 [《Perf 原始证据到 Agent 数据的可信链路》](docs/evidence-pipeline.zh-CN.md)。
 
@@ -51,10 +52,11 @@ PerfLens 不包含 LLM API、Web UI、源码补丁工具、通用 Benchmark 执�
 在明确授权的优化会话中，外部 Agent 只能编辑已审阅的 mutable 路径，固定 workload 合同负责
 产出正确性和 Benchmark 证据。
 
-当前仓库还包含 v0.4.0 预发布 Runtime Lock 实现：严格的 Evidence Schema 1.1 与重放验证、
+当前仓库还包含 v0.4.0 发布候选 Runtime Lock 实现：严格的 Evidence Schema 1.1 与重放验证、
 有界会话、Native pthread、Java JFR、CPython threading、Go pprof Adapter，以及 Docker
-optimization 集成。在 v0.4.0 发布门和 `0.4.0-1` 安装包完成前，它仍属于源码预发布能力；
-最新已发布稳定版本仍是 v0.3.2。
+optimization 集成。最终本地门禁、可复现 `0.4.0-1` 候选包、真实主机/运行时矩阵验收以及
+远端 CI 与 Tag 门禁仍须通过；最新已发布稳定版本仍是 v0.3.2。当前证据见
+[《v0.4.0 发布候选就绪记录》](docs/v0.4.0-release-readiness.zh-CN.md)。
 
 ## 安装
 
@@ -63,9 +65,9 @@ optimization 集成。在 v0.4.0 发布门和 `0.4.0-1` 安装包完成前，它
 从 GitHub Releases 下载 wheel 后，推荐作为独立工具安装：
 
 ```bash
-pipx install ./perflens-0.3.2-py3-none-any.whl
+pipx install ./perflens-0.4.0-py3-none-any.whl
 # 或者
-uv tool install ./perflens-0.3.2-py3-none-any.whl
+uv tool install ./perflens-0.4.0-py3-none-any.whl
 ```
 
 不要手工提取 wheel。安装成功后进入要分析的项目，首次运行：
@@ -531,7 +533,8 @@ uv run pip-audit
 - [Perf 原始证据到 Agent 数据的可信链路](docs/evidence-pipeline.zh-CN.md)
 - [产品部署、验收、升级与卸载](docs/deployment.zh-CN.md)
 - [安全策略](SECURITY.zh-CN.md)
-- [发布就绪检查](docs/release-readiness.zh-CN.md)
+- [v0.3.2 历史发布就绪检查](docs/release-readiness.zh-CN.md)
+- [v0.4.0 发布候选就绪记录](docs/v0.4.0-release-readiness.zh-CN.md)
 - [发布流程](docs/releasing.zh-CN.md)
 - [已知问题与临时处理](docs/known-issues.zh-CN.md)
 - [故障排查](docs/troubleshooting.zh-CN.md)

@@ -2,9 +2,9 @@
 
 简体中文 | [English](runtime-locks.md)
 
-状态：**仓库中已实现为 v0.4.0 预发布能力，尚不属于已发布的 v0.3.2 安装包**。只有
-v0.4.0 版本、安装包、真实运行时矩阵和主机门禁全部通过后，才能宣称为稳定发布能力。
-当前已发布基线仍是 v0.3.2。
+状态：**已实现为 v0.4.0 发布候选，尚不属于已发布的 v0.3.2 安装包**。版本与可复现候选
+安装包已准备好，但真实运行时矩阵、主机、远端 CI 与 Tag 门禁仍须通过后才能发布。当前
+已发布基线仍是 v0.3.2。当前证据见[《v0.4.0 发布候选就绪记录》](v0.4.0-release-readiness.zh-CN.md)。
 
 Runtime Lock 是面向语言级等待与竞争的确定性证据链。它不会把每个 futex 当成语言锁，
 不会在来源没有提供时猜测 owner 或持锁区间，也不会把抽样或累计 Profile 写成精确事件。
@@ -58,6 +58,12 @@ allowlist 只是允许调用某类工具，不等于用户已同意解析后的�
 PerfLens 不向任意运行中进程或任意已有容器注入。Native、CPython 和 Java 主动采集只支持
 启动时插桩；v0.4.0 不包含 live JVM attach，也不把 eBPF/uprobe 作为稳定路径。
 
+宿主机 CPython 授权会绑定规范化解释器、包内 bootstrap，以及不可组写的 Runtime Home 目录
+身份。非特权 supervisor 只接收这些已经打开的描述符，并自行生成固定
+`PYTHONHOME=/proc/self/fd/<n>`；因此可支持安全安装的可重定位 CPython，同时不接受 Agent
+传入任意环境变量，也不退回按路径执行。Runtime Home 被替换或可写时主动采集显示
+`unavailable`，受控导入与离线分析仍可使用。
+
 ## 证据语义
 
 Runtime Lock Evidence Schema 1.1 可以表示 OS 线程、Java 平台/虚拟线程、Go goroutine 和
@@ -82,9 +88,9 @@ Runtime Lock Evidence Schema 1.1 可以表示 OS 线程、Java 平台/虚拟线�
 | Adapter | 仓库 v0.4.0 预发布边界 | 重要限制 |
 |---|---|---|
 | Native pthread | Debian 12/13 amd64、glibc 2.36/2.41、动态链接 pthread mutex/rwlock/condition；固定 `LD_PRELOAD` 启动插桩；默认 thresholded 1 us，并提供有界 exact | 静态/musl/setuid/file-cap、内联/自定义原子锁、自旋锁和不可见快路径为 partial 或 unsupported；不做 live uprobe/eBPF |
-| Java JFR | JDK 17/21/25；启动时 JFR；固定 `balanced` 10 ms 或 `deep` 1 ms；采集 `JavaMonitorEnter`、`JavaMonitorWait`、`ThreadPark`，虚拟线程按 metadata 发现 | 不做 live attach；使用同一 JDK 的 `jfr print --json` 有界转换；阈值以下未记录不能解释为“没有等待”；缺少 acquire/release 时禁止 owner/hold 结论 |
-| CPython threading | CPython 3.12/3.13 的公开 `threading.Lock`、`RLock`、`Condition`、`Semaphore`；普通用户启动 bootstrap；默认 thresholded 10 us，并提供有界 exact | 不伪装所有 `_thread` 或 C 扩展锁；GIL、内部锁和应用锁分开；3.13 free-threaded 禁止传统 GIL 结论 |
-| Go pprof | Go 1.24-1.27，固定 `go tool pprof -raw`；私有文件 mutex/block Profile；显式启用时支持同 UID 字面量 loopback 宿主 pprof | Docker 默认只用文件后端且不开网络；PerfLens 不开启 runtime Profile rate 或修改源码；mutex/block 保持为独立 cumulative Evidence，其中行表示抽样竞争观测，不虚构 TID、owner 或锁对象 |
+| Java JFR | 目标矩阵 JDK 17/21/25；启动时 JFR；固定 `balanced` 10 ms 或 `deep` 1 ms；采集 `JavaMonitorEnter`、`JavaMonitorWait`、`ThreadPark`，虚拟线程按 metadata 发现 | 不做 live attach；使用同一 JDK 的 `jfr print --json` 有界转换；阈值以下未记录不能解释为“没有等待”；缺少 acquire/release 时禁止 owner/hold 结论；本地发布证据当前覆盖 JDK 21/25，JDK 17 仍阻断发布 |
+| CPython threading | CPython 3.12/3.13 的公开 `threading.Lock`、`RLock`、`Condition`、`Semaphore`；普通用户启动 bootstrap；默认 thresholded 10 us，并提供有界 exact | 不伪装所有 `_thread` 或 C 扩展锁；GIL、内部锁和应用锁分开；3.13 free-threaded 禁止传统 GIL 结论，且在真实环境通过前仍阻断发布 |
+| Go pprof | 目标矩阵 Go 1.24-1.27，固定 `go tool pprof -raw`；私有文件 mutex/block Profile；显式启用时支持同 UID 字面量 loopback 宿主 pprof | Docker 默认只用文件后端且不开网络；PerfLens 不开启 runtime Profile rate 或修改源码；mutex/block 保持为独立 cumulative Evidence，不虚构 TID、owner 或锁对象；当前只有 Go 1.24 具备所需本地 Golden，1.25-1.27 保持 `partial` 并阻断发布 |
 | Generic NDJSON | 严格读取 Schema 1.0/1.1 的有界流式受控导入与重放 | 导入源必须声明精确/阈值/抽样/累计语义、时钟、可见面、丢失、owner/hold 来源；格式错误、跨目标、乱序或不守恒输入会被拒绝 |
 
 JDK、Go、async-profiler、DTrace/SystemTap 等属于可选外部依赖。PerfLens 只检测它们，不由

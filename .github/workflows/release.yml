@@ -90,12 +90,15 @@ jobs:
           --package perflens-privileged-helper
           --package perflens-trace-helper
       - name: Build static unprivileged runtime boundaries
-        env:
-          RUSTFLAGS: "-C target-feature=+crt-static"
-        run: >-
-          cargo build --release --locked
-          --package perflens-container-gate
-          --package perflens-runtime-supervisor
+        run: |
+          cargo rustc --release --locked \
+            --package perflens-container-gate \
+            --bin perflens-container-gate -- \
+            -C target-feature=+crt-static
+          cargo rustc --release --locked \
+            --package perflens-runtime-supervisor \
+            --bin perflens-runtime-supervisor -- \
+            -C target-feature=+crt-static
       - name: Build the hardened Native pthread probe
         run: |
           cmake -S native/pthread_probe -B build/native-pthread \
@@ -193,6 +196,22 @@ jobs:
           uv export --locked --no-dev --no-emit-project
           --preview-features sbom-export
           --format cyclonedx1.5 --output-file dist/sbom.cdx.json
+      - run: >-
+          uv run python scripts/normalize_sbom.py
+          --input dist/sbom.cdx.json
+          --output dist/sbom.cdx.json
+          --source-date-epoch "$(git log -1 --format=%ct)"
+      - run: >-
+          uv export --locked --no-dev --no-emit-project
+          --preview-features sbom-export
+          --format cyclonedx1.5
+          --output-file /tmp/perflens-python-reproducible/sbom.cdx.json
+      - run: >-
+          uv run python scripts/normalize_sbom.py
+          --input /tmp/perflens-python-reproducible/sbom.cdx.json
+          --output /tmp/perflens-python-reproducible/sbom.cdx.json
+          --source-date-epoch "$(git log -1 --format=%ct)"
+      - run: cmp dist/sbom.cdx.json /tmp/perflens-python-reproducible/sbom.cdx.json
       - run: uv run python scripts/prepare_release.py --tag "$GITHUB_REF_NAME"
       - name: Render beginner-friendly release notes
         run: >-

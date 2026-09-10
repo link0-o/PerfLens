@@ -18,7 +18,7 @@ MCP or Collector identity. Links in writable directories are rejected.
 For offline profile analysis, install only the main package:
 
 ```bash
-sudo apt install ./perflens_0.3.2-1_amd64.deb
+sudo apt install ./perflens_0.4.0-1_amd64.deb
 cd /absolute/path/to/project
 perflens init
 ```
@@ -27,8 +27,8 @@ For automatic collection, install both packages and generate a reviewed policy:
 
 ```bash
 sudo apt install \
-  ./perflens_0.3.2-1_amd64.deb \
-  ./perflens-collector_0.3.2-1_amd64.deb
+  ./perflens_0.4.0-1_amd64.deb \
+  ./perflens-collector_0.4.0-1_amd64.deb
 
 perflens setup \
   --project /absolute/path/to/project \
@@ -66,20 +66,20 @@ the complete versioned artifact.
 The previous repaired `0.2.0` line kept its upstream version and incremented only the
 Debian revision from `1` to `2`. APT could therefore upgrade an installed
 `0.2.0-1` package to `0.2.0-2`, while the PerfLens CLI still reported `0.2.0`.
-The `0.3.2` release package resets the Debian revision to `1`; APT compares the
-upstream `0.3.2` version before that revision, so it remains newer than every `0.3.1-*` package
-while every PerfLens command reports `0.3.2`.
+The `0.4.0` release package resets the Debian revision to `1`; APT compares the
+upstream `0.4.0` version before that revision, so it remains newer than every `0.3.2-*` package
+while every PerfLens command reports `0.4.0`.
 
 Docker remains an optional external runtime. Neither package depends on or activates Docker, joins
 a Docker group, writes daemon configuration, or enables project Docker policy. The Container Gate
 in the main package is inert until an ordinary-user managed workflow has explicit authorization.
 Use `perflens init --docker` only in projects that intentionally opt in.
-The repository v0.4.0 prerelease main package additionally carries the fixed, capability-free
+The v0.4.0 main package additionally carries the fixed, capability-free
 pthread probe and Runtime Lock supervisor. They remain inert after installation. A project must
 run `perflens init --runtime-locks` (or combine it with `--docker`), review
 `runtime-locks.toml`, reload its Agent client, and confirm a content-bound session before any
 instrumentation or collection. Optional JDK and Go toolchains are detected rather than downloaded.
-Published `0.3.2-1` packages do not include this prerelease capability; see the
+Published `0.3.2-1` packages do not include this capability; see the
 [Runtime Lock guide](runtime-locks.md).
 After the user's new login session, `perflens status --project <project>` checks
 runtime readiness and `perflens-admin spool-status` reports Collector storage

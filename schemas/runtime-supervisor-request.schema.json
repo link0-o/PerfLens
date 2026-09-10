@@ -49,6 +49,9 @@
         "output": {
           "$ref": "#/$defs/RuntimeSupervisorWritableFileIdentity"
         },
+        "runtime_home": {
+          "$ref": "#/$defs/RuntimeSupervisorDirectoryIdentity"
+        },
         "script": {
           "$ref": "#/$defs/RuntimeSupervisorFileIdentity"
         },
@@ -83,6 +86,7 @@
       },
       "required": [
         "adapter",
+        "runtime_home",
         "bootstrap",
         "script",
         "script_label",
