@@ -96,9 +96,13 @@ def convert_go_pprof_raw(
     sample_stacks: dict[tuple[int, ...], tuple[str, tuple[_Frame, ...]]] = {}
     for sample in samples:
         if sample.locations not in sample_stacks:
-            frames = tuple(
+            leaf_first_frames = tuple(
                 frame for location in sample.locations for frame in locations[location]
             )
+            # Profile.proto orders both Sample.location entries and inlined
+            # Location.line entries leaf-first. Publish the repository-wide
+            # root/caller -> leaf/callee order.
+            frames = tuple(reversed(leaf_first_frames))
             if len(frames) > limits.max_stack_depth:
                 raise _limit("Go pprof merged call path exceeds max_stack_depth")
             sample_stacks[sample.locations] = (
@@ -107,10 +111,7 @@ def convert_go_pprof_raw(
             )
     visible_kinds = tuple(
         sorted(
-            {
-                _classify_lock(profile_kind, sample_stacks[sample.locations][1])
-                for sample in samples
-            }
+            {_classify_lock(profile_kind, sample_stacks[sample.locations][1]) for sample in samples}
         )
     )
     with SpooledTemporaryFile(max_size=_SPOOL_MEMORY_BYTES, mode="w+b") as normalized:
@@ -143,9 +144,7 @@ def convert_go_pprof_raw(
                 "fast_path_visibility": "none",
                 "owner_is_source_observed": False,
                 "hold_time_is_source_observed": False,
-                "sampling_fraction": (
-                    mutex_profile_fraction if profile_kind == "mutex" else None
-                ),
+                "sampling_fraction": (mutex_profile_fraction if profile_kind == "mutex" else None),
                 "block_profile_rate_ns": (
                     block_profile_rate_ns if profile_kind == "block" else None
                 ),
@@ -178,9 +177,7 @@ def convert_go_pprof_raw(
                     "target_pid": target_pid,
                 },
                 "source_lock_id": None,
-                "lock_kind": _classify_lock(
-                    profile_kind, sample_stacks[sample.locations][1]
-                ),
+                "lock_kind": _classify_lock(profile_kind, sample_stacks[sample.locations][1]),
                 "source_stack_id": sample_stacks[sample.locations][0],
                 "observed_count": sample.observed_count,
                 # The raw text does not prove whether Go already scaled this
@@ -262,9 +259,7 @@ def _parse_raw_stream(
 ) -> tuple[tuple[_Sample, ...], dict[int, tuple[_Frame, ...]]]:
     maximum_lines = min(
         1_000_000,
-        limits.max_input_records
-        + limits.max_unique_stacks * (limits.max_stack_depth + 1)
-        + 64,
+        limits.max_input_records + limits.max_unique_stacks * (limits.max_stack_depth + 1) + 64,
     )
     samples: list[_Sample] = []
     locations: dict[int, tuple[_Frame, ...]] = {}
@@ -524,8 +519,14 @@ def _rebind_source(
                 "Go pprof is cumulative profile evidence; sample rows are not exact lock events.",
                 "Go pprof exposes no exact TID, lock object, owner relationship, or hold time.",
                 "Mutex and block profiles remain separate Evidence Artifacts and cannot be mixed.",
-                "Go mutex profile stacks generally describe the releasing side of contention, "
-                "not an exact waiter-to-owner relationship.",
+                *(
+                    (
+                        "Go mutex profile stacks generally describe the releasing side of "
+                        "contention, not an exact waiter-to-owner relationship.",
+                    )
+                    if profile_kind == "mutex"
+                    else ()
+                ),
                 "Profile sampling controls are policy declarations and are not independently "
                 "attested by the profile payload.",
                 *(binding.limitations),

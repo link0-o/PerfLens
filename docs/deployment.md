@@ -19,6 +19,7 @@ Project onboarding remains unprivileged. Plain `perflens init` activates Codex a
 Code; `--client opencode` opts in OpenCode, while `--client copilot` configures both local
 Copilot CLI (`.mcp.json`) and VS Code Copilot Agent (`.vscode/mcp.json`). These local project
 files never grant GitHub's cloud Coding Agent access to the host Collector or Docker socket.
+Explicit `--client all` selects all four integrations without changing the plain-init default.
 Repeated `--client` options select a per-project set. Users may explicitly persist future-init
 defaults with `perflens client-defaults`; absent `~/.config/perflens/config.toml`, the built-in
 selection remains Codex plus Claude Code. Project updates preserve their recorded selection unless

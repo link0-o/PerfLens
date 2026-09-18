@@ -9,6 +9,59 @@ Maintainers changing Collector, Helper, Gate, or Docker optimization state must 
 [v0.3.2 Docker optimization regression playbook](v0.3.2-regression-playbook.md). It turns the
 2026-08-26 fixes into permanent ordering, invariants, forbidden shortcuts, and test gates.
 
+## KI-2026-09-15: Benchmark capture rejected its own managed scratch layout (resolved)
+
+- Affected scope: a managed Docker workload with `benchmark_output`, including Docker
+  optimization sessions that also capture Runtime Lock Evidence.
+- Symptom: the workload exits successfully and the Broker can persist a complete Collection, but
+  finalization fails with `Managed Docker scratch root identity or permissions are unsafe` before
+  the Container Run, Benchmark, Measurement, and Docker Runtime Lock Run are published.
+- Root cause: the managed coordinator, Docker mount validator, and Runtime Lock capture contract
+  all create and require an exact `0733` scratch leaf beneath a private `0700` per-run directory.
+  The older Benchmark reader independently required the leaf itself to be `0700`, making every
+  real managed Benchmark path reject the directory created by PerfLens.
+- Fix: Benchmark capture now validates the same two-level layout: invoking-user ownership and
+  exact `0700` mode on the enclosing run directory, plus invoking-user ownership and exact `0733`
+  mode on the scratch leaf. The output owner is independently bound to the verified container
+  target's host UID, which also preserves mapped-UID support.
+- Safety boundary: no created directory became more permissive. Output remains a canonical,
+  non-symlink regular file with one link, bounded size, stable identity, the exact target owner,
+  and no group/other write bits. The workload lease remains charged and non-retryable on any
+  failure.
+- Regression coverage: the real `0700`/`0733` layout succeeds; a `0700` scratch leaf, a non-private
+  parent, or an output-owner mismatch fails closed; the MCP server passes the verified target host
+  UID into Benchmark capture.
+
+## KI-2026-09-15: setup and finalization consumed managed workload time (resolved)
+
+- Affected scope: managed Docker collection, including a Docker optimization Preview that also
+  binds Runtime Lock, when the fixed workload duration is close to
+  `workload_timeout_seconds`.
+- Symptoms: the Collector can publish a complete short `stat` Collection after releasing the
+  Gate, but the following container wait can fail with `External tool exceeded its execution
+  timeout`. After that deadline was corrected, a later real-host run reached Docker wait,
+  Runtime Lock capture, Benchmark capture, resource capture, and cleanup, then failed settlement
+  with `Docker run exceeded its reserved resource budget`.
+- Root cause: two clocks still used the whole tool call. The original wait deadline rounded
+  container setup plus collection up to an integer second before subtracting it from the workload
+  timeout. The internal managed-session settlement independently rounded setup, workload, and
+  post-exit finalization together, so a valid three-second lease could be charged more than three
+  seconds even after the workload had exited.
+- Fix: the workload deadline now starts immediately before the authenticated Gate release. The
+  Collector observation interval still consumes that workload window, but pre-release setup does
+  not. The Docker wait receives the precise fractional remainder, and a real expiry is reported as
+  a `docker_workload` / `container_wait` failure. Settlement records the workload-exit monotonic
+  timestamp and charges only the Gate-to-exit interval; setup and post-exit Benchmark/Runtime Lock
+  finalization are excluded, and integer rounding cannot exceed the already reserved lease.
+- Safety boundary: this does not enlarge the authorized duration or add an automatic retry. A
+  separate precise Docker-wait deadline still enforces the authorized duration. A failure after
+  lease issuance remains charged and ends the optimization workflow exactly as before.
+- Regression coverage: tests preserve a `1.959`-second remainder after `1.041` seconds of a
+  three-second Gate-relative window, pass that fractional value through the managed coordinator,
+  reject non-finite/out-of-range values, retain the typed Docker-wait timeout stage, exclude a
+  long post-exit finalization interval from accounting, and cap an in-flight failure at its
+  reserved integer lease.
+
 ## KI-2026-08-26: the automatic PMU probe could release a fast Docker workload (resolved)
 
 - Affected scope: managed Docker `stat`/`record` with `event_source=auto`, especially an A/B pair

@@ -115,8 +115,9 @@ evidence, start a workload, or access pprof. See the [Runtime Lock guide](docs/r
 
 This activates Codex and Claude Code by default. Select one of them with
 `--client codex` or `--client claude-code`; use `--client opencode` for OpenCode,
-or `--client copilot` for both Copilot CLI and VS Code Copilot Agent. Use `--read-only` when the
-project should analyze existing evidence without automatic collection.
+or `--client copilot` for both Copilot CLI and VS Code Copilot Agent. Explicit
+`--client all` configures all four integrations; it does not change the no-option default.
+Use `--read-only` when the project should analyze existing evidence without automatic collection.
 Repeat `--client` to select several clients for one project. To make that selection the default
 for future plain `init` calls, run, for example,
 `perflens client-defaults --client codex --client claude-code --client copilot`.

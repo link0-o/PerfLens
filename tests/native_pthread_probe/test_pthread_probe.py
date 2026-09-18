@@ -6,7 +6,6 @@ import shutil
 import socket
 import statistics
 import subprocess
-from collections.abc import Iterator
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -512,32 +511,41 @@ def test_address_sanitizers_accept_probe_lifecycle(
     assert records[-1]["record_type"] == "probe_footer"
 
 
-def _wait4_cpu_seconds(
+def _spawn_cpu_measurement(
     command: list[str],
     environment: dict[str, str],
     *,
     inherited_fd: int | None = None,
-) -> float:
+) -> int:
     file_actions: list[tuple[int, int, int]] = []
     if inherited_fd is not None:
         # POSIX_SPAWN_DUP2 clears FD_CLOEXEC on the duplicated descriptor while
         # retaining the exact numeric descriptor bound into the probe policy.
         file_actions.append((os.POSIX_SPAWN_DUP2, inherited_fd, inherited_fd))
-    pid = os.posix_spawn(
+    return os.posix_spawn(
         command[0],
         command,
         environment,
         file_actions=file_actions,
     )
+
+
+def _wait4_cpu_seconds(pid: int) -> float:
     waited_pid, status, usage = os.wait4(pid, 0)
     assert waited_pid == pid
     assert os.waitstatus_to_exitcode(status) == 0
     return usage.ru_utime + usage.ru_stime
 
 
-def _timings(command: list[str], environment: dict[str, str], count: int = 5) -> Iterator[float]:
-    for _ in range(count):
-        yield _wait4_cpu_seconds(command, environment)
+def _measure_cpu_seconds(
+    command: list[str],
+    environment: dict[str, str],
+    *,
+    inherited_fd: int | None = None,
+) -> float:
+    return _wait4_cpu_seconds(
+        _spawn_cpu_measurement(command, environment, inherited_fd=inherited_fd)
+    )
 
 
 @pytest.mark.timeout(30)
@@ -554,8 +562,17 @@ def test_probe_disabled_and_thresholded_overhead_are_bounded(
     base_environment = dict(os.environ)
     disabled_environment = {**base_environment, "LD_PRELOAD": str(probe)}
     evidence = tmp_path / "overhead.ndjson"
+    original_affinity = os.sched_getaffinity(0)
+    assert original_affinity, "Native overhead gate requires a non-empty CPU affinity mask"
+    measurement_cpu = min(original_affinity)
     descriptor = os.open(evidence, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+    affinity_pinned = False
     try:
+        # Keep all three modes on the same inherited CPU so per-core frequency,
+        # cache, and scheduler differences cannot consume a 1% process-CPU
+        # budget. The original test-process affinity is restored below.
+        os.sched_setaffinity(0, {measurement_cpu})
+        affinity_pinned = True
         threshold_environment = {
             **disabled_environment,
             "PERFLENS_RUNTIME_LOCK_FD": str(descriptor),
@@ -563,24 +580,25 @@ def test_probe_disabled_and_thresholded_overhead_are_bounded(
             "PERFLENS_RUNTIME_LOCK_THRESHOLD_NS": "1000000000",
             "PERFLENS_RUNTIME_LOCK_MAX_EVENTS": "20000",
         }
-        # Interleave and rotate the three modes so CPU frequency and machine
-        # load drift cannot systematically favor whichever mode runs first.
-        # Repeat a balanced rotation three times so transient CPU-frequency
-        # changes and isolated child-process jitter cannot dominate a 1% gate.
-        # Every mode occupies every position equally; the published limits are
-        # unchanged and are applied to the median of the three balanced-block
-        # deltas, so measurements from different load epochs are not mixed.
+        # Run each baseline/disabled/thresholded trio concurrently on the same
+        # inherited CPU. They therefore share one frequency and scheduler-load
+        # epoch while process CPU time still excludes time that each child is
+        # descheduled. Rotate spawn order and repeat three balanced blocks so
+        # startup order and isolated child jitter cannot favor one mode.
         baseline_samples: list[float] = []
         disabled_samples: list[float] = []
         thresholded_samples: list[float] = []
         disabled_block_deltas: list[float] = []
         thresholded_block_deltas: list[float] = []
-        measurements = {
-            "baseline": lambda: next(_timings(command, base_environment, count=1)),
-            "disabled": lambda: next(_timings(command, disabled_environment, count=1)),
-            "thresholded": lambda: next(
-                _timings_with_fd(command, threshold_environment, descriptor, count=1)
-            ),
+        environments = {
+            "baseline": base_environment,
+            "disabled": disabled_environment,
+            "thresholded": threshold_environment,
+        }
+        inherited_descriptors = {
+            "baseline": None,
+            "disabled": None,
+            "thresholded": descriptor,
         }
         samples = {
             "baseline": baseline_samples,
@@ -592,37 +610,56 @@ def test_probe_disabled_and_thresholded_overhead_are_bounded(
             ("disabled", "thresholded", "baseline"),
             ("thresholded", "baseline", "disabled"),
         )
+        # Warm dynamic loading, symbol resolution, and the selected CPU before
+        # measured Latin-square rotations. Warm-up results are never admitted
+        # into the gate samples.
+        for mode in orders[0]:
+            _measure_cpu_seconds(
+                command,
+                environments[mode],
+                inherited_fd=inherited_descriptors[mode],
+            )
         for _ in range(3):
+            disabled_pair_deltas: list[float] = []
+            thresholded_pair_deltas: list[float] = []
             for order in orders:
+                running = [
+                    (
+                        mode,
+                        _spawn_cpu_measurement(
+                            command,
+                            environments[mode],
+                            inherited_fd=inherited_descriptors[mode],
+                        ),
+                    )
+                    for mode in order
+                ]
+                paired = {mode: _wait4_cpu_seconds(pid) for mode, pid in running}
                 for mode in order:
-                    samples[mode].append(measurements[mode]())
-            block_baseline = statistics.median(baseline_samples[-3:])
-            disabled_block_deltas.append(
-                statistics.median(disabled_samples[-3:]) - block_baseline
-            )
-            thresholded_block_deltas.append(
-                statistics.median(thresholded_samples[-3:]) - block_baseline
-            )
+                    samples[mode].append(paired[mode])
+                disabled_pair_deltas.append(paired["disabled"] - paired["baseline"])
+                thresholded_pair_deltas.append(paired["thresholded"] - paired["baseline"])
+            disabled_block_deltas.append(statistics.median(disabled_pair_deltas))
+            thresholded_block_deltas.append(statistics.median(thresholded_pair_deltas))
         baseline = statistics.median(baseline_samples)
         disabled_overhead = statistics.median(disabled_block_deltas)
         thresholded_overhead = statistics.median(thresholded_block_deltas)
     finally:
-        os.close(descriptor)
-    assert disabled_overhead <= max(0.01 * baseline, 0.002), (
-        f"baseline={baseline_samples!r}, disabled={disabled_samples!r}, "
-        f"block_deltas={disabled_block_deltas!r}"
+        try:
+            if affinity_pinned:
+                os.sched_setaffinity(0, original_affinity)
+        finally:
+            os.close(descriptor)
+    disabled_limit = max(0.01 * baseline, 0.002)
+    thresholded_limit = max(0.15 * baseline, 0.002)
+    diagnostics = (
+        f"measurement_cpu={measurement_cpu}, baseline={baseline!r}, "
+        f"disabled_overhead={disabled_overhead!r}, disabled_limit={disabled_limit!r}, "
+        f"thresholded_overhead={thresholded_overhead!r}, "
+        f"thresholded_limit={thresholded_limit!r}, baseline_samples={baseline_samples!r}, "
+        f"disabled_samples={disabled_samples!r}, thresholded_samples={thresholded_samples!r}, "
+        f"disabled_block_deltas={disabled_block_deltas!r}, "
+        f"thresholded_block_deltas={thresholded_block_deltas!r}"
     )
-    assert thresholded_overhead <= max(0.15 * baseline, 0.002), (
-        f"baseline={baseline_samples!r}, thresholded={thresholded_samples!r}, "
-        f"block_deltas={thresholded_block_deltas!r}"
-    )
-
-
-def _timings_with_fd(
-    command: list[str],
-    environment: dict[str, str],
-    descriptor: int,
-    count: int = 5,
-) -> Iterator[float]:
-    for _ in range(count):
-        yield _wait4_cpu_seconds(command, environment, inherited_fd=descriptor)
+    assert disabled_overhead <= disabled_limit, diagnostics
+    assert thresholded_overhead <= thresholded_limit, diagnostics

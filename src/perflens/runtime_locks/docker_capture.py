@@ -235,7 +235,7 @@ def capture_docker_runtime_lock_evidence(
             )
             with _stream(source.descriptor) as stream:
                 replay = verify_cpython_threading_replay(
-                    receipt.evidence,
+                    receipt,
                     stream,
                     execution_binding=actual_binding,
                 )
@@ -243,7 +243,7 @@ def capture_docker_runtime_lock_evidence(
                 evidence=receipt.evidence,
                 execution_binding=actual_binding,
                 runtime_characteristics=runtime_characteristics,
-                replay_verified=replay,
+                replay_verified=replay is not None,
                 adapter_id=execution_binding.adapter_id,
                 profile_kind=None,
                 private_source_sha256=source.sha256,

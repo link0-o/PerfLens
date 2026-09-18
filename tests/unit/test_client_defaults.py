@@ -8,6 +8,7 @@ import pytest
 from perflens.distribution import client_defaults
 from perflens.distribution.client_defaults import (
     BUILTIN_DEFAULT_CLIENTS,
+    SUPPORTED_CLIENTS,
     load_client_defaults,
     normalize_client_options,
     save_client_defaults,
@@ -100,12 +101,12 @@ def test_client_defaults_reject_group_writable_existing_file(tmp_path: Path) -> 
         load_client_defaults(path)
 
 
-def test_repeated_client_options_are_deduplicated_and_all_cannot_be_mixed() -> None:
+def test_repeated_client_options_are_deduplicated_and_all_expands_every_client() -> None:
     assert normalize_client_options(("copilot", "codex", "copilot")) == (
         "codex",
         "copilot",
     )
-    assert normalize_client_options(("all",)) == BUILTIN_DEFAULT_CLIENTS
+    assert normalize_client_options(("all",)) == SUPPORTED_CLIENTS
 
     with pytest.raises(PerfLensError):
         normalize_client_options(("all", "opencode"))

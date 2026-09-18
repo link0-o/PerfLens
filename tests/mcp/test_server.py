@@ -56,6 +56,8 @@ from perflens.mcp.server import (
     _docker_optimization_iteration_summary,  # pyright: ignore[reportPrivateUsage]
     _finish_optimization_workload_with_evidence,  # pyright: ignore[reportPrivateUsage]
     _managed_evidence_bytes,  # pyright: ignore[reportPrivateUsage]
+    _managed_workload_active_seconds,  # pyright: ignore[reportPrivateUsage]
+    _remaining_managed_workload_timeout_seconds,  # pyright: ignore[reportPrivateUsage]
     create_server,
 )
 from perflens.mcp.storage import ArtifactStore, PathPolicy
@@ -676,6 +678,14 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["verify_runtime_lock_analysis"].meta == {
                 "perflens/permission": "READ_ONLY"
             }
+            assert (
+                "runtime_lock_verification_id"
+                in tools["verify_runtime_lock_analysis"].input_schema["properties"]
+            )
+            assert (
+                "runtime_lock_verification_id"
+                in tools["build_runtime_lock_diagnosis_bundle"].input_schema["properties"]
+            )
             assert tools["list_runtime_lock_hotspots"].meta == {"perflens/permission": "READ_ONLY"}
             assert tools["inspect_runtime_lock_capability"].meta == {
                 "perflens/permission": "READ_ONLY"
@@ -683,6 +693,9 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["preview_runtime_lock_session"].meta == {
                 "perflens/permission": "READ_ONLY_CONTEXT_SNAPSHOT"
             }
+            assert (
+                "profile_kind" in tools["preview_runtime_lock_session"].input_schema["properties"]
+            )
             assert tools["authorize_runtime_lock_session"].meta == {
                 "perflens/permission": "RUNTIME_LOCK_AUTHORIZATION"
             }
@@ -693,6 +706,7 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
                 "perflens/permission": "RUNTIME_LOCK_WORKLOAD_EXECUTION"
             }
             native_collection = tools["collect_runtime_lock_evidence"].input_schema["properties"]
+            assert "profile_kind" in native_collection
             assert not {
                 "executable",
                 "arguments",
@@ -703,6 +717,20 @@ def test_tools_have_typed_schemas_annotations_and_permissions(tmp_path: Path) ->
             assert tools["revoke_runtime_lock_session"].meta == {
                 "perflens/permission": "RUNTIME_LOCK_AUTHORIZATION"
             }
+            artifact_types = set(
+                tools["read_artifact_page"].input_schema["properties"]["artifact_type"]["enum"]
+            )
+            assert {
+                "docker-build-capability",
+                "docker-build-recipe",
+                "docker-build-context",
+                "docker-optimization-preview",
+                "docker-optimization-session",
+                "docker-build",
+                "docker-optimization-iteration",
+                "docker-optimization-disposition",
+                "container-target",
+            }.issubset(artifact_types)
             runtime_lock_authorization = tools["authorize_runtime_lock_session"].input_schema[
                 "properties"
             ]["authorization"]
@@ -1062,7 +1090,16 @@ def test_runtime_lock_preview_authorize_and_revoke_are_content_bound(
                 str,
                 _structured(stored_capability_page)["text"],
             )
-            for artifact_id, artifact_type in ((preview["preview_id"], "runtime-lock-preview"),):
+            stored_capability = json.loads(cast(str, _structured(stored_capability_page)["text"]))
+            generic_adapter = next(
+                item
+                for item in stored_capability["adapters"]
+                if item["adapter_id"] == "generic_ndjson_import"
+            )
+            for artifact_id, artifact_type in (
+                (generic_adapter["capability_id"], "runtime-adapter-capability"),
+                (preview["preview_id"], "runtime-lock-preview"),
+            ):
                 page = await client.call_tool(
                     "read_artifact_page",
                     {
@@ -1232,8 +1269,28 @@ def test_runtime_lock_controlled_import_consumes_lease_and_closes_session(
             assert not imported.is_error, imported.content
             reference = _structured(imported)
             assert reference["artifact_type"] == "runtime-lock-run"
-            assert reference["summary"]["private_source_replay_status"] == "verified"
+            assert reference["summary"]["private_source_replay_status"] == "passed"
             assert reference["summary"]["event_count"] == 4
+            assert reference["summary"]["settled_session_revision"] == 2
+            finalization_page = await client.call_tool(
+                "read_artifact_page",
+                {
+                    "artifact_id": reference["summary"]["runtime_lock_run_finalization_id"],
+                    "artifact_type": "runtime-lock-run-finalization",
+                },
+            )
+            assert not finalization_page.is_error, finalization_page.content
+            finalization = json.loads(cast(str, _structured(finalization_page)["text"]))
+            assert finalization["outcome"] == "completed"
+            assert finalization["run_id"] == reference["artifact_id"]
+            assert (
+                finalization["content_sha256"]
+                == reference["summary"]["runtime_lock_run_finalization_content_sha256"]
+            )
+            assert (
+                finalization["final_session_artifact_id"]
+                == reference["summary"]["settled_session_artifact_id"]
+            )
             run_page = await client.call_tool(
                 "read_artifact_page",
                 {
@@ -1327,7 +1384,12 @@ def test_runtime_lock_controlled_import_rejects_symlink_and_terminates_session(
         json.loads(path.read_text(encoding="utf-8"))
         for path in artifact_root.glob("*.runtime-lock-session.json")
     ]
-    assert any(item["session_id"] == session_id and item["state"] == "revoked" for item in states)
+    assert any(
+        item["session_id"] == session_id
+        and item["state"] == "revoked"
+        and item["invalidation_reason"] == "request_rejected"
+        for item in states
+    )
     assert not list(artifact_root.glob("*.runtime-lock-evidence.json"))
     assert not list(artifact_root.glob("*.runtime-lock-run.json"))
 
@@ -1399,6 +1461,23 @@ def test_docker_optimization_preview_authorize_build_and_revoke_are_bound(
             assert not baseline_result.is_error
             baseline = _structured(baseline_result)
             assert baseline["artifact_type"] == "docker-build"
+            for artifact_id, artifact_type in (
+                (preview["build_capability_id"], "docker-build-capability"),
+                (preview["recipe_id"], "docker-build-recipe"),
+                (preview["baseline_context_id"], "docker-build-context"),
+                (preview["preview_id"], "docker-optimization-preview"),
+                (session["session_artifact_id"], "docker-optimization-session"),
+                (baseline["artifact_id"], "docker-build"),
+            ):
+                page = await client.call_tool(
+                    "read_artifact_page",
+                    {
+                        "artifact_id": artifact_id,
+                        "artifact_type": artifact_type,
+                    },
+                )
+                assert not page.is_error, (artifact_type, page.content)
+                assert _structured(page)["next_offset"] is None
             (project / "src/app").write_bytes(b"candidate")
             candidate_result = await client.call_tool(
                 "build_docker_optimization_candidate",
@@ -1792,27 +1871,24 @@ def test_docker_optimization_confirmation_binds_runtime_lock_without_second_sess
             assert not preview_result.is_error, str(preview_result.content)
             preview = _structured(preview_result)
             assert preview["schema_version"] == "1.1"
-            assert preview["runtime_lock_scope"]["allowed_adapters"] == [
-                "native_pthread"
-            ]
+            assert preview["runtime_lock_scope"]["allowed_adapters"] == ["native_pthread"]
             session = _structured(
                 await client.call_tool(
                     "authorize_docker_optimization_session",
                     {
                         "preview_id": preview["preview_id"],
                         "preview_content_sha256": preview["content_sha256"],
-                        "authorization_summary_sha256": preview[
-                            "authorization_summary_sha256"
-                        ],
+                        "authorization_summary_sha256": preview["authorization_summary_sha256"],
                         "authorization": (
                             "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
                         ),
                     },
                 )
             )
-            assert session["runtime_lock_scope"]["content_sha256"] == preview[
-                "runtime_lock_scope"
-            ]["content_sha256"]
+            assert (
+                session["runtime_lock_scope"]["content_sha256"]
+                == preview["runtime_lock_scope"]["content_sha256"]
+            )
             baseline = _structured(
                 await client.call_tool(
                     "build_docker_optimization_candidate",
@@ -1892,9 +1968,7 @@ def test_docker_optimization_rejects_runtime_lock_outside_parent_preview_without
                     {
                         "preview_id": preview["preview_id"],
                         "preview_content_sha256": preview["content_sha256"],
-                        "authorization_summary_sha256": preview[
-                            "authorization_summary_sha256"
-                        ],
+                        "authorization_summary_sha256": preview["authorization_summary_sha256"],
                         "authorization": (
                             "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
                         ),
@@ -2365,6 +2439,8 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
         source_format="perflens",
     )
     operations: list[str] = []
+    wait_timeouts: list[float] = []
+    workload_accounting_windows: list[tuple[float | None, float | None, int, float]] = []
     requests: list[CollectionPlanRequest] = []
     plan_denied = {"value": False}
 
@@ -2373,8 +2449,9 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             operations.append("release")
             prepared.state = "released"
 
-        def wait(self, prepared: SimpleNamespace, *, timeout_seconds: int) -> int:
-            assert timeout_seconds > 0
+        def wait(self, prepared: SimpleNamespace, *, timeout_seconds: float) -> int:
+            assert 0 < timeout_seconds <= 30
+            wait_timeouts.append(timeout_seconds)
             operations.append("wait")
             prepared.exit_code = 0
             return 0
@@ -2611,13 +2688,44 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
     ) -> BenchmarkArtifact:
         assert scratch_root == prepared.receipt.scratch_directory
         assert relative_path == "results.json"
-        assert kwargs == {"source_format": "auto", "benchmark_name": None}
+        assert kwargs == {
+            "source_format": "auto",
+            "benchmark_name": None,
+            "output_owner_uid": target.host_uid,
+        }
         operations.append("benchmark")
         return benchmark
 
     monkeypatch.setattr(
         "perflens.mcp.server.load_managed_benchmark",
         fake_load_benchmark,
+    )
+
+    def track_workload_accounting(
+        *,
+        workload_started_monotonic: float | None,
+        workload_finished_monotonic: float | None,
+        workload_timeout_seconds: int,
+        now_monotonic: float,
+    ) -> int:
+        workload_accounting_windows.append(
+            (
+                workload_started_monotonic,
+                workload_finished_monotonic,
+                workload_timeout_seconds,
+                now_monotonic,
+            )
+        )
+        return _managed_workload_active_seconds(
+            workload_started_monotonic=workload_started_monotonic,
+            workload_finished_monotonic=workload_finished_monotonic,
+            workload_timeout_seconds=workload_timeout_seconds,
+            now_monotonic=now_monotonic,
+        )
+
+    monkeypatch.setattr(
+        "perflens.mcp.server._managed_workload_active_seconds",
+        track_workload_accounting,
     )
     server = create_server(
         ServerConfig(
@@ -2694,6 +2802,14 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             )
             assert not result.is_error
             reference = _structured(result)
+            assert len(workload_accounting_windows) == 1
+            accounting_start, accounting_finish, accounting_limit, accounting_now = (
+                workload_accounting_windows[0]
+            )
+            assert accounting_start is not None
+            assert accounting_finish is not None
+            assert accounting_start <= accounting_finish <= accounting_now
+            assert accounting_limit == 30
             assert reference["artifact_id"] == container_run.run_id
             assert reference["summary"]["docker_session_state"] == "exhausted"
             assert reference["summary"]["container_resource_context_id"] == (
@@ -2704,6 +2820,7 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             )
             assert reference["summary"]["container_measurement_quality"] == "verified"
             assert reference["summary"]["evidence_bytes"] == collection.output_bytes
+            assert 29 < wait_timeouts[0] <= 30
             measurement_id = reference["summary"]["container_measurement_id"]
             assert isinstance(measurement_id, str)
             assert operations == [
@@ -2928,6 +3045,52 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             ]
 
     asyncio.run(exercise())
+
+
+def test_managed_workload_timeout_is_gate_relative_and_keeps_subsecond_precision() -> None:
+    assert _remaining_managed_workload_timeout_seconds(
+        workload_started_monotonic=100.0,
+        workload_timeout_seconds=3,
+        now_monotonic=101.041,
+    ) == pytest.approx(1.959)
+    assert (
+        _remaining_managed_workload_timeout_seconds(
+            workload_started_monotonic=100.0,
+            workload_timeout_seconds=3,
+            now_monotonic=99.5,
+        )
+        == 3.0
+    )
+
+
+def test_managed_workload_accounting_excludes_setup_and_finalization_time() -> None:
+    assert (
+        _managed_workload_active_seconds(
+            workload_started_monotonic=None,
+            workload_finished_monotonic=None,
+            workload_timeout_seconds=3,
+            now_monotonic=500.0,
+        )
+        == 0
+    )
+    assert (
+        _managed_workload_active_seconds(
+            workload_started_monotonic=100.0,
+            workload_finished_monotonic=101.041,
+            workload_timeout_seconds=3,
+            now_monotonic=500.0,
+        )
+        == 2
+    )
+    assert (
+        _managed_workload_active_seconds(
+            workload_started_monotonic=100.0,
+            workload_finished_monotonic=None,
+            workload_timeout_seconds=3,
+            now_monotonic=103.5,
+        )
+        == 3
+    )
 
 
 @pytest.mark.parametrize("value", (None, 0, -1, True, "120"))

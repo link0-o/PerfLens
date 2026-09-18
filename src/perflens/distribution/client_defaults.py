@@ -97,13 +97,13 @@ def save_client_defaults(
 
 
 def normalize_client_options(values: tuple[str, ...]) -> tuple[ClientName, ...]:
-    """Normalize repeated CLI options while preserving legacy ``--client all`` semantics."""
+    """Normalize repeated CLI options and expand ``--client all``."""
     if not values:
         raise _config_error("At least one client must be selected")
     if "all" in values:
         if len(values) != 1:
             raise _config_error("--client all cannot be combined with another --client value")
-        return BUILTIN_DEFAULT_CLIENTS
+        return SUPPORTED_CLIENTS
     return normalize_client_selection(values)
 
 

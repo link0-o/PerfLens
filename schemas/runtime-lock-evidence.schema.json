@@ -288,6 +288,19 @@
           "title": "Lost Event Count",
           "type": "integer"
         },
+        "lost_source_bytes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lost Source Bytes"
+        },
         "malformed_record_count": {
           "minimum": 0,
           "title": "Malformed Record Count",
@@ -2443,6 +2456,11 @@
                     {
                       "required": [
                         "truncated_stack_record_count"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "lost_source_bytes"
                       ]
                     }
                   ]

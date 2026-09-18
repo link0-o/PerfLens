@@ -28,6 +28,16 @@ One Evidence Artifact has one meaning:
 - `sampled` reports sampled observations, never exact contention counts;
 - `cumulative` is an aggregate runtime profile, not an event stream.
 
+Aggregated wait duration is summed across execution contexts and concurrent waiters, so it may
+exceed the wall interval. Compare it with concurrency-weighted exposure when that denominator is
+known; wall time alone is not a consistency bound.
+
+JFR thresholded duration events are wait observations ordered by wait end. Adjacent wait-end
+timestamps are not acquire/release pairs and cannot establish hold duration or acquisition count;
+shorter-than-threshold and uncontended acquisitions may be omitted between them. A JFR
+`previousOwner`, when present, is event-local partial provenance rather than an exact owner
+timeline, and it does not create hold evidence.
+
 Never merge JFR profiles with different thresholds or Go mutex/block profiles into one Evidence.
 Inspect the execution context (`os_thread`, Java platform/virtual thread, Go goroutine, or process
 aggregate), visible lock kinds/fast paths, lost/truncated/omitted counts and weights, and whether

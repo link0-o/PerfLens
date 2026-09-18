@@ -295,6 +295,9 @@ from perflens.runtime_locks.java_jfr_launcher import (
     open_java_jfr_private_file,
     release_java_jfr_artifact_root_lease,
 )
+from perflens.runtime_locks.native_evidence_binding import (
+    bind_native_pthread_evidence_execution,
+)
 from perflens.runtime_locks.native_launcher import (
     NativeLaunchCapability,
     NativeLaunchRequest,
@@ -465,6 +468,22 @@ def _docker_runtime_lock_accounted_bytes(collected: _DockerRuntimeLockCollected)
     )
 
 
+def _runtime_lock_private_source_replay_status(
+    verification: RuntimeLockAnalysisVerificationArtifact,
+) -> Literal["passed"]:
+    """Return the source-replay result, not the enclosing verification status."""
+
+    receipt = verification.source_replay_receipt
+    if receipt is None:
+        raise PerfLensError(
+            ErrorCode.INTERNAL_ERROR,
+            "runtime_lock_verification",
+            "Verified Runtime Lock evidence lacks its private-source replay receipt",
+            recoverable=False,
+        )
+    return receipt.status
+
+
 def _finalize_docker_runtime_lock_run(
     store: ArtifactStore,
     optimization_runtime: DockerOptimizationRuntime,
@@ -484,9 +503,7 @@ def _finalize_docker_runtime_lock_run(
         lifecycle_seconds,
     )
     exact_events = (
-        event_count
-        if collected.request.execution_binding.measurement_semantics == "exact"
-        else 0
+        event_count if collected.request.execution_binding.measurement_semantics == "exact" else 0
     )
     # Persist the replayable evidence chain before consuming the nested Runtime Lock
     # allowance.  A failure at any point is handled by the outer collection path, which
@@ -517,9 +534,7 @@ def _finalize_docker_runtime_lock_run(
         actual_active_seconds=active_seconds,
         actual_evidence_bytes=accounted_evidence_bytes,
         exact_event_count=exact_events,
-        result_status=(
-            "active" if collected.analysis.quality_status == "complete" else "partial"
-        ),
+        result_status=("active" if collected.analysis.quality_status == "complete" else "partial"),
     )
     if collected.request.runtime_characteristics is None:
         raise PerfLensError(
@@ -607,6 +622,7 @@ def _finalize_docker_runtime_lock_run(
         adapter_execution_identity_sha256=(
             collected.request.execution_binding.execution_identity_sha256
         ),
+        profile_kind=collected.request.go_profile_kind,
         measurement_semantics=(collected.request.execution_binding.measurement_semantics),
         workload_identity_sha256=build.recipe_content_sha256,
         runtime_lock_evidence_id=collected.evidence.runtime_lock_evidence_id,
@@ -646,7 +662,6 @@ def _finalize_docker_runtime_lock_run(
     )
     optimization_runtime.mark_runtime_lock_published(session_id, lease)
     return session, runtime_run
-
 
 
 def create_server(config: ServerConfig) -> MCPServer[None]:
@@ -987,6 +1002,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
 
     def build_docker_runtime_lock_scope(
         adapter_ids: tuple[RuntimeLockAdapterId, ...],
+        requested_semantics: dict[RuntimeLockAdapterId, MeasurementSemantics] | None = None,
     ) -> tuple[DockerRuntimeLockAuthorizationScope, RuntimeLockCapabilityInspection]:
         """Bind reviewed Adapter identities into the parent Docker consent.
 
@@ -1010,6 +1026,14 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "active Adapter scope",
                 recoverable=True,
             )
+        if requested_semantics is not None and set(requested_semantics) != set(adapter_ids):
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "runtime_lock_authorization",
+                "Docker optimization Runtime Lock semantics must select exactly one value "
+                "for every requested Adapter",
+                recoverable=True,
+            )
         inspection = inspect_runtime_lock_session_capability()
         references = {item.adapter_id: item for item in inspection.capability.adapters}
         bindings: list[RuntimeLockAdapterExecutionBinding] = []
@@ -1023,11 +1047,32 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     recoverable=True,
                     details={"adapter_id": adapter_id},
                 )
+            if (
+                requested_semantics is not None
+                and requested_semantics[adapter_id] not in reference.supported_semantics
+            ):
+                raise PerfLensError(
+                    ErrorCode.EXTERNAL_TOOL_FAILED,
+                    "runtime_lock_capability",
+                    "A selected Docker Runtime Lock execution binding is unavailable",
+                    recoverable=True,
+                    details={
+                        "adapter_id": adapter_id,
+                        "measurement_semantics": requested_semantics[adapter_id],
+                    },
+                )
             if adapter_id == "java_jfr":
                 binding = get_runtime_lock_java_bridge().execution_binding
             elif adapter_id == "cpython_threading":
-                binding = get_runtime_lock_cpython_bridge().binding_for("thresholded")
-                if binding is None:
+                selected = (
+                    requested_semantics[adapter_id]
+                    if requested_semantics is not None
+                    else "thresholded"
+                )
+                binding = get_runtime_lock_cpython_bridge().binding_for(
+                    cast(Literal["exact", "thresholded"], selected)
+                )
+                if binding is None and requested_semantics is None:
                     binding = get_runtime_lock_cpython_bridge().binding_for("exact")
             elif adapter_id == "go_pprof":
                 binding = get_runtime_lock_go_bridge().execution_binding
@@ -1040,7 +1085,13 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 probe = discover_native_pthread_probe_policy()
                 adapter_policy = runtime_lock_policy.adapter_policy("native_pthread")
                 semantics = (
-                    "thresholded" if "thresholded" in adapter_policy.allowed_semantics else "exact"
+                    cast(Literal["exact", "thresholded"], requested_semantics[adapter_id])
+                    if requested_semantics is not None
+                    else (
+                        "thresholded"
+                        if "thresholded" in adapter_policy.allowed_semantics
+                        else "exact"
+                    )
                 )
                 threshold = (
                     adapter_policy.duration_threshold_ns if semantics == "thresholded" else None
@@ -1089,6 +1140,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             if (
                 binding is None
                 or binding.measurement_semantics not in reference.supported_semantics
+                or (
+                    requested_semantics is not None
+                    and binding.measurement_semantics != requested_semantics[adapter_id]
+                )
             ):
                 raise PerfLensError(
                     ErrorCode.EXTERNAL_TOOL_FAILED,
@@ -1214,11 +1269,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             authorized_tools = {tool.name: tool for tool in binding.tools}
             if (
                 binding.configuration_sha256 != policy_binding.bootstrap.sha256
-                or binding.runtime_payload_identity_sha256
-                != policy_binding.bootstrap.sha256
+                or binding.runtime_payload_identity_sha256 != policy_binding.bootstrap.sha256
                 or authorized_tools.get("python") is None
-                or authorized_tools["python"].binary_sha256
-                != policy_binding.interpreter.sha256
+                or authorized_tools["python"].binary_sha256 != policy_binding.interpreter.sha256
             ):
                 raise PerfLensError(
                     ErrorCode.PATH_SAFETY_VIOLATION,
@@ -1255,8 +1308,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 != java_policy.runtime_payload.identity_sha256
                 or "java" not in authorized_tools
                 or "jfr" not in authorized_tools
-                or authorized_tools["java"].binary_sha256
-                != java_policy.java_tool.sha256
+                or authorized_tools["java"].binary_sha256 != java_policy.java_tool.sha256
                 or authorized_tools["jfr"].binary_sha256 != current_jfr.sha256
             ):
                 raise PerfLensError(
@@ -1705,7 +1757,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             )
             launcher = get_runtime_lock_cpython_launcher()
             script_path = _runtime_lock_project_executable(
-                runtime_lock_project.path, workload.program
+                runtime_lock_project.path,
+                workload.program,
+                stage="runtime_lock_collection",
             )
             target = launcher.inspect_target(script_path)
             if (
@@ -1794,9 +1848,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             replay_fd = open_cpython_private_stream(launch_result)
             try:
                 with os.fdopen(os.dup(replay_fd), "rb") as replay:
-                    if not verify_cpython_threading_replay(
-                        receipt.evidence, replay, execution_binding=binding
-                    ):
+                    replay_receipt = verify_cpython_threading_replay(
+                        receipt, replay, execution_binding=binding
+                    )
+                    if replay_receipt is None:
                         raise _runtime_lock_native_error(
                             "CPython private evidence replay differs from the public Artifact"
                         )
@@ -1811,7 +1866,15 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 max_events=max_events,
             )
             analysis = build_runtime_lock_analysis(evidence)
-            verification = verify_runtime_lock_analysis_artifact(analysis, evidence)
+            verification = verify_runtime_lock_analysis_artifact(
+                analysis,
+                evidence,
+                source_replay_receipt=build_runtime_lock_source_replay_receipt(
+                    evidence,
+                    normalized_source_sha256=replay_receipt.normalized_source_sha256,
+                    normalized_source_bytes=replay_receipt.normalized_source_bytes,
+                ),
+            )
             require_usable_runtime_lock_analysis(verification)
             actual_evidence_bytes = len(serialize_json(evidence))
             actual_exact_events = len(evidence.events) if measurement_semantics == "exact" else 0
@@ -1902,10 +1965,20 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "runtime_lock_evidence_id": evidence.runtime_lock_evidence_id,
                     "runtime_lock_analysis_id": analysis.runtime_lock_analysis_id,
                     "runtime_lock_verification_id": verification.runtime_lock_verification_id,
-                    "private_source_replay_status": "passed",
+                    "runtime_lock_run_finalization_id": (settlement.finalization.finalization_id),
+                    "runtime_lock_run_finalization_content_sha256": (
+                        settlement.finalization.content_sha256
+                    ),
+                    "settled_session_artifact_id": settlement.session.session_artifact_id,
+                    "settled_session_revision": settlement.session.revision,
+                    "private_source_replay_status": (
+                        _runtime_lock_private_source_replay_status(verification)
+                    ),
                     "quality_status": run.quality_status,
                     "event_count": run.event_count,
+                    "evidence_bytes": run.evidence_bytes,
                     "target_pid": launch_result.target_pid,
+                    "target_uid": launch_result.target_uid,
                     "exit_code": launch_result.exit_code,
                     "session_state": settlement.session.state,
                 },
@@ -1931,7 +2004,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     _persist_runtime_lock_settlement(runtime, session_id, store, terminal)
             elif lease is None:
                 with suppress(PerfLensError):
-                    terminal = runtime.revoke(session_id)
+                    terminal = runtime.revoke(session_id, reason="request_rejected")
                     store.save(terminal, terminal.session_artifact_id, "runtime-lock-session")
             raise
 
@@ -1982,7 +2055,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             )
             launcher = get_runtime_lock_go_launcher()
             executable_path = _runtime_lock_project_executable(
-                runtime_lock_project.path, workload.program
+                runtime_lock_project.path,
+                workload.program,
+                stage="runtime_lock_collection",
             )
             target = launcher.inspect_target(executable_path)
             if (
@@ -2087,27 +2162,25 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             replay_fd = open_go_pprof_raw(raw_result)
             try:
                 with os.fdopen(os.dup(replay_fd), "rb") as replay:
-                    if (
-                        verify_go_pprof_replay(
-                            replay,
-                            expected=receipt,
-                            execution_binding=binding,
-                            target_pid=launch_result.target_pid,
-                            target_uid=launch_result.target_uid,
-                            target_start_time_ticks=launch_result.target_start_ticks,
-                            mutex_profile_fraction=(
-                                adapter_policy.mutex_profile_fraction
-                                if profile_kind == "mutex"
-                                else None
-                            ),
-                            block_profile_rate_ns=(
-                                adapter_policy.block_profile_rate_ns
-                                if profile_kind == "block"
-                                else None
-                            ),
-                        )
-                        is None
-                    ):
+                    replay_receipt = verify_go_pprof_replay(
+                        replay,
+                        expected=receipt,
+                        execution_binding=binding,
+                        target_pid=launch_result.target_pid,
+                        target_uid=launch_result.target_uid,
+                        target_start_time_ticks=launch_result.target_start_ticks,
+                        mutex_profile_fraction=(
+                            adapter_policy.mutex_profile_fraction
+                            if profile_kind == "mutex"
+                            else None
+                        ),
+                        block_profile_rate_ns=(
+                            adapter_policy.block_profile_rate_ns
+                            if profile_kind == "block"
+                            else None
+                        ),
+                    )
+                    if replay_receipt is None:
                         raise _runtime_lock_native_error(
                             "Go private profile replay differs from the public Artifact"
                         )
@@ -2124,7 +2197,15 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 max_events=max_events,
             )
             analysis = build_runtime_lock_analysis(evidence)
-            verification = verify_runtime_lock_analysis_artifact(analysis, evidence)
+            verification = verify_runtime_lock_analysis_artifact(
+                analysis,
+                evidence,
+                source_replay_receipt=build_runtime_lock_source_replay_receipt(
+                    evidence,
+                    normalized_source_sha256=replay_receipt.normalized_source_sha256,
+                    normalized_source_bytes=replay_receipt.normalized_source_bytes,
+                ),
+            )
             require_usable_runtime_lock_analysis(verification)
             public_evidence_bytes = len(serialize_json(evidence))
             warnings = tuple(
@@ -2161,6 +2242,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 target_identity_sha256=target.identity_sha256,
                 adapter_id="go_pprof",
                 adapter_execution_identity_sha256=binding.execution_identity_sha256,
+                profile_kind=profile_kind,
                 measurement_semantics="cumulative",
                 workload_identity_sha256=workload.workload_identity_sha256,
                 runtime_lock_evidence_id=evidence.runtime_lock_evidence_id,
@@ -2216,10 +2298,20 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "runtime_lock_evidence_id": evidence.runtime_lock_evidence_id,
                     "runtime_lock_analysis_id": analysis.runtime_lock_analysis_id,
                     "runtime_lock_verification_id": verification.runtime_lock_verification_id,
-                    "private_source_replay_status": "passed",
+                    "runtime_lock_run_finalization_id": (settlement.finalization.finalization_id),
+                    "runtime_lock_run_finalization_content_sha256": (
+                        settlement.finalization.content_sha256
+                    ),
+                    "settled_session_artifact_id": settlement.session.session_artifact_id,
+                    "settled_session_revision": settlement.session.revision,
+                    "private_source_replay_status": (
+                        _runtime_lock_private_source_replay_status(verification)
+                    ),
                     "quality_status": run.quality_status,
                     "event_count": run.event_count,
+                    "evidence_bytes": run.evidence_bytes,
                     "target_pid": launch_result.target_pid,
+                    "target_uid": launch_result.target_uid,
                     "exit_code": launch_result.exit_code,
                     "session_state": settlement.session.state,
                 },
@@ -2258,7 +2350,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     _persist_runtime_lock_settlement(runtime, session_id, store, terminal)
             elif lease is None:
                 with suppress(PerfLensError):
-                    terminal = runtime.revoke(session_id)
+                    terminal = runtime.revoke(session_id, reason="request_rejected")
                     store.save(terminal, terminal.session_artifact_id, "runtime-lock-session")
             raise
 
@@ -2402,27 +2494,25 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             replay_fd = open_go_pprof_raw(raw_result)
             try:
                 with os.fdopen(os.dup(replay_fd), "rb") as replay:
-                    if (
-                        verify_go_pprof_replay(
-                            replay,
-                            expected=receipt,
-                            execution_binding=binding,
-                            target_pid=target.target_pid,
-                            target_uid=target.target_uid,
-                            target_start_time_ticks=target.target_start_time_ticks,
-                            mutex_profile_fraction=(
-                                adapter_policy.mutex_profile_fraction
-                                if profile_kind == "mutex"
-                                else None
-                            ),
-                            block_profile_rate_ns=(
-                                adapter_policy.block_profile_rate_ns
-                                if profile_kind == "block"
-                                else None
-                            ),
-                        )
-                        is None
-                    ):
+                    replay_receipt = verify_go_pprof_replay(
+                        replay,
+                        expected=receipt,
+                        execution_binding=binding,
+                        target_pid=target.target_pid,
+                        target_uid=target.target_uid,
+                        target_start_time_ticks=target.target_start_time_ticks,
+                        mutex_profile_fraction=(
+                            adapter_policy.mutex_profile_fraction
+                            if profile_kind == "mutex"
+                            else None
+                        ),
+                        block_profile_rate_ns=(
+                            adapter_policy.block_profile_rate_ns
+                            if profile_kind == "block"
+                            else None
+                        ),
+                    )
+                    if replay_receipt is None:
                         raise _runtime_lock_native_error(
                             "Go loopback private profile replay differs from the public Artifact"
                         )
@@ -2449,7 +2539,15 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 max_events=max_events,
             )
             analysis = build_runtime_lock_analysis(evidence)
-            verification = verify_runtime_lock_analysis_artifact(analysis, evidence)
+            verification = verify_runtime_lock_analysis_artifact(
+                analysis,
+                evidence,
+                source_replay_receipt=build_runtime_lock_source_replay_receipt(
+                    evidence,
+                    normalized_source_sha256=replay_receipt.normalized_source_sha256,
+                    normalized_source_bytes=replay_receipt.normalized_source_bytes,
+                ),
+            )
             require_usable_runtime_lock_analysis(verification)
             public_evidence_bytes = len(serialize_json(evidence))
             warnings = tuple(
@@ -2492,6 +2590,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 target_identity_sha256=target.target_identity_sha256,
                 adapter_id="go_pprof",
                 adapter_execution_identity_sha256=binding.execution_identity_sha256,
+                profile_kind=profile_kind,
                 measurement_semantics="cumulative",
                 workload_identity_sha256=target.target_identity_sha256,
                 runtime_lock_evidence_id=evidence.runtime_lock_evidence_id,
@@ -2548,10 +2647,20 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "runtime_lock_evidence_id": evidence.runtime_lock_evidence_id,
                     "runtime_lock_analysis_id": analysis.runtime_lock_analysis_id,
                     "runtime_lock_verification_id": verification.runtime_lock_verification_id,
-                    "private_source_replay_status": "passed",
+                    "runtime_lock_run_finalization_id": (settlement.finalization.finalization_id),
+                    "runtime_lock_run_finalization_content_sha256": (
+                        settlement.finalization.content_sha256
+                    ),
+                    "settled_session_artifact_id": settlement.session.session_artifact_id,
+                    "settled_session_revision": settlement.session.revision,
+                    "private_source_replay_status": (
+                        _runtime_lock_private_source_replay_status(verification)
+                    ),
                     "quality_status": run.quality_status,
                     "event_count": run.event_count,
+                    "evidence_bytes": run.evidence_bytes,
                     "target_pid": target.target_pid,
+                    "target_uid": target.target_uid,
                     "session_state": settlement.session.state,
                 },
             )
@@ -2593,7 +2702,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     _persist_runtime_lock_settlement(runtime, session_id, store, terminal)
             elif lease is None:
                 with suppress(PerfLensError):
-                    terminal = runtime.revoke(session_id)
+                    terminal = runtime.revoke(session_id, reason="request_rejected")
                     store.save(terminal, terminal.session_artifact_id, "runtime-lock-session")
             raise
 
@@ -2641,6 +2750,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         arguments: tuple[str, ...] = (),
         target_pid: int | None = None,
         loopback_port: int | None = None,
+        profile_kind: GoProfileKind | None = None,
     ) -> RuntimeLockSessionPreviewArtifact:
         _require_runtime_locks(config)
         if target_scope in {"managed_temporary_container", "docker_optimization"}:
@@ -2665,6 +2775,24 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         process_target: RuntimeLockProcessTargetBinding | None = None
         execution_bindings: tuple[RuntimeLockAdapterExecutionBinding, ...] = ()
         preview_warnings: tuple[str, ...] = ()
+        active_go_scope = allowed_adapters == ("go_pprof",) and target_scope in {
+            "host_launched_workload",
+            "host_bound_process",
+        }
+        if active_go_scope and profile_kind is None:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "runtime_lock_authorization",
+                "An active Go pprof Preview requires one exact mutex or block profile_kind",
+                recoverable=True,
+            )
+        if not active_go_scope and profile_kind is not None:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "runtime_lock_authorization",
+                "profile_kind is valid only for an active Go pprof Preview",
+                recoverable=True,
+            )
         if target_scope == "host_bound_process":
             if (
                 allowed_adapters != ("go_pprof",)
@@ -2735,6 +2863,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             executable_path = _runtime_lock_project_executable(
                 runtime_lock_project.path,
                 executable,
+                stage="runtime_lock_authorization",
             )
             if adapter_id == "java_jfr":
                 if allowed_semantics != ("thresholded",):
@@ -2803,6 +2932,17 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 preview_warnings = bridge.capability.limitations
                 program_sha256 = target.binary_sha256
             else:
+                if len(allowed_semantics) != 1 or allowed_semantics[0] not in {
+                    "exact",
+                    "thresholded",
+                }:
+                    raise PerfLensError(
+                        ErrorCode.PATH_SAFETY_VIOLATION,
+                        "runtime_lock_authorization",
+                        "Native pthread host collection requires one exact or thresholded "
+                        "semantics",
+                        recoverable=True,
+                    )
                 launcher = get_runtime_lock_native_launcher()
                 target = launcher.inspect_target(executable_path)
                 target_capability = launcher.capability(executable_path)
@@ -2820,6 +2960,13 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     )
                 workload_kind = "native_elf"
                 program_sha256 = target.binary_sha256
+                execution_bindings = (
+                    _build_native_runtime_lock_execution_binding(
+                        target_capability,
+                        runtime_lock_policy,
+                        cast(Literal["exact", "thresholded"], allowed_semantics[0]),
+                    ),
+                )
                 preview_warnings = tuple(
                     dict.fromkeys(
                         (*target_capability.limitations, NATIVE_PTHREAD_PROVENANCE_LIMITATION)
@@ -2887,6 +3034,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             ),
             workload=workload,
             process_target=process_target,
+            profile_kind=profile_kind,
             adapter_execution_bindings=execution_bindings,
             budget=runtime_lock_policy.budget,
             planned_actions=_runtime_lock_planned_actions(target_scope),
@@ -2997,6 +3145,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             executable_path = _runtime_lock_project_executable(
                 runtime_lock_project.path,
                 workload.program,
+                stage="runtime_lock_collection",
             )
             target = launcher.inspect_target(executable_path)
             if (
@@ -3296,7 +3445,15 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "runtime_lock_evidence_id": evidence.runtime_lock_evidence_id,
                     "runtime_lock_analysis_id": analysis.runtime_lock_analysis_id,
                     "runtime_lock_verification_id": verification.runtime_lock_verification_id,
-                    "private_source_replay_status": "passed",
+                    "runtime_lock_run_finalization_id": (settlement.finalization.finalization_id),
+                    "runtime_lock_run_finalization_content_sha256": (
+                        settlement.finalization.content_sha256
+                    ),
+                    "settled_session_artifact_id": settlement.session.session_artifact_id,
+                    "settled_session_revision": settlement.session.revision,
+                    "private_source_replay_status": (
+                        _runtime_lock_private_source_replay_status(verification)
+                    ),
                     "quality_status": run.quality_status,
                     "event_count": run.event_count,
                     "evidence_bytes": run.evidence_bytes,
@@ -3345,7 +3502,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     )
             elif lease is None:
                 with suppress(PerfLensError):
-                    terminal = runtime.revoke(session_id)
+                    terminal = runtime.revoke(session_id, reason="request_rejected")
                     store.save(terminal, terminal.session_artifact_id, "runtime-lock-session")
             raise
 
@@ -3367,7 +3524,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         measurement_semantics: Literal["exact", "thresholded", "cumulative"],
         duration_seconds: int,
         max_events: int = 20_000,
-        profile_kind: GoProfileKind = "mutex",
+        profile_kind: GoProfileKind | None = None,
     ) -> ArtifactReference:
         _require_runtime_locks(config)
         assert runtime_lock_policy is not None
@@ -3376,6 +3533,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         candidate_session = runtime.snapshot(session_id)
         candidate_preview = store.load_runtime_lock_preview(candidate_session.preview_id)
         if candidate_preview.target_scope == "host_bound_process":
+            if profile_kind is None:
+                raise _runtime_lock_native_error(
+                    "Go pprof collection requires the profile_kind authorized by its Preview"
+                )
             if measurement_semantics != "cumulative":
                 raise _runtime_lock_native_error(
                     "Go pprof loopback collection requires cumulative semantics"
@@ -3390,6 +3551,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             candidate_preview.workload is not None
             and candidate_preview.workload.adapter_id == "java_jfr"
         ):
+            if profile_kind is not None:
+                raise _runtime_lock_native_error(
+                    "profile_kind is valid only for the Go pprof Adapter"
+                )
             if measurement_semantics != "thresholded":
                 raise _runtime_lock_native_error(
                     "Java JFR collection requires thresholded semantics"
@@ -3403,6 +3568,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             candidate_preview.workload is not None
             and candidate_preview.workload.adapter_id == "cpython_threading"
         ):
+            if profile_kind is not None:
+                raise _runtime_lock_native_error(
+                    "profile_kind is valid only for the Go pprof Adapter"
+                )
             if measurement_semantics == "cumulative":
                 raise _runtime_lock_native_error(
                     "CPython collection requires exact or thresholded semantics"
@@ -3417,6 +3586,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             candidate_preview.workload is not None
             and candidate_preview.workload.adapter_id == "go_pprof"
         ):
+            if profile_kind is None:
+                raise _runtime_lock_native_error(
+                    "Go pprof collection requires the profile_kind authorized by its Preview"
+                )
             if measurement_semantics != "cumulative":
                 raise _runtime_lock_native_error(
                     "Go pprof collection requires cumulative semantics"
@@ -3431,7 +3604,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             raise _runtime_lock_native_error(
                 "Cumulative collection is supported only by the Go pprof Adapter"
             )
-        if profile_kind != "mutex":
+        if profile_kind is not None:
             raise _runtime_lock_native_error("profile_kind is valid only for the Go pprof Adapter")
         lease = None
         launch_result: NativeLaunchResult | None = None
@@ -3463,7 +3636,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             session = runtime.snapshot(session_id)
             private_retention_quota_bytes = session.budget.max_evidence_bytes
             preview = store.load_runtime_lock_preview(session.preview_id)
-            workload = _validate_native_runtime_lock_session(
+            workload, execution_binding = _validate_native_runtime_lock_session(
                 session,
                 preview,
                 runtime_lock_policy,
@@ -3476,12 +3649,19 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             executable_path = _runtime_lock_project_executable(
                 runtime_lock_project.path,
                 workload.program,
+                stage="runtime_lock_collection",
             )
             target = launcher.inspect_target(executable_path)
+            current_execution_binding = _build_native_runtime_lock_execution_binding(
+                launcher.capability(executable_path),
+                runtime_lock_policy,
+                measurement_semantics,
+            )
             if (
                 target.project_relative_path != workload.program
                 or target.binary_sha256 != workload.program_sha256
                 or target.size != workload.program_size
+                or current_execution_binding != execution_binding
             ):
                 failure_reason = "target_identity_changed"
                 raise PerfLensError(
@@ -3508,6 +3688,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 measurement_semantics,
                 duration_seconds,
                 max_events,
+                execution_binding.execution_identity_sha256,
             )
             lease = runtime.begin_run(
                 session_id,
@@ -3583,7 +3764,23 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     created_at=launch_result.started_at,
                 )
             _assert_runtime_lock_import_unchanged(pinned)
-            evidence = receipt.evidence
+            unbound_evidence = receipt.evidence
+            unbound_analysis = build_runtime_lock_analysis(unbound_evidence)
+            with os.fdopen(os.dup(pinned.descriptor), "rb") as private_source:
+                os.lseek(private_source.fileno(), 0, os.SEEK_SET)
+                private_verification = verify_runtime_lock_analysis_artifact(
+                    unbound_analysis,
+                    unbound_evidence,
+                    private_source_stream=private_source,
+                    normalized_source_sha256=receipt.normalized_source_sha256,
+                    normalized_source_bytes=receipt.normalized_source_bytes,
+                )
+            _assert_runtime_lock_import_unchanged(pinned)
+            require_usable_runtime_lock_analysis(private_verification)
+            evidence = bind_native_pthread_evidence_execution(
+                unbound_evidence,
+                execution_binding,
+            )
             try:
                 identity_warnings = _assert_native_runtime_lock_evidence_identity(
                     evidence,
@@ -3591,6 +3788,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     receipt_source_bytes=receipt.raw_source_bytes,
                     launch_result=launch_result,
                     expected_target_identity_sha256=target.identity_sha256,
+                    execution_binding=execution_binding,
                     measurement_semantics=measurement_semantics,
                     duration_threshold_ns=threshold_ns,
                     max_events=max_events,
@@ -3599,18 +3797,16 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 failure_reason = "target_identity_changed"
                 raise
             analysis = build_runtime_lock_analysis(evidence)
-            with os.fdopen(os.dup(pinned.descriptor), "rb") as private_source:
-                os.lseek(private_source.fileno(), 0, os.SEEK_SET)
-                private_verification = verify_runtime_lock_analysis_artifact(
-                    analysis,
+            verification = verify_runtime_lock_analysis_artifact(
+                analysis,
+                evidence,
+                source_replay_receipt=build_runtime_lock_source_replay_receipt(
                     evidence,
-                    private_source_stream=private_source,
                     normalized_source_sha256=receipt.normalized_source_sha256,
                     normalized_source_bytes=receipt.normalized_source_bytes,
-                )
-            _assert_runtime_lock_import_unchanged(pinned)
-            require_usable_runtime_lock_analysis(private_verification)
-            verification = private_verification
+                ),
+            )
+            require_usable_runtime_lock_analysis(verification)
             retain_private_stream_on_failure = False
             actual_evidence_bytes = len(serialize_json(evidence))
             actual_exact_events = len(evidence.events) if measurement_semantics == "exact" else 0
@@ -3675,6 +3871,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 operation_identity_sha256=operation_identity,
                 target_identity_sha256=target.identity_sha256,
                 adapter_id="native_pthread",
+                adapter_execution_identity_sha256=(execution_binding.execution_identity_sha256),
                 measurement_semantics=measurement_semantics,
                 workload_identity_sha256=workload.workload_identity_sha256,
                 runtime_lock_evidence_id=evidence.runtime_lock_evidence_id,
@@ -3742,7 +3939,15 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "runtime_lock_evidence_id": run.runtime_lock_evidence_id,
                     "runtime_lock_analysis_id": run.runtime_lock_analysis_id,
                     "runtime_lock_verification_id": run.runtime_lock_verification_id,
-                    "private_source_replay_status": private_verification.verification_status,
+                    "runtime_lock_run_finalization_id": (settlement.finalization.finalization_id),
+                    "runtime_lock_run_finalization_content_sha256": (
+                        settlement.finalization.content_sha256
+                    ),
+                    "settled_session_artifact_id": settlement.session.session_artifact_id,
+                    "settled_session_revision": settlement.session.revision,
+                    "private_source_replay_status": (
+                        _runtime_lock_private_source_replay_status(verification)
+                    ),
                     "quality_status": run.quality_status,
                     "event_count": run.event_count,
                     "evidence_bytes": run.evidence_bytes,
@@ -3776,7 +3981,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     )
             elif lease is None:
                 with suppress(PerfLensError):
-                    terminal = runtime.revoke(session_id)
+                    terminal = runtime.revoke(session_id, reason="request_rejected")
                     store.save(
                         terminal,
                         terminal.session_artifact_id,
@@ -4064,7 +4269,15 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "runtime_lock_evidence_id": run.runtime_lock_evidence_id,
                     "runtime_lock_analysis_id": run.runtime_lock_analysis_id,
                     "runtime_lock_verification_id": run.runtime_lock_verification_id,
-                    "private_source_replay_status": private_verification.verification_status,
+                    "runtime_lock_run_finalization_id": (settlement.finalization.finalization_id),
+                    "runtime_lock_run_finalization_content_sha256": (
+                        settlement.finalization.content_sha256
+                    ),
+                    "settled_session_artifact_id": settlement.session.session_artifact_id,
+                    "settled_session_revision": settlement.session.revision,
+                    "private_source_replay_status": (
+                        _runtime_lock_private_source_replay_status(verification)
+                    ),
                     "quality_status": run.quality_status,
                     "event_count": run.event_count,
                     "evidence_bytes": run.evidence_bytes,
@@ -4090,7 +4303,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     )
             elif lease is None:
                 with suppress(PerfLensError):
-                    terminal = runtime.revoke(session_id)
+                    terminal = runtime.revoke(session_id, reason="request_rejected")
                     store.save(
                         terminal,
                         terminal.session_artifact_id,
@@ -4169,13 +4382,22 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     async def preview_docker_optimization_session(
         allowed_modes: tuple[OptimizationCollectionMode, ...],
         runtime_lock_adapters: tuple[RuntimeLockAdapterId, ...] = (),
+        runtime_lock_semantics: dict[RuntimeLockAdapterId, MeasurementSemantics] | None = None,
     ) -> DockerOptimizationPreviewArtifact:
         runtime = get_docker_optimization_runtime()
         runtime_lock_scope: DockerRuntimeLockAuthorizationScope | None = None
         runtime_lock_inspection: RuntimeLockCapabilityInspection | None = None
         if runtime_lock_adapters:
             runtime_lock_scope, runtime_lock_inspection = build_docker_runtime_lock_scope(
-                runtime_lock_adapters
+                runtime_lock_adapters,
+                runtime_lock_semantics,
+            )
+        elif runtime_lock_semantics:
+            raise PerfLensError(
+                ErrorCode.PATH_SAFETY_VIOLATION,
+                "runtime_lock_authorization",
+                "Docker optimization Runtime Lock semantics require requested Adapters",
+                recoverable=True,
             )
         if runtime_lock_scope is None:
             result = runtime.preview(allowed_modes=allowed_modes)
@@ -4650,7 +4872,6 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             max_output_bytes=max_output_bytes,
             trace_max_duration_seconds=docker_policy.trace_max_duration_seconds,
         )
-        started = time.monotonic()
         executed: _ExecutedBrokerPlan | None = None
         resource_reader: CgroupV2ResourceReader | None = None
         resource_monitor: CgroupSnapshotMonitor | None = None
@@ -4673,6 +4894,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 runtime_lock_request.launch if runtime_lock_request is not None else None
             ),
         )
+        workload_released = False
+        workload_started_at: datetime | None = None
+        workload_started_monotonic: float | None = None
+        workload_finished_monotonic: float | None = None
         try:
             captured_path_sha256 = tuple(
                 sorted(item.relative_path_sha256 for item in treatment_snapshot.files)
@@ -4781,11 +5006,9 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             resource_reader = CgroupV2ResourceReader(run.prepared.target)
             before_snapshot = resource_reader.capture()
             resource_monitor = CgroupSnapshotMonitor(resource_reader, before_snapshot)
-            workload_released = False
-            workload_started_at: datetime | None = None
 
             def capture_and_release_workload() -> None:
-                nonlocal workload_released, workload_started_at
+                nonlocal workload_released, workload_started_at, workload_started_monotonic
                 if workload_released:
                     raise PerfLensError(
                         ErrorCode.PATH_SAFETY_VIOLATION,
@@ -4795,6 +5018,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 assert resource_monitor is not None
                 resource_monitor.start()
                 try:
+                    # The workload budget begins when the authenticated Gate is released, not
+                    # while PerfLens prepares the container and Collector. Keep the monotonic
+                    # deadline separate from the wall-clock timestamp persisted in Artifacts.
+                    workload_started_monotonic = time.monotonic()
                     workload_started_at = datetime.now(tz=UTC)
                     run.coordinator.release(run.prepared)
                 except BaseException:
@@ -4828,8 +5055,18 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 if pinned_process_root is not None:
                     pinned_process_root.close()
                     pinned_process_root = None
-            elapsed = math.ceil(time.monotonic() - started)
-            remaining = workload_timeout_seconds - elapsed
+            if workload_started_at is None or workload_started_monotonic is None:
+                raise PerfLensError(
+                    ErrorCode.PROFILE_PARSE_FAILED,
+                    "runtime_lock_docker_binding",
+                    "Docker workload release time is unavailable",
+                    recoverable=False,
+                )
+            remaining = _remaining_managed_workload_timeout_seconds(
+                workload_started_monotonic=workload_started_monotonic,
+                workload_timeout_seconds=workload_timeout_seconds,
+                now_monotonic=time.monotonic(),
+            )
             if remaining <= 0:
                 raise PerfLensError(
                     ErrorCode.RESOURCE_LIMIT_EXCEEDED,
@@ -4838,14 +5075,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     recoverable=True,
                 )
             run.coordinator.wait(run.prepared, timeout_seconds=remaining)
+            workload_finished_monotonic = time.monotonic()
             workload_finished_at = datetime.now(tz=UTC)
-            if workload_started_at is None:
-                raise PerfLensError(
-                    ErrorCode.PROFILE_PARSE_FAILED,
-                    "runtime_lock_docker_binding",
-                    "Docker workload release time is unavailable",
-                    recoverable=False,
-                )
             assert_treatment_snapshot_current(treatment_snapshot)
             runtime_lock_capture: DockerRuntimeLockCapture | None = None
             if runtime_lock_request is not None:
@@ -4925,6 +5156,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     docker_policy.managed.benchmark_output,
                     source_format=docker_policy.managed.benchmark_format,
                     benchmark_name=docker_policy.managed.benchmark_name,
+                    output_owner_uid=target.host_uid,
                 )
                 if docker_policy.managed.benchmark_output
                 else None
@@ -4969,7 +5201,12 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             )
             session = docker_runtime.finish_managed_run(
                 run,
-                actual_active_seconds=max(1, math.ceil(time.monotonic() - started)),
+                actual_active_seconds=_managed_workload_active_seconds(
+                    workload_started_monotonic=workload_started_monotonic,
+                    workload_finished_monotonic=workload_finished_monotonic,
+                    workload_timeout_seconds=workload_timeout_seconds,
+                    now_monotonic=time.monotonic(),
+                ),
                 actual_evidence_bytes=executed.evidence_bytes,
             )
             if benchmark is not None:
@@ -5084,7 +5321,12 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             with suppress(PerfLensError):
                 docker_runtime.finish_managed_run(
                     run,
-                    actual_active_seconds=max(1, math.ceil(time.monotonic() - started)),
+                    actual_active_seconds=_managed_workload_active_seconds(
+                        workload_started_monotonic=workload_started_monotonic,
+                        workload_finished_monotonic=workload_finished_monotonic,
+                        workload_timeout_seconds=workload_timeout_seconds,
+                        now_monotonic=time.monotonic(),
+                    ),
                     actual_evidence_bytes=(executed.evidence_bytes if executed is not None else 0),
                 )
             raise
@@ -5806,7 +6048,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         name="verify_runtime_lock_analysis",
         description=(
             "Independently replay a stored Runtime Lock Analysis from its bound Evidence before "
-            "Agent interpretation."
+            "Agent interpretation. Pass the Run-bound Verification ID for active collection so "
+            "the persisted private-source replay receipt is also revalidated."
         ),
         annotations=READ_ONLY,
         meta={"perflens/permission": "READ_ONLY"},
@@ -5814,8 +6057,23 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     )
     async def verify_runtime_lock_analysis(
         runtime_lock_analysis_id: str,
+        runtime_lock_verification_id: str | None = None,
     ) -> RuntimeLockAnalysisVerificationArtifact:
         analysis, evidence, _ = store.load_runtime_lock_analysis(runtime_lock_analysis_id)
+        if runtime_lock_verification_id is not None:
+            persisted = store.load_runtime_lock_verification(runtime_lock_verification_id)
+            if persisted.runtime_lock_analysis_id != analysis.runtime_lock_analysis_id:
+                raise PerfLensError(
+                    ErrorCode.PROFILE_PARSE_FAILED,
+                    "runtime_lock_verification",
+                    "Stored Runtime Lock Verification does not bind the requested Analysis",
+                    recoverable=False,
+                    details={
+                        "runtime_lock_analysis_id": runtime_lock_analysis_id,
+                        "runtime_lock_verification_id": runtime_lock_verification_id,
+                    },
+                )
+            return persisted
         return verify_runtime_lock_analysis_artifact(analysis, evidence)
 
     @server.tool(
@@ -5999,7 +6257,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         name="build_runtime_lock_diagnosis_bundle",
         description=(
             "Build and store one bounded evidence-constrained Runtime Lock diagnosis; it never "
-            "upgrades an observation to a root cause or Verified Improvement."
+            "upgrades an observation to a root cause or Verified Improvement. Pass the Run-bound "
+            "Verification ID to retain active collection's private-source replay proof."
         ),
         annotations=WRITES_ARTIFACTS,
         meta={"perflens/permission": "WRITES_ARTIFACTS"},
@@ -6007,10 +6266,24 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     )
     async def build_runtime_lock_diagnosis_bundle(
         runtime_lock_analysis_id: str,
+        runtime_lock_verification_id: str | None = None,
     ) -> ArtifactReference:
         analysis, evidence, verification = store.load_runtime_lock_analysis(
             runtime_lock_analysis_id
         )
+        if runtime_lock_verification_id is not None:
+            verification = store.load_runtime_lock_verification(runtime_lock_verification_id)
+            if verification.runtime_lock_analysis_id != analysis.runtime_lock_analysis_id:
+                raise PerfLensError(
+                    ErrorCode.PROFILE_PARSE_FAILED,
+                    "runtime_lock_diagnosis",
+                    "Stored Runtime Lock Verification does not bind the requested Analysis",
+                    recoverable=False,
+                    details={
+                        "runtime_lock_analysis_id": runtime_lock_analysis_id,
+                        "runtime_lock_verification_id": runtime_lock_verification_id,
+                    },
+                )
         diagnosis = create_runtime_lock_diagnosis(
             analysis,
             evidence,
@@ -6030,6 +6303,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             ),
             summary={
                 "runtime_lock_analysis_id": diagnosis.runtime_lock_analysis_id,
+                "runtime_lock_verification_id": diagnosis.runtime_lock_verification_id,
                 "runtime": diagnosis.runtime,
                 "measurement_semantics": diagnosis.measurement_semantics,
                 "quality_status": diagnosis.quality_status,
@@ -6325,6 +6599,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "scheduler-analysis",
             "off-cpu-analysis",
             "lock-analysis",
+            "runtime-adapter-capability",
             "runtime-lock-capability",
             "runtime-lock-preview",
             "runtime-lock-evidence",
@@ -6333,7 +6608,17 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             "runtime-lock-diagnosis",
             "runtime-lock-session",
             "runtime-lock-run",
+            "runtime-lock-run-finalization",
             "runtime-lock-comparison",
+            "docker-build-capability",
+            "docker-build-recipe",
+            "docker-build-context",
+            "docker-optimization-preview",
+            "docker-optimization-session",
+            "docker-build",
+            "docker-optimization-iteration",
+            "docker-optimization-disposition",
+            "container-target",
             "container-resource-context",
             "container-run",
             "container-workload-spec",
@@ -6865,6 +7150,36 @@ def _preflight_managed_collection(
         )
 
 
+def _remaining_managed_workload_timeout_seconds(
+    *,
+    workload_started_monotonic: float,
+    workload_timeout_seconds: int,
+    now_monotonic: float,
+) -> float:
+    """Return the precise Gate-relative remainder of one authorized workload window."""
+
+    elapsed = max(0.0, now_monotonic - workload_started_monotonic)
+    return float(workload_timeout_seconds) - elapsed
+
+
+def _managed_workload_active_seconds(
+    *,
+    workload_started_monotonic: float | None,
+    workload_finished_monotonic: float | None,
+    workload_timeout_seconds: int,
+    now_monotonic: float,
+) -> int:
+    """Charge only Gate-released workload lifetime against the integer run budget."""
+
+    if workload_started_monotonic is None:
+        return 0
+    finished = now_monotonic
+    if workload_finished_monotonic is not None:
+        finished = workload_finished_monotonic
+    elapsed = max(0.0, finished - workload_started_monotonic)
+    return min(workload_timeout_seconds, max(1, math.ceil(elapsed)))
+
+
 def _managed_run_reference(
     run: ContainerRunArtifact,
     collection: ArtifactReference,
@@ -7304,9 +7619,19 @@ def _require_runtime_lock_adapter_capability(
         )
 
 
-def _runtime_lock_project_executable(project_root: Path, value: str) -> Path:
+def _runtime_lock_project_executable(
+    project_root: Path,
+    value: str,
+    *,
+    stage: Literal["runtime_lock_authorization", "runtime_lock_collection"],
+) -> Path:
     if not value or "\x00" in value or "\\" in value or len(value.encode("utf-8")) > 4096:
-        raise _runtime_lock_native_error("Native pthread executable path is invalid")
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Runtime Lock workload executable path is invalid",
+            recoverable=True,
+        )
     relative = PurePosixPath(value)
     if (
         relative.is_absolute()
@@ -7314,10 +7639,74 @@ def _runtime_lock_project_executable(project_root: Path, value: str) -> Path:
         or relative in {PurePosixPath("."), PurePosixPath("..")}
         or ".." in relative.parts
     ):
-        raise _runtime_lock_native_error(
-            "Native pthread executable must be one normalized project-relative path"
+        raise PerfLensError(
+            ErrorCode.PATH_SAFETY_VIOLATION,
+            stage,
+            "Runtime Lock workload executable must be one normalized project-relative path",
+            recoverable=True,
         )
     return project_root.joinpath(*relative.parts)
+
+
+def _build_native_runtime_lock_execution_binding(
+    capability: NativeLaunchCapability,
+    policy: RuntimeLockProjectPolicy,
+    measurement_semantics: Literal["exact", "thresholded"],
+) -> RuntimeLockAdapterExecutionBinding:
+    adapter_policy = policy.adapter_policy("native_pthread")
+    threshold = (
+        adapter_policy.duration_threshold_ns if measurement_semantics == "thresholded" else None
+    )
+    if (
+        capability.availability not in {"available", "partial"}
+        or capability.probe_sha256 is None
+        or capability.runtime_glibc_version is None
+        or measurement_semantics not in capability.supported_semantics
+        or measurement_semantics not in adapter_policy.allowed_semantics
+        or (measurement_semantics == "thresholded" and threshold is None)
+    ):
+        raise _runtime_lock_native_error(
+            "The Native pthread probe execution binding is unavailable for this target"
+        )
+    tools = ()
+    toolchain = derive_runtime_lock_toolchain_identity(tools)
+    metadata = hashlib.sha256(
+        (
+            "perflens-native-pthread-metadata-v1\0"
+            f"{NATIVE_PTHREAD_PROBE_ABI_VERSION}\0"
+            f"{NATIVE_PTHREAD_PROBE_PROTOCOL_VERSION}"
+        ).encode()
+    ).hexdigest()
+    runtime_version = f"glibc-{capability.runtime_glibc_version}"
+    execution = derive_runtime_lock_adapter_execution_identity(
+        "native_pthread",
+        "native-pthread-adapter-v1",
+        "ld-preload",
+        runtime_version,
+        measurement_semantics,
+        measurement_semantics,
+        threshold,
+        toolchain,
+        capability.probe_sha256,
+        metadata,
+        capability.probe_sha256,
+    )
+    return RuntimeLockAdapterExecutionBinding(
+        adapter_id="native_pthread",
+        adapter_version="native-pthread-adapter-v1",
+        backend_id="ld-preload",
+        runtime_version=runtime_version,
+        profile=measurement_semantics,
+        measurement_semantics=measurement_semantics,
+        duration_threshold_ns=threshold,
+        tools=tools,
+        toolchain_identity_sha256=toolchain,
+        configuration_sha256=capability.probe_sha256,
+        metadata_sha256=metadata,
+        runtime_payload_identity_sha256=capability.probe_sha256,
+        execution_identity_sha256=execution,
+        limitations=capability.limitations,
+    )
 
 
 def _validate_native_runtime_lock_session(
@@ -7328,8 +7717,13 @@ def _validate_native_runtime_lock_session(
     measurement_semantics: Literal["exact", "thresholded"],
     duration_seconds: int,
     max_events: int,
-) -> RuntimeLockWorkloadBinding:
+) -> tuple[RuntimeLockWorkloadBinding, RuntimeLockAdapterExecutionBinding]:
     workload = preview.workload
+    execution_binding = (
+        preview.adapter_execution_bindings[0]
+        if len(preview.adapter_execution_bindings) == 1
+        else None
+    )
     if (
         session.state != "active"
         or session.target_scope != "host_launched_workload"
@@ -7341,6 +7735,9 @@ def _validate_native_runtime_lock_session(
         or workload is None
         or workload.adapter_id != "native_pthread"
         or workload.workload_kind != "native_elf"
+        or execution_binding is None
+        or execution_binding.adapter_id != "native_pthread"
+        or execution_binding.measurement_semantics != measurement_semantics
         or measurement_semantics not in session.allowed_semantics
         or isinstance(duration_seconds, bool)
         or not 1 <= duration_seconds <= session.budget.max_collection_duration_seconds
@@ -7363,7 +7760,7 @@ def _validate_native_runtime_lock_session(
     adapter_policy = policy.adapter_policy("native_pthread")
     if measurement_semantics == "exact" and not adapter_policy.exact_enabled:
         raise _runtime_lock_native_error("Native pthread exact collection is disabled by policy")
-    return workload
+    return workload, execution_binding
 
 
 def _runtime_lock_native_operation_identity(
@@ -7372,10 +7769,11 @@ def _runtime_lock_native_operation_identity(
     measurement_semantics: str,
     duration_seconds: int,
     max_events: int,
+    execution_identity_sha256: str,
 ) -> str:
     material = "\0".join(
         (
-            "perflens-runtime-lock-native-operation-v1",
+            "perflens-runtime-lock-native-operation-v2",
             session.session_id,
             str(session.revision),
             str(session.workload_runs_used + 1),
@@ -7383,6 +7781,7 @@ def _runtime_lock_native_operation_identity(
             measurement_semantics,
             str(duration_seconds),
             str(max_events),
+            execution_identity_sha256,
         )
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
@@ -7482,17 +7881,30 @@ def _validate_cpython_runtime_lock_session(
         or workload.adapter_id != "cpython_threading"
         or workload.workload_kind != "python_script"
         or preview.adapter_execution_bindings != (execution_binding,)
-        or isinstance(duration_seconds, bool)
-        or not 1 <= duration_seconds <= session.budget.max_collection_duration_seconds
-        or isinstance(max_events, bool)
-        or not 1 <= max_events <= session.budget.max_exact_events
-        or (
-            measurement_semantics == "exact"
-            and duration_seconds > session.budget.max_exact_duration_seconds
-        )
     ):
         raise _runtime_lock_native_error(
             "CPython collection is outside the authorized Runtime Lock Session"
+        )
+    if (
+        isinstance(duration_seconds, bool)
+        or not 1 <= duration_seconds <= session.budget.max_collection_duration_seconds
+    ):
+        raise _runtime_lock_collection_resource_error(
+            "CPython duration_seconds must be between 1 and the authorized "
+            f"max_collection_duration_seconds ({session.budget.max_collection_duration_seconds})"
+        )
+    if (
+        measurement_semantics == "exact"
+        and duration_seconds > session.budget.max_exact_duration_seconds
+    ):
+        raise _runtime_lock_collection_resource_error(
+            "CPython exact duration_seconds exceeds the authorized "
+            f"max_exact_duration_seconds ({session.budget.max_exact_duration_seconds})"
+        )
+    if isinstance(max_events, bool) or not 1 <= max_events <= session.budget.max_exact_events:
+        raise _runtime_lock_collection_resource_error(
+            "CPython max_events must be between 1 and the authorized "
+            f"max_exact_events ({session.budget.max_exact_events})"
         )
     _validate_runtime_lock_preview_policy(
         policy,
@@ -7565,6 +7977,7 @@ def _validate_go_runtime_lock_session(
         or workload is None
         or workload.adapter_id != "go_pprof"
         or workload.workload_kind != "go_elf"
+        or preview.profile_kind != profile_kind
         or preview.adapter_execution_bindings != (execution_binding,)
         or not adapter_policy.file_backend_enabled
         or selected_rate is None
@@ -7613,6 +8026,7 @@ def _validate_go_loopback_runtime_lock_session(
         or session.allowed_semantics != ("cumulative",)
         or target is None
         or preview.workload is not None
+        or preview.profile_kind != profile_kind
         or preview.adapter_execution_bindings != (execution_binding,)
         or not adapter_policy.loopback_backend_enabled
         or selected_rate is None
@@ -7968,6 +8382,7 @@ def _assert_native_runtime_lock_evidence_identity(
     receipt_source_bytes: int,
     launch_result: NativeLaunchResult,
     expected_target_identity_sha256: str,
+    execution_binding: RuntimeLockAdapterExecutionBinding,
     measurement_semantics: Literal["exact", "thresholded"],
     duration_threshold_ns: int | None,
     max_events: int,
@@ -7987,7 +8402,16 @@ def _assert_native_runtime_lock_evidence_identity(
         or launch_result.target_uid != os.geteuid()
         or launch_result.target_pid not in evidence_tids
         or launch_result.target_pid not in launch_tids
-        or source.adapter_id != "native-pthread"
+        or source.runtime != "c_cpp"
+        or source.adapter_id != "native_pthread"
+        or source.adapter_version != execution_binding.adapter_version
+        or source.backend_id != execution_binding.backend_id
+        or source.backend_version != execution_binding.runtime_version
+        or source.runtime_version != execution_binding.runtime_version
+        or source.adapter_execution_identity_sha256 != execution_binding.execution_identity_sha256
+        or source.configuration_sha256 != execution_binding.configuration_sha256
+        or source.metadata_sha256 != execution_binding.metadata_sha256
+        or source.tool is not None
         or source.measurement_semantics != measurement_semantics
         or source.duration_threshold_ns != duration_threshold_ns
         or source.source_sha256 != receipt_source_sha256
@@ -8265,6 +8689,15 @@ def _is_native_runtime_lock_retained_name(name: str) -> bool:
 
 
 def _runtime_lock_native_retention_limit(message: str) -> PerfLensError:
+    return PerfLensError(
+        ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+        "runtime_lock_collection",
+        message,
+        recoverable=True,
+    )
+
+
+def _runtime_lock_collection_resource_error(message: str) -> PerfLensError:
     return PerfLensError(
         ErrorCode.RESOURCE_LIMIT_EXCEEDED,
         "runtime_lock_collection",

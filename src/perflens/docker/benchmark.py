@@ -42,9 +42,13 @@ def load_managed_benchmark(
     source_format: BenchmarkFormat,
     benchmark_name: str | None,
     invoking_uid: int | None = None,
+    output_owner_uid: int | None = None,
 ) -> BenchmarkArtifact:
     """Read a stopped workload's private benchmark once and bind it to its raw bytes."""
     uid = os.geteuid() if invoking_uid is None else invoking_uid
+    expected_output_uid = uid if output_owner_uid is None else output_owner_uid
+    if isinstance(expected_output_uid, bool) or not 0 <= expected_output_uid < 1 << 32:
+        raise _benchmark_error("Managed Docker benchmark output owner UID is invalid")
     root = _canonical_private_root(scratch_root, uid)
     output = root / _relative_output_path(relative_path)
     if output.is_symlink():
@@ -63,7 +67,7 @@ def load_managed_benchmark(
         if (
             not stat.S_ISREG(before.st_mode)
             or before.st_nlink != 1
-            or before.st_uid != uid
+            or before.st_uid != expected_output_uid
             or before.st_mode & 0o022
             or before.st_size > _MAX_BENCHMARK_BYTES
         ):
@@ -115,16 +119,29 @@ def load_managed_benchmark(
 def _canonical_private_root(path: Path, invoking_uid: int) -> Path:
     if not path.is_absolute() or path.is_symlink():
         raise _benchmark_error("Managed Docker scratch root must be absolute and non-symlinked")
+    parent = path.parent
     try:
         resolved = path.resolve(strict=True)
         metadata = path.stat(follow_symlinks=False)
+        resolved_parent = parent.resolve(strict=True)
+        parent_metadata = parent.stat(follow_symlinks=False)
     except OSError as exc:
         raise _benchmark_error("Managed Docker scratch root is unavailable") from exc
     if (
         resolved != path
         or not stat.S_ISDIR(metadata.st_mode)
         or metadata.st_uid != invoking_uid
-        or stat.S_IMODE(metadata.st_mode) != 0o700
+        # The exact 0733 mode is the reviewed managed-container mount contract:
+        # the fixed numeric container UID may create outputs, while directory
+        # listing remains unavailable. The enclosing per-run directory is the
+        # host-side 0700 privacy boundary.
+        or stat.S_IMODE(metadata.st_mode) != 0o733
+        or parent == path
+        or parent.is_symlink()
+        or resolved_parent != parent
+        or not stat.S_ISDIR(parent_metadata.st_mode)
+        or parent_metadata.st_uid != invoking_uid
+        or stat.S_IMODE(parent_metadata.st_mode) != 0o700
     ):
         raise _benchmark_error("Managed Docker scratch root identity or permissions are unsafe")
     return resolved

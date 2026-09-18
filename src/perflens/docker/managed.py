@@ -398,7 +398,7 @@ class ManagedDockerCoordinator:
             prepared.control.close()
         prepared.state = "released"
 
-    def wait(self, prepared: PreparedManagedContainer, *, timeout_seconds: int) -> int:
+    def wait(self, prepared: PreparedManagedContainer, *, timeout_seconds: float) -> int:
         if prepared.state != "released":
             raise _managed_error("Managed Docker wait requires one released workload")
         exit_code = self._adapter.wait_managed_container(

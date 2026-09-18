@@ -101,8 +101,8 @@ perflens init --docker --runtime-locks
 `init` 默认只在当前项目激活 Codex 和 Claude Code 集成，并开启受策略约束的自动采集。
 只使用一个默认客户端时传 `--client codex` 或 `--client claude-code`；OpenCode 使用
 `--client opencode`，本地 Copilot CLI 与 VS Code 插件一起使用 `--client copilot`；
-只分析已有证据时传 `--read-only`。没有运行 `init` 的其他项目不会出现 PerfLens Skill
-或项目 MCP 配置。
+显式传 `--client all` 会配置全部四类集成，但不会改变无参数时的默认集合。只分析已有证据时
+传 `--read-only`。没有运行 `init` 的其他项目不会出现 PerfLens Skill 或项目 MCP 配置。
 同一项目可以重复传入 `--client`。若希望以后普通 `init` 默认包含其他客户端，可运行
 `perflens client-defaults --client codex --client claude-code --client copilot`；它写入严格的
 `~/.config/perflens/config.toml`。配置不存在时，默认仍只有 Codex + Claude Code；显式
@@ -311,6 +311,7 @@ perflens init --client codex     # 只启用 Codex
 perflens init --client claude-code --read-only
 perflens init --client opencode  # OpenCode
 perflens init --client copilot   # Copilot CLI + VS Code Copilot Agent
+perflens init --client all       # 上述全部四类客户端
 perflens init --update           # 安全更新已有项目接入
 ```
 

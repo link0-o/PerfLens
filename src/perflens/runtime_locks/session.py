@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from perflens import __version__
 from perflens.application.evidence import contract_content_sha256
@@ -528,11 +529,16 @@ class RuntimeLockSessionAuthority:
                 finalization=finalization,
             )
 
-    def revoke(self, access: RuntimeLockSessionAccess) -> RuntimeLockSessionArtifact:
+    def revoke(
+        self,
+        access: RuntimeLockSessionAccess,
+        *,
+        reason: RuntimeLockSessionEndReason = "explicitly_revoked",
+    ) -> RuntimeLockSessionArtifact:
         with self._lock:
             state = self._require(access, allow_inactive=True)
             if state.artifact.state == "active":
-                self._end(state, "revoked", "explicitly_revoked")
+                self._end(state, "revoked", reason)
             else:
                 self._release_active_lease(state)
             return state.artifact
@@ -767,6 +773,7 @@ class RuntimeLockSessionRuntime:
         import_roots: tuple[str, ...] = (),
         workload: RuntimeLockWorkloadBinding | None = None,
         process_target: RuntimeLockProcessTargetBinding | None = None,
+        profile_kind: Literal["mutex", "block"] | None = None,
         adapter_execution_bindings: tuple[RuntimeLockAdapterExecutionBinding, ...] = (),
         budget: RuntimeLockSessionBudget | None = None,
         planned_actions: tuple[str, ...],
@@ -804,6 +811,7 @@ class RuntimeLockSessionRuntime:
                 import_roots=import_roots,
                 workload=workload,
                 process_target=process_target,
+                profile_kind=profile_kind,
                 adapter_execution_bindings=adapter_execution_bindings,
                 budget=budget,
                 planned_actions=planned_actions,
@@ -925,10 +933,15 @@ class RuntimeLockSessionRuntime:
         with self._lock:
             return self._authority.snapshot(self._require_session(session_id).access)
 
-    def revoke(self, session_id: str) -> RuntimeLockSessionArtifact:
+    def revoke(
+        self,
+        session_id: str,
+        *,
+        reason: RuntimeLockSessionEndReason = "explicitly_revoked",
+    ) -> RuntimeLockSessionArtifact:
         with self._lock:
             session = self._require_session(session_id)
-            artifact = self._authority.revoke(session.access)
+            artifact = self._authority.revoke(session.access, reason=reason)
             self._authority.discard(session.access)
             self._sessions.pop(session_id, None)
             return artifact
@@ -1011,6 +1024,7 @@ def build_runtime_lock_session_preview(
     import_roots: tuple[str, ...] = (),
     workload: RuntimeLockWorkloadBinding | None = None,
     process_target: RuntimeLockProcessTargetBinding | None = None,
+    profile_kind: Literal["mutex", "block"] | None = None,
     adapter_execution_bindings: tuple[RuntimeLockAdapterExecutionBinding, ...] = (),
     budget: RuntimeLockSessionBudget | None = None,
     planned_actions: tuple[str, ...],
@@ -1061,6 +1075,7 @@ def build_runtime_lock_session_preview(
         "import_roots": tuple(sorted(import_roots)),
         "workload": workload,
         "process_target": process_target,
+        "profile_kind": profile_kind,
         "adapter_execution_bindings": adapter_execution_bindings,
         "budget": budget or RuntimeLockSessionBudget(),
         "planned_actions": planned_actions,
@@ -1410,6 +1425,7 @@ def _public_end_reason(value: str) -> RuntimeLockSessionEndReason:
         "internal_collection_error",
         "operation_lease_expired",
         "operation_reservation_exceeded",
+        "request_rejected",
         "resource_limit_exceeded",
         "run_artifact_mismatch",
         "session_budget_exhausted",

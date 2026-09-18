@@ -149,10 +149,10 @@ def client_defaults_command(
         list[str] | None,
         typer.Option(
             "--client",
-            metavar="codex|claude-code|opencode|copilot",
+            metavar="all|codex|claude-code|opencode|copilot",
             help=(
                 "保存为普通 perflens init 的默认客户端; 可重复传入, 例如 "
-                "--client codex --client copilot。"
+                "--client codex --client copilot; all 表示全部四类客户端。"
             ),
         ),
     ] = None,
@@ -170,7 +170,10 @@ def client_defaults_command(
         defaults = (
             load_client_defaults(config_path)
             if clients is None
-            else save_client_defaults(tuple(clients), config_path=config_path)
+            else save_client_defaults(
+                normalize_client_options(tuple(clients)),
+                config_path=config_path,
+            )
         )
     except PerfLensError as exc:
         _fail(exc)
@@ -379,11 +382,10 @@ def init_command(
         list[str] | None,
         typer.Option(
             "--client",
-            metavar="codex|claude-code|opencode|copilot",
+            metavar="all|codex|claude-code|opencode|copilot",
             help=(
                 "临时覆盖当前项目的 AI 客户端; 可重复传入 codex、claude-code、"
-                "opencode 或 copilot。省略时读取客户端默认配置; 旧的 all 值仍表示 "
-                "Codex 和 Claude Code。"
+                "opencode 或 copilot; all 表示全部四类客户端。省略时读取客户端默认配置。"
             ),
         ),
     ] = None,

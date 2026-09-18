@@ -10,7 +10,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 from mcp.client import Client
@@ -39,6 +39,7 @@ from tests.unit.test_docker_comparison import (
 import perflens.mcp.server as server_module
 from perflens.contracts.artifacts import AnalysisArtifact, BenchmarkArtifact
 from perflens.contracts.docker import ContainerMeasurementArtifact
+from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.mcp.server import ServerConfig, create_server
 from perflens.mcp.storage import ArtifactStore, PathPolicy
 from perflens.runtime_locks import import_runtime_lock_ndjson
@@ -78,16 +79,20 @@ async def _authorize_host_session(
     adapter: str,
     semantics: str,
     executable: str,
+    profile_kind: GoProfileKind = "mutex",
 ) -> dict[str, Any]:
+    request: dict[str, object] = {
+        "target_scope": "host_launched_workload",
+        "allowed_adapters": [adapter],
+        "allowed_semantics": [semantics],
+        "executable": executable,
+        "arguments": [],
+    }
+    if adapter == "go_pprof":
+        request["profile_kind"] = profile_kind
     previewed = await client.call_tool(
         "preview_runtime_lock_session",
-        {
-            "target_scope": "host_launched_workload",
-            "allowed_adapters": [adapter],
-            "allowed_semantics": [semantics],
-            "executable": executable,
-            "arguments": [],
-        },
+        request,
     )
     assert not previewed.is_error, previewed.content
     preview = _structured(previewed)
@@ -140,6 +145,36 @@ def test_preview_rejects_ambiguous_host_and_import_scopes(tmp_path: Path) -> Non
     assert not list(artifacts.glob("*.runtime-lock-preview.json"))
 
 
+@pytest.mark.parametrize(
+    ("value", "message"),
+    (
+        ("", "Runtime Lock workload executable path is invalid"),
+        (
+            "/tmp/workload",
+            "Runtime Lock workload executable must be one normalized project-relative path",
+        ),
+    ),
+)
+@pytest.mark.parametrize(
+    "stage",
+    ("runtime_lock_authorization", "runtime_lock_collection"),
+)
+def test_runtime_lock_executable_path_errors_are_adapter_neutral_and_stage_specific(
+    tmp_path: Path,
+    value: str,
+    message: str,
+    stage: Literal["runtime_lock_authorization", "runtime_lock_collection"],
+) -> None:
+    with pytest.raises(PerfLensError) as captured:
+        server_module._runtime_lock_project_executable(tmp_path, value, stage=stage)
+
+    assert captured.value.code is ErrorCode.PATH_SAFETY_VIOLATION
+    assert captured.value.stage == stage
+    assert captured.value.message == message
+    assert captured.value.recoverable is True
+    assert "Native pthread" not in captured.value.message
+
+
 @pytest.mark.timeout(30)
 @pytest.mark.parametrize(
     ("failure", "message"),
@@ -185,9 +220,9 @@ def test_cpython_collection_failures_are_terminal_and_leave_no_public_run(
             return replace(result, exit_code=7)
         return result
 
-    def verify_replay(*args: object, **kwargs: object) -> bool:
+    def verify_replay(*args: object, **kwargs: object) -> object:
         if failure == "replay_mismatch":
-            return False
+            return None
         return cast(Any, original_replay)(*args, **kwargs)
 
     monkeypatch.setattr(CpythonThreadingLauncher, "launch", launch)

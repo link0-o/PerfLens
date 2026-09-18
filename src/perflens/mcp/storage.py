@@ -611,9 +611,17 @@ class ArtifactStore:
             runtime_lock_diagnosis_id,
             "runtime-lock-diagnosis",
         )
-        analysis, evidence, verification = self.load_runtime_lock_analysis(
+        analysis, evidence, _ = self.load_runtime_lock_analysis(
             diagnosis.runtime_lock_analysis_id
         )
+        verification = self.load_runtime_lock_verification(
+            diagnosis.runtime_lock_verification_id
+        )
+        if verification.runtime_lock_analysis_id != analysis.runtime_lock_analysis_id:
+            raise self._identity_error(
+                runtime_lock_diagnosis_id,
+                "runtime-lock-diagnosis",
+            )
         replayed = build_runtime_lock_diagnosis_bundle(
             analysis,
             evidence,

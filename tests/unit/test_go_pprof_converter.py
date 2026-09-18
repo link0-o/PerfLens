@@ -49,9 +49,7 @@ Mappings
 def _binding() -> RuntimeLockAdapterExecutionBinding:
     tools = (
         RuntimeLockAdapterToolBinding(name="go", version="1.24.4", binary_sha256="1" * 64),
-        RuntimeLockAdapterToolBinding(
-            name="pprof", version="1.24.4", binary_sha256="2" * 64
-        ),
+        RuntimeLockAdapterToolBinding(name="pprof", version="1.24.4", binary_sha256="2" * 64),
     )
     toolchain = derive_runtime_lock_toolchain_identity(tools)
     identity = derive_runtime_lock_adapter_execution_identity(
@@ -105,21 +103,30 @@ def test_mutex_profile_is_partial_process_aggregate_and_path_private() -> None:
     assert event.observed_count == 2
     assert event.estimated_count is None
     assert event.lock_id is None
+    assert any("releasing side" in item for item in evidence.quality.limitations)
+    assert [frame.symbol for frame in evidence.stacks[0].frames] == [
+        "runtime.main",
+        "example/work.hot",
+        "sync.(*Mutex).Unlock",
+    ]
     assert all(
         frame.source_file is None or "/" not in frame.source_file
         for frame in evidence.stacks[0].frames
     )
     assert "/private/" not in evidence.model_dump_json()
-    assert verify_go_pprof_replay(
-        BytesIO(MUTEX_RAW),
-        expected=receipt,
-        execution_binding=_binding(),
-        target_pid=100,
-        target_uid=1000,
-        target_start_time_ticks=900,
-        mutex_profile_fraction=5,
-        block_profile_rate_ns=None,
-    ) is not None
+    assert (
+        verify_go_pprof_replay(
+            BytesIO(MUTEX_RAW),
+            expected=receipt,
+            execution_binding=_binding(),
+            target_pid=100,
+            target_uid=1000,
+            target_start_time_ticks=900,
+            mutex_profile_fraction=5,
+            block_profile_rate_ns=None,
+        )
+        is not None
+    )
 
 
 def test_block_profile_keeps_independent_rate_and_channel_semantics() -> None:
@@ -140,6 +147,7 @@ def test_block_profile_keeps_independent_rate_and_channel_semantics() -> None:
     assert isinstance(event, RuntimeSampledContentionEvent)
     assert event.lock_kind == "channel"
     assert event.estimated_count is None
+    assert not any("releasing side" in item for item in evidence.quality.limitations)
 
 
 @pytest.mark.parametrize(

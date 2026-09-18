@@ -336,8 +336,32 @@ def test_discovery_rejects_supervisor_file_capabilities(
 
 
 def test_client_reports_missing_receipt_without_signalling_child(tmp_path: Path) -> None:
+    compiler = shutil.which("cc")
+    if compiler is None:
+        pytest.skip("C compiler is unavailable")
+    source = tmp_path / "silent-supervisor.c"
     fake = tmp_path / "silent-supervisor"
-    shutil.copyfile("/bin/true", fake)
+    source.write_text(
+        "#include <stdlib.h>\n"
+        "#include <string.h>\n"
+        "#include <unistd.h>\n"
+        "int main(int argc, char **argv) {\n"
+        "  int fd = -1;\n"
+        "  for (int i = 1; i + 1 < argc; ++i)\n"
+        '    if (strcmp(argv[i], "--request-fd") == 0) fd = atoi(argv[i + 1]);\n'
+        "  char buffer[4096];\n"
+        "  ssize_t count;\n"
+        "  if (fd < 0) return 2;\n"
+        "  while ((count = read(fd, buffer, sizeof(buffer))) > 0) {}\n"
+        "  return count == 0 ? 0 : 3;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    subprocess.run(  # noqa: S603 - fixed compiler argv for a private test helper
+        (compiler, "-O2", "-o", str(fake), str(source)),
+        check=True,
+        capture_output=True,
+    )
     fake.chmod(0o755)
     discovery = discover_runtime_supervisor_policy(fake, expected_owner_uid=os.geteuid())
     assert discovery.policy is not None

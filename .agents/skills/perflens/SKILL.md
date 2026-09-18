@@ -34,6 +34,13 @@ Always read [evidence-model.md](references/evidence-model.md). Load the topic re
 - Read [docker-analysis.md](references/docker-analysis.md) when the target runs in a local Docker
   container or the project Docker workload policy is selected.
 
+Do not infer host deployment ownership from `stat`, `ls`, or similar commands run inside the
+Agent client's filesystem sandbox or user namespace. Such a boundary may map host UID/GID 0 to
+65534 (`nobody:nogroup`) even when the real host object is root-owned. Prefer native PerfLens
+capability/status evidence or an administrator-supplied `perflens-admin ... --dry-run` result from
+the host namespace. If neither is available, report ownership as unverified rather than unsafe.
+Never accept UID 65534 as a substitute for the required root ownership.
+
 ## Default workflow
 
 1. If an existing Profile is available, call `analyze_profile` with its input path and explicit source type when auto-detection is ambiguous. If a local Docker container is the requested target, follow **Docker project optimization** below. If an exact host-project workload is the authorized evidence source, follow **Project-level optimization** below. If a live host PID is the authorized evidence source, follow **Automatic live collection** first.
@@ -241,20 +248,64 @@ instrument, attach, import, access pprof, or run a workload.
 Use the native MCP tools from the current project connection. If they are absent, ask the user to
 reload that connection; do not start another MCP process or create a protocol bridge.
 
+Read-only inspection never authorizes target execution. Do not launch, smoke-test, or
+compatibility-test the workload directly, even without profiler flags. Repository metadata and a
+request to inspect the project are not execution consent; only the native collection tool may
+start the exact workload after its displayed Preview has been explicitly confirmed and authorized.
+
 1. Call `inspect_runtime_lock_capability`. Select only an Adapter, target scope, and measurement
    semantics that are both available and necessary for the evidence gap.
 2. Call `preview_runtime_lock_session`. Show the exact target/workload, Adapter, runtime payload,
-   fixed tools, semantics/threshold, import roots, and budgets returned by the Preview. End the
-   response and wait for a fresh explicit user confirmation.
-3. Only after that reply call `authorize_runtime_lock_session` with the exact Preview hashes and
-   fixed authorization token. Client auto-approval is tool access, not target consent.
-4. Use `collect_runtime_lock_evidence` for a reviewed launched workload, or
+   fixed tools, semantics/threshold, import roots, and budgets returned by the Preview. A Go pprof
+   Preview must select exactly one `profile_kind` (`mutex` or `block`); collection must repeat that
+   exact value, and the persisted Run must retain it. For one target, end the response and wait for
+   a fresh explicit user confirmation.
+3. When the user explicitly requests a bounded multi-Adapter or multi-workload acceptance matrix,
+   create every independent exact Preview before stopping. Display every Preview ID and hash, all
+   fields required above, the planned per-child collection duration, `max_events` or
+   `profile_kind`, fixed execution order, aggregate maximum budgets, and failure policy. End the
+   response only once and wait for one fresh explicit reply covering every listed Preview. Each
+   Preview remains a standalone authorization scope; never describe the batch as one atomic
+   transaction or one Session.
+4. Only after that reply call `authorize_runtime_lock_session` with each exact Preview's hashes and
+   fixed authorization token. For a displayed batch, authorize every child immediately before its
+   Preview expires, then collect sequentially with no more than one active Adapter. One human reply
+   may cover the displayed batch, but the backend still performs separate authorization calls. Do
+   not ask again inside the unchanged displayed scope. If a Preview expires or changes, or any
+   authorization fails, stop without silently regenerating or retrying; display the complete
+   replacement batch and obtain one new explicit confirmation. Do not add retries, workloads,
+   arguments, Adapters, settings, or budgets that were absent from the confirmed batch. Client
+   auto-approval is tool access, not target consent.
+5. Use `collect_runtime_lock_evidence` for a reviewed launched workload, or
    `import_runtime_lock_evidence` for a policy-authorized source. Never substitute direct
    `LD_PRELOAD`, `java -XX:StartFlightRecording`, pprof HTTP, perf/uprobe, or shell execution.
-5. Call `analyze_runtime_lock_evidence`, then `verify_runtime_lock_analysis`; do not interpret a
-   failed verification. Query only bounded pages with `list_runtime_lock_hotspots` and
-   `get_runtime_lock_call_paths`, and build a diagnosis bundle only when durable evidence is useful.
-6. Compare only Run-bound analyses from the same authority with
+6. A successful `collect_runtime_lock_evidence` already returns a Run whose bound Analysis and
+   Verification were produced before private source cleanup. Its reference summary also returns
+   `runtime_lock_run_finalization_id`, `runtime_lock_run_finalization_content_sha256`,
+   `settled_session_artifact_id`, and `settled_session_revision`. Record those fields and read the
+   small `runtime-lock-run-finalization` Artifact before revoking the Session; require
+   `outcome=completed`, the same Run ID/content digest, and the same settled Session ID/revision.
+   Maintain an append-only Artifact ledger from the first capability inspection through final
+   revocation. Record the top-level and per-Adapter capability IDs, Preview ID, Session ID and every
+   returned Session Artifact ID/revision (including authorization revision 0, reservation,
+   settlement, and revocation), Evidence, Analysis, Verification, Run, and Run Finalization as each
+   tool returns them. `read_artifact_page` retrieves a known ID; it is not an Artifact enumerator.
+   Never claim that a final ID list is exhaustive if any response was lost to context compaction or
+   was not entered in the ledger; label the list partial instead of reconstructing or inventing IDs.
+   A later explicit revocation creates a new Session revision whose `settlement_finalization_id`
+   is intentionally null because that revision does not settle another operation. Never infer that
+   the Run Finalization is absent from that terminal null; use the ID returned by collection.
+   Read the Run and call
+   `verify_runtime_lock_analysis` with both its `runtime_lock_analysis_id` and
+   `runtime_lock_verification_id`; this independently revalidates the persisted source replay
+   receipt. Do not call `analyze_runtime_lock_evidence` again for that collected Evidence, because
+   a later public-only conversion cannot recreate the private-source receipt. For controlled
+   imports that return Evidence rather than a Run, call `analyze_runtime_lock_evidence`, then
+   `verify_runtime_lock_analysis` without a Verification ID. Do not interpret a failed
+   verification. Query only bounded pages with `list_runtime_lock_hotspots` and
+   `get_runtime_lock_call_paths`. Build a diagnosis bundle only when durable evidence is useful;
+   for an active Run, pass that same Run-bound Verification ID to the bundle builder.
+7. Compare only Run-bound analyses from the same authority with
    `compare_runtime_lock_analyses`. Preserve exact, thresholded, sampled, and cumulative meanings;
    do not compare or add their raw counts as if they were one measurement model.
 
@@ -272,8 +323,10 @@ Docker correctness, Benchmark, perf, resource-transfer, and replay gates.
 
 Always report Adapter/runtime versions, source semantics, threshold or sampling configuration,
 visibility/fast-path limits, loss/truncation, owner/hold provenance, verification status, and
-allowed/forbidden conclusions. An Artifact-local opaque lock ID must never be correlated across
-Artifacts. Revoke the session when work is complete or cannot continue safely.
+allowed/forbidden conclusions. Keep Evidence `quality.status` distinct from Run `quality_status`;
+either may be `complete`/`partial` for a different contract layer. An Artifact-local opaque lock ID
+must never be correlated across Artifacts. Revoke the session when work is complete or cannot
+continue safely.
 
 ## Automatic live collection
 

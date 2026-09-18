@@ -36,6 +36,7 @@ _FAKE_DOCKER = """#!/usr/bin/python3
 import json
 import os
 import sys
+import time
 
 args = sys.argv[1:]
 command = args[4:]
@@ -93,6 +94,8 @@ elif command[:2] == ["container", "create"]:
 elif command[:2] in (["container", "start"], ["container", "stop"], ["container", "rm"]):
     sys.stdout.write("a" * 64 + "\\n")
 elif command[:2] == ["container", "wait"]:
+    if variant == "slow-wait":
+        time.sleep(0.2)
     sys.stdout.write("7\\n")
 else:
     raise SystemExit(64)
@@ -306,6 +309,35 @@ def test_managed_adapter_derives_one_fixed_sandbox_and_lifecycle() -> None:
             ("container", "wait", container_id),
             ("container", "stop", "--time"),
             ("container", "rm", container_id),
+        )
+
+
+def test_managed_adapter_preserves_fractional_wait_timeout_and_reports_its_stage() -> None:
+    with _docker_sandbox(variant="slow-wait") as sandbox:
+        adapter = _adapter(sandbox)
+        with pytest.raises(PerfLensError) as captured:
+            adapter.wait_managed_container("a" * 64, timeout_seconds=0.05)
+
+    error = captured.value
+    assert error.code == ErrorCode.EXTERNAL_TOOL_TIMEOUT
+    assert error.stage == "docker_workload"
+    assert error.retryable
+    assert error.details["docker_operation"] == "container_wait"
+    assert error.details["remaining_workload_timeout_seconds"] == 0.05
+
+
+@pytest.mark.parametrize(
+    "timeout_seconds",
+    (True, 0, -1, float("nan"), float("inf"), 1_260.1),
+)
+def test_managed_adapter_rejects_invalid_wait_timeout(timeout_seconds: object) -> None:
+    with (
+        _docker_sandbox() as sandbox,
+        pytest.raises(PerfLensError, match="outside its fixed bound"),
+    ):
+        _adapter(sandbox).wait_managed_container(
+            "a" * 64,
+            timeout_seconds=timeout_seconds,  # type: ignore[arg-type]
         )
 
 

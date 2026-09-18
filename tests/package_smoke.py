@@ -82,9 +82,7 @@ def main() -> None:
         expected="事务化切换 Collector 模式",
     )
     assert "--acknowledge-privileged-helper-risk" in switch_help
-    analysis_only = json.loads(
-        _run(perflens_admin, "setup", "--mode", "analysis_only", "--json")
-    )
+    analysis_only = json.loads(_run(perflens_admin, "setup", "--mode", "analysis_only", "--json"))
     assert analysis_only["schema_version"] == "1.0"
     assert analysis_only["status"] == "analysis_only"
     _run(
@@ -223,6 +221,11 @@ def main() -> None:
         _run(perflens, "install-skill", "--project", str(project))
         skill = project / ".agents" / "skills" / "perflens" / "SKILL.md"
         assert skill.is_file()
+        installed_skill = skill.read_text(encoding="utf-8")
+        assert "Do not launch, smoke-test, or" in installed_skill
+        assert "one fresh explicit reply covering every listed Preview" in installed_skill
+        assert "Do not call `analyze_runtime_lock_evidence` again" in installed_skill
+        assert "Maintain an append-only Artifact ledger" in installed_skill
 
         _run(
             perflens,
@@ -239,8 +242,13 @@ def main() -> None:
         )
         assert (initialized_project / ".agents/skills/perflens/SKILL.md").is_file()
         assert (initialized_project / ".claude/skills/perflens/SKILL.md").is_file()
+        assert "never describe the batch as one atomic" in (
+            initialized_project / ".claude/skills/perflens/SKILL.md"
+        ).read_text(encoding="utf-8")
         assert (initialized_project / "perflens-setup/runtime-locks.toml").is_file()
         assert (initialized_project / ".codex/config.toml").is_file()
+        assert (initialized_project / ".opencode/opencode.json").is_file()
+        assert (initialized_project / ".vscode/mcp.json").is_file()
         claude_project = json.loads((initialized_project / ".mcp.json").read_text(encoding="utf-8"))
         assert claude_project["mcpServers"]["perflens"]["type"] == "stdio"
         runtime_lock_config = (initialized_project / ".codex/config.toml").read_text(

@@ -524,6 +524,68 @@
           "adapter_execution_bindings"
         ]
       }
+    },
+    {
+      "else": {
+        "properties": {
+          "profile_kind": {
+            "type": "null"
+          }
+        }
+      },
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              },
+              "workload": {
+                "properties": {
+                  "adapter_id": {
+                    "const": "go_pprof"
+                  }
+                },
+                "required": [
+                  "adapter_id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "schema_version",
+              "workload"
+            ]
+          },
+          {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              },
+              "target_scope": {
+                "const": "host_bound_process"
+              }
+            },
+            "required": [
+              "schema_version",
+              "target_scope"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "profile_kind": {
+            "enum": [
+              "mutex",
+              "block"
+            ]
+          }
+        },
+        "required": [
+          "profile_kind"
+        ]
+      }
     }
   ],
   "properties": {
@@ -632,6 +694,22 @@
         }
       ],
       "default": null
+    },
+    "profile_kind": {
+      "anyOf": [
+        {
+          "enum": [
+            "mutex",
+            "block"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Profile Kind"
     },
     "project_identity_sha256": {
       "pattern": "^[a-f0-9]{64}$",

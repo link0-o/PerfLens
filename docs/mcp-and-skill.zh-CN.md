@@ -29,6 +29,7 @@ perflens init
 ```bash
 perflens init --client opencode
 perflens init --client copilot
+perflens init --client all
 ```
 
 OpenCode 使用 `.opencode/opencode.json` 并复用 `.agents/skills/perflens`。`copilot`
@@ -36,6 +37,7 @@ OpenCode 使用 `.opencode/opencode.json` 并复用 `.agents/skills/perflens`。
 `.vscode/mcp.json`，二者同样复用 `.agents/skills/perflens`。该选项不配置 GitHub
 云端 Coding Agent，也不会把本机 Collector、Docker Socket 或 Unix Socket 暴露给云端。
 冲突的用户手写配置会被拒绝覆盖，也不会申请管理员权限。
+显式 `--client all` 会选择全部四类集成；普通 `init` 仍默认只选择 Codex 与 Claude Code。
 
 Claude Code 与 Copilot CLI 都使用 `.mcp.json`；同时选择时，引导会验证生成内容及已记录
 所有权一致，并只执行一次原子共享更新。
@@ -46,6 +48,8 @@ Claude Code 与 Copilot CLI 都使用 `.mcp.json`；同时选择时，引导会�
 ```bash
 perflens client-defaults --client codex --client claude-code --client opencode
 ```
+
+`perflens client-defaults --client all` 可把完整四客户端集合保存为以后新项目的默认值。
 
 生成的 `~/.config/perflens/config.toml` 使用 schema `1.0`；文件不存在时，内置默认值仍是
 Codex + Claude Code。显式 `init --client ...` 集合只覆盖本次调用。
@@ -78,6 +82,9 @@ perflens init --docker
 重试。请求时长也只是观测窗口上限，不会延长固定 workload 的生命周期；若 workload 两秒后
 退出，把采集时长改为十秒也不会产生十秒 CPU 样本，报告不得作此暗示。
 
+独立的托管 workload 超时从已认证 Gate 即将放行 workload 时开始；放行前的容器与 Collector
+准备不消耗该时间，放行后的采集会消耗它，最终 Docker wait 接收保留小数精度的剩余时间。
+
 `perflens init` 默认开启项目工作负载自动采集，允许 `stat` 和 `record`，MCP 单次最长
 30 秒、`record` 最大 99 Hz、单次输出最大 256 MiB、一次性计划 120 秒失效；Skill
 通常先请求约 10 秒，并按程序长短调整，不会固定强制采集 10 秒。已有 PID 附加默认关闭。
@@ -105,11 +112,16 @@ payload/工具、路径和预算，然后结束响应并等待用户一次新的
 采集或导入、分析、独立校验、查询、比较和撤销有界会话。Native pthread、Java JFR、
 CPython 主动采集只支持启动时插桩；Go 还允许显式启用、同 UID、本机字面量 loopback pprof。
 不支持向任意运行中进程或已有容器注入。
+每次成功采集的返回引用都会给出 Run Finalization ID/摘要与完成结算的 Session revision，所有
+Agent 客户端都可在撤销前核验原子结算。更晚的 revoked Session revision 没有新的结算标记，
+不能据此推断该 Run 的 Finalization 不存在。
 
 Runtime Lock 若明确进入 Docker optimization Preview，则由父级一次确认会话覆盖；采集费用
 绑定同一个 workload lease，并绑定精确 Build、Run、Measurement、运行时、payload 与工具
 身份。它不能独立产生外层 Docker `verified_improvement`。详见
 [《用户态锁工作流》](runtime-locks.zh-CN.md)。
+需要指定 Runtime Lock 语义时，应在 Preview 中传入 `runtime_lock_semantics` 的
+Adapter→语义映射；授权事实仍以返回的 scope 为准。
 
 需要调整时可在首次 `init` 或后续 `init --update` 中使用：
 

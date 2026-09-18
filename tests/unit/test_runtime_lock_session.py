@@ -652,6 +652,16 @@ def test_expiry_forged_access_capacity_and_naive_clock_are_rejected() -> None:
         _authorize(naive)
 
 
+def test_internal_request_rejection_is_distinct_from_explicit_revoke() -> None:
+    authority, _ = _authority()
+    authorized = _authorize(authority)
+
+    rejected = authority.revoke(authorized.access, reason="request_rejected")
+
+    assert rejected.state == "revoked"
+    assert rejected.invalidation_reason == "request_rejected"
+
+
 def test_preview_and_operation_lease_expiry() -> None:
     authority, clock = _authority()
     clock.advance(601)

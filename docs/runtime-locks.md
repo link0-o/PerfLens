@@ -42,17 +42,48 @@ inspect_runtime_lock_capability
   -> show the exact target, Adapter, semantics, payload, tools, paths, and budgets
   -> wait for one fresh user confirmation
   -> authorize_runtime_lock_session
-  -> collect_runtime_lock_evidence or import_runtime_lock_evidence
-  -> analyze_runtime_lock_evidence
-  -> verify_runtime_lock_analysis
+  -> collect_runtime_lock_evidence
+     -> verify_runtime_lock_analysis with the Run-bound Analysis + Verification IDs
+  OR import_runtime_lock_evidence
+     -> analyze_runtime_lock_evidence -> verify_runtime_lock_analysis
   -> bounded hotspot/call-path queries and optional comparison/diagnosis
   -> revoke_runtime_lock_session
 ```
+
+Active collection creates its Run, Analysis, Verification, and private-source replay receipt as
+one fail-closed pipeline. Reverification must pass both IDs retained by that Run so the stored
+receipt is revalidated after private cleanup. Do not re-analyze the collected public Evidence as
+if it were a fresh import: public Evidence alone cannot recreate a private-source receipt. Pass
+the same Run-bound Verification ID when building an optional diagnosis bundle.
+
+The successful collection reference directly exposes the immutable Run Finalization ID/content
+digest and the settled Session Artifact ID/revision. Read that small Finalization Artifact and
+verify that it reports `outcome=completed` and binds the returned Run before revoking the Session.
+Revocation then creates a later terminal Session revision with `settlement_finalization_id=null`:
+that field describes only whether this exact revision settled an operation and does not erase or
+invalidate the preceding Run Finalization. Reports must use the collection-returned Finalization
+ID instead of treating the terminal null as evidence that no marker exists. Evidence
+`quality.status` and Run `quality_status` are separate contract layers and must be reported
+separately.
 
 Preview and authorization are content-bound to the project policy, target/workload identity,
 Adapter payload and tools, measurement semantics, import roots, and budgets. Authorization is kept
 in the current MCP process; persisted Artifacts contain only a receipt digest. An MCP permission
 popup or client allowlist is categorical tool access, not consent to a resolved target.
+
+Each host Adapter/workload still has its own exact Preview and Session. When the user explicitly
+requests a bounded acceptance matrix, an Agent may create all independent Previews first, display
+every child ID/hash and exact scope plus the planned collection settings, execution order,
+aggregate ceilings, and failure policy, then wait once for one fresh confirmation covering that
+whole displayed set. After that reply it must authorize every child immediately and collect them
+sequentially. This is one human confirmation over several independent authorization calls, not an
+atomic batch or a single Session. An expired/changed Preview or authorization failure stops the
+batch; replacement Previews must all be displayed and freshly confirmed together. Client tool
+permission prompts remain a separate client concern.
+
+Capability inspection and Preview are read-only. They never permit an Agent to launch or
+smoke-test the workload directly, even without profiler flags; only the authorized native
+collection tool may start it.
 
 The stable target model is deliberately narrow:
 
@@ -88,6 +119,14 @@ Analyzer aggregates by opaque lock ID, execution context, call path, wait result
 while preserving omitted counts and weights. A lock ID is stable only inside one Artifact and is
 derived without exposing its source address. Exact owner and hold-time fields require genuine,
 pairable source evidence.
+JFR Evidence publishes `quality.lost_source_bytes`, including an explicit zero, because
+`jdk.DataLoss.amount` is measured in bytes and must not be misrepresented as an event count.
+
+Every public call-path frame sequence is normalized as root/caller to leaf/callee, independent of
+the source runtime's native serialization order. For Go pprof, `profile_kind` is an exact Preview
+field (`mutex` or `block`), is included in the content-bound authorization summary, must match the
+collection request, and is persisted in the Run. A missing or different value is rejected before
+the workload is launched.
 
 The independent verifier replays conversion when the private source is available, validates source
 and normalized digests, event pairing and time order, target/context isolation, pagination, and
@@ -106,8 +145,22 @@ automatically upgraded to a root cause or Verified Improvement.
 
 JDK, Go, async-profiler, DTrace/SystemTap, and other runtime tools are optional external
 dependencies. PerfLens detects them; the two core DEBs do not download or bundle those runtimes.
+The Java Adapter resolves `java` from the MCP server's `PATH`, then pins `java`, `jfr`, and the
+runtime payload to that same trusted JDK root. Select JDK 17, 21, or 25 by starting the client with
+the intended JDK first on `PATH`; `JAVA_HOME` alone does not select it. A project built for Java 17
+is intended to be captured with its JDK 17 runtime instead of being forced onto the acceptance
+host's JDK 21; the v0.4.0 compatibility claim remains blocked until the real JDK 17 matrix passes.
 The main native DEB carries the fixed, root-owned, capability-free pthread probe and Runtime Lock
 supervisor. Neither is activated by package installation.
+
+After successful Java conversion, replay, publication, and identity-safe cleanup, the private JFR
+recording and JSON transcript are removed. If conversion, replay, or safe cleanup instead ends as
+`adapter_output_invalid`, PerfLens intentionally retains both bounded files as owner-only private
+diagnostics. Their bytes are charged to the Session evidence budget and inventoried on MCP restart;
+no public Evidence or successful Run is published from that failure. These hidden files are
+diagnostic quarantine, not public Artifacts and not an unbounded leak. Operators must not archive
+them as public evidence and should remove them only through a deliberate, identity-aware cleanup
+after the owning MCP process has stopped.
 
 ## Docker optimization integration
 
@@ -116,6 +169,12 @@ with one reviewed Runtime Lock Adapter and semantics. When it does, the one Dock
 confirmation also authorizes that bounded Runtime Lock scope; PerfLens does not create a second
 hidden authorization. Runtime Lock budget is checked before container creation and charged only to
 the same single-use workload lease. Published v0.3.2 packages cannot request this extension.
+
+`preview_docker_optimization_session` accepts an optional `runtime_lock_semantics` object that maps
+each requested Adapter to one exact measurement semantics, for example
+`{"native_pthread":"exact"}`. The selected binding and threshold are content-bound in the Preview.
+Omitting the object preserves the policy-derived compatibility default; callers that require a
+specific semantics should always provide it and verify the returned scope before confirmation.
 
 Baseline and candidate comparisons bind the exact Build content digest, recipe, Builder/network
 policy, platform, immutable context, Container Run and Measurement, runtime/tool/payload identity,

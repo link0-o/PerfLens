@@ -266,6 +266,7 @@ def test_host_bound_process_preview_binds_pid_start_time_port_and_socket() -> No
         allowed_adapters=("go_pprof",),
         allowed_semantics=("cumulative",),
         process_target=target,
+        profile_kind="mutex",
         adapter_execution_bindings=(_go_binding(),),
         budget=RuntimeLockSessionBudget(),
         planned_actions=("Fetch one bound loopback profile.",),
@@ -273,6 +274,12 @@ def test_host_bound_process_preview_binds_pid_start_time_port_and_socket() -> No
         content_sha256="7" * 64,
     )
     assert preview.process_target == target
+    assert preview.profile_kind == "mutex"
+
+    missing_profile_kind = preview.model_dump(mode="json")
+    missing_profile_kind.pop("profile_kind")
+    with pytest.raises(ValidationError, match="profile kind"):
+        RuntimeLockSessionPreviewArtifact.model_validate(missing_profile_kind)
 
     with pytest.raises(ValidationError, match="differs from its content"):
         RuntimeLockProcessTargetBinding(

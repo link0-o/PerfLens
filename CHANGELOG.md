@@ -23,6 +23,9 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Changed
 
+- Plain `perflens init` still defaults to Codex plus Claude Code, while explicit `--client all`
+  now configures Codex, Claude Code, OpenCode, and the local Copilot integrations. The same alias
+  can persist the complete set through `perflens client-defaults`.
 - Runtime Lock evidence keeps exact, thresholded, sampled, and cumulative meanings separate;
   Artifact-local opaque lock IDs replace raw addresses, and missing owner/hold provenance remains
   absent rather than inferred.
@@ -38,6 +41,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 - Active Native, CPython, and Java collection is launch-time only; v0.4.0 does not add arbitrary
   live-process or existing-container injection, live JVM attach, or a privileged eBPF/uprobe path.
+- The locked MCP transport stack now uses `httpx2` and `httpcore2` 2.12.0, replacing the vulnerable
+  2.9.1 pair identified by the final release dependency audit.
 - Capability, payload, converter, runtime, target, UID, namespace/cgroup, source, Build, Run,
   Measurement, session, replay, and persistence identities are independently checked. Replacement,
   cross-target splicing, malformed input, unsafe paths, budget exhaustion, and failed
@@ -48,11 +53,69 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Fixed
 
+- Managed Docker Benchmark capture now validates the scratch layout actually created by the
+  coordinator: an exact `0733` container-writable leaf inside an invoking-user-owned `0700`
+  per-run directory. Benchmark file ownership is checked against the verified target host UID,
+  while regular-file, link-count, write-bit, canonical-path, size, and stable-identity checks
+  remain fail-closed.
+- Managed Docker workload timeouts now start when the authenticated package Gate releases the
+  workload, rather than during container/Collector preparation. The remaining wait budget keeps
+  sub-second precision, and a genuine Docker wait expiry is reported at the `docker_workload`
+  stage instead of looking like an Agent-client tool timeout. Managed-session settlement also
+  charges only the Gate-release-to-workload-exit lifetime, excluding both setup and post-exit
+  finalization, while keeping the integer charge within the already reserved lease.
+- Bounded artifact paging now includes the public Docker Build capability, Recipe, Context,
+  Preview, Session, Build, Iteration, Disposition, and Container Target types already persisted by
+  Docker optimization, so an Agent can audit known returned IDs without enumerating storage or
+  reading private build archives.
+- Docker optimization Runtime Lock Previews can now explicitly bind one measurement semantics per
+  requested Adapter through `runtime_lock_semantics`; callers that omit it retain the existing
+  policy-derived compatibility default. Java JFR Evidence now publishes the content-bound
+  `quality.lost_source_bytes` value, including zero, instead of making `jdk.DataLoss.amount`
+  observable only through a non-zero limitation string.
 - Recursive exact-lock pairing now uses LIFO order, unknown lock cardinality and omitted
   count/weight remain conservative, and unpaired evidence cannot fabricate owner or hold time.
+- Java JFR conversion now derives its profile-relative epoch from the earliest observed wait
+  start, accepting valid end-ordered overlapping duration events while retaining deterministic
+  wait-end ordering and signed timestamp bounds.
+- Java JFR and Go pprof public call paths now use the documented root/caller-to-leaf/callee order.
+  Go mutex versus block is content-bound in Preview, required unchanged at collection, and retained
+  in the Run instead of being distinguishable only from the Evidence backend.
 - Java replay receipts bind both raw JFR and converted JSON identities; Go receipts bind raw pprof,
   converter output, and normalized Evidence. Runtime versions come from target-produced metadata
   rather than host guesses.
+- Host CPython and Go successful private replays now persist source replay receipts, so later
+  verification reloads can re-establish source identity and conversion instead of degrading those
+  checks to skipped. Native host Preview, Evidence, and Run now retain the authorized probe,
+  runtime, configuration, metadata, and execution identities. The public verifier accepts the
+  Run-bound Verification ID and independently revalidates its persisted source receipt instead of
+  replacing it with a public-only `skipped` result.
+- Runtime Adapter Capability and Run Finalization artifacts are available through bounded paging;
+  pre-lease request rejection is distinct from an explicit user revocation, and CPython exact-mode
+  duration/event budget errors identify the violated authorized ceiling.
+- Successful Runtime Lock collection references now expose the immutable Run Finalization ID and
+  digest plus the settled Session revision. Agent guidance no longer mistakes the later revoked
+  Session's intentionally empty settlement field for a missing Finalization, and it keeps Evidence
+  quality separate from Run quality.
+- Successful CPython and Go Runtime Lock collection references now expose the same `target_uid`
+  and `evidence_bytes` summary fields as Native and Java, while keeping the persisted Run as the
+  authoritative record.
+- Every successful Runtime Lock collection now reports `private_source_replay_status=passed`
+  from the persisted source replay receipt instead of mixing that result with the enclosing
+  Verification artifact's `verified` status. Go block Evidence no longer inherits the
+  mutex-only releasing-side stack limitation.
+- The Native 1%/15% overhead gate now compares each mode in a same-CPU, same-load epoch with
+  balanced spawn ordering and warm-up, while retaining the published limits. Any failure reports
+  all baseline, disabled, thresholded, and block-delta samples.
+- Agent guidance now treats ownership shown only through a sandbox/user-namespace UID mapping as
+  unverified, rather than misclassifying mapped UID 65534 as the real owner of host Collector
+  policy; the root-ownership security requirement itself remains unchanged.
+- Runtime Lock Skill guidance now forbids direct workload smoke runs during read-only inspection
+  and lets one fresh human confirmation cover a fully disclosed bounded set of independent
+  Previews; child authorization remains separate, immediate, sequential, and fail-closed.
+- Runtime Lock Skill reporting now maintains an append-only ledger for capability, Preview,
+  Session-revision, Evidence, Analysis, Verification, Run, and Finalization artifacts, and must
+  label an ID list partial when client context compaction prevents an exhaustive report.
 - Docker comparisons reject swapped Build/Run/Measurement/session artifacts, unchanged Treatments,
   mismatched immutable manifests, and incompatible baseline/candidate runtimes.
 

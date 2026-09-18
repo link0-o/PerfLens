@@ -380,6 +380,61 @@ def _four_adapter_server(
     return server, runtime, adapter, project
 
 
+@pytest.mark.parametrize("semantics", ("exact", "thresholded"))
+def test_docker_runtime_lock_preview_honors_explicit_native_semantics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    semantics: str,
+) -> None:
+    server, _runtime, _adapter, _project = _four_adapter_server(tmp_path, monkeypatch)
+
+    async def exercise() -> None:
+        async with Client(cast(Any, server)) as client:
+            result = await client.call_tool(
+                "preview_docker_optimization_session",
+                {
+                    "allowed_modes": ["stat"],
+                    "runtime_lock_adapters": ["native_pthread"],
+                    "runtime_lock_semantics": {"native_pthread": semantics},
+                },
+            )
+            assert not result.is_error, result.content
+            scope = _structured(result)["runtime_lock_scope"]
+            assert scope["allowed_semantics"] == [semantics]
+            assert scope["adapter_execution_bindings"][0]["measurement_semantics"] == semantics
+            assert scope["adapter_execution_bindings"][0]["duration_threshold_ns"] == (
+                1000 if semantics == "thresholded" else None
+            )
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    "runtime_lock_semantics",
+    ({}, {"java_jfr": "thresholded"}, {"native_pthread": "cumulative"}),
+)
+def test_docker_runtime_lock_preview_rejects_invalid_explicit_semantics_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_lock_semantics: dict[str, str],
+) -> None:
+    server, _runtime, _adapter, _project = _four_adapter_server(tmp_path, monkeypatch)
+
+    async def exercise() -> None:
+        async with Client(cast(Any, server)) as client:
+            result = await client.call_tool(
+                "preview_docker_optimization_session",
+                {
+                    "allowed_modes": ["stat"],
+                    "runtime_lock_adapters": ["native_pthread"],
+                    "runtime_lock_semantics": runtime_lock_semantics,
+                },
+            )
+            assert result.is_error
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize(
     ("adapter_id", "launch_name", "profile_kind"),
     (
@@ -448,9 +503,7 @@ def test_one_docker_confirmation_builds_each_typed_runtime_lock_launch(
                 {
                     "preview_id": preview["preview_id"],
                     "preview_content_sha256": preview["content_sha256"],
-                    "authorization_summary_sha256": preview[
-                        "authorization_summary_sha256"
-                    ],
+                    "authorization_summary_sha256": preview["authorization_summary_sha256"],
                     "authorization": (
                         "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
                     ),
@@ -485,9 +538,7 @@ def test_one_docker_confirmation_builds_each_typed_runtime_lock_launch(
                 request,
             )
             assert stopped.is_error
-            assert "Synthetic stop after typed Docker launch construction" in str(
-                stopped.content
-            )
+            assert "Synthetic stop after typed Docker launch construction" in str(stopped.content)
             current = runtime.snapshot(cast(str, session["session_id"]))
             assert current.workload_runs_used == 1
             assert current.runtime_lock_runs_used == 0
@@ -526,9 +577,7 @@ def test_runtime_lock_combined_evidence_budget_is_rejected_before_container(
                     {
                         "preview_id": preview["preview_id"],
                         "preview_content_sha256": preview["content_sha256"],
-                        "authorization_summary_sha256": preview[
-                            "authorization_summary_sha256"
-                        ],
+                        "authorization_summary_sha256": preview["authorization_summary_sha256"],
                         "authorization": (
                             "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
                         ),
@@ -559,9 +608,7 @@ def test_runtime_lock_combined_evidence_budget_is_rejected_before_container(
                 },
             )
             assert rejected.is_error
-            assert "reservation exceeds the remaining Session budget" in str(
-                rejected.content
-            )
+            assert "reservation exceeds the remaining Session budget" in str(rejected.content)
             current = runtime.snapshot(cast(str, session["session_id"]))
             assert current.workload_runs_used == 0
             assert current.runtime_lock_runs_used == 0
@@ -623,9 +670,7 @@ def test_docker_runtime_lock_collection_rejects_untyped_mode_and_go_profile_inpu
                     {
                         "preview_id": preview["preview_id"],
                         "preview_content_sha256": preview["content_sha256"],
-                        "authorization_summary_sha256": preview[
-                            "authorization_summary_sha256"
-                        ],
+                        "authorization_summary_sha256": preview["authorization_summary_sha256"],
                         "authorization": (
                             "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
                         ),
@@ -792,9 +837,7 @@ def test_docker_runtime_lock_rejects_adapter_replacement_after_preview(
                     {
                         "preview_id": preview["preview_id"],
                         "preview_content_sha256": preview["content_sha256"],
-                        "authorization_summary_sha256": preview[
-                            "authorization_summary_sha256"
-                        ],
+                        "authorization_summary_sha256": preview["authorization_summary_sha256"],
                         "authorization": (
                             "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_DOCKER_OPTIMIZATION_SESSION"
                         ),
@@ -909,9 +952,7 @@ def test_docker_runtime_lock_finalization_is_single_charge_and_fail_closed(
             build_id=build.build_id,
             adapter_id="native_pthread",
             execution_binding=execution_binding,
-            authorized_execution_identity_sha256=(
-                authorized_binding.execution_identity_sha256
-            ),
+            authorized_execution_identity_sha256=(authorized_binding.execution_identity_sha256),
             launch=NativePthreadDockerLaunch(
                 probe_path=tmp_path / "probe.so",
                 probe_sha256=execution_binding.configuration_sha256,
@@ -1007,12 +1048,9 @@ def test_docker_runtime_lock_finalization_is_single_charge_and_fail_closed(
     assert runtime_run.evidence_bytes == len(serialize_json(evidence))
     assert runtime_run.docker_optimization_binding is not None
     assert runtime_run.docker_optimization_binding.accounted_evidence_bytes == accounted
+    assert (store.root / f"{runtime_run.run_id}.runtime-lock-run.json").is_file()
     assert (
-        store.root / f"{runtime_run.run_id}.runtime-lock-run.json"
-    ).is_file()
-    assert (
-        store.root
-        / f"{charged_session.session_artifact_id}.docker-optimization-session.json"
+        store.root / f"{charged_session.session_artifact_id}.docker-optimization-session.json"
     ).is_file()
     assert runtime.snapshot(session.session_id) == charged_session
     assert store.load_runtime_lock_run(runtime_run.run_id) == runtime_run
@@ -1108,8 +1146,6 @@ def test_runtime_lock_comparison_mcp_persists_verified_standalone_result(
                 },
             )
             assert forged_resource_claim.is_error
-            assert "cannot claim Docker resource evidence" in str(
-                forged_resource_claim.content
-            )
+            assert "cannot claim Docker resource evidence" in str(forged_resource_claim.content)
 
     asyncio.run(exercise())

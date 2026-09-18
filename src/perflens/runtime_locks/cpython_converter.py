@@ -287,22 +287,28 @@ def convert_cpython_threading_stream(
 
 
 def verify_cpython_threading_replay(
-    expected: RuntimeLockEvidenceArtifact,
+    expected: CpythonThreadingConversionReceipt,
     stream: BinaryIO,
     *,
     execution_binding: RuntimeLockAdapterExecutionBinding,
-) -> bool:
-    if expected.source.source_format != "cpython_threading_ndjson_v1":
+) -> CpythonThreadingConversionReceipt | None:
+    if expected.evidence.source.source_format != "cpython_threading_ndjson_v1":
         raise _invalid("Runtime Lock evidence is not a CPython threading stream")
-    return (
-        convert_cpython_threading_stream(
-            stream,
-            execution_binding=execution_binding,
-            limits=expected.limits,
-            created_at=expected.created_at,
-        ).evidence
-        == expected
+    replay = convert_cpython_threading_stream(
+        stream,
+        execution_binding=execution_binding,
+        limits=expected.evidence.limits,
+        created_at=expected.evidence.created_at,
     )
+    if (
+        serialize_json(replay.evidence) != serialize_json(expected.evidence)
+        or replay.raw_source_sha256 != expected.raw_source_sha256
+        or replay.raw_source_bytes != expected.raw_source_bytes
+        or replay.normalized_source_sha256 != expected.normalized_source_sha256
+        or replay.normalized_source_bytes != expected.normalized_source_bytes
+    ):
+        return None
+    return replay
 
 
 def _validate_binding(

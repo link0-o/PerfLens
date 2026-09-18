@@ -118,6 +118,15 @@ marker, trusted ownership, and no group/other write permission. Review rejected
 legacy or manually edited units with `systemctl cat perflens-collector.service`
 and migrate them explicitly; do not weaken the ownership check.
 
+## A sandbox reports `nobody:nogroup` for root-owned host files
+
+Do not diagnose `/etc/perflens` ownership from `stat` or `ls` executed inside an Agent client
+sandbox or user namespace. Some sandboxes map host UID/GID 0 to 65534, so even `/` and `/etc`
+appear to belong to `nobody:nogroup`. Verify the real host namespace with an administrator-run
+`perflens-admin upgrade --dry-run` or an equivalent read-only host check. If that evidence is not
+available, report ownership as unverified. Never make UID 65534 trusted and never weaken the
+root-ownership checks to accommodate a namespace mapping.
+
 ## Active perf collection is denied
 
 PerfLens reports the bounded stderr from `perf` as `EXTERNAL_TOOL_FAILED`. Check `/proc/sys/kernel/perf_event_paranoid`, capabilities, container policy, and access to tracepoints outside PerfLens. The development host uses value `3`, which rejects unprivileged collection.

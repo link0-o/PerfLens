@@ -858,6 +858,15 @@ def test_runtime_source_converter_json_schema_matches_model_version_rules() -> N
     assert RuntimeSourceManifest.model_validate(versionless_legacy).schema_version == "1.0"
 
 
+def test_schema_1_0_evidence_rejects_source_byte_loss_accounting() -> None:
+    payload = _schema_1_0_evidence()
+    payload["quality"]["lost_source_bytes"] = 0
+    with pytest.raises(JsonSchemaValidationError):
+        _validate_json_schema(RuntimeLockEvidenceArtifact.model_json_schema(), payload)
+    with pytest.raises(ValidationError, match=r"cannot carry 1\.1 accounting fields"):
+        RuntimeLockEvidenceArtifact.model_validate(payload)
+
+
 def test_schema_1_1_rejects_unbound_ids_and_legacy_tid() -> None:
     payload = _evidence()
     for event in payload["events"]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import shutil
 import sys
@@ -12,7 +13,10 @@ from typing import Any, cast
 
 from mcp.client import Client
 
-from perflens.contracts.runtime_lock_sessions import RuntimeLockSessionArtifact
+from perflens.contracts.runtime_lock_sessions import (
+    RuntimeLockSessionArtifact,
+    derive_runtime_lock_run_finalization_id,
+)
 from perflens.docker.workload import inspect_managed_project_root
 from perflens.mcp.server import ServerConfig, create_server
 from perflens.mcp.storage import ArtifactStore, PathPolicy
@@ -35,9 +39,7 @@ from perflens.runtime_locks.project_config import (
 from perflens.runtime_locks.supervisor import RuntimeSupervisorClient
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-BOOTSTRAP = (
-    PROJECT_ROOT / "src/perflens/runtime_locks/cpython/cpython_threading_bootstrap.py"
-)
+BOOTSTRAP = PROJECT_ROOT / "src/perflens/runtime_locks/cpython/cpython_threading_bootstrap.py"
 
 
 def _structured(result: object) -> dict[str, Any]:
@@ -138,7 +140,7 @@ class _MalformedCpythonLauncher:
             request,
             expected_target_identity_sha256=expected_target_identity_sha256,
         )
-        payload = b'not-json\n'
+        payload = b"not-json\n"
         result.stream_path.write_bytes(payload)
         result.stream_path.chmod(0o600)
         return replace(
@@ -174,12 +176,8 @@ def test_cpython_preview_authorize_collect_analyze_verify_and_cleanup(
                 {
                     "preview_id": preview["preview_id"],
                     "preview_content_sha256": preview["content_sha256"],
-                    "authorization_summary_sha256": preview[
-                        "authorization_summary_sha256"
-                    ],
-                    "authorization": (
-                        "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"
-                    ),
+                    "authorization_summary_sha256": preview["authorization_summary_sha256"],
+                    "authorization": ("I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"),
                 },
             )
             assert not authorization.is_error, authorization.content
@@ -198,6 +196,72 @@ def test_cpython_preview_authorize_collect_analyze_verify_and_cleanup(
             assert reference["artifact_type"] == "runtime-lock-run"
             assert reference["summary"]["adapter_id"] == "cpython_threading"
             assert reference["summary"]["private_source_replay_status"] == "passed"
+            assert reference["summary"]["settled_session_revision"] == 2
+            assert reference["summary"]["target_uid"] == os.geteuid()
+            run_page = await client.call_tool(
+                "read_artifact_page",
+                {
+                    "artifact_id": reference["artifact_id"],
+                    "artifact_type": "runtime-lock-run",
+                },
+            )
+            assert not run_page.is_error, run_page.content
+            run = json.loads(cast(str, _structured(run_page)["text"]))
+            assert reference["summary"]["evidence_bytes"] == run["evidence_bytes"]
+            verification_result = await client.call_tool(
+                "verify_runtime_lock_analysis",
+                {
+                    "runtime_lock_analysis_id": run["runtime_lock_analysis_id"],
+                    "runtime_lock_verification_id": run["runtime_lock_verification_id"],
+                },
+            )
+            assert not verification_result.is_error, verification_result.content
+            verified = _structured(verification_result)
+            assert verified["verification_status"] == "verified"
+            assert verified["source_replay_receipt"] is not None
+            assert {check["name"]: check["status"] for check in verified["checks"]}[
+                "source_conversion_replay"
+            ] == "passed"
+            diagnosis_result = await client.call_tool(
+                "build_runtime_lock_diagnosis_bundle",
+                {
+                    "runtime_lock_analysis_id": run["runtime_lock_analysis_id"],
+                    "runtime_lock_verification_id": run["runtime_lock_verification_id"],
+                },
+            )
+            assert not diagnosis_result.is_error, diagnosis_result.content
+            assert (
+                _structured(diagnosis_result)["summary"]["runtime_lock_verification_id"]
+                == run["runtime_lock_verification_id"]
+            )
+            finalization_id = reference["summary"]["runtime_lock_run_finalization_id"]
+            assert finalization_id == derive_runtime_lock_run_finalization_id(
+                session["session_id"], run["operation_identity_sha256"]
+            )
+            finalization_page = await client.call_tool(
+                "read_artifact_page",
+                {
+                    "artifact_id": finalization_id,
+                    "artifact_type": "runtime-lock-run-finalization",
+                },
+            )
+            assert not finalization_page.is_error, finalization_page.content
+            finalization = json.loads(cast(str, _structured(finalization_page)["text"]))
+            assert finalization["finalization_id"] == finalization_id
+            assert (
+                finalization["content_sha256"]
+                == reference["summary"]["runtime_lock_run_finalization_content_sha256"]
+            )
+            assert (
+                finalization["final_session_artifact_id"]
+                == reference["summary"]["settled_session_artifact_id"]
+            )
+            assert (
+                finalization["final_session_revision"]
+                == reference["summary"]["settled_session_revision"]
+            )
+            assert finalization["run_id"] == reference["artifact_id"]
+            assert finalization["outcome"] == "completed"
 
     asyncio.run(exercise())
     assert len(launchers) == 1
@@ -209,6 +273,17 @@ def test_cpython_preview_authorize_collect_analyze_verify_and_cleanup(
     assert run.adapter_id == "cpython_threading"
     assert run.correctness_status == "passed"
     assert run.quality_status == "partial"
+    verification = store.load_runtime_lock_verification(run.runtime_lock_verification_id)
+    assert verification.verification_status == "verified"
+    assert verification.source_replay_receipt is not None
+    assert {check.name: check.status for check in verification.checks}[
+        "source_conversion_replay"
+    ] == "passed"
+    diagnosis_path = next(artifacts.glob("*.runtime-lock-diagnosis.json"))
+    diagnosis = store.load_runtime_lock_diagnosis(
+        diagnosis_path.name.removesuffix(".runtime-lock-diagnosis.json")
+    )
+    assert diagnosis.runtime_lock_verification_id == run.runtime_lock_verification_id
 
 
 def test_malformed_cpython_stream_is_retained_and_session_is_failed(
@@ -237,12 +312,8 @@ def test_malformed_cpython_stream_is_retained_and_session_is_failed(
                 {
                     "preview_id": preview["preview_id"],
                     "preview_content_sha256": preview["content_sha256"],
-                    "authorization_summary_sha256": preview[
-                        "authorization_summary_sha256"
-                    ],
-                    "authorization": (
-                        "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"
-                    ),
+                    "authorization_summary_sha256": preview["authorization_summary_sha256"],
+                    "authorization": ("I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"),
                 },
             )
             session = _structured(authorization)
@@ -270,3 +341,57 @@ def test_malformed_cpython_stream_is_retained_and_session_is_failed(
         session.state == "failed" and session.invalidation_reason == "adapter_output_invalid"
         for session in sessions
     )
+
+
+def test_cpython_exact_duration_rejection_is_specific_and_not_explicit_revoke(
+    tmp_path: Path, runtime_supervisor_client: RuntimeSupervisorClient
+) -> None:
+    server, _project, artifacts, _launchers = _server(tmp_path, runtime_supervisor_client)
+
+    async def exercise() -> None:
+        async with Client(cast(Any, server)) as client:
+            preview_result = await client.call_tool(
+                "preview_runtime_lock_session",
+                {
+                    "target_scope": "host_launched_workload",
+                    "allowed_adapters": ["cpython_threading"],
+                    "allowed_semantics": ["exact"],
+                    "executable": "workload.py",
+                    "arguments": [],
+                },
+            )
+            preview = _structured(preview_result)
+            authorization = await client.call_tool(
+                "authorize_runtime_lock_session",
+                {
+                    "preview_id": preview["preview_id"],
+                    "preview_content_sha256": preview["content_sha256"],
+                    "authorization_summary_sha256": preview["authorization_summary_sha256"],
+                    "authorization": ("I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"),
+                },
+            )
+            session = _structured(authorization)
+            collected = await client.call_tool(
+                "collect_runtime_lock_evidence",
+                {
+                    "session_id": session["session_id"],
+                    "measurement_semantics": "exact",
+                    "duration_seconds": 4,
+                    "max_events": 500,
+                },
+            )
+            assert collected.is_error
+            assert "max_exact_duration_seconds (3)" in str(collected.content)
+
+    asyncio.run(exercise())
+    sessions = [
+        RuntimeLockSessionArtifact.model_validate_json(path.read_bytes())
+        for path in artifacts.glob("*.runtime-lock-session.json")
+    ]
+    assert any(
+        session.state == "revoked"
+        and session.invalidation_reason == "request_rejected"
+        and session.workload_runs_used == 0
+        for session in sessions
+    )
+    assert not list(artifacts.glob("*.runtime-lock-run-finalization.json"))

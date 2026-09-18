@@ -101,9 +101,9 @@ def convert_java_jfr_json(
     if jdk_major not in _SUPPORTED_JDKS:
         raise _invalid("JFR converter only accepts the reviewed JDK 17, 21, and 25 formats")
     reader = JfrJsonEventStream(stream)
-    projected: list[dict[str, Any]] = []
+    pending: list[tuple[int, dict[str, Any]]] = []
     stacks: list[dict[str, Any]] = []
-    first_timestamp: int | None = None
+    minimum_wait_start_timestamp: int | None = None
     observed_tids: set[int] = {target_pid}
     lost_bytes = 0
     source_tokens: dict[tuple[int, str], str] = {}
@@ -125,10 +125,11 @@ def convert_java_jfr_json(
             continue
         _validate_thread_metadata_for_jdk(event, jdk_major)
         wait_start_timestamp = _timestamp_ns(event.values.startTime)
-        first_timestamp = wait_start_timestamp if first_timestamp is None else first_timestamp
-        relative_wait_start = wait_start_timestamp - first_timestamp
-        if relative_wait_start < 0:
-            raise _invalid("JFR events are not in non-decreasing time order")
+        minimum_wait_start_timestamp = (
+            wait_start_timestamp
+            if minimum_wait_start_timestamp is None
+            else min(minimum_wait_start_timestamp, wait_start_timestamp)
+        )
         context = _context(event.values.eventThread, target_pid, observed_tids)
         owner = None
         if event.type == "jdk.JavaMonitorEnter" and event.values.previousOwner is not None:
@@ -140,16 +141,6 @@ def convert_java_jfr_json(
         duration = _duration_ns(event.values.duration)
         if duration < duration_threshold_ns:
             raise _invalid("JFR event duration is below the configured threshold")
-        # JFR's startTime identifies when blocking began, while the normalized
-        # event is a wait_end.  Publishing startTime as the end timestamp made
-        # the public temporal model internally false even though JFR supplied
-        # the exact duration.  Keep the profile-relative epoch private, and
-        # place the public event at the observed end with an explicit signed
-        # 64-bit bound matching the Runtime Lock importer.
-        relative_timestamp = _checked_wait_end_timestamp(
-            relative_wait_start,
-            duration,
-        )
         if event.type == "jdk.JavaMonitorEnter":
             lock_kind = "mutex"
             outcome = "acquired"
@@ -174,7 +165,6 @@ def convert_java_jfr_json(
             "record_type": "runtime_lock_event",
             "source_event_id": f"jfr-event-{source_index + 1}",
             "event_kind": "wait_end",
-            "timestamp_ns": relative_timestamp,
             "execution_context": context,
             "source_lock_id": source_lock_id,
             "lock_kind": lock_kind,
@@ -184,12 +174,26 @@ def convert_java_jfr_json(
             "outcome": outcome,
             "owner_execution_context": owner,
         }
-        projected.append(record)
+        pending.append((wait_start_timestamp, record))
     if reader.identity is None:
         raise _invalid("JFR JSON stream did not reach a complete footer")
     if require_jvm_information and target_runtime_version is None:
         raise _invalid("JFR evidence lacks required JVMInformation runtime identity")
     observed_runtime_version = target_runtime_version or execution_binding.runtime_version
+    projected: list[dict[str, Any]] = []
+    if minimum_wait_start_timestamp is not None:
+        for wait_start_timestamp, record in pending:
+            # JFR duration events may be delivered in end/commit order, so the first
+            # event in the source is not necessarily the earliest event by startTime.
+            # Keep the parser streaming, derive one private profile-relative epoch
+            # from the bounded event set, and publish each normalized wait_end at
+            # start + duration with the importer's signed 64-bit bound.
+            relative_wait_start = wait_start_timestamp - minimum_wait_start_timestamp
+            record["timestamp_ns"] = _checked_wait_end_timestamp(
+                relative_wait_start,
+                cast(int, record["duration_ns"]),
+            )
+            projected.append(record)
     projected.sort(
         key=lambda record: (cast(int, record["timestamp_ns"]), cast(str, record["source_event_id"]))
     )
@@ -349,7 +353,9 @@ def _stack(event: JfrLockEvent, stacks: list[dict[str, Any]], tokens: dict[str, 
     if trace is None or not trace.frames:
         return None
     frames: list[dict[str, Any]] = []
-    for frame in trace.frames:
+    # ``jfr print --json`` emits stack frames leaf-first. Runtime Lock's
+    # public contract is root/caller -> leaf/callee, including inline frames.
+    for frame in reversed(trace.frames):
         owner_type = frame.method.type
         symbol = f"{owner_type.name.replace('/', '.')}.{frame.method.name}"
         module = owner_type.package.module if owner_type.package is not None else None
@@ -471,7 +477,10 @@ def _bind_raw_source(
     source = source0.model_copy(
         update={"conversion_fingerprint": compute_runtime_source_conversion_fingerprint(source0)}
     )
-    quality = evidence.quality
+    # jdk.DataLoss reports bytes, not an event count.  Publish the exact sum,
+    # including an explicit zero, so callers can distinguish no observed
+    # DataLoss from an Adapter that exposes no byte-loss surface.
+    quality = evidence.quality.model_copy(update={"lost_source_bytes": data_loss_bytes})
     if data_loss_bytes:
         loss_limitation = f"JFR reported {data_loss_bytes} lost source bytes"
         loss_limitation += "; the lost event count is unavailable"

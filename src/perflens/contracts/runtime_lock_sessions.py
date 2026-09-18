@@ -58,6 +58,7 @@ RuntimeLockSessionEndReason = Literal[
     "internal_collection_error",
     "operation_lease_expired",
     "operation_reservation_exceeded",
+    "request_rejected",
     "resource_limit_exceeded",
     "run_artifact_mismatch",
     "session_budget_exhausted",
@@ -75,6 +76,7 @@ RuntimeLockSessionSchemaVersion = Literal["1.0", "1.1"]
 RuntimeLockLimitation = Annotated[str, Field(min_length=1, max_length=2048)]
 RuntimeLockRunQualityStatus = Literal["complete", "partial"]
 RuntimeLockAuthorizationKind = Literal["runtime_lock_session", "docker_optimization"]
+RuntimeLockGoProfileKind = Literal["mutex", "block"]
 RuntimeLockAuthorizationSessionId = Annotated[
     str,
     Field(pattern=r"^(?:runtime-lock-session|docker-optimization-session)-[a-f0-9]{20}$"),
@@ -770,6 +772,35 @@ class RuntimeLockSessionPreviewArtifact(ContractModel):
                         },
                     },
                 },
+                {
+                    "if": {
+                        "anyOf": [
+                            {
+                                "properties": {
+                                    "schema_version": {"const": "1.1"},
+                                    "workload": {
+                                        "type": "object",
+                                        "properties": {"adapter_id": {"const": "go_pprof"}},
+                                        "required": ["adapter_id"],
+                                    },
+                                },
+                                "required": ["schema_version", "workload"],
+                            },
+                            {
+                                "properties": {
+                                    "schema_version": {"const": "1.1"},
+                                    "target_scope": {"const": "host_bound_process"},
+                                },
+                                "required": ["schema_version", "target_scope"],
+                            },
+                        ]
+                    },
+                    "then": {
+                        "required": ["profile_kind"],
+                        "properties": {"profile_kind": {"enum": ["mutex", "block"]}},
+                    },
+                    "else": {"properties": {"profile_kind": {"type": "null"}}},
+                },
             ]
         }
     )
@@ -791,6 +822,7 @@ class RuntimeLockSessionPreviewArtifact(ContractModel):
     import_roots: tuple[str, ...] = ()
     workload: RuntimeLockWorkloadBinding | None = None
     process_target: RuntimeLockProcessTargetBinding | None = None
+    profile_kind: RuntimeLockGoProfileKind | None = None
     adapter_execution_bindings: tuple[RuntimeLockAdapterExecutionBinding, ...] = ()
     budget: RuntimeLockSessionBudget
     planned_actions: tuple[str, ...]
@@ -822,6 +854,8 @@ class RuntimeLockSessionPreviewArtifact(ContractModel):
             raise ValueError("Runtime Lock Preview 1.0 cannot carry Adapter execution bindings")
         if self.schema_version == "1.0" and self.process_target is not None:
             raise ValueError("Runtime Lock Preview 1.0 cannot carry a process target")
+        if self.schema_version == "1.0" and self.profile_kind is not None:
+            raise ValueError("Runtime Lock Preview 1.0 cannot carry a Go profile kind")
         if not self.allowed_adapters or not self.allowed_semantics:
             raise ValueError("Runtime Lock Preview requires Adapter and semantics scopes")
         if not self.planned_actions or len(self.planned_actions) > 32:
@@ -860,6 +894,14 @@ class RuntimeLockSessionPreviewArtifact(ContractModel):
                 raise ValueError("host-bound process requires one exact Go pprof cumulative target")
         elif self.process_target is not None:
             raise ValueError("Only a host-bound Runtime Lock Preview may carry a process target")
+        active_go_scope = self.schema_version == "1.1" and (
+            (self.workload is not None and self.workload.adapter_id == "go_pprof")
+            or self.target_scope == "host_bound_process"
+        )
+        if active_go_scope and self.profile_kind is None:
+            raise ValueError("Active Go pprof Preview requires one exact profile kind")
+        if not active_go_scope and self.profile_kind is not None:
+            raise ValueError("Go profile kind is valid only for an active Go pprof Preview")
         if self.target_scope in {"managed_temporary_container", "docker_optimization"} and (
             self.workload is not None
         ):
@@ -1020,6 +1062,13 @@ class RuntimeLockRunArtifact(ContractModel):
                     "if": {
                         "anyOf": [
                             {
+                                "properties": {
+                                    "schema_version": {"const": "1.1"},
+                                    "adapter_id": {"const": "native_pthread"},
+                                },
+                                "required": ["schema_version", "adapter_id"],
+                            },
+                            {
                                 "properties": {"adapter_id": {"const": "java_jfr"}},
                                 "required": ["adapter_id"],
                             },
@@ -1044,6 +1093,20 @@ class RuntimeLockRunArtifact(ContractModel):
                         "properties": {"adapter_execution_identity_sha256": {"type": "string"}},
                     },
                 },
+                {
+                    "if": {
+                        "properties": {
+                            "schema_version": {"const": "1.1"},
+                            "adapter_id": {"const": "go_pprof"},
+                        },
+                        "required": ["schema_version", "adapter_id"],
+                    },
+                    "then": {
+                        "required": ["profile_kind"],
+                        "properties": {"profile_kind": {"enum": ["mutex", "block"]}},
+                    },
+                    "else": {"properties": {"profile_kind": {"type": "null"}}},
+                },
             ]
         }
     )
@@ -1065,6 +1128,7 @@ class RuntimeLockRunArtifact(ContractModel):
     target_identity_sha256: Sha256
     adapter_id: RuntimeLockAdapterId
     adapter_execution_identity_sha256: Sha256 | None = None
+    profile_kind: RuntimeLockGoProfileKind | None = None
     measurement_semantics: MeasurementSemantics
     workload_identity_sha256: Sha256
     runtime_lock_evidence_id: str = Field(pattern=r"^runtime-lock-evidence-[a-f0-9]{16,64}$")
@@ -1126,6 +1190,8 @@ class RuntimeLockRunArtifact(ContractModel):
             raise ValueError("exact Runtime Lock Run exceeds its hard evidence bound")
         if self.schema_version == "1.0" and self.adapter_execution_identity_sha256 is not None:
             raise ValueError("Runtime Lock Run 1.0 cannot carry an Adapter execution identity")
+        if self.schema_version == "1.0" and self.profile_kind is not None:
+            raise ValueError("Runtime Lock Run 1.0 cannot carry a Go profile kind")
         standalone_session = (
             self.session_artifact_id,
             self.session_artifact_content_sha256,
@@ -1168,10 +1234,15 @@ class RuntimeLockRunArtifact(ContractModel):
             self.adapter_id == "java_jfr"
             or (
                 self.schema_version == "1.1"
-                and self.adapter_id in {"cpython_threading", "go_pprof"}
+                and self.adapter_id in {"native_pthread", "cpython_threading", "go_pprof"}
             )
         ) and (self.adapter_execution_identity_sha256 is None):
             raise ValueError("Managed runtime Run requires its authorized execution identity")
+        if self.schema_version == "1.1" and self.adapter_id == "go_pprof":
+            if self.profile_kind is None:
+                raise ValueError("Go pprof Run requires its authorized profile kind")
+        elif self.profile_kind is not None:
+            raise ValueError("Go profile kind is valid only for a Go pprof Run")
         expected = derive_runtime_lock_run_id(
             self.session_id,
             self.adapter_id,

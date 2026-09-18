@@ -38,6 +38,26 @@ def test_performance_skill_has_valid_minimal_frontmatter_and_resources() -> None
     assert "build/pull images" in body
     assert "Do not launch `perflens-mcp` through a shell" in body
     assert "custom JSON-RPC client" in body
+    assert "Do not launch, smoke-test, or" in body
+    assert "one fresh explicit reply covering every listed Preview" in body
+    assert "never describe the batch as one atomic" in body
+    assert "collection must repeat that exact value" in " ".join(body.split())
+    assert "both its `runtime_lock_analysis_id` and" in body
+    assert "Do not call `analyze_runtime_lock_evidence` again" in body
+    assert "runtime_lock_run_finalization_id" in body
+    assert "Maintain an append-only Artifact ledger" in body
+    assert "it is not an Artifact enumerator" in body
+    assert "label the list partial" in body
+    assert "Never infer that" in body
+    assert "Evidence `quality.status` distinct from Run `quality_status`" in body
+    assert "map host UID/GID 0 to" in body
+    assert "Never accept UID 65534" in body
+
+    lock_reference = (skill_root / "references" / "lock-analysis.md").read_text(encoding="utf-8")
+    normalized_lock_reference = " ".join(lock_reference.split())
+    assert "may exceed the wall interval" in normalized_lock_reference
+    assert "Adjacent wait-end timestamps are not acquire/release pairs" in normalized_lock_reference
+    assert "event-local partial provenance" in normalized_lock_reference
 
 
 def test_skill_declares_mcp_dependency_and_explicit_invocation_prompt() -> None:

@@ -186,8 +186,11 @@ def test_exact_stream_converts_replays_and_hides_private_lock_identity() -> None
     assert "lock-1" not in evidence.model_dump_json()
     assert "exact_owner_relationship" in evidence.forbidden_conclusions
     assert "exact_hold_time" in evidence.forbidden_conclusions
-    assert verify_cpython_threading_replay(
-        evidence, BytesIO(raw), execution_binding=_binding()
+    assert (
+        verify_cpython_threading_replay(
+            receipt, BytesIO(raw), execution_binding=_binding()
+        )
+        == receipt
     )
 
 

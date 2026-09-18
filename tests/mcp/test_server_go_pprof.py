@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import socket
@@ -240,11 +241,13 @@ def test_go_preview_authorize_collect_profile_and_reload(
                     "allowed_semantics": ["cumulative"],
                     "executable": "workload",
                     "arguments": [],
+                    "profile_kind": profile_kind,
                 },
             )
             assert not preview_result.is_error, preview_result.content
             preview = _structured(preview_result)
             assert preview["workload"]["workload_kind"] == "go_elf"
+            assert preview["profile_kind"] == profile_kind
             assert [tool["name"] for tool in preview["adapter_execution_bindings"][0]["tools"]] == [
                 "go",
                 "pprof",
@@ -254,12 +257,8 @@ def test_go_preview_authorize_collect_profile_and_reload(
                 {
                     "preview_id": preview["preview_id"],
                     "preview_content_sha256": preview["content_sha256"],
-                    "authorization_summary_sha256": preview[
-                        "authorization_summary_sha256"
-                    ],
-                    "authorization": (
-                        "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"
-                    ),
+                    "authorization_summary_sha256": preview["authorization_summary_sha256"],
+                    "authorization": ("I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"),
                 },
             )
             assert not authorization.is_error, authorization.content
@@ -279,6 +278,37 @@ def test_go_preview_authorize_collect_profile_and_reload(
             assert reference["summary"]["adapter_id"] == "go_pprof"
             assert reference["summary"]["profile_kind"] == profile_kind
             assert reference["summary"]["private_source_replay_status"] == "passed"
+            assert reference["summary"]["settled_session_revision"] == 2
+            assert reference["summary"]["target_uid"] == os.geteuid()
+            run_page = await client.call_tool(
+                "read_artifact_page",
+                {
+                    "artifact_id": reference["artifact_id"],
+                    "artifact_type": "runtime-lock-run",
+                },
+            )
+            assert not run_page.is_error, run_page.content
+            run = json.loads(cast(str, _structured(run_page)["text"]))
+            assert reference["summary"]["evidence_bytes"] == run["evidence_bytes"]
+            finalization_page = await client.call_tool(
+                "read_artifact_page",
+                {
+                    "artifact_id": reference["summary"]["runtime_lock_run_finalization_id"],
+                    "artifact_type": "runtime-lock-run-finalization",
+                },
+            )
+            assert not finalization_page.is_error, finalization_page.content
+            finalization = json.loads(cast(str, _structured(finalization_page)["text"]))
+            assert finalization["outcome"] == "completed"
+            assert finalization["run_id"] == reference["artifact_id"]
+            assert (
+                finalization["content_sha256"]
+                == reference["summary"]["runtime_lock_run_finalization_content_sha256"]
+            )
+            assert (
+                finalization["final_session_artifact_id"]
+                == reference["summary"]["settled_session_artifact_id"]
+            )
 
     asyncio.run(exercise())
     assert not list(artifacts.glob(".runtime-lock-go-*/*"))
@@ -292,6 +322,17 @@ def test_go_preview_authorize_collect_profile_and_reload(
     assert all(run.adapter_id == "go_pprof" for run in runs)
     assert all(run.measurement_semantics == "cumulative" for run in runs)
     assert all(run.correctness_status == "passed" for run in runs)
+    assert all(run.profile_kind == profile_kind for run in runs)
+    assert all(run.evidence_bytes > 0 for run in runs)
+    verifications = [
+        store.load_runtime_lock_verification(run.runtime_lock_verification_id) for run in runs
+    ]
+    assert all(item.verification_status == "verified" for item in verifications)
+    assert all(item.source_replay_receipt is not None for item in verifications)
+    assert all(
+        {check.name: check.status for check in item.checks}["source_conversion_replay"] == "passed"
+        for item in verifications
+    )
 
 
 def test_go_rejects_non_cumulative_collection_before_launch(
@@ -310,6 +351,7 @@ def test_go_rejects_non_cumulative_collection_before_launch(
                     "allowed_semantics": ["cumulative"],
                     "executable": "workload",
                     "arguments": [],
+                    "profile_kind": "mutex",
                 },
             )
             preview = _structured(preview_result)
@@ -318,12 +360,8 @@ def test_go_rejects_non_cumulative_collection_before_launch(
                 {
                     "preview_id": preview["preview_id"],
                     "preview_content_sha256": preview["content_sha256"],
-                    "authorization_summary_sha256": preview[
-                        "authorization_summary_sha256"
-                    ],
-                    "authorization": (
-                        "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"
-                    ),
+                    "authorization_summary_sha256": preview["authorization_summary_sha256"],
+                    "authorization": ("I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"),
                 },
             )
             session = _structured(authorization)
@@ -332,6 +370,7 @@ def test_go_rejects_non_cumulative_collection_before_launch(
                 {
                     "session_id": session["session_id"],
                     "measurement_semantics": "thresholded",
+                    "profile_kind": "mutex",
                     "duration_seconds": 3,
                     "max_events": 100,
                 },
@@ -341,6 +380,54 @@ def test_go_rejects_non_cumulative_collection_before_launch(
 
     asyncio.run(exercise())
     assert not list(artifacts.glob("*.runtime-lock-run.json"))
+
+
+def test_go_rejects_profile_kind_different_from_preview_before_launch(
+    tmp_path: Path,
+    runtime_supervisor_client: RuntimeSupervisorClient,
+) -> None:
+    server, _project, artifacts = _server(tmp_path, runtime_supervisor_client)
+
+    async def exercise() -> None:
+        async with Client(cast(Any, server)) as client:
+            preview_result = await client.call_tool(
+                "preview_runtime_lock_session",
+                {
+                    "target_scope": "host_launched_workload",
+                    "allowed_adapters": ["go_pprof"],
+                    "allowed_semantics": ["cumulative"],
+                    "executable": "workload",
+                    "arguments": [],
+                    "profile_kind": "mutex",
+                },
+            )
+            preview = _structured(preview_result)
+            authorization = await client.call_tool(
+                "authorize_runtime_lock_session",
+                {
+                    "preview_id": preview["preview_id"],
+                    "preview_content_sha256": preview["content_sha256"],
+                    "authorization_summary_sha256": preview["authorization_summary_sha256"],
+                    "authorization": ("I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"),
+                },
+            )
+            session = _structured(authorization)
+            rejected = await client.call_tool(
+                "collect_runtime_lock_evidence",
+                {
+                    "session_id": session["session_id"],
+                    "measurement_semantics": "cumulative",
+                    "profile_kind": "block",
+                    "duration_seconds": 3,
+                    "max_events": 100,
+                },
+            )
+            assert rejected.is_error
+            assert "outside the authorized Runtime Lock Session" in str(rejected.content)
+
+    asyncio.run(exercise())
+    assert not list(artifacts.glob("*.runtime-lock-run.json"))
+    assert not list(artifacts.glob(".runtime-lock-go-*/*"))
 
 
 @pytest.mark.timeout(60)
@@ -384,20 +471,20 @@ def test_go_loopback_preview_binds_pid_socket_and_collects_cumulative_profile(
                         "allowed_semantics": ["cumulative"],
                         "target_pid": process.pid,
                         "loopback_port": port,
+                        "profile_kind": "mutex",
                     },
                 )
                 assert not preview_result.is_error, preview_result.content
                 preview = _structured(preview_result)
                 assert preview["process_target"]["target_pid"] == process.pid
                 assert preview["process_target"]["loopback_port"] == port
+                assert preview["profile_kind"] == "mutex"
                 authorization = await client.call_tool(
                     "authorize_runtime_lock_session",
                     {
                         "preview_id": preview["preview_id"],
                         "preview_content_sha256": preview["content_sha256"],
-                        "authorization_summary_sha256": preview[
-                            "authorization_summary_sha256"
-                        ],
+                        "authorization_summary_sha256": preview["authorization_summary_sha256"],
                         "authorization": (
                             "I_EXPLICITLY_AUTHORIZE_THIS_BOUNDED_RUNTIME_LOCK_SESSION"
                         ),
@@ -419,6 +506,38 @@ def test_go_loopback_preview_binds_pid_socket_and_collects_cumulative_profile(
                 summary = _structured(collected)["summary"]
                 assert summary["backend"] == "same_uid_loopback"
                 assert summary["target_pid"] == process.pid
+                assert summary["target_uid"] == os.geteuid()
+                assert summary["evidence_bytes"] > 0
+                assert summary["settled_session_revision"] == 2
+                run_page = await client.call_tool(
+                    "read_artifact_page",
+                    {
+                        "artifact_id": _structured(collected)["artifact_id"],
+                        "artifact_type": "runtime-lock-run",
+                    },
+                )
+                assert not run_page.is_error, run_page.content
+                run = json.loads(cast(str, _structured(run_page)["text"]))
+                assert summary["evidence_bytes"] == run["evidence_bytes"]
+                finalization_page = await client.call_tool(
+                    "read_artifact_page",
+                    {
+                        "artifact_id": summary["runtime_lock_run_finalization_id"],
+                        "artifact_type": "runtime-lock-run-finalization",
+                    },
+                )
+                assert not finalization_page.is_error, finalization_page.content
+                finalization = json.loads(cast(str, _structured(finalization_page)["text"]))
+                assert finalization["outcome"] == "completed"
+                assert finalization["run_id"] == _structured(collected)["artifact_id"]
+                assert (
+                    finalization["content_sha256"]
+                    == summary["runtime_lock_run_finalization_content_sha256"]
+                )
+                assert (
+                    finalization["final_session_artifact_id"]
+                    == summary["settled_session_artifact_id"]
+                )
 
         asyncio.run(exercise())
     finally:
@@ -434,3 +553,7 @@ def test_go_loopback_preview_binds_pid_socket_and_collects_cumulative_profile(
     run = store.load_runtime_lock_run(run_path.name.removesuffix(".runtime-lock-run.json"))
     assert run.target_scope == "host_bound_process"
     assert run.correctness_status == "unavailable"
+    assert run.profile_kind == "mutex"
+    verification = store.load_runtime_lock_verification(run.runtime_lock_verification_id)
+    assert verification.verification_status == "verified"
+    assert verification.source_replay_receipt is not None

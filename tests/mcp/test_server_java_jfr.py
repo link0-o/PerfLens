@@ -500,9 +500,13 @@ def test_java_jfr_preview_collects_replays_persists_and_cleans_private_evidence(
 ) -> None:
     server, project, artifacts, bridge, launchers = _server(tmp_path)
     run_id = ""
+    finalization_id_from_reference = ""
+    finalization_content_sha256 = ""
+    settled_session_artifact_id = ""
 
     async def exercise() -> None:
-        nonlocal run_id
+        nonlocal finalization_content_sha256, finalization_id_from_reference, run_id
+        nonlocal settled_session_artifact_id
         async with Client(cast(Any, server)) as client:
             preview, session = await _authorize_java_session(client)
             assert bridge.execution_binding is not None
@@ -524,10 +528,21 @@ def test_java_jfr_preview_collects_replays_persists_and_cleans_private_evidence(
             assert not collected.is_error, collected.content
             reference = _structured(collected)
             run_id = cast(str, reference["artifact_id"])
+            finalization_id_from_reference = cast(
+                str, reference["summary"]["runtime_lock_run_finalization_id"]
+            )
+            finalization_content_sha256 = cast(
+                str,
+                reference["summary"]["runtime_lock_run_finalization_content_sha256"],
+            )
+            settled_session_artifact_id = cast(
+                str, reference["summary"]["settled_session_artifact_id"]
+            )
             assert reference["summary"]["adapter_id"] == "java_jfr"
             assert reference["summary"]["private_source_replay_status"] == "passed"
             assert reference["summary"]["event_count"] == 4
             assert reference["summary"]["target_pid"] == 31
+            assert reference["summary"]["settled_session_revision"] == 2
             assert launchers[0].requests == [
                 JavaJfrLaunchRequest(arguments=("--reviewed", "42"), duration_seconds=3)
             ]
@@ -583,7 +598,10 @@ def test_java_jfr_preview_collects_replays_persists_and_cleans_private_evidence(
         loaded.session_id,
         loaded.operation_identity_sha256,
     )
+    assert finalization_id_from_reference == finalization_id
     finalization = store.load_runtime_lock_run_finalization(finalization_id)
+    assert finalization.content_sha256 == finalization_content_sha256
+    assert finalization.final_session_artifact_id == settled_session_artifact_id
     assert finalization.outcome == "completed"
     assert finalization.run_id == loaded.run_id
     assert finalization.run_content_sha256 == loaded.content_sha256

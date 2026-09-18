@@ -22,7 +22,8 @@ perflens init
 It activates Codex and Claude Code by default. Use `--client codex` or
 `--client claude-code` to select one of them. Use `--client opencode` for OpenCode,
 or `--client copilot` for the local Copilot suite (Copilot CLI plus VS Code Copilot
-Agent). OpenCode and Copilot reuse `.agents/skills/perflens`; their project MCP files are
+Agent). Explicit `--client all` selects all four integrations while plain `init` keeps its
+two-client default. OpenCode and Copilot reuse `.agents/skills/perflens`; their project MCP files are
 `.opencode/opencode.json`, `.mcp.json`, and `.vscode/mcp.json`, respectively. The Copilot
 option does not configure GitHub's cloud Coding Agent or expose local sockets to it. Use
 `--read-only` to disable automatic workload collection. It installs only
@@ -42,6 +43,8 @@ clients can persist a strict default set:
 ```bash
 perflens client-defaults --client codex --client claude-code --client opencode
 ```
+
+`perflens client-defaults --client all` persists the complete four-client set.
 
 The generated `~/.config/perflens/config.toml` has schema `1.0`; without it, the built-in
 selection is Codex plus Claude Code. An explicit `init --client ...` list wins for that call.
@@ -75,6 +78,10 @@ silent retry. A retry must have been disclosed in the summary or receive a new c
 requested duration is also a maximum observation window: it does not extend the fixed workload's
 lifetime, so a workload that exits after two seconds cannot yield ten seconds of samples merely by
 requesting a ten-second collection.
+
+The separate managed-workload timeout begins immediately before the authenticated Gate releases
+that workload. Container and Collector preparation before release do not consume it; collection
+after release does, and the final Docker wait receives the precise remaining fraction.
 
 The default project policy allows `stat` and `record`, with MCP ceilings of 30
 seconds, 99 Hz, 256 MiB per collection, and a 120-second plan lifetime. The
@@ -110,12 +117,18 @@ one fresh confirmation. Only then may it authorize, collect or import, analyze, 
 verify, query, compare, and revoke the bounded session. Native pthread, Java JFR, and CPython
 active collection is launch-time only; Go also permits an explicitly enabled same-UID literal
 loopback pprof target. Arbitrary live-process or existing-container injection is not supported.
+Each successful collection reference exposes its Run Finalization ID/digest and settled Session
+revision so every Agent client can inspect the atomic settlement before revocation. A later revoked
+Session revision has no new settlement marker and must not be used to infer that the Run's marker
+is absent.
 
 When Runtime Lock is explicitly part of a Docker optimization Preview, the parent one-confirmation
 session covers it. The capture is charged to the same workload lease and is bound to the exact
 Build, Run, Measurement, runtime, payload, and tool identities. It cannot independently establish
 the outer Docker `verified_improvement` verdict. See the
 [Runtime Lock guide](runtime-locks.md).
+Use the Preview's `runtime_lock_semantics` Adapter-to-semantics mapping when a particular Runtime
+Lock semantics is required; the returned scope remains the authorization source of truth.
 
 An unchanged v0.1.2 Skill is migrated to the shorter `perflens` directory by
 `perflens init --update`, while user-modified content is preserved and refused.

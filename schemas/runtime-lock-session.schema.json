@@ -190,6 +190,7 @@
             "internal_collection_error",
             "operation_lease_expired",
             "operation_reservation_exceeded",
+            "request_rejected",
             "resource_limit_exceeded",
             "run_artifact_mismatch",
             "session_budget_exhausted",

@@ -597,7 +597,59 @@ def test_init_update_without_clients_preserves_the_project_selection(
     assert not (project / ".codex").exists()
 
 
-def test_init_rejects_mixing_legacy_all_with_another_client(tmp_path: Path) -> None:
+def test_client_all_configures_every_supported_client(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    initialized = runner.invoke(
+        app,
+        [
+            "init",
+            str(project),
+            "--client",
+            "all",
+            "--read-only",
+            "--mcp-command",
+            sys.executable,
+            "--perf-path",
+            "/bin/true",
+        ],
+    )
+
+    assert initialized.exit_code == 0, initialized.output
+    assert "已启用客户端: codex, claude-code, opencode, copilot" in initialized.output
+    setup = json.loads((project / "perflens-setup/setup.json").read_text(encoding="utf-8"))
+    assert setup["selected_clients"] == ["codex", "claude-code", "opencode", "copilot"]
+    assert (project / ".codex/config.toml").is_file()
+    assert (project / ".claude/skills/perflens/SKILL.md").is_file()
+    assert (project / ".opencode/opencode.json").is_file()
+    assert (project / ".mcp.json").is_file()
+    assert (project / ".vscode/mcp.json").is_file()
+
+
+def test_client_defaults_all_persists_every_supported_client(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+
+    configured = runner.invoke(
+        app,
+        [
+            "client-defaults",
+            "--config",
+            str(config),
+            "--client",
+            "all",
+        ],
+    )
+
+    assert configured.exit_code == 0, configured.output
+    assert "客户端: codex, claude-code, opencode, copilot" in configured.output
+    assert config.read_text(encoding="utf-8") == (
+        'schema_version = "1.0"\n'
+        'default_clients = ["codex", "claude-code", "opencode", "copilot"]\n'
+    )
+
+
+def test_init_rejects_mixing_all_with_another_client(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
 

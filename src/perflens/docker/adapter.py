@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import stat
@@ -212,15 +213,36 @@ class DockerCommandAdapter:
         if _parse_managed_container_id(payload, "start") != reference:
             raise _managed_error("Docker start returned a different container identity")
 
-    def wait_managed_container(self, container_id: str, *, timeout_seconds: int) -> int:
+    def wait_managed_container(self, container_id: str, *, timeout_seconds: float) -> int:
         reference = _validate_full_container_id(container_id)
-        if not 1 <= timeout_seconds <= 1_260:
+        if (
+            isinstance(timeout_seconds, bool)
+            or not math.isfinite(timeout_seconds)
+            or not 0 < timeout_seconds <= 1_260
+        ):
             raise _managed_error("Managed Docker wait timeout is outside its fixed bound")
-        payload = self._run_bytes(
-            ("container", "wait", reference),
-            max_stdout_bytes=32,
-            timeout_seconds=timeout_seconds,
-        )
+        try:
+            payload = self._run_bytes(
+                ("container", "wait", reference),
+                max_stdout_bytes=32,
+                timeout_seconds=timeout_seconds,
+            )
+        except PerfLensError as exc:
+            if exc.code != ErrorCode.EXTERNAL_TOOL_TIMEOUT:
+                raise
+            raise PerfLensError(
+                ErrorCode.EXTERNAL_TOOL_TIMEOUT,
+                "docker_workload",
+                "Managed Docker wait did not complete within the remaining authorized "
+                "workload time",
+                recoverable=True,
+                retryable=True,
+                details={
+                    **exc.details,
+                    "docker_operation": "container_wait",
+                    "remaining_workload_timeout_seconds": timeout_seconds,
+                },
+            ) from exc
         try:
             value = int(payload.decode("ascii", errors="strict").strip())
         except (UnicodeDecodeError, ValueError) as exc:
@@ -274,9 +296,13 @@ class DockerCommandAdapter:
         args: tuple[str, ...],
         *,
         max_stdout_bytes: int,
-        timeout_seconds: int = 5,
+        timeout_seconds: float = 5,
     ) -> bytes:
-        if not 1 <= timeout_seconds <= 1_260:
+        if (
+            isinstance(timeout_seconds, bool)
+            or not math.isfinite(timeout_seconds)
+            or not 0 < timeout_seconds <= 1_260
+        ):
             raise _managed_error("Docker command timeout is outside its fixed bound")
         assert_docker_cli_current(self._cli)
         assert_docker_endpoint_current(self._endpoint, invoking_uid=self._invoking_uid)

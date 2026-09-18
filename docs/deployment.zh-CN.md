@@ -37,6 +37,7 @@ sudo perflens-admin setup
 `--client opencode` 显式启用 OpenCode，`--client copilot` 同时配置本地 Copilot CLI
 （`.mcp.json`）和 VS Code Copilot Agent（`.vscode/mcp.json`）。这些本地项目文件不会让
 GitHub 云端 Coding Agent 获得宿主 Collector 或 Docker Socket 访问权。
+显式 `--client all` 会选择全部四类集成，但不改变普通 `init` 的双客户端默认值。
 重复传入 `--client` 可选择一个项目级客户端集合。用户可显式运行 `perflens client-defaults`
 保存以后新项目的默认集合；`~/.config/perflens/config.toml` 不存在时，内置默认值仍只有
 Codex + Claude Code。已有项目更新时默认保留自身已记录的集合，只有显式客户端参数才替换。

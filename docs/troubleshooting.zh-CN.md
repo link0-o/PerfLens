@@ -139,6 +139,14 @@ perflens-collector.service` 审查差异，不要放宽检查。
 `systemctl status perflens-collector.service` 和 journal。历史产物与 service unit 不会被
 该命令修改。
 
+## 沙箱把 root 管理的主机文件显示为 `nobody:nogroup`
+
+不要根据 Agent 客户端沙箱或用户命名空间内执行的 `stat`、`ls` 判断 `/etc/perflens` 的真实
+属主。部分沙箱会把宿主 UID/GID 0 映射为 65534，因此连 `/` 和 `/etc` 都会显示为
+`nobody:nogroup`。应使用管理员在真实宿主命名空间执行的 `perflens-admin upgrade --dry-run`
+或等价只读检查；拿不到该证据时只能报告“属主未验证”，不能报告“不安全”。不得把 UID 65534
+加入可信属主，也不得为兼容命名空间映射而放宽 root 属主校验。
+
 ## service 已启动但部署仍报告 Socket 失败
 
 部署和升级不会只看 `/run/perflens/collector.sock` 是否存在，而会连接并发送一次只读

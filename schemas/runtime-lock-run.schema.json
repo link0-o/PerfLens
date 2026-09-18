@@ -367,6 +367,20 @@
           {
             "properties": {
               "adapter_id": {
+                "const": "native_pthread"
+              },
+              "schema_version": {
+                "const": "1.1"
+              }
+            },
+            "required": [
+              "schema_version",
+              "adapter_id"
+            ]
+          },
+          {
+            "properties": {
+              "adapter_id": {
                 "const": "java_jfr"
               }
             },
@@ -412,6 +426,42 @@
         },
         "required": [
           "adapter_execution_identity_sha256"
+        ]
+      }
+    },
+    {
+      "else": {
+        "properties": {
+          "profile_kind": {
+            "type": "null"
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "adapter_id": {
+            "const": "go_pprof"
+          },
+          "schema_version": {
+            "const": "1.1"
+          }
+        },
+        "required": [
+          "schema_version",
+          "adapter_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "profile_kind": {
+            "enum": [
+              "mutex",
+              "block"
+            ]
+          }
+        },
+        "required": [
+          "profile_kind"
         ]
       }
     }
@@ -539,6 +589,22 @@
     "perflens_version": {
       "title": "Perflens Version",
       "type": "string"
+    },
+    "profile_kind": {
+      "anyOf": [
+        {
+          "enum": [
+            "mutex",
+            "block"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Profile Kind"
     },
     "quality_status": {
       "enum": [

@@ -19,8 +19,11 @@ from perflens.domain.errors import PerfLensError
 
 
 def _scratch(tmp_path: Path) -> Path:
-    root = tmp_path / "scratch"
-    root.mkdir(mode=0o700)
+    run_root = tmp_path / "run"
+    run_root.mkdir(mode=0o700)
+    root = run_root / "scratch"
+    root.mkdir(mode=0o733)
+    root.chmod(0o733)
     return root
 
 
@@ -92,6 +95,42 @@ def test_managed_benchmark_rejects_escape_symlink_and_writable_output(tmp_path: 
             "writable.json",
             source_format="perflens",
             benchmark_name=None,
+        )
+
+
+@pytest.mark.parametrize(("unsafe_part", "mode"), (("scratch", 0o700), ("parent", 0o755)))
+def test_managed_benchmark_rejects_scratch_contract_mismatch(
+    tmp_path: Path,
+    unsafe_part: str,
+    mode: int,
+) -> None:
+    root = _scratch(tmp_path)
+    (root if unsafe_part == "scratch" else root.parent).chmod(mode)
+
+    with pytest.raises(PerfLensError, match="scratch root identity or permissions"):
+        load_managed_benchmark(
+            root,
+            "results.json",
+            source_format="perflens",
+            benchmark_name=None,
+        )
+
+
+def test_managed_benchmark_binds_output_owner_separately_from_scratch_owner(
+    tmp_path: Path,
+) -> None:
+    root = _scratch(tmp_path)
+    output = root / "results.json"
+    output.write_bytes(_payload())
+    output.chmod(0o600)
+
+    with pytest.raises(PerfLensError, match="output owner, mode"):
+        load_managed_benchmark(
+            root,
+            "results.json",
+            source_format="perflens",
+            benchmark_name=None,
+            output_owner_uid=output.stat().st_uid + 1,
         )
 
 

@@ -208,7 +208,13 @@ def _verify_source_chain(
     """Fail closed before joining or summarizing independently supplied Artifacts."""
 
     validate_runtime_lock_evidence_invariants(evidence)
-    replayed = verify_runtime_lock_analysis_artifact(analysis, evidence)
+    replayed = verify_runtime_lock_analysis_artifact(
+        analysis,
+        evidence,
+        source_replay_receipt=(
+            verification.source_replay_receipt if verification is not None else None
+        ),
+    )
     require_usable_runtime_lock_analysis(replayed)
     if verification is not None and verification != replayed:
         raise PerfLensError(

@@ -9,6 +9,47 @@
 [《v0.3.2 Docker 优化链路防回归手册》](v0.3.2-regression-playbook.zh-CN.md)。该手册把
 2026-08-26 的修复转换成永久时序、不变量、禁止捷径和测试门禁。
 
+## KI-2026-09-15：Benchmark 采集拒绝自身创建的托管 scratch 布局（已修复）
+
+- 影响范围：配置了 `benchmark_output` 的托管 Docker workload，包括同时采集 Runtime Lock
+  Evidence 的 Docker optimization Session；
+- 现象：workload 正常退出、Broker 也能持久化完整 Collection，但在发布 Container Run、
+  Benchmark、Measurement 与 Docker Runtime Lock Run 前，以
+  `Managed Docker scratch root identity or permissions are unsafe` 终止；
+- 根因：托管 coordinator、Docker mount 校验与 Runtime Lock capture 都会创建并要求
+  “私有 `0700` 单次运行目录 + 精确 `0733` scratch 叶目录”；旧 Benchmark 读取器却独立要求
+  scratch 叶目录本身为 `0700`，因此真实托管 Benchmark 路径必然拒绝 PerfLens 自己创建的目录；
+- 修复：Benchmark capture 现在校验同一个两层布局：外层运行目录由调用用户所有且精确为
+  `0700`，scratch 叶目录同样由调用用户所有且精确为 `0733`；输出文件 owner 则独立绑定到
+  已验证容器目标的宿主 UID，从而保留映射 UID 支持；
+- 安全边界：既有目录没有变得更宽松。输出仍必须是规范路径下的非符号链接普通文件、链接数
+  为 1、大小有界、读取期间身份稳定、owner 与目标一致，且组用户/其他用户不可写；任何失败
+  仍会计费，且不得原样重试；
+- 回归覆盖：真实 `0700`/`0733` 布局通过；scratch 误为 `0700`、外层目录不私有或输出 owner
+  不匹配均保持 fail-closed；MCP server 会把已验证目标的宿主 UID 传给 Benchmark capture。
+
+## KI-2026-09-15：准备和收尾阶段消耗了托管 workload 时间（已修复）
+
+- 影响范围：固定 workload 时长接近 `workload_timeout_seconds` 的托管 Docker 采集，包括
+  同时绑定 Runtime Lock 的 Docker optimization Preview；
+- 现象：Gate 放行后，Collector 可以发布完整的短时 `stat` Collection，但后续容器等待可能返回
+  `External tool exceeded its execution timeout`。修正该截止时间后，后续真实主机复测已执行到
+  Docker wait、Runtime Lock capture、Benchmark capture、资源采集和清理，却在结算时报
+  `Docker run exceeded its reserved resource budget`；
+- 根因：两处时钟仍错误覆盖整个工具调用。原等待截止时间把容器准备和采集总时间向上取整后
+  从 workload 超时中扣除；内部托管 Session 结算又独立把准备、workload 和退出后收尾一起
+  向上取整，导致合法三秒 lease 在 workload 已退出后仍可能被记为超过三秒；
+- 修复：workload 截止时间改为在已认证 Gate 即将放行时开始。Gate 放行后的 Collector 观测
+  仍消耗该窗口，放行前的准备则不再消耗；Docker wait 接收保留小数精度的剩余时间，真正
+  超时时明确报告为 `docker_workload` / `container_wait`。结算记录 workload 退出时的单调
+  时钟，只计 Gate 放行至退出的区间；准备和退出后的 Benchmark/Runtime Lock 收尾不计入，
+  整数向上取整也不会超过已经预留的 lease；
+- 安全边界：修复不扩大授权时长，也不增加自动重试；精确 Docker wait 截止时间仍单独执行
+  授权时长上限。lease 签发后的失败仍会计费，并按原有规则终止 optimization 工作流；
+- 回归覆盖：测试证明三秒 Gate 相对窗口经过 `1.041` 秒后仍精确保留 `1.959` 秒，经托管
+  coordinator 原样传递该小数值，拒绝非有限值与越界值，保留明确的 Docker wait 超时阶段，
+  并证明较长的退出后收尾不会进入记账、运行中失败最多计入其已预留整数 lease。
+
 ## KI-2026-08-26：自动 PMU 探测可能提前放行快速 Docker workload（已修复）
 
 - 影响范围：托管 Docker `stat`/`record` 使用 `event_source=auto`，尤其是优化候选明显快于

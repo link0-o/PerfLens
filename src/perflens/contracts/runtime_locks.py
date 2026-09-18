@@ -74,6 +74,7 @@ _SCHEMA_1_1_QUALITY_FIELDS = (
     "duplicate_stack_record_count",
     "truncated_stack_record_count",
 )
+_SCHEMA_1_1_OPTIONAL_QUALITY_FIELDS = ("lost_source_bytes",)
 _SCHEMA_1_1_EVENT_FIELDS = (
     "execution_context_id",
     "owner_execution_context_id",
@@ -700,9 +701,7 @@ class RuntimeSourceManifest(ContractModel):
                                 "schema_version": {"const": "1.1"},
                                 "runtime": {"const": "go"},
                                 "adapter_id": {"const": "go_pprof"},
-                                "backend_id": {
-                                    "enum": ["pprof-block", "pprof-mutex"]
-                                },
+                                "backend_id": {"enum": ["pprof-block", "pprof-mutex"]},
                                 "target_scope": {"const": "bound_pid"},
                             },
                         },
@@ -1046,6 +1045,9 @@ class RuntimeEvidenceQuality(ContractModel):
     out_of_order_record_count: int = Field(default=0, ge=0)
     unsupported_record_count: int = Field(ge=0)
     lost_event_count: int = Field(ge=0)
+    # Some runtimes report loss in bytes rather than an event count.  Keep the
+    # unit explicit and optional so zero can be distinguished from unavailable.
+    lost_source_bytes: int | None = Field(default=None, ge=0)
     truncated_event_count: int = Field(ge=0)
     stack_input_record_count: int = Field(default=0, ge=0)
     emitted_stack_count: int = Field(default=0, ge=0)
@@ -1103,6 +1105,7 @@ class RuntimeEvidenceQuality(ContractModel):
                 self.malformed_record_count,
                 self.unsupported_record_count,
                 self.lost_event_count,
+                self.lost_source_bytes or 0,
                 self.truncated_event_count,
                 self.duplicate_record_count,
                 self.out_of_order_record_count,
@@ -1139,7 +1142,8 @@ class RuntimeLockEvidenceArtifact(ContractModel):
                                         ),
                                         "source": _legacy_schema_condition(),
                                         "quality": _forbid_present_json_schema(
-                                            *_SCHEMA_1_1_QUALITY_FIELDS
+                                            *_SCHEMA_1_1_QUALITY_FIELDS,
+                                            *_SCHEMA_1_1_OPTIONAL_QUALITY_FIELDS,
                                         ),
                                         "events": {
                                             "items": {
@@ -1257,7 +1261,9 @@ class RuntimeLockEvidenceArtifact(ContractModel):
         if self.schema_version == "1.0":
             if "execution_contexts" in self.model_fields_set:
                 raise ValueError("schema 1.0 runtime Evidence cannot carry execution contexts")
-            if quality_fields & set(_SCHEMA_1_1_QUALITY_FIELDS):
+            if quality_fields & set(
+                (*_SCHEMA_1_1_QUALITY_FIELDS, *_SCHEMA_1_1_OPTIONAL_QUALITY_FIELDS)
+            ):
                 raise ValueError("schema 1.0 runtime quality cannot carry 1.1 accounting fields")
             if any(event.model_fields_set & set(_SCHEMA_1_1_EVENT_FIELDS) for event in self.events):
                 raise ValueError("schema 1.0 runtime event cannot carry 1.1 fields")
@@ -1274,6 +1280,10 @@ class RuntimeLockEvidenceArtifact(ContractModel):
                 raise ValueError("schema 1.1 runtime event cannot carry legacy TID fields")
             if "target_kind" not in target_fields:
                 raise ValueError("schema 1.1 runtime target requires an explicit target kind")
+            if self.source.source_format == "jfr_json_v1" and (
+                "lost_source_bytes" not in quality_fields or self.quality.lost_source_bytes is None
+            ):
+                raise ValueError("JFR evidence must disclose jdk.DataLoss bytes")
         if self.source.schema_version != self.schema_version:
             raise ValueError("runtime Evidence and source schema versions must match")
         if self.source.source_bytes > self.limits.max_source_bytes:

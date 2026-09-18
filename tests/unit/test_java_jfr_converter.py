@@ -14,7 +14,7 @@ from perflens.contracts.runtime_lock_sessions import (
     derive_runtime_lock_adapter_execution_identity,
     derive_runtime_lock_toolchain_identity,
 )
-from perflens.contracts.runtime_locks import RuntimeWaitEndEvent
+from perflens.contracts.runtime_locks import RuntimeLockEvidenceArtifact, RuntimeWaitEndEvent
 from perflens.domain.errors import ErrorCode, PerfLensError
 from perflens.runtime_locks import java_jfr_stream
 from perflens.runtime_locks.java_jfr_converter import (
@@ -144,6 +144,11 @@ def test_real_jfr_fixtures_convert_without_leaking_private_identity(jdk: int) ->
     )
     assert all(context.name is None for context in evidence.execution_contexts)
     assert "jrt:/" not in public and '"location"' not in public
+    assert any(
+        stack.frames[0].symbol == "java.lang.Thread.run"
+        and stack.frames[-1].symbol == "java.lang.Object.wait0"
+        for stack in evidence.stacks
+    )
     replay = verify_java_jfr_replay(
         BytesIO(raw),
         expected=receipt,
@@ -332,12 +337,14 @@ def test_data_loss_is_partial_and_reports_bytes_as_a_limitation() -> None:
     evidence = _convert(json.dumps(document, separators=(",", ":")).encode()).evidence
     assert evidence.quality.status == "partial"
     assert evidence.quality.lost_event_count == 0
+    assert evidence.quality.lost_source_bytes == 4096
     assert any("4096 lost source bytes" in value for value in evidence.quality.limitations)
 
 
 def test_zero_event_and_data_loss_only_evidence_are_honest() -> None:
     empty = _convert(b'{"recording":{"events":[]}}').evidence
     assert empty.events == ()
+    assert empty.quality.lost_source_bytes == 0
     assert empty.quality.status == "partial"
     assert any("no accepted events" in item.lower() for item in empty.quality.limitations)
 
@@ -358,6 +365,7 @@ def test_zero_event_and_data_loss_only_evidence_are_honest() -> None:
     evidence = _convert(json.dumps(data_loss, separators=(",", ":")).encode()).evidence
     assert evidence.events == ()
     assert evidence.quality.status == "partial"
+    assert evidence.quality.lost_source_bytes == 64
     assert any("64 lost source bytes" in item for item in evidence.quality.limitations)
 
 
@@ -365,6 +373,7 @@ def test_jfr_source_is_fully_bound_and_path_free() -> None:
     raw = (FIXTURES / "jdk25-locks.json").read_bytes()
     binding = _binding(25)
     evidence = _convert(raw).evidence
+    assert evidence.quality.lost_source_bytes == 0
     source = evidence.source
     assert source.runtime == "java"
     assert source.adapter_id == "java_jfr"
@@ -380,6 +389,10 @@ def test_jfr_source_is_fully_bound_and_path_free() -> None:
     assert source.metadata_sha256 == binding.metadata_sha256
     public = evidence.model_dump_json()
     assert "/usr/" not in public and "/home/" not in public
+    without_loss_disclosure = evidence.model_dump(mode="json", exclude_none=True)
+    without_loss_disclosure["quality"].pop("lost_source_bytes")
+    with pytest.raises(ValueError, match=r"must disclose jdk\.DataLoss bytes"):
+        RuntimeLockEvidenceArtifact.model_validate(without_loss_disclosure)
 
 
 def test_profile_threshold_and_jdk_version_are_content_bound() -> None:
@@ -408,6 +421,26 @@ def test_wait_end_timestamp_is_start_plus_duration_and_end_ordered() -> None:
         112_263_772,
         132_676_046,
     ]
+    assert all(
+        isinstance(event, RuntimeWaitEndEvent) and event.timestamp_ns >= event.duration_ns
+        for event in evidence.events
+    )
+
+
+def test_end_ordered_events_may_start_before_the_first_source_event() -> None:
+    document = json.loads((FIXTURES / "jdk25-locks.json").read_bytes())
+    events = document["recording"]["events"]
+    events[0]["values"]["startTime"] = "2026-08-30T18:33:02.200000000+08:00"
+    events[0]["values"]["duration"] = "PT0.020S"
+    events[1]["values"]["startTime"] = "2026-08-30T18:33:02.190000000+08:00"
+    events[1]["values"]["duration"] = "PT0.040S"
+
+    evidence = _convert(json.dumps(document, separators=(",", ":")).encode()).evidence
+
+    assert [event.timestamp_ns for event in evidence.events[:2]] == [30_000_000, 40_000_000]
+    assert [event.timestamp_ns for event in evidence.events] == sorted(
+        event.timestamp_ns for event in evidence.events
+    )
     assert all(
         isinstance(event, RuntimeWaitEndEvent) and event.timestamp_ns >= event.duration_ns
         for event in evidence.events

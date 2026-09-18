@@ -341,13 +341,25 @@ def test_native_host_preview_collects_converts_verifies_and_cleans_private_strea
 ) -> None:
     server, project, artifacts, launchers = _server(tmp_path)
     run_id = ""
+    execution_identity = ""
+    finalization_id = ""
+    finalization_content_sha256 = ""
+    settled_session_artifact_id = ""
 
     async def exercise() -> None:
-        nonlocal run_id
+        nonlocal execution_identity, finalization_content_sha256, finalization_id
+        nonlocal run_id, settled_session_artifact_id
         async with Client(cast(Any, server)) as client:
             preview, session = await _authorize_host_session(client)
             assert any("cooperatively" in item for item in preview["warnings"])
             assert any("not tamper-proof" in item for item in preview["warnings"])
+            assert len(preview["adapter_execution_bindings"]) == 1
+            execution_binding = preview["adapter_execution_bindings"][0]
+            execution_identity = cast(str, execution_binding["execution_identity_sha256"])
+            assert execution_binding["adapter_id"] == "native_pthread"
+            assert execution_binding["runtime_version"] == "glibc-2.41"
+            assert execution_binding["profile"] == "exact"
+            assert execution_binding["runtime_payload_identity_sha256"] == "2" * 64
             assert preview["workload"] == {
                 "adapter_id": "native_pthread",
                 "workload_kind": "native_elf",
@@ -370,11 +382,20 @@ def test_native_host_preview_collects_converts_verifies_and_cleans_private_strea
             assert not collected.is_error, collected.content
             reference = _structured(collected)
             run_id = cast(str, reference["artifact_id"])
+            finalization_id = cast(str, reference["summary"]["runtime_lock_run_finalization_id"])
+            finalization_content_sha256 = cast(
+                str,
+                reference["summary"]["runtime_lock_run_finalization_content_sha256"],
+            )
+            settled_session_artifact_id = cast(
+                str, reference["summary"]["settled_session_artifact_id"]
+            )
             assert reference["artifact_type"] == "runtime-lock-run"
-            assert reference["summary"]["private_source_replay_status"] == "verified"
+            assert reference["summary"]["private_source_replay_status"] == "passed"
             assert reference["summary"]["event_count"] == 10
             assert reference["summary"]["target_pid"] == 4242
             assert reference["summary"]["session_state"] == "active"
+            assert reference["summary"]["settled_session_revision"] == 2
             assert launchers[0].requests == [
                 NativeLaunchRequest(
                     arguments=("--reviewed", "42"),
@@ -387,6 +408,45 @@ def test_native_host_preview_collects_converts_verifies_and_cleans_private_strea
             private_root = launchers[0].private_root
             assert list(private_root.iterdir()) == []
 
+            finalization_page = await client.call_tool(
+                "read_artifact_page",
+                {
+                    "artifact_id": finalization_id,
+                    "artifact_type": "runtime-lock-run-finalization",
+                },
+            )
+            assert not finalization_page.is_error, finalization_page.content
+            finalization_payload = json.loads(cast(str, _structured(finalization_page)["text"]))
+            assert finalization_payload["content_sha256"] == finalization_content_sha256
+            assert finalization_payload["run_id"] == run_id
+            assert finalization_payload["final_session_artifact_id"] == (
+                settled_session_artifact_id
+            )
+            assert finalization_payload["outcome"] == "completed"
+
+            revoked = await client.call_tool(
+                "revoke_runtime_lock_session",
+                {"session_id": session["session_id"]},
+            )
+            assert not revoked.is_error, revoked.content
+            terminal_session = _structured(revoked)
+            assert terminal_session["state"] == "revoked"
+            assert terminal_session["revision"] == 3
+            assert terminal_session["settlement_finalization_id"] is None
+
+            finalization_after_revoke = await client.call_tool(
+                "read_artifact_page",
+                {
+                    "artifact_id": finalization_id,
+                    "artifact_type": "runtime-lock-run-finalization",
+                },
+            )
+            assert not finalization_after_revoke.is_error, finalization_after_revoke.content
+            assert (
+                json.loads(cast(str, _structured(finalization_after_revoke)["text"]))
+                == finalization_payload
+            )
+
     asyncio.run(exercise())
     assert len(list(artifacts.glob("*.runtime-lock-evidence.json"))) == 1
     assert len(list(artifacts.glob("*.runtime-lock-analysis.json"))) == 1
@@ -395,16 +455,25 @@ def test_native_host_preview_collects_converts_verifies_and_cleans_private_strea
     store = ArtifactStore(artifacts, PathPolicy((project,)), allow_writes=False)
     loaded = store.load_runtime_lock_run(run_id)
     assert loaded.workload_identity_sha256
+    assert loaded.adapter_execution_identity_sha256 == execution_identity
     assert loaded.quality_status == "partial"
+    evidence = store.load_runtime_lock_evidence(loaded.runtime_lock_evidence_id)
+    assert evidence.source.adapter_id == "native_pthread"
+    assert evidence.source.adapter_execution_identity_sha256 == execution_identity
+    verification = store.load_runtime_lock_verification(loaded.runtime_lock_verification_id)
+    assert verification.verification_status == "verified"
+    assert verification.source_replay_receipt is not None
     started = datetime.fromisoformat(loaded.started_at)
     finished = datetime.fromisoformat(loaded.finished_at)
     assert loaded.created_at == loaded.finished_at
     assert loaded.duration_seconds == math.ceil((finished - started).total_seconds()) == 1
-    finalization_id = derive_runtime_lock_run_finalization_id(
+    assert finalization_id == derive_runtime_lock_run_finalization_id(
         loaded.session_id,
         loaded.operation_identity_sha256,
     )
     finalization = store.load_runtime_lock_run_finalization(finalization_id)
+    assert finalization.content_sha256 == finalization_content_sha256
+    assert finalization.final_session_artifact_id == settled_session_artifact_id
     assert finalization.accounted_active_seconds == loaded.duration_seconds
     settled_session = store.load_runtime_lock_session(finalization.final_session_artifact_id)
     assert settled_session.active_seconds_used == loaded.duration_seconds
@@ -782,6 +851,12 @@ def test_native_preview_and_private_output_safety_reject_unsafe_inputs(
                     },
                 )
                 assert preview.is_error
+                if executable == str(project / "workload"):
+                    assert (
+                        "Runtime Lock workload executable must be one normalized "
+                        "project-relative path"
+                    ) in str(preview.content)
+                    assert "Native pthread executable" not in str(preview.content)
             _preview, session = await _authorize_host_session(client)
             rejected = await client.call_tool(
                 "collect_runtime_lock_evidence",

@@ -3330,6 +3330,7 @@ def test_admin_spool_status_reports_versioned_read_only_capacity(tmp_path: Path)
 
 def test_admin_spool_status_uses_private_helper_spool_in_paranoid3_mode(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config, _perf, _collector, layout = _deployment_inputs(tmp_path)
     config.write_text(
@@ -3346,6 +3347,14 @@ def test_admin_spool_status_uses_private_helper_spool_in_paranoid3_mode(
     layout.helper_state_directory.mkdir(parents=True)
     artifact = layout.helper_state_directory / "plan-00000000000000000003.stat.csv"
     artifact.write_bytes(b"metric")
+
+    def filesystem_status(_descriptor: int) -> os.statvfs_result:
+        available_bytes = 4 << 30
+        return os.statvfs_result(
+            (1, 1, available_bytes, available_bytes, available_bytes, 0, 0, 0, 255, 255)
+        )
+
+    monkeypatch.setattr(admin_deploy.os, "fstatvfs", filesystem_status)
 
     result = inspect_collector_spool(
         config,
