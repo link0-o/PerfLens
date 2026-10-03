@@ -2,9 +2,10 @@
 
 简体中文 | [English](runtime-locks.md)
 
-状态：**已实现为 v0.4.0 发布候选，尚不属于已发布的 v0.3.2 安装包**。版本与可复现候选
-安装包已准备好，但真实运行时矩阵、主机、远端 CI 与 Tag 门禁仍须通过后才能发布。当前
-已发布基线仍是 v0.3.2。当前证据见[《v0.4.0 发布候选就绪记录》](v0.4.0-release-readiness.zh-CN.md)。
+状态：**已在 v0.4.0 实现，不属于 v0.3.2 安装包**。固定运行时宿主机矩阵与 Docker 一次确认
+链路已通过功能验收。精确 Evidence、Native 固定 fixture 开销、本地源码/安装包门禁和远端
+CI/发布在以下记录中分别列出：
+[《v0.4.0 发布就绪记录》](v0.4.0-release-readiness.zh-CN.md)。
 
 Runtime Lock 是面向语言级等待与竞争的确定性证据链。它不会把每个 futex 当成语言锁，
 不会在来源没有提供时猜测 owner 或持锁区间，也不会把抽样或累计 Profile 写成精确事件。
@@ -50,7 +51,7 @@ receipt。私有来源清理后再次验证时，必须同时传入 Run 保存�
 不要把已采集的公开 Evidence 当作新导入再次分析；单靠公开 Evidence 无法重建私有来源 receipt。
 如需生成诊断 Bundle，也要传入同一个 Run 绑定的 Verification ID。
 
-成功采集的返回引用会直接给出不可变 Run Finalization 的 ID/内容摘要，以及完成结算的 Session
+独立宿主机 `collect_runtime_lock_evidence` 成功返回时，会给出不可变 Run Finalization 的 ID/内容摘要，以及完成结算的 Session
 Artifact ID/revision。撤销 Session 前应读取这份很小的 Finalization Artifact，确认
 `outcome=completed` 且绑定同一个 Run。随后显式撤销会生成一个更晚的终态 Session revision，
 其中 `settlement_finalization_id=null`；该字段只表示“这个 revision 没有结算新操作”，不会删除
@@ -88,6 +89,15 @@ PerfLens 不向任意运行中进程或任意已有容器注入。Native、CPyth
 传入任意环境变量，也不退回按路径执行。Runtime Home 被替换或可写时主动采集显示
 `unavailable`，受控导入与离线分析仍可使用。
 
+对于单独安装的 CPython 3.13 free-threaded 等目标，MCP 可继续使用正常受支持的
+Python；管理员在 MCP 启动参数中指定
+`--runtime-lock-cpython-interpreter /绝对路径/python3.13t`。
+目标必须是受信所有者的绝对、非符号链接、权限安全的可执行文件，Runtime Home
+也必须通过现有所有者与权限检查。固定的 `-I -S` 标准库身份查询通过已哈希的
+可执行文件描述符运行，并将目标版本、ABI、free-threaded 状态、解释器字节和
+Runtime Home 绑定到 Adapter 能力与 Preview。该启动选项不执行项目 workload，
+Agent 不能逐次调用传入；变更时必须重启 MCP，并重新 Preview、授权。
+
 ## 证据语义
 
 Runtime Lock Evidence Schema 1.1 可以表示 OS 线程、Java 平台/虚拟线程、Go goroutine 和
@@ -116,12 +126,12 @@ JFR Evidence 会明确发布 `quality.lost_source_bytes`（包括 0）；因为
 
 ## Adapter 兼容矩阵
 
-| Adapter | 仓库 v0.4.0 预发布边界 | 重要限制 |
+| Adapter | v0.4.0边界 | 重要限制 |
 |---|---|---|
 | Native pthread | Debian 12/13 amd64、glibc 2.36/2.41、动态链接 pthread mutex/rwlock/condition；固定 `LD_PRELOAD` 启动插桩；默认 thresholded 1 us，并提供有界 exact | 静态/musl/setuid/file-cap、内联/自定义原子锁、自旋锁和不可见快路径为 partial 或 unsupported；不做 live uprobe/eBPF |
-| Java JFR | 目标矩阵 JDK 17/21/25；启动时 JFR；固定 `balanced` 10 ms 或 `deep` 1 ms；采集 `JavaMonitorEnter`、`JavaMonitorWait`、`ThreadPark`，虚拟线程按 metadata 发现 | 不做 live attach；使用同一 JDK 的 `jfr print --json` 有界转换；阈值以下未记录不能解释为“没有等待”；缺少 acquire/release 时禁止 owner/hold 结论；本地发布证据当前覆盖 JDK 21/25，JDK 17 仍阻断发布 |
-| CPython threading | CPython 3.12/3.13 的公开 `threading.Lock`、`RLock`、`Condition`、`Semaphore`；普通用户启动 bootstrap；默认 thresholded 10 us，并提供有界 exact | 不伪装所有 `_thread` 或 C 扩展锁；GIL、内部锁和应用锁分开；3.13 free-threaded 禁止传统 GIL 结论，且在真实环境通过前仍阻断发布 |
-| Go pprof | 目标矩阵 Go 1.24-1.27，固定 `go tool pprof -raw`；私有文件 mutex/block Profile；显式启用时支持同 UID 字面量 loopback 宿主 pprof | Docker 默认只用文件后端且不开网络；PerfLens 不开启 runtime Profile rate 或修改源码；mutex/block 保持为独立 cumulative Evidence，不虚构 TID、owner 或锁对象；当前只有 Go 1.24 具备所需本地 Golden，1.25-1.27 保持 `partial` 并阻断发布 |
+| Java JFR | 目标矩阵 JDK 17/21/25；启动时 JFR；固定 `balanced` 10 ms 或 `deep` 1 ms；采集 `JavaMonitorEnter`、`JavaMonitorWait`、`ThreadPark`，虚拟线程按 metadata 发现 | 不做 live attach；使用同一 JDK 的 `jfr print --json` 有界转换；阈值以下未记录不能解释为“没有等待”；缺少 acquire/release 时禁止 owner/hold 结论；JDK 17/21/25 均有真实本机功能证据，JDK 17 Run 的线程覆盖 partial 已披露 |
+| CPython threading | CPython 3.12/3.13 的公开 `threading.Lock`、`RLock`、`Condition`、`Semaphore`；普通用户启动 bootstrap；默认 thresholded 10 us，并提供有界 exact | 不伪装所有 `_thread` 或 C 扩展锁；GIL、内部锁和应用锁分开；3.13 free-threaded 禁止传统 GIL 结论。真实 3.13.5 free-threaded 宿主 Run 的正确性与重放通过，但公开 threading 可见性如实保持 partial；这不等于完整发布验收 |
+| Go pprof | 目标矩阵 Go 1.24-1.27，固定 `go tool pprof -raw`；私有文件 mutex/block Profile；显式启用时支持同 UID 字面量 loopback 宿主 pprof | Docker 默认只用文件后端且不开网络；PerfLens 不开启 runtime Profile rate 或修改源码；mutex/block 保持为独立 cumulative Evidence，不虚构 TID、owner 或锁对象；固定的 Go 1.24.4/1.25.14/1.26.8/1.27.1 现有匹配原始 Golden，当前源码的 Adapter 能力为 `available`；其他补丁版本须另经审查，否则保持 `partial`。即使能力可用，累计 Evidence 仍为 `partial`；固定 Go 的重建安装包宿主功能验收已通过；Native 固定 fixture 开销与本地/发布门禁分别见就绪记录 |
 | Generic NDJSON | 严格读取 Schema 1.0/1.1 的有界流式受控导入与重放 | 导入源必须声明精确/阈值/抽样/累计语义、时钟、可见面、丢失、owner/hold 来源；格式错误、跨目标、乱序或不守恒输入会被拒绝 |
 
 JDK、Go、async-profiler、DTrace/SystemTap 等属于可选外部依赖。PerfLens 只检测它们，不由
@@ -130,8 +140,13 @@ pthread probe 和 Runtime Lock supervisor；安装包本身不会激活它们。
 Server 的 `PATH` 解析 `java`，再把 `java`、`jfr` 与运行时 payload 固定到同一个可信 JDK
 根目录。需要 JDK 17、21 或 25 时，应让客户端启动环境的 `PATH` 优先指向对应 JDK；只设置
 `JAVA_HOME` 不会完成选择。使用 Java 17 编译的项目可以直接用其 JDK 17 运行时采集，不需要
-强制切换到验收机使用的 JDK 21；但在 JDK 17 真实矩阵通过前，v0.4.0 仍不能正式宣称该项
-兼容性验收完成。
+强制切换到 JDK 21。固定 Temurin 17.0.20.1 的宿主链路已通过；Run 层仍显式保留短命线程
+覆盖 partial 的限制。
+
+Go 主动转换需要可信、root 所有的 go，以及位于 go env GOTOOLDIR
+目录下预编译、root 所有的 pprof 可执行文件。有些 Go 归档不自带后者；
+管理员须用匹配的定版 Go 源码构建，并以 0755 模式安装。PerfLens 不会将
+go tool pprof 的按需构建或用户可写缓存当作已绑定身份的采集工具。
 
 Java 转换、重放、发布及身份安全清理全部成功后，私有 JFR recording 和 JSON transcript 会被
 删除。如果转换、重放或安全清理以 `adapter_output_invalid` 结束，PerfLens 会有意保留这两个
@@ -142,10 +157,21 @@ Java 转换、重放、发布及身份安全清理全部成功后，私有 JFR r
 
 ## Docker optimization 集成
 
-仓库 v0.4.0 预发布实现可以在 v0.3.2 Docker optimization 工作流的 Preview 中明确增加一个
+v0.4.0 可以在 v0.3.2 Docker optimization 工作流的 Preview 中明确增加一个
 已审阅的 Runtime Lock Adapter 和语义。选择后，用户对 Docker optimization 的一次确认同时
 覆盖该有界 Runtime Lock 范围，不会再产生第二个隐式授权。PerfLens 在创建容器前检查 Runtime
 Lock 预算，且费用只能结算到同一个单次 workload lease。已发布的 v0.3.2 安装包不能请求该扩展。
+
+内嵌 Run 的 `authorization_kind=docker_optimization`，通过 `docker_optimization_binding`
+绑定已结算父 Session、Build、Container Run 与 Measurement，不生成独立宿主机 Run Finalization。
+应核对这些内容绑定的 Artifact 和后续父会话终态；分页使用不可变的 `session_artifact_id`，
+不能传授权用的 `session_id`。Runtime Lock Evidence 采用保守计费，包含公开 Evidence 以及
+capture/raw/normalized 表示，并另计 perf 证据；不能只用捕获的 NDJSON 文件大小核对总费用。
+
+`collect_docker_optimization_workload` 省略 `workload_timeout_seconds` 时，内嵌 Runtime
+Lock 会根据已选择的语义使用授权时长上限，且不超过普通路径原有的 60 秒默认值。未选择
+Runtime Lock 时仍默认 60 秒。明确传入超过所选窗口的时长会在签发 workload lease 前拒绝。
+该时长只是负载执行上限，不会让提前结束的负载继续运行到窗口末尾。
 
 `preview_docker_optimization_session` 可接收可选的 `runtime_lock_semantics` 对象，为每个请求的
 Adapter 明确选择一种测量语义，例如 `{"native_pthread":"exact"}`。所选 binding 与阈值都会
@@ -160,6 +186,11 @@ baseline/candidate 比较会绑定精确 Build 内容摘要、Recipe、Builder/�
 
 任何后处理或持久化失败都会把父会话的 Runtime Lock 标记为 unavailable 并禁止误导性继续。
 身份替换、策略/工具/payload 变化、预算耗尽、撤销或过期均安全失败，不能原样自动重试。
+
+父级 `state` 才是授权状态。`runtime_lock_status` 是内嵌 Runtime Lock scope/结果的保留投影
+（`active`、`partial`、`unavailable` 或 `exhausted`），不是第二个权限开关。因此终态父 Artifact
+可以是 `state=revoked`，同时保留最后一次成功内嵌结果的 `runtime_lock_status=active`。所有操作
+都会拒绝非 active 的父级状态；报告必须同时读取两者，不能把保留的子状态描述成仍存活的权限。
 
 ## 离线 CLI
 

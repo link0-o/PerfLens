@@ -895,6 +895,23 @@ def test_expiry_revoke_capacity_and_forged_access_fail_closed() -> None:
     assert authority.snapshot(replacement.access).state == "expired"
 
 
+def test_revoke_ends_parent_authority_but_retains_runtime_lock_projection() -> None:
+    authority, _ = _authority()
+    preview = _preview(runtime_lock_scope=_runtime_lock_scope())
+    authorized = _authorize(authority, preview)
+
+    revoked = authority.revoke(authorized.access)
+
+    assert revoked.state == "revoked"
+    assert revoked.runtime_lock_status == "active"
+    with pytest.raises(PerfLensError, match="session is no longer active"):
+        _begin_build(
+            authority,
+            authorized.access,
+            preview_content_sha256=authorized.artifact.preview_content_sha256,
+        )
+
+
 @pytest.mark.parametrize("capacity", (0, 33))
 def test_authority_rejects_capacity_outside_fixed_bound(capacity: int) -> None:
     with pytest.raises(ValueError, match="capacity is outside"):

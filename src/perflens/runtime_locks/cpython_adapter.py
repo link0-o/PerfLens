@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import json
 import os
 import stat
+import subprocess
 import sys
 import sysconfig
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from perflens.application.evidence import contract_content_sha256
 from perflens.contracts.runtime_lock_sessions import (
@@ -60,6 +62,17 @@ class CpythonInstallation:
     bootstrap: CpythonFileIdentity | None
     metadata_sha256: str | None
     limitations: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CpythonRuntimeProbe:
+    interpreter: CpythonFileIdentity
+    runtime_home: Path
+    runtime_version: str
+    free_threaded: bool
+    cache_tag: str
+    soabi: str
+    abiflags: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,12 +147,24 @@ def inspect_cpython_installation(
     runtime_home_path: Path | None = None,
     bootstrap_path: Path = DEFAULT_CPYTHON_BOOTSTRAP_PATH,
     trusted_owner_uids: tuple[int, ...] = (0,),
+    runtime_probe: CpythonRuntimeProbe | None = None,
 ) -> CpythonInstallation:
-    """Inspect only the interpreter running this MCP and one package-owned bootstrap."""
+    """Inspect a pinned interpreter, using its own metadata when explicitly probed."""
 
-    version = ".".join(map(str, sys.version_info[:3]))
-    free_threaded = bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
-    if sys.implementation.name != "cpython" or sys.version_info[:2] not in {(3, 12), (3, 13)}:
+    version = (
+        runtime_probe.runtime_version
+        if runtime_probe is not None
+        else ".".join(map(str, sys.version_info[:3]))
+    )
+    free_threaded = (
+        runtime_probe.free_threaded
+        if runtime_probe is not None
+        else bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
+    )
+    supported = runtime_probe is not None or (
+        sys.implementation.name == "cpython" and sys.version_info[:2] in {(3, 12), (3, 13)}
+    )
+    if not supported:
         return CpythonInstallation(
             availability="unavailable",
             runtime_version=version,
@@ -181,8 +206,11 @@ def inspect_cpython_installation(
             maximum_size=512 << 20,
             trusted_owner_uids=trusted_owner_uids,
         )
+        if runtime_probe is not None and interpreter != runtime_probe.interpreter:
+            raise _error("CPython interpreter changed after its version probe")
         runtime_home = _inspect_runtime_home(
-            runtime_home_path or Path(sys.base_prefix),
+            runtime_home_path
+            or (runtime_probe.runtime_home if runtime_probe is not None else Path(sys.base_prefix)),
             trusted_owner_uids=trusted_owner_uids,
         )
         bootstrap = _inspect_file(
@@ -210,10 +238,22 @@ def inspect_cpython_installation(
             (
                 "perflens-cpython-runtime-metadata-v1",
                 version,
-                sys.implementation.cache_tag or "",
+                (
+                    runtime_probe.cache_tag
+                    if runtime_probe is not None
+                    else sys.implementation.cache_tag or ""
+                ),
                 str(int(free_threaded)),
-                sysconfig.get_config_var("SOABI") or "",
-                sysconfig.get_config_var("ABIFLAGS") or "",
+                (
+                    runtime_probe.soabi
+                    if runtime_probe is not None
+                    else sysconfig.get_config_var("SOABI") or ""
+                ),
+                (
+                    runtime_probe.abiflags
+                    if runtime_probe is not None
+                    else sysconfig.get_config_var("ABIFLAGS") or ""
+                ),
                 str(runtime_home.device),
                 str(runtime_home.inode),
                 str(runtime_home.owner_uid),
@@ -416,16 +456,208 @@ def build_cpython_adapter_bridge(
     )
 
 
+_CPYTHON_TARGET_PROBE = (
+    "import json,sys,sysconfig;"
+    "print(json.dumps({"
+    "'implementation':sys.implementation.name,"
+    "'executable':sys.executable,"
+    "'version':[sys.version_info.major,sys.version_info.minor,sys.version_info.micro],"
+    "'runtime_home':sys.base_prefix,"
+    "'free_threaded':bool(sysconfig.get_config_var('Py_GIL_DISABLED')),"
+    "'cache_tag':sys.implementation.cache_tag or '',"
+    "'soabi':sysconfig.get_config_var('SOABI') or '',"
+    "'abiflags':sysconfig.get_config_var('ABIFLAGS') or ''"
+    "},separators=(',',':')))"
+)
+_CPYTHON_TARGET_PROBE_KEYS = frozenset(
+    {
+        "implementation",
+        "executable",
+        "version",
+        "runtime_home",
+        "free_threaded",
+        "cache_tag",
+        "soabi",
+        "abiflags",
+    }
+)
+
+
+def inspect_configured_cpython_installation(
+    interpreter_path: Path,
+    *,
+    bootstrap_path: Path = DEFAULT_CPYTHON_BOOTSTRAP_PATH,
+    trusted_owner_uids: tuple[int, ...] = (0,),
+) -> CpythonInstallation:
+    """Probe one explicitly configured, trusted target Python without importing MCP into it."""
+
+    try:
+        interpreter = _inspect_file(
+            interpreter_path,
+            executable=True,
+            maximum_size=512 << 20,
+            trusted_owner_uids=trusted_owner_uids,
+        )
+        probe = _probe_cpython_target(interpreter)
+        installation = inspect_cpython_installation(
+            interpreter_path=interpreter_path,
+            runtime_home_path=probe.runtime_home,
+            bootstrap_path=bootstrap_path,
+            trusted_owner_uids=trusted_owner_uids,
+            runtime_probe=probe,
+        )
+        return installation
+    except (OSError, PerfLensError) as exc:
+        reason = exc.message if isinstance(exc, PerfLensError) else type(exc).__name__
+        return CpythonInstallation(
+            availability="unavailable",
+            runtime_version=None,
+            free_threaded=None,
+            interpreter=None,
+            runtime_home=None,
+            bootstrap=None,
+            metadata_sha256=None,
+            limitations=(
+                f"Configured CPython target is unavailable: {reason}",
+                "Controlled Runtime Lock import and analysis remain available.",
+            ),
+        )
+
+
+def _probe_cpython_target(interpreter: CpythonFileIdentity) -> CpythonRuntimeProbe:
+    """Run a fixed isolated stdlib identity query through the hashed executable FD."""
+
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            interpreter.path,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        before = os.fstat(descriptor)
+        if (
+            before.st_dev != interpreter.device
+            or before.st_ino != interpreter.inode
+            or before.st_uid != interpreter.owner_uid
+            or stat.S_IMODE(before.st_mode) != interpreter.mode
+            or before.st_nlink != interpreter.links
+            or before.st_size != interpreter.size
+        ):
+            raise _error("Configured CPython executable changed before its version probe")
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 64 * 1024):
+            digest.update(chunk)
+        if digest.hexdigest() != interpreter.sha256:
+            raise _error("Configured CPython executable changed before its version probe")
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        result = subprocess.run(  # noqa: S603 - executable is the hashed, open FD
+            [str(interpreter.path), "-I", "-S", "-c", _CPYTHON_TARGET_PROBE],
+            executable=f"/proc/self/fd/{descriptor}",
+            pass_fds=(descriptor,),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=3,
+            check=False,
+            cwd="/",
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+        )
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_uid,
+            before.st_mode,
+            before.st_nlink,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_uid,
+            after.st_mode,
+            after.st_nlink,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            raise _error("Configured CPython executable changed during its version probe")
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise _error("Configured CPython interpreter identity probe failed") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if result.returncode != 0 or len(result.stdout) > 4096 or len(result.stderr) > 4096:
+        raise _error("Configured CPython interpreter identity probe failed")
+    try:
+        raw_payload: object = json.loads(result.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _error("Configured CPython interpreter returned invalid identity data") from exc
+    if not isinstance(raw_payload, dict):
+        raise _error("Configured CPython interpreter returned invalid identity fields")
+    payload = cast(dict[str, object], raw_payload)
+    if set(payload) != set(_CPYTHON_TARGET_PROBE_KEYS):
+        raise _error("Configured CPython interpreter returned invalid identity fields")
+    if payload["implementation"] != "cpython" or payload["executable"] != str(interpreter.path):
+        raise _error("Configured CPython executable identity is inconsistent")
+    raw_version = payload["version"]
+    if not isinstance(raw_version, list):
+        raise _error("Configured CPython version is outside the reviewed 3.12/3.13 matrix")
+    version = cast(list[object], raw_version)
+    if len(version) != 3:
+        raise _error("Configured CPython version is outside the reviewed 3.12/3.13 matrix")
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in version):
+        raise _error("Configured CPython version is outside the reviewed 3.12/3.13 matrix")
+    major, minor, micro = cast(tuple[int, int, int], tuple(version))
+    if major != 3 or minor not in (12, 13) or not 0 <= micro <= 999:
+        raise _error("Configured CPython version is outside the reviewed 3.12/3.13 matrix")
+    free_threaded = payload["free_threaded"]
+    if not isinstance(free_threaded, bool) or (free_threaded and minor != 13):
+        raise _error("Configured CPython free-threaded identity is invalid")
+    runtime_home = payload["runtime_home"]
+    if (
+        not isinstance(runtime_home, str)
+        or not runtime_home.startswith("/")
+        or "\x00" in runtime_home
+        or len(runtime_home.encode("utf-8")) > 4096
+    ):
+        raise _error("Configured CPython Runtime Home is invalid")
+    cache_tag = _bounded_probe_abi_text(payload["cache_tag"], 80)
+    soabi = _bounded_probe_abi_text(payload["soabi"], 160)
+    abiflags = _bounded_probe_abi_text(payload["abiflags"], 16)
+    return CpythonRuntimeProbe(
+        interpreter=interpreter,
+        runtime_home=Path(runtime_home),
+        runtime_version=f"{major}.{minor}.{micro}",
+        free_threaded=free_threaded,
+        cache_tag=cache_tag,
+        soabi=soabi,
+        abiflags=abiflags,
+    )
+
+
+def _bounded_probe_abi_text(value: object, maximum: int) -> str:
+    if not isinstance(value, str) or not value.isprintable() or len(value) > maximum:
+        raise _error("Configured CPython ABI identity is invalid")
+    return value
+
+
 def discover_cpython_adapter_bridge(
     policy: RuntimeLockProjectPolicy,
     *,
+    interpreter_path: Path | None = None,
     bootstrap_path: Path = DEFAULT_CPYTHON_BOOTSTRAP_PATH,
     trusted_owner_uids: tuple[int, ...] = (0,),
     created_at: str | None = None,
 ) -> CpythonAdapterBridge:
-    installation = inspect_cpython_installation(
-        bootstrap_path=bootstrap_path,
-        trusted_owner_uids=trusted_owner_uids,
+    installation = (
+        inspect_configured_cpython_installation(
+            interpreter_path,
+            bootstrap_path=bootstrap_path,
+            trusted_owner_uids=trusted_owner_uids,
+        )
+        if interpreter_path is not None
+        else inspect_cpython_installation(
+            bootstrap_path=bootstrap_path,
+            trusted_owner_uids=trusted_owner_uids,
+        )
     )
     return build_cpython_adapter_bridge(
         policy,

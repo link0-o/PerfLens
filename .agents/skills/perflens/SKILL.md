@@ -254,15 +254,23 @@ request to inspect the project are not execution consent; only the native collec
 start the exact workload after its displayed Preview has been explicitly confirmed and authorized.
 
 1. Call `inspect_runtime_lock_capability`. Select only an Adapter, target scope, and measurement
-   semantics that are both available and necessary for the evidence gap.
+   semantics that are both available and necessary for the evidence gap. Its top-level `adapters`
+   entries are references without `runtime_version`; do not infer that the full per-Adapter
+   capability lacks the field.
 2. Call `preview_runtime_lock_session`. Show the exact target/workload, Adapter, runtime payload,
    fixed tools, semantics/threshold, import roots, and budgets returned by the Preview. A Go pprof
    Preview must select exactly one `profile_kind` (`mutex` or `block`); collection must repeat that
-   exact value, and the persisted Run must retain it. For one target, end the response and wait for
-   a fresh explicit user confirmation.
+   exact value, and the persisted Run must retain it. For a version gate, read the persisted
+   `runtime-lock-capability` using the Preview's `capability_id`, then the selected
+   `runtime-adapter-capability` using its reference ID; compare its `runtime_version` with
+   `adapter_execution_bindings[].runtime_version` before authorization. Show both Preview hashes
+   (`content_sha256` and `authorization_summary_sha256`) in full. If either hash is absent
+   or the user-visible summary is truncated, re-display it from that same Preview before asking
+   for consent; a later successful authorization does not replace pre-confirmation disclosure.
+   For one target, end the response and wait for a fresh explicit user confirmation.
 3. When the user explicitly requests a bounded multi-Adapter or multi-workload acceptance matrix,
-   create every independent exact Preview before stopping. Display every Preview ID and hash, all
-   fields required above, the planned per-child collection duration, `max_events` or
+   create every independent exact Preview before stopping. Display each Preview ID and both full
+   hashes, all fields required above, the planned per-child collection duration, `max_events` or
    `profile_kind`, fixed execution order, aggregate maximum budgets, and failure policy. End the
    response only once and wait for one fresh explicit reply covering every listed Preview. Each
    Preview remains a standalone authorization scope; never describe the batch as one atomic
@@ -320,6 +328,15 @@ Runtime Lock authorization. Check combined budget before container creation, and
 conversion, replay, or persistence marks Runtime Lock unavailable for the parent. Runtime Lock
 comparison alone is candidate evidence: final `Verified Improvement` still requires the outer
 Docker correctness, Benchmark, perf, resource-transfer, and replay gates.
+
+An embedded Run has `authorization_kind=docker_optimization`: validate its
+`docker_optimization_binding` and the charged parent Session Artifact. It does not have a standalone
+host Run Finalization. Use `session_artifact_id` for immutable Session paging, not `session_id`.
+
+For a Docker optimization Session, the outer `state` is the authorization state.
+`runtime_lock_status` is only the retained embedded-scope/result projection and may remain `active`
+in an immutable Artifact whose outer state is `revoked`. Every further operation is still denied by
+the outer state. Report both fields and never describe that retained substatus as live authority.
 
 Always report Adapter/runtime versions, source semantics, threshold or sampling configuration,
 visibility/fast-path limits, loss/truncation, owner/hold provenance, verification status, and

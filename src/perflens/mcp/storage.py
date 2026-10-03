@@ -59,8 +59,12 @@ from perflens.contracts.docker import (
 )
 from perflens.contracts.docker_build import (
     DockerBuildArtifact,
+    DockerBuildCapabilityArtifact,
+    DockerBuildContextArtifact,
+    DockerBuildRecipeArtifact,
     DockerOptimizationDispositionArtifact,
     DockerOptimizationIterationArtifact,
+    DockerOptimizationPreviewArtifact,
     DockerOptimizationSessionArtifact,
 )
 from perflens.contracts.runtime_lock_sessions import (
@@ -126,6 +130,28 @@ _TRACE_ANALYSIS_TYPES: dict[
     "scheduler-analysis": (SchedulerAnalysisArtifact, "scheduler_analysis_id"),
     "off-cpu-analysis": (OffCpuAnalysisArtifact, "off_cpu_analysis_id"),
     "lock-analysis": (LockAnalysisArtifact, "lock_analysis_id"),
+}
+
+type DockerSnapshotArtifact = (
+    DockerBuildCapabilityArtifact
+    | DockerBuildRecipeArtifact
+    | DockerBuildContextArtifact
+    | DockerOptimizationPreviewArtifact
+    | DockerOptimizationSessionArtifact
+    | DockerBuildArtifact
+    | DockerOptimizationIterationArtifact
+    | DockerOptimizationDispositionArtifact
+)
+
+_DOCKER_SNAPSHOT_TYPES: dict[str, tuple[type[DockerSnapshotArtifact], str]] = {
+    "docker-build-capability": (DockerBuildCapabilityArtifact, "capability_id"),
+    "docker-build-recipe": (DockerBuildRecipeArtifact, "recipe_id"),
+    "docker-build-context": (DockerBuildContextArtifact, "context_id"),
+    "docker-optimization-preview": (DockerOptimizationPreviewArtifact, "preview_id"),
+    "docker-optimization-session": (DockerOptimizationSessionArtifact, "session_artifact_id"),
+    "docker-build": (DockerBuildArtifact, "build_id"),
+    "docker-optimization-iteration": (DockerOptimizationIterationArtifact, "iteration_id"),
+    "docker-optimization-disposition": (DockerOptimizationDispositionArtifact, "disposition_id"),
 }
 
 
@@ -1678,6 +1704,14 @@ class ArtifactStore:
             "docker-optimization-iteration",
             DockerOptimizationIterationArtifact,
         )
+        self._verify_docker_optimization_iteration(iteration, iteration_id)
+        return iteration
+
+    def _verify_docker_optimization_iteration(
+        self,
+        iteration: DockerOptimizationIterationArtifact,
+        iteration_id: str,
+    ) -> None:
         self._require_embedded_id(
             iteration.iteration_id,
             iteration_id,
@@ -1731,7 +1765,6 @@ class ArtifactStore:
         )
         if replayed != iteration:
             raise self._identity_error(iteration_id, "docker-optimization-iteration")
-        return iteration
 
     def load_docker_optimization_disposition(
         self,
@@ -1742,6 +1775,14 @@ class ArtifactStore:
             "docker-optimization-disposition",
             DockerOptimizationDispositionArtifact,
         )
+        self._verify_docker_optimization_disposition(disposition, disposition_id)
+        return disposition
+
+    def _verify_docker_optimization_disposition(
+        self,
+        disposition: DockerOptimizationDispositionArtifact,
+        disposition_id: str,
+    ) -> None:
         self._require_embedded_id(
             disposition.disposition_id,
             disposition_id,
@@ -1825,7 +1866,6 @@ class ArtifactStore:
                 disposition_id,
                 "docker-optimization-disposition",
             )
-        return disposition
 
     def load_trace_analysis(
         self,
@@ -1863,7 +1903,7 @@ class ArtifactStore:
                 details={"offset": offset, "limit": limit},
             )
         path = self._path(artifact_id, artifact_type)
-        if artifact_type in {
+        if artifact_type in _DOCKER_SNAPSHOT_TYPES or artifact_type in {
             "analysis",
             "benchmark",
             "benchmark-comparison",
@@ -1931,6 +1971,22 @@ class ArtifactStore:
         return text, next_offset, size
 
     def _validate_snapshot(self, artifact_id: str, artifact_type: str, payload: bytes) -> None:
+        if artifact_type in _DOCKER_SNAPSHOT_TYPES:
+            model_type, id_attribute = _DOCKER_SNAPSHOT_TYPES[artifact_type]
+            docker_model = model_type.model_validate_json(payload)
+            self._require_embedded_id(
+                getattr(docker_model, id_attribute), artifact_id, artifact_type
+            )
+            self._verify_docker_content(
+                docker_model, docker_model.content_sha256, artifact_id, artifact_type
+            )
+            # Replay linked evidence using the already-read model, never a second open
+            # of the requested artifact (which could return a replaced snapshot).
+            if isinstance(docker_model, DockerOptimizationIterationArtifact):
+                self._verify_docker_optimization_iteration(docker_model, artifact_id)
+            elif isinstance(docker_model, DockerOptimizationDispositionArtifact):
+                self._verify_docker_optimization_disposition(docker_model, artifact_id)
+            return
         if artifact_type == "analysis":
             analysis = AnalysisArtifact.model_validate_json(payload)
             self._require_embedded_id(analysis.analysis_id, artifact_id, artifact_type)

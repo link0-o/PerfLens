@@ -1,0 +1,3 @@
+# Preserve byte-for-byte pprof output, including its significant fixture hashes.
+# The external tool emits trailing spaces; do not normalize evidence to satisfy style checks.
+tests/fixtures/runtime_locks/go/*.raw -text whitespace=-blank-at-eol

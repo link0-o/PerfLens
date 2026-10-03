@@ -20,9 +20,9 @@ current maturity boundary and phased extension plan. Release v0.3.1 local-Docker
 support is specified separately in the [Docker process guide](docs/docker-container-roadmap.md).
 The v0.3.2 bounded build-and-optimize contract is tracked in the
 [Docker optimization guide](docs/docker-optimization-roadmap.md).
-The repository's v0.4.0 release-candidate Runtime Lock workflow is documented in the
-[Runtime Lock guide](docs/runtime-locks.md); it is not part of published v0.3.2 packages and has
-not yet been tagged or published.
+The v0.4.0 Runtime Lock workflow is documented in the [Runtime Lock guide](docs/runtime-locks.md).
+It is not part of v0.3.2 packages. A local source tag does not publish GitHub Release assets;
+publication requires the separate release workflow.
 See the [trustworthy perf evidence pipeline](docs/evidence-pipeline.md) for raw-input binding,
 conversion provenance, quality gates, and Agent-facing verification.
 
@@ -61,12 +61,19 @@ Release v0.3.2 supports Milestones 0 through 9:
   choice; that choice is recorded without upgrading the evidence verdict. The Agent/client
   sandbox, not PerfLens, enforces filesystem write permission.
 
-The current repository additionally contains the v0.4.0 release-candidate Runtime Lock implementation:
+The repository additionally contains the v0.4.0 Runtime Lock implementation:
 strict evidence schema 1.1 and replay verification, bounded sessions, Native pthread, Java JFR,
-CPython threading, and Go pprof Adapters, plus Docker optimization integration. Final local gates,
-reproducible `0.4.0-1` candidate packages, real-host/runtime-matrix acceptance, and remote CI/tag
-gates are still required; the latest published stable release remains v0.3.2. See the
-[v0.4.0 release-candidate readiness record](docs/v0.4.0-release-readiness.md).
+CPython threading, and Go pprof Adapters, plus Docker optimization integration. Current local gates,
+reproducible packages, and the real-host matrix are recorded separately in the
+[v0.4.0 release readiness record](docs/v0.4.0-release-readiness.md). Functional acceptance covers
+fixed JDK 17, CPython 3.13 free-threaded, Go 1.25.14/1.26.8/1.27.1 mutex/block, and Docker embedded
+Native evidence. Go cumulative and CPython visibility limits remain explicit. Native overhead
+results apply to the checked-in fixture, not arbitrary applications. Remote CI, attestation,
+and publication are separate from local acceptance.
+The source audit's Docker Artifact validation, outer-session time accounting, and MCP error
+reporting fixes are in candidate source and have completed rebuilt-package functional acceptance.
+The paging corruption-denial path remains source-regression evidence because host acceptance did
+not deliberately tamper with installed Artifacts. See [known issues](docs/known-issues.md).
 
 It does **not** include an AI/LLM API, Web UI, source-code patch tool, general-purpose benchmark
 runner, or custom agent framework. In an authorized optimization session, the external Agent edits
@@ -76,7 +83,9 @@ only reviewed mutable paths and the fixed workload contract supplies correctness
 
 PerfLens requires Python 3.12 or newer.
 
-For a GitHub release, download the wheel and install it as an isolated tool:
+The commands below use a locally built v0.4.0 candidate wheel, which is not yet a published
+GitHub Release asset. For a published release, substitute the exact downloaded wheel filename.
+Install the wheel as an isolated tool:
 
 ```bash
 pipx install ./perflens-0.4.0-py3-none-any.whl
@@ -102,7 +111,7 @@ or start Docker, join the Docker group, build/pull an image, deploy a Collector,
 The Skill uses typed MCP discovery, authorization, collection, and comparison tools only after the
 user confirms either one run or a bounded in-memory session.
 
-For the repository v0.4.0 prerelease Runtime Lock workflow, explicitly initialize its project
+For the v0.4.0 Runtime Lock workflow, explicitly initialize its project
 policy (combine both flags for Docker optimization):
 
 ```bash
@@ -170,7 +179,7 @@ Release v0.3.2 adds the separately opt-in, benchmark-required bounded Docker opt
 It does not build during preview, does not grant arbitrary Docker access, and never authorizes
 commit, push, tags, or releases. See the
 [v0.3.2 Docker optimization guide](docs/docker-optimization-roadmap.md).
-The repository v0.4.0 prerelease adds bounded Runtime Lock sessions and four Adapter families, but
+v0.4.0 adds bounded Runtime Lock sessions and four Adapter families, but
 does not support arbitrary live-process or existing-container injection. Native, CPython, and Java
 active collection is launch-time only; Go additionally supports an explicitly authorized same-UID
 literal-loopback pprof endpoint. See the [Runtime Lock guide](docs/runtime-locks.md).
@@ -526,7 +535,7 @@ uv run python tests/performance/benchmark_folded.py \
 See `docs/performance-budget.md` for the recorded environment and baseline.
 
 See the historical [v0.3.2 release readiness](docs/release-readiness.md), the
-[v0.4.0 release-candidate readiness record](docs/v0.4.0-release-readiness.md),
+[v0.4.0 release readiness record](docs/v0.4.0-release-readiness.md),
 [release process](docs/releasing.md),
 [real-world profile acceptance](docs/real-world-acceptance.md), and
 [known issues](docs/known-issues.md), and
@@ -570,7 +579,7 @@ Chinese version.
   cgroup v2 and explicit project/session authorization. It excludes remote Engines, Docker Desktop
   VMs, Compose/Kubernetes, image build/pull, arbitrary Docker arguments, and whole-container perf
   aggregation; container-wide cgroup deltas are context rather than process-exclusive evidence.
-- The repository v0.4.0 Runtime Lock prerelease observes only the surface exposed by its selected
+- v0.4.0 Runtime Lock observes only the surface exposed by its selected
   Adapter and semantics. Thresholded, sampled, and cumulative inputs are not exact event logs;
   invisible fast paths, custom atomics, missing owners, and unpaired acquire/release events remain
   explicit limitations. It does not authorize arbitrary running-process or existing-container

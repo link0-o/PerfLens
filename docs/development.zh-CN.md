@@ -29,9 +29,11 @@ uv run perflens-mcp --version
 
 不要默认使用 sudo。PerfLens 的只读分析、测试和构建都不需要 root。
 
-开发计划中的 `paranoid=3` 高权限 Helper 还需要仓库
-`rust-toolchain.toml` 固定的 Rust 1.97.1。Rust 只用于 Helper；普通 Python wheel、
-只读分析和最终用户不需要安装工具链。安装后检查：
+构建仓库中的 `paranoid=3` 高权限 Helper、独立 Trace Helper、非特权 Container Gate 和
+Runtime Lock Supervisor，需要 `rust-toolchain.toml` 固定的 Rust 1.97.1。Rust 不用于
+CLI/MCP/分析层；普通 Python wheel 构建和只读分析不要求 Rust，最终用户使用已打包的二进制
+也无需安装工具链。Trace Helper 的构建还需要 clang 和 libbpf 开发文件；Native pthread
+probe 的发布构建需要 CMake 与 C 编译器。安装相应开发依赖后检查：
 
 ```bash
 rustc --version

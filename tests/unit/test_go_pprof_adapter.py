@@ -4,15 +4,18 @@ import hashlib
 import os
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from perflens.contracts.runtime_lock_sessions import (
     RuntimeLockAdapterId,
     RuntimeLockSessionBudget,
 )
+from perflens.runtime_locks import go_pprof_adapter
 from perflens.runtime_locks.go_pprof_adapter import (
     GoPprofInstallation,
     GoToolIdentity,
     build_go_pprof_adapter_bridge,
+    inspect_go_pprof_installation,
 )
 from perflens.runtime_locks.project_config import (
     RuntimeLockAdapterProjectPolicy,
@@ -92,6 +95,42 @@ def _installation(tmp_path: Path, version: str = "1.24.4") -> GoPprofInstallatio
         metadata_sha256=metadata,
         limitations=("cumulative only",),
     )
+
+
+def test_go_installation_reports_availability_only_for_exact_golden_versions(
+    tmp_path: Path,
+) -> None:
+    reviewed = {"1.24.4", "1.25.14", "1.26.8", "1.27.1"}
+    unreviewed = {"1.24.5", "1.25.15", "1.26.9", "1.27.2"}
+    for version in sorted(reviewed | unreviewed):
+        tool = _installation(tmp_path, version).tool
+        assert tool is not None
+        with (
+            patch.object(go_pprof_adapter, "_inspect_go_tool", return_value=tool),
+            patch.object(go_pprof_adapter, "_inspect_pprof_tool", return_value=tool),
+            patch.object(go_pprof_adapter.platform, "system", return_value="Linux"),
+            patch.object(go_pprof_adapter.platform, "machine", return_value="x86_64"),
+        ):
+            inspected = inspect_go_pprof_installation(go_path=tool.path)
+        assert inspected.runtime_version == version
+        if version in reviewed:
+            assert inspected.availability == "available"
+            assert not any("Golden" in item for item in inspected.limitations)
+        else:
+            assert inspected.availability == "partial"
+            assert any(
+                "Adapter availability remains partial until one is accepted" in item
+                for item in inspected.limitations
+            )
+            assert any(
+                "Cumulative Go Evidence remains partial even when Adapter availability "
+                "is available" in item
+                for item in inspected.limitations
+            )
+            assert any(
+                "no reviewed matching pprof Golden" in item
+                for item in inspected.limitations
+            )
 
 
 def test_go_bridge_binds_tool_rates_and_cumulative_semantics(tmp_path: Path) -> None:

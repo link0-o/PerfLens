@@ -40,7 +40,10 @@ _MAX_NATIVE_RELATIVE_PATH_BYTES = 1024
 _MAX_NATIVE_LINK_TARGET_BYTES = 4096
 _MAX_OUTPUT_BYTES = 1 << 20
 _VERSION = re.compile(r'^(?:openjdk|java) version "(?P<version>[0-9]+(?:\.[0-9]+){1,3})')
-_BUILD = re.compile(r"Runtime Environment \(build (?P<build>[^)]+)\)")
+_BUILD = re.compile(
+    r"Runtime Environment(?: [^\r\n()]{1,128})? "
+    r"\(build (?P<build>[^\r\n()]{1,128})\)"
+)
 _JFR_VERSION = re.compile(r"^(?P<version>[0-9]+(?:\.[0-9]+){1,3})")
 _NAME = re.compile(r'^@Name\("(?P<name>jdk\.[A-Za-z0-9]+)"\)$')
 _CLASS = re.compile(r"^class [A-Za-z0-9]+ extends jdk\.jfr\.Event \{$")
@@ -320,8 +323,16 @@ def inspect_java_jfr_installation(
         major = int(java_version.split(".", 1)[0])
         if major not in _SUPPORTED_JDK_MAJORS:
             raise ValueError("JDK major is outside the supported 17/21/25 matrix")
+        jfr_format_version_only = False
         if jfr_version != java_version:
-            raise ValueError("java and jfr do not identify the same JDK build")
+            # JDK 17 may report the JFR format version, not the JDK patch.
+            # Its already-open release file must corroborate java's build.
+            if major != 17 or jfr_version != "1.0":
+                raise ValueError("java and jfr do not identify the same JDK build")
+            release_version, release_build = _parse_release_jdk_identity(release_fd)
+            if (release_version, release_build) != (java_version, java_build):
+                raise ValueError("JDK release identity does not match the java runtime build")
+            jfr_format_version_only = True
         selected_profiles = tuple(p for p in profiles if p.jdk_major == major)
         if {p.profile_id for p in selected_profiles} != {"balanced", "deep"}:
             raise ValueError("Both fixed JFR profiles are required for this JDK")
@@ -375,6 +386,15 @@ def inspect_java_jfr_installation(
             "Monitor addresses are sensitive and must be converted to Artifact-local opaque IDs.",
             "JFR events do not provide acquire/release pairs, so exact owner or hold-time "
             "claims are forbidden.",
+            *(
+                (
+                    "This JDK 17 jfr CLI reports format version 1.0, not an independent "
+                    "JDK patch version; its identity is bound to the trusted JDK root "
+                    "and release file.",
+                )
+                if jfr_format_version_only
+                else ()
+            ),
         ),
         runtime_payload=runtime_payload,
     )
@@ -923,7 +943,40 @@ def _parse_java_version(output: str) -> tuple[str, str]:
     build = _BUILD.search(output)
     if version is None or build is None:
         raise ValueError("java version output is not recognized")
-    return version.group("version"), build.group("build")
+    java_version = version.group("version")
+    java_build = build.group("build")
+    if not java_build.startswith(f"{java_version}+"):
+        raise ValueError("java version and runtime build do not match")
+    return java_version, java_build
+
+
+def _parse_release_jdk_identity(release_fd: int) -> tuple[str, str]:
+    """Bind a JFR-format-only CLI to its trusted, already-open JDK release file."""
+
+    raw = os.pread(release_fd, _MAX_RELEASE_BYTES + 1, 0)
+    if len(raw) > _MAX_RELEASE_BYTES:
+        raise ValueError("JDK release identity exceeds its bound")
+    try:
+        lines = raw.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise ValueError("JDK release identity is not UTF-8") from exc
+    values: dict[str, str] = {}
+    for line in lines:
+        key, separator, value = line.partition("=")
+        if key not in {"JAVA_VERSION", "JAVA_RUNTIME_VERSION"}:
+            continue
+        if (
+            separator != "="
+            or key in values
+            or len(value) < 3
+            or value[0] != '"'
+            or value[-1] != '"'
+        ):
+            raise ValueError("JDK release identity is malformed")
+        values[key] = value[1:-1]
+    if set(values) != {"JAVA_VERSION", "JAVA_RUNTIME_VERSION"}:
+        raise ValueError("JDK release identity is incomplete")
+    return values["JAVA_VERSION"], values["JAVA_RUNTIME_VERSION"]
 
 
 def _parse_jfr_version(output: str) -> str:

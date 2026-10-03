@@ -13,7 +13,7 @@ import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
@@ -197,6 +197,7 @@ from perflens.docker.treatment import (
 )
 from perflens.docker.workload import assert_managed_project_current, inspect_managed_project_root
 from perflens.domain.errors import ErrorCode, PerfLensError
+from perflens.mcp.errors import PerfLensMCPServer
 from perflens.mcp.storage import ArtifactStore, PathPolicy
 from perflens.runtime_locks import import_runtime_lock_ndjson
 from perflens.runtime_locks.capability import (
@@ -358,6 +359,12 @@ REVOKES_DOCKER = ToolAnnotations(
     open_world_hint=False,
 )
 
+# Once the identity-pinned cgroup has disappeared, the workload is no longer
+# executing. Docker still needs a bounded administrative window to publish its
+# exit status; that acknowledgement latency is not workload authorization or
+# active-time usage.
+_MANAGED_POST_EXIT_CONFIRMATION_SECONDS = 15.0
+
 
 @dataclass(frozen=True, slots=True)
 class ServerConfig:
@@ -374,6 +381,7 @@ class ServerConfig:
     allow_runtime_locks: bool = False
     docker_project_config: Path | None = None
     runtime_lock_project_config: Path | None = None
+    runtime_lock_cpython_interpreter: Path | None = None
     docker_runtime_root: Path | None = None
     docker_builder_policy: Path | None = None
     docker_gate_path: Path = Path("/usr/lib/perflens/perflens-container-gate")
@@ -708,6 +716,12 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         raise ValueError(
             "Runtime Lock project policy cannot be set while Runtime Lock sessions are disabled"
         )
+    if config.runtime_lock_cpython_interpreter is not None and (
+        not config.allow_runtime_locks or not config.allow_process_execution
+    ):
+        raise ValueError(
+            "Configured CPython target requires Runtime Lock sessions and process execution"
+        )
     if not config.allow_runtime_locks and (
         config.runtime_lock_runtime_factory is not None
         or config.runtime_lock_capability_factory is not None
@@ -790,6 +804,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
     managed_runtime_lock_requests: dict[str, _DockerRuntimeLockRequest] = {}
     managed_runtime_lock_results: dict[str, _DockerRuntimeLockCollected] = {}
     managed_collection_progress: dict[str, tuple[int, str]] = {}
+    managed_active_seconds: dict[str, int] = {}
 
     def runtime_lock_go_retained_bytes() -> int:
         launched = sum(
@@ -847,7 +862,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 with suppress(OSError):
                     runtime_lock_go_private_root.rmdir()
 
-    server: MCPServer[None] = MCPServer(
+    server: MCPServer[None] = PerfLensMCPServer(
         "perflens",
         title="PerfLens Linux Performance Analysis",
         description="Deterministic profile analysis, evidence, and source-resolution tools.",
@@ -932,7 +947,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         if config.runtime_lock_cpython_bridge_factory is not None:
             bridge = config.runtime_lock_cpython_bridge_factory()
         elif config.allow_process_execution:
-            bridge = discover_cpython_adapter_bridge(runtime_lock_policy)
+            bridge = discover_cpython_adapter_bridge(
+                runtime_lock_policy,
+                interpreter_path=config.runtime_lock_cpython_interpreter,
+            )
         else:
             bridge = build_cpython_adapter_bridge(
                 runtime_lock_policy,
@@ -4898,6 +4916,34 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         workload_started_at: datetime | None = None
         workload_started_monotonic: float | None = None
         workload_finished_monotonic: float | None = None
+
+        def settle_active_seconds() -> int:
+            now_monotonic = time.monotonic()
+            settled_finish = workload_finished_monotonic
+            if (
+                settled_finish is None
+                and workload_started_monotonic is not None
+                and resource_monitor is not None
+            ):
+                observed_finish = resource_monitor.lifecycle_ended_monotonic
+                if (
+                    observed_finish is not None
+                    and math.isfinite(observed_finish)
+                    and workload_started_monotonic <= observed_finish <= now_monotonic
+                ):
+                    settled_finish = observed_finish
+            active_seconds = _managed_workload_active_seconds(
+                workload_started_monotonic=workload_started_monotonic,
+                workload_finished_monotonic=settled_finish,
+                workload_timeout_seconds=workload_timeout_seconds,
+                now_monotonic=now_monotonic,
+            )
+            # Publish before inner settlement: even a settlement/publication failure
+            # must charge the parent the same Gate-relative duration, not tool time.
+            if session_id in managed_active_seconds:
+                managed_active_seconds[session_id] = active_seconds
+            return active_seconds
+
         try:
             captured_path_sha256 = tuple(
                 sorted(item.relative_path_sha256 for item in treatment_snapshot.files)
@@ -5062,21 +5108,42 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     "Docker workload release time is unavailable",
                     recoverable=False,
                 )
-            remaining = _remaining_managed_workload_timeout_seconds(
+            now_monotonic = time.monotonic()
+            workload_finished_monotonic = _validate_observed_managed_workload_end(
                 workload_started_monotonic=workload_started_monotonic,
+                lifecycle_ended_monotonic=(
+                    resource_monitor.lifecycle_ended_monotonic
+                    if resource_monitor is not None
+                    else None
+                ),
                 workload_timeout_seconds=workload_timeout_seconds,
-                now_monotonic=time.monotonic(),
+                now_monotonic=now_monotonic,
             )
-            if remaining <= 0:
-                raise PerfLensError(
-                    ErrorCode.RESOURCE_LIMIT_EXCEEDED,
-                    "docker_workload",
-                    "Managed Docker workload exhausted its bounded run timeout",
-                    recoverable=True,
+            if workload_finished_monotonic is None:
+                remaining = _remaining_managed_workload_timeout_seconds(
+                    workload_started_monotonic=workload_started_monotonic,
+                    workload_timeout_seconds=workload_timeout_seconds,
+                    now_monotonic=now_monotonic,
                 )
-            run.coordinator.wait(run.prepared, timeout_seconds=remaining)
-            workload_finished_monotonic = time.monotonic()
-            workload_finished_at = datetime.now(tz=UTC)
+                if remaining <= 0:
+                    raise PerfLensError(
+                        ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                        "docker_workload",
+                        "Managed Docker workload exhausted its bounded run timeout",
+                        recoverable=True,
+                    )
+                wait_timeout_seconds = remaining
+            else:
+                wait_timeout_seconds = _MANAGED_POST_EXIT_CONFIRMATION_SECONDS
+            run.coordinator.wait(
+                run.prepared,
+                timeout_seconds=wait_timeout_seconds,
+            )
+            if workload_finished_monotonic is None:
+                workload_finished_monotonic = time.monotonic()
+            workload_finished_at = workload_started_at + timedelta(
+                seconds=workload_finished_monotonic - workload_started_monotonic
+            )
             assert_treatment_snapshot_current(treatment_snapshot)
             runtime_lock_capture: DockerRuntimeLockCapture | None = None
             if runtime_lock_request is not None:
@@ -5201,12 +5268,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             )
             session = docker_runtime.finish_managed_run(
                 run,
-                actual_active_seconds=_managed_workload_active_seconds(
-                    workload_started_monotonic=workload_started_monotonic,
-                    workload_finished_monotonic=workload_finished_monotonic,
-                    workload_timeout_seconds=workload_timeout_seconds,
-                    now_monotonic=time.monotonic(),
-                ),
+                actual_active_seconds=settle_active_seconds(),
                 actual_evidence_bytes=executed.evidence_bytes,
             )
             if benchmark is not None:
@@ -5303,6 +5365,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 ),
             )
         except BaseException:
+            # Keep a measured parent charge even if cleanup itself fails. If the
+            # workload is still running, successful cleanup below updates it once
+            # more; a known exit timestamp always excludes post-exit work.
+            settle_active_seconds()
             if pinned_process_root is not None:
                 pinned_process_root.close()
             resource_reader_can_close = True
@@ -5321,12 +5387,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             with suppress(PerfLensError):
                 docker_runtime.finish_managed_run(
                     run,
-                    actual_active_seconds=_managed_workload_active_seconds(
-                        workload_started_monotonic=workload_started_monotonic,
-                        workload_finished_monotonic=workload_finished_monotonic,
-                        workload_timeout_seconds=workload_timeout_seconds,
-                        now_monotonic=time.monotonic(),
-                    ),
+                    actual_active_seconds=settle_active_seconds(),
                     actual_evidence_bytes=(executed.evidence_bytes if executed is not None else 0),
                 )
             raise
@@ -5349,7 +5410,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
         build_id: str,
         mode: Literal["record", "stat", "sched", "lock", "off_cpu"] = "stat",
         duration_seconds: float = 2.0,
-        workload_timeout_seconds: int = 60,
+        workload_timeout_seconds: int | None = None,
         frequency_hz: int = 99,
         call_graph: Literal["fp", "dwarf", "lbr"] = "dwarf",
         events: tuple[str, ...] = HARDWARE_STAT_EVENTS,
@@ -5406,6 +5467,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 if runtime_lock_binding.measurement_semantics == "exact"
                 else scope.budget.max_collection_duration_seconds
             )
+            if workload_timeout_seconds is None:
+                workload_timeout_seconds = min(60, runtime_lock_duration_limit)
             if workload_timeout_seconds > runtime_lock_duration_limit:
                 raise PerfLensError(
                     ErrorCode.RESOURCE_LIMIT_EXCEEDED,
@@ -5443,6 +5506,8 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 "A Go profile kind cannot be selected without the Go Runtime Lock Adapter",
                 recoverable=True,
             )
+        if workload_timeout_seconds is None:
+            workload_timeout_seconds = 60
         recipe = optimization_runtime.build_recipe(session_id)
         budget = recipe.budget
         if (
@@ -5476,7 +5541,6 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
             reserve_active_seconds=workload_timeout_seconds,
             reserve_evidence_bytes=max_output_bytes + runtime_lock_reserved_bytes,
         )
-        started = time.monotonic()
         internal_session: ContainerOptimizationSessionArtifact | None = None
         workload_completed = False
         try:
@@ -5486,6 +5550,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 allowed_modes=(mode,),
             )
             managed_collection_progress[internal_session.session_id] = (0, "")
+            managed_active_seconds[internal_session.session_id] = 0
             if runtime_lock_binding is not None and runtime_lock_launch is not None:
                 managed_runtime_lock_requests[internal_session.session_id] = (
                     _DockerRuntimeLockRequest(
@@ -5527,10 +5592,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 optimization_runtime,
                 session_id,
                 lease,
-                actual_active_seconds=min(
-                    workload_timeout_seconds,
-                    max(0, time.monotonic() - started),
-                ),
+                actual_active_seconds=managed_active_seconds[internal_session.session_id],
                 collected=collected,
                 additional_evidence_bytes=(
                     _docker_runtime_lock_accounted_bytes(runtime_lock_collected)
@@ -5572,9 +5634,10 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                     failed_session = optimization_runtime.fail_workload(
                         session_id,
                         lease,
-                        actual_active_seconds=min(
-                            workload_timeout_seconds,
-                            max(0, time.monotonic() - started),
+                        actual_active_seconds=(
+                            managed_active_seconds.get(internal_session.session_id, 0)
+                            if internal_session is not None
+                            else 0
                         ),
                         actual_evidence_bytes=persisted_evidence_bytes,
                         reason=failure_reason,
@@ -5626,6 +5689,7 @@ def create_server(config: ServerConfig) -> MCPServer[None]:
                 managed_runtime_lock_requests.pop(internal_session.session_id, None)
                 managed_runtime_lock_results.pop(internal_session.session_id, None)
                 managed_collection_progress.pop(internal_session.session_id, None)
+                managed_active_seconds.pop(internal_session.session_id, None)
                 with suppress(PerfLensError):
                     docker_runtime.revoke(internal_session.session_id)
         # Runtime Lock finalization already publishes the exact charged parent
@@ -7160,6 +7224,45 @@ def _remaining_managed_workload_timeout_seconds(
 
     elapsed = max(0.0, now_monotonic - workload_started_monotonic)
     return float(workload_timeout_seconds) - elapsed
+
+
+def _validate_observed_managed_workload_end(
+    *,
+    workload_started_monotonic: float,
+    lifecycle_ended_monotonic: float | None,
+    workload_timeout_seconds: int,
+    now_monotonic: float,
+) -> float | None:
+    """Validate an independently observed cgroup lifecycle end.
+
+    The identity-pinned cgroup monitor runs concurrently with Broker collection.
+    Its first path-removal timestamp can therefore prove that the workload ended
+    before Collector publication or Docker acknowledgement completed.
+    """
+
+    if lifecycle_ended_monotonic is None:
+        return None
+    if (
+        not math.isfinite(workload_started_monotonic)
+        or not math.isfinite(lifecycle_ended_monotonic)
+        or not math.isfinite(now_monotonic)
+        or lifecycle_ended_monotonic < workload_started_monotonic
+        or lifecycle_ended_monotonic > now_monotonic
+    ):
+        raise PerfLensError(
+            ErrorCode.PROFILE_PARSE_FAILED,
+            "docker_resource_context",
+            "Managed Docker cgroup lifecycle timestamp is invalid",
+            recoverable=False,
+        )
+    if lifecycle_ended_monotonic - workload_started_monotonic > workload_timeout_seconds:
+        raise PerfLensError(
+            ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+            "docker_workload",
+            "Managed Docker workload ended after its bounded run timeout",
+            recoverable=True,
+        )
+    return lifecycle_ended_monotonic
 
 
 def _managed_workload_active_seconds(
@@ -8917,6 +9020,7 @@ def main() -> None:
     parser.add_argument("--allow-runtime-locks", action="store_true")
     parser.add_argument("--docker-project-config", type=Path)
     parser.add_argument("--runtime-lock-project-config", type=Path)
+    parser.add_argument("--runtime-lock-cpython-interpreter", type=Path)
     parser.add_argument("--docker-runtime-root", type=Path)
     parser.add_argument("--docker-builder-policy", type=Path)
     parser.add_argument(
@@ -8957,6 +9061,7 @@ def main() -> None:
             allow_runtime_locks=arguments.allow_runtime_locks,
             docker_project_config=arguments.docker_project_config,
             runtime_lock_project_config=arguments.runtime_lock_project_config,
+            runtime_lock_cpython_interpreter=arguments.runtime_lock_cpython_interpreter,
             docker_runtime_root=arguments.docker_runtime_root,
             docker_builder_policy=arguments.docker_builder_policy,
             docker_gate_path=arguments.docker_gate_path,

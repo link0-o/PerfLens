@@ -6,6 +6,7 @@ import json
 import os
 import stat
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -58,6 +59,7 @@ from perflens.mcp.server import (
     _managed_evidence_bytes,  # pyright: ignore[reportPrivateUsage]
     _managed_workload_active_seconds,  # pyright: ignore[reportPrivateUsage]
     _remaining_managed_workload_timeout_seconds,  # pyright: ignore[reportPrivateUsage]
+    _validate_observed_managed_workload_end,  # pyright: ignore[reportPrivateUsage]
     create_server,
 )
 from perflens.mcp.storage import ArtifactStore, PathPolicy
@@ -1026,6 +1028,25 @@ def test_runtime_lock_preview_authorize_and_revoke_are_content_bound(
                 runtime_lock_project_config=policy,
             )
         )
+    with pytest.raises(ValueError, match="Configured CPython target requires"):
+        create_server(
+            ServerConfig(
+                (tmp_path,),
+                artifact_root,
+                runtime_lock_cpython_interpreter=tmp_path / "python3.13t",
+            )
+        )
+    with pytest.raises(ValueError, match="Configured CPython target requires"):
+        create_server(
+            ServerConfig(
+                (tmp_path,),
+                artifact_root,
+                allow_writes=True,
+                allow_runtime_locks=True,
+                runtime_lock_project_config=policy,
+                runtime_lock_cpython_interpreter=tmp_path / "python3.13t",
+            )
+        )
     denied_server = create_server(ServerConfig((tmp_path,), artifact_root))
     server = create_server(
         ServerConfig(
@@ -1724,8 +1745,17 @@ def test_docker_optimization_collection_failure_is_charged_and_stops_session(
             )
             assert failed.is_error
             assert "Privileged perf binding failed" in str(failed.content)
+            error = _structured(failed)["error"]
+            assert error["code"] == "EXTERNAL_TOOL_FAILED"
+            assert error["stage"] == "perf_control"
+            assert error["recoverable"] is False
+            assert error["retryable"] is False
+            assert error["details"]["docker_optimization_workload_attempt_charged"] is True
+            assert error["details"]["docker_optimization_automatic_retry_allowed"] is False
+            assert error["suggested_actions"]
             current = runtime.snapshot(cast(str, session["session_id"]))
             assert current.workload_runs_used == 1
+            assert current.workload_active_seconds_used == 0
             assert current.evidence_bytes_used == 0
 
             unchanged_retry = await client.call_tool(
@@ -2491,15 +2521,23 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
                 operations.append("cgroup-close")
 
     class FakeCgroupMonitor:
+        latest: FakeCgroupMonitor | None = None
+
         def __init__(self, reader: FakeCgroupReader, baseline: object) -> None:
             self.reader = reader
             self.baseline = baseline
             self.started = False
+            self.observed_lifecycle_end: float | None = None
+            type(self).latest = self
 
         def start(self) -> None:
             assert not self.started
             self.started = True
             self.reader.capture()
+
+        @property
+        def lifecycle_ended_monotonic(self) -> float | None:
+            return self.observed_lifecycle_end
 
         def finish(self) -> object:
             assert self.started
@@ -2636,6 +2674,7 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
     class FakeBrokerClient:
         fail = False
         callback_count = 1
+        observe_lifecycle_end = False
 
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
@@ -2650,6 +2689,9 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             assert ready_callback is not None
             for _ in range(self.callback_count):
                 ready_callback()
+            if self.observe_lifecycle_end:
+                assert FakeCgroupMonitor.latest is not None
+                FakeCgroupMonitor.latest.observed_lifecycle_end = time.monotonic()
             if self.fail:
                 raise PerfLensError(
                     ErrorCode.EXTERNAL_TOOL_FAILED,
@@ -2788,6 +2830,22 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             assert denied.is_error
             assert runtime_instances[0].prepare_count == 0
 
+            # Exercise the same internal accounting channel used by the outer
+            # optimization tool, while retaining the real managed producer here.
+            managed_tool = server._tool_manager.get_tool(  # pyright: ignore[reportPrivateUsage]
+                "collect_managed_docker_workload"
+            )
+            assert managed_tool is not None
+            cells = managed_tool.fn.__closure__
+            assert cells is not None
+            managed_cells = dict(
+                zip(managed_tool.fn.__code__.co_freevars, cells, strict=True)
+            )
+            parent_active_seconds = cast(
+                dict[str, int], managed_cells["managed_active_seconds"].cell_contents
+            )
+            parent_active_seconds[active_session.session_id] = 0
+            FakeBrokerClient.observe_lifecycle_end = True
             result = await client.call_tool(
                 "collect_managed_docker_workload",
                 {
@@ -2800,6 +2858,7 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
                     "max_output_bytes": 1000,
                 },
             )
+            FakeBrokerClient.observe_lifecycle_end = False
             assert not result.is_error
             reference = _structured(result)
             assert len(workload_accounting_windows) == 1
@@ -2810,6 +2869,14 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             assert accounting_finish is not None
             assert accounting_start <= accounting_finish <= accounting_now
             assert accounting_limit == 30
+            assert parent_active_seconds[active_session.session_id] == (
+                _managed_workload_active_seconds(
+                    workload_started_monotonic=accounting_start,
+                    workload_finished_monotonic=accounting_finish,
+                    workload_timeout_seconds=accounting_limit,
+                    now_monotonic=accounting_now,
+                )
+            )
             assert reference["artifact_id"] == container_run.run_id
             assert reference["summary"]["docker_session_state"] == "exhausted"
             assert reference["summary"]["container_resource_context_id"] == (
@@ -2820,7 +2887,7 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             )
             assert reference["summary"]["container_measurement_quality"] == "verified"
             assert reference["summary"]["evidence_bytes"] == collection.output_bytes
-            assert 29 < wait_timeouts[0] <= 30
+            assert wait_timeouts[0] == 15.0
             measurement_id = reference["summary"]["container_measurement_id"]
             assert isinstance(measurement_id, str)
             assert operations == [
@@ -2853,6 +2920,8 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
             operations.clear()
             prepared.state = "prepared"
             prepared.exit_code = None
+            accounting_count_before_symbol_failure = len(workload_accounting_windows)
+            FakeBrokerClient.observe_lifecycle_end = True
             symbol_failure = await client.call_tool(
                 "collect_managed_docker_workload",
                 {
@@ -2864,9 +2933,21 @@ def test_managed_docker_session_releases_gate_only_after_broker_ready(
                     "max_output_bytes": 1000,
                 },
             )
+            FakeBrokerClient.observe_lifecycle_end = False
             assert symbol_failure.is_error
             assert "simulated post-collection symbol conversion failure" in str(
                 symbol_failure.content
+            )
+            symbol_failure_accounting = workload_accounting_windows[
+                accounting_count_before_symbol_failure:
+            ]
+            assert len(symbol_failure_accounting) == 2
+            assert FakeCgroupMonitor.latest is not None
+            observed_failure_end = FakeCgroupMonitor.latest.observed_lifecycle_end
+            assert observed_failure_end is not None
+            assert all(
+                accounting_finish == observed_failure_end
+                for _, accounting_finish, _, _ in symbol_failure_accounting
             )
             assert operations == [
                 "prepare",
@@ -3061,6 +3142,64 @@ def test_managed_workload_timeout_is_gate_relative_and_keeps_subsecond_precision
         )
         == 3.0
     )
+
+
+def test_observed_managed_workload_end_excludes_post_exit_publication_time() -> None:
+    assert _validate_observed_managed_workload_end(
+        workload_started_monotonic=100.0,
+        lifecycle_ended_monotonic=102.1,
+        workload_timeout_seconds=3,
+        now_monotonic=104.5,
+    ) == pytest.approx(102.1)
+    assert (
+        _validate_observed_managed_workload_end(
+            workload_started_monotonic=100.0,
+            lifecycle_ended_monotonic=None,
+            workload_timeout_seconds=3,
+            now_monotonic=102.5,
+        )
+        is None
+    )
+
+
+def test_observed_managed_workload_end_rejects_late_exit() -> None:
+    with pytest.raises(PerfLensError) as captured:
+        _validate_observed_managed_workload_end(
+            workload_started_monotonic=100.0,
+            lifecycle_ended_monotonic=103.001,
+            workload_timeout_seconds=3,
+            now_monotonic=104.5,
+        )
+
+    assert captured.value.code == ErrorCode.RESOURCE_LIMIT_EXCEEDED
+    assert captured.value.stage == "docker_workload"
+
+
+@pytest.mark.parametrize(
+    ("started", "finished", "now"),
+    (
+        (float("nan"), 102.0, 103.0),
+        (100.0, float("nan"), 103.0),
+        (100.0, 102.0, float("nan")),
+        (100.0, 99.9, 103.0),
+        (100.0, 103.1, 103.0),
+    ),
+)
+def test_observed_managed_workload_end_rejects_invalid_timestamps(
+    started: float,
+    finished: float,
+    now: float,
+) -> None:
+    with pytest.raises(PerfLensError) as captured:
+        _validate_observed_managed_workload_end(
+            workload_started_monotonic=started,
+            lifecycle_ended_monotonic=finished,
+            workload_timeout_seconds=3,
+            now_monotonic=now,
+        )
+
+    assert captured.value.code == ErrorCode.PROFILE_PARSE_FAILED
+    assert captured.value.stage == "docker_resource_context"
 
 
 def test_managed_workload_accounting_excludes_setup_and_finalization_time() -> None:

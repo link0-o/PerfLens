@@ -11,22 +11,31 @@ from perflens.contracts.runtime_lock_sessions import (
     derive_runtime_lock_adapter_execution_identity,
     derive_runtime_lock_toolchain_identity,
 )
+from perflens.contracts.runtime_locks import RuntimeSampledContentionEvent
+from perflens.runtime_locks import go_pprof_adapter
 from perflens.runtime_locks.go_pprof_converter import convert_go_pprof_raw
 
 FIXTURE_ROOT = Path(__file__).parents[1] / "fixtures" / "runtime_locks" / "go"
+
+
+class _GoldenEvent(TypedDict):
+    lock_kind: str
+    observed_count: int
+    cumulative_wait_ns: int
 
 
 class _GoldenProfile(TypedDict):
     fixture: str
     profile_kind: Literal["mutex", "block"]
     runtime_version: str
+    generator: str
     expected_event_count: int
+    expected_events: list[_GoldenEvent]
     source_sha256: str
 
 
 class _GoldenManifest(TypedDict):
     schema_version: str
-    generator: str
     profiles: list[_GoldenProfile]
 
 
@@ -70,17 +79,19 @@ def _binding(runtime_version: str) -> RuntimeLockAdapterExecutionBinding:
     )
 
 
-def test_go_1_24_real_pprof_raw_goldens_remain_compatible_and_private() -> None:
+def test_real_go_pprof_raw_goldens_remain_compatible_and_private() -> None:
     manifest = cast(
         _GoldenManifest,
         json.loads((FIXTURE_ROOT / "manifest.json").read_text(encoding="utf-8")),
     )
-    assert manifest["schema_version"] == "1.0"
-    assert manifest["generator"] == (
-        "go1.24.4 linux/amd64 runtime/pprof + matching pprof -raw"
-    )
+    assert manifest["schema_version"] == "1.1"
 
     for profile in manifest["profiles"]:
+        assert profile["generator"] == (
+            f"go{profile['runtime_version']} linux/amd64 runtime/pprof "
+            "+ matching pprof -raw"
+        )
+        assert len(profile["expected_events"]) == profile["expected_event_count"]
         source_path = FIXTURE_ROOT / profile["fixture"]
         source = source_path.read_bytes()
         assert hashlib.sha256(source).hexdigest() == profile["source_sha256"]
@@ -101,5 +112,39 @@ def test_go_1_24_real_pprof_raw_goldens_remain_compatible_and_private() -> None:
             ).evidence
 
         assert len(evidence.events) == profile["expected_event_count"]
+        samples = [
+            event
+            for event in evidence.events
+            if isinstance(event, RuntimeSampledContentionEvent)
+        ]
+        assert len(samples) == len(evidence.events)
+        assert [
+            {
+                "lock_kind": event.lock_kind,
+                "observed_count": event.observed_count,
+                "cumulative_wait_ns": event.cumulative_wait_ns,
+            }
+            for event in samples
+        ] == profile["expected_events"]
+        assert evidence.quality.status == "partial"
+        assert all(event.estimated_count is None for event in samples)
         assert "/tmp/" not in evidence.model_dump_json()
+        assert "/home/" not in evidence.model_dump_json()
         assert all(context.kind == "process_aggregate" for context in evidence.execution_contexts)
+
+
+def test_available_go_versions_have_matching_mutex_and_block_goldens() -> None:
+    manifest = cast(
+        _GoldenManifest,
+        json.loads((FIXTURE_ROOT / "manifest.json").read_text(encoding="utf-8")),
+    )
+    kinds_by_version: dict[str, set[str]] = {}
+    for profile in manifest["profiles"]:
+        kinds = kinds_by_version.setdefault(profile["runtime_version"], set())
+        assert profile["profile_kind"] not in kinds
+        kinds.add(profile["profile_kind"])
+
+    complete_versions = {
+        version for version, kinds in kinds_by_version.items() if kinds == {"mutex", "block"}
+    }
+    assert complete_versions == go_pprof_adapter.REVIEWED_GO_PPROF_GOLDEN_VERSIONS

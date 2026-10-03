@@ -50,6 +50,8 @@ def test_performance_skill_has_valid_minimal_frontmatter_and_resources() -> None
     assert "label the list partial" in body
     assert "Never infer that" in body
     assert "Evidence `quality.status` distinct from Run `quality_status`" in body
+    assert "the outer `state` is the authorization state" in body
+    assert "never describe that retained substatus as live authority" in body
     assert "map host UID/GID 0 to" in body
     assert "Never accept UID 65534" in body
 

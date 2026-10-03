@@ -40,6 +40,7 @@ from perflens.contracts.artifacts import (
     ConversionProvenance,
     DiagnosisBundle,
     ElfMetadataArtifact,
+    ErrorArtifact,
     Evidence,
     EvidenceQuality,
     Frame,
@@ -110,6 +111,7 @@ def test_checked_in_json_schemas_match_contract_models() -> None:
     project_root = Path(__file__).resolve().parents[2]
     schema_root = project_root / "schemas"
     models: dict[str, type[BaseModel]] = {
+        "error.schema.json": ErrorArtifact,
         "analysis.schema.json": AnalysisArtifact,
         "analysis-verification.schema.json": AnalysisVerificationArtifact,
         "verification-check.schema.json": VerificationCheck,

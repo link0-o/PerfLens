@@ -12,7 +12,7 @@
 | ELF/DWARF | ELF through pyelftools 0.33; LLVM JSON provider or GNU/elfutils addr2line fallback |
 | Rules | Safe YAML; packaged generic, Linux, and C++ candidate rules |
 | Reports | JSON evidence bundle and Markdown |
-| MCP | Official Python SDK 2.x, local stdio transport |
+| MCP | Official Python SDK 2.x, local stdio transport; handshake fallback and direct 2026-07-28 requests are protocol-tested |
 | Skill | Project Skill for Codex/OpenCode/local Copilot `.agents/skills` and Claude Code `.claude/skills`, validated by `skill-creator` |
 | AI client config | Codex `.codex/config.toml`; Claude Code/Copilot CLI `.mcp.json`; OpenCode `.opencode/opencode.json`; VS Code Copilot Agent `.vscode/mcp.json` |
 | Active collection | Release `0.3.0` supports `record/stat` and adds opt-in `sched/off_cpu/lock` through a separate Trace Helper |
@@ -21,7 +21,7 @@
 | paranoid=3 Helper | The existing Rust Helper remains permanently limited to `record/stat`; v0.3.0 uses another service/protocol/socket/spool for its Trace Helper |
 | Target runtime | Linux host PID, or one explicit process in a local Linux Docker Engine with cgroup v2; no remote Engine, Docker Desktop VM, Compose, or whole-container aggregation |
 | Native DEB | Debian 13 `amd64`, system Python 3.13; split exact-version Collector package |
-| Runtime Lock (repository v0.4.0 prerelease) | Implemented target matrix: Native pthread on Debian 12/13 amd64 + glibc 2.36/2.41; Java JFR on JDK 17/21/25; CPython 3.12/3.13 including free-threaded detection; Go pprof 1.24-1.27. Local release evidence currently covers JDK 21/25, non-free-threaded CPython 3.12/3.13, and Go 1.24; JDK 17, free-threaded CPython 3.13, and Go 1.25-1.27 remain release blockers, with unvalidated Go versions reported as `partial`. |
+| Runtime Lock (v0.4.0) | Implemented target matrix: Native pthread on Debian 12/13 amd64 + glibc 2.36/2.41; Java JFR on JDK 17/21/25; CPython 3.12/3.13 including free-threaded detection; Go pprof 1.24-1.27. Local functional host evidence covers JDK 17/21/25, CPython 3.12/3.13 including a real 3.13.5 free-threaded Run, and Go 1.24-1.27. The JDK 17 Run has disclosed partial thread coverage; the free-threaded Run retains declared partial public-threading visibility. The fixed Go 1.25.14/1.26.8/1.27.1 releases now have matching raw pprof Goldens and current-source Adapter capability `available`; other patch releases remain `partial` until separately reviewed. Cumulative Evidence remains `partial` even for available versions. The rebuilt-package Go host functional matrix passed. Native fixture overhead and final local/publication gates are recorded separately in the v0.4.0 readiness record. |
 | Runtime Lock target | Reviewed host launch, managed/optimization Docker launch, controlled import, or explicit same-UID loopback Go pprof; no arbitrary live injection |
 | Artifact schema | Existing public artifacts 1.0; Docker project policy accepts strict 1.0/1.1; Runtime Lock Evidence reads strict 1.0/1.1 and new Adapters write 1.1 |
 
@@ -29,7 +29,10 @@ PerfLens does not parse `perf.data` directly. Binary compatibility is delegated
 to the selected system `perf`; use a matching perf build when a profile cannot
 be decoded. The GNU addr2line fallback is exercised against Binutils 2.44. The
 LLVM JSON provider is protocol-tested because `llvm-symbolizer` is not installed
-on the development host. MCP behavior is tested in memory with the official SDK client.
+on the development host. MCP behavior is tested in memory and through a real subprocess stdio
+connection with the official SDK client. An opening enveloped `server/discover` is treated as a
+compatibility probe so an auto-negotiating local client can complete the 2025-11-25 handshake on
+the same process; a client that opens directly with a 2026-07-28 request remains on the modern path.
 
 The Collector Broker integration is tested end-to-end with a real Unix socket and
 an executable perf test double. Manual Debian 13 host acceptance also completed
@@ -46,7 +49,7 @@ session can run only typed, recipe-bound builds after confirmation. Rootful UID-
 explicitly enables the dedicated policy boundary. See the [Docker process guide](docker-container-roadmap.md)
 for the complete compatibility and denial matrix.
 
-The repository v0.4.0 prerelease exposes Runtime Lock capability discovery, content-bound
+v0.4.0 exposes Runtime Lock capability discovery, content-bound
 sessions, strict conversion/import, deterministic analysis, independent replay verification, and
 the four Adapter families listed above. It is not a compatibility promise for published v0.3.2
 packages. JDK and Go tools are optional external dependencies; the native DEB supplies the fixed

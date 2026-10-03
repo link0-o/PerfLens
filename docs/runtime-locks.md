@@ -2,10 +2,11 @@
 
 [简体中文](runtime-locks.zh-CN.md) | English
 
-Status: **implemented as a v0.4.0 release candidate; not part of the published v0.3.2 packages**.
-The version and reproducible candidate packages are prepared, but the runtime-matrix, real-host,
-remote CI, and tag gates must still pass before publication. Release v0.3.2 remains the published
-baseline. See the [v0.4.0 readiness record](v0.4.0-release-readiness.md).
+Status: **implemented in v0.4.0; not part of v0.3.2 packages**.
+The fixed-runtime host matrix and Docker single-confirmation path have passed functional
+acceptance. Exact evidence, Native fixture overhead, local source/package gates, and remote
+CI/publication are distinguished in the
+[v0.4.0 readiness record](v0.4.0-release-readiness.md).
 
 Runtime Lock is a deterministic evidence pipeline for language-level waiting and contention. It
 does not treat every futex as a language lock, does not infer an owner or hold interval that the
@@ -56,7 +57,7 @@ receipt is revalidated after private cleanup. Do not re-analyze the collected pu
 if it were a fresh import: public Evidence alone cannot recreate a private-source receipt. Pass
 the same Run-bound Verification ID when building an optional diagnosis bundle.
 
-The successful collection reference directly exposes the immutable Run Finalization ID/content
+The successful standalone `collect_runtime_lock_evidence` reference exposes the immutable Run Finalization ID/content
 digest and the settled Session Artifact ID/revision. Read that small Finalization Artifact and
 verify that it reports `outcome=completed` and binds the returned Run before revoking the Session.
 Revocation then creates a later terminal Session revision with `settlement_finalization_id=null`:
@@ -104,6 +105,16 @@ supports safely installed relocatable CPython distributions without accepting an
 environment or falling back to pathname execution. A replaced or writable Runtime Home is
 `unavailable`; controlled import and offline analysis remain usable.
 
+For an independently installed target such as CPython 3.13 free-threaded, the MCP may stay on a
+regular supported Python. An operator can set
+`--runtime-lock-cpython-interpreter /absolute/path/to/python3.13t` at MCP startup.
+The chosen file must be an absolute, non-symlink, trusted-owner executable with safe mode;
+its Runtime Home must also pass the existing owner/mode check. A fixed `-I -S` stdlib query
+runs through the hashed executable descriptor and binds the target version, ABI, free-threaded
+state, interpreter bytes, and Runtime Home into the Adapter capability and Preview.
+This startup option never executes a project workload and cannot be supplied per tool call.
+Changing it requires a new MCP process and fresh Preview/authorization.
+
 ## Evidence semantics
 
 Runtime Lock Evidence schema 1.1 represents OS threads, Java platform/virtual threads, Go
@@ -135,12 +146,12 @@ automatically upgraded to a root cause or Verified Improvement.
 
 ## Adapter matrix
 
-| Adapter | Repository v0.4.0 prerelease boundary | Important limits |
+| Adapter | v0.4.0 boundary | Important limits |
 |---|---|---|
 | Native pthread | Debian 12/13 amd64, glibc 2.36/2.41, dynamically linked pthread mutex/rwlock/condition; launch-time fixed `LD_PRELOAD`; thresholded 1 us and bounded exact modes | Static/musl/setuid/file-cap targets, inline/custom atomics, spinlocks, and invisible fast paths are partial or unsupported; no live uprobe/eBPF |
-| Java JFR | Target matrix JDK 17/21/25; launch-time JFR; fixed `balanced` 10 ms or `deep` 1 ms configuration; `JavaMonitorEnter`, `JavaMonitorWait`, `ThreadPark`, and metadata-discovered virtual-thread events | No live attach; the matching JDK `jfr print --json` performs bounded conversion; threshold omission is not “no wait”; absent acquire/release pairs forbid owner/hold claims; local release evidence currently covers JDK 21/25, while JDK 17 remains a release blocker |
-| CPython threading | CPython 3.12/3.13 public `threading.Lock`, `RLock`, `Condition`, and `Semaphore`; ordinary-user launch bootstrap; thresholded 10 us and bounded exact modes | Does not impersonate every `_thread` or C-extension lock; GIL/internal/application locks stay separate; free-threaded 3.13 forbids traditional-GIL conclusions and remains a release-matrix blocker until its real environment passes |
-| Go pprof | Target matrix Go 1.24-1.27 fixed `go tool pprof -raw`; private file mutex/block profiles; same-UID literal-loopback host pprof when explicitly enabled | Docker defaults to the file backend and opens no network; PerfLens does not enable runtime profile rates or modify source; mutex/block remain separate cumulative Evidence without fabricated TID, owner, or lock object; only Go 1.24 currently has the required local Golden, so 1.25-1.27 remain `partial` and block release |
+| Java JFR | Target matrix JDK 17/21/25; launch-time JFR; fixed `balanced` 10 ms or `deep` 1 ms configuration; `JavaMonitorEnter`, `JavaMonitorWait`, `ThreadPark`, and metadata-discovered virtual-thread events | No live attach; the matching JDK `jfr print --json` performs bounded conversion; threshold omission is not “no wait”; absent acquire/release pairs forbid owner/hold claims; JDK 17/21/25 have real local functional evidence, with disclosed partial thread coverage in the JDK 17 Run |
+| CPython threading | CPython 3.12/3.13 public `threading.Lock`, `RLock`, `Condition`, and `Semaphore`; ordinary-user launch bootstrap; thresholded 10 us and bounded exact modes | Does not impersonate every `_thread` or C-extension lock; GIL/internal/application locks stay separate; free-threaded 3.13 forbids traditional-GIL conclusions. A real 3.13.5 free-threaded host Run passed correctness and replay with declared partial public-threading visibility; it is not full release validation |
+| Go pprof | Target matrix Go 1.24-1.27 fixed `go tool pprof -raw`; private file mutex/block profiles; same-UID literal-loopback host pprof when explicitly enabled | Docker defaults to the file backend and opens no network; PerfLens does not enable runtime profile rates or modify source; mutex/block remain separate cumulative Evidence without fabricated TID, owner, or lock object; the fixed Go 1.24.4/1.25.14/1.26.8/1.27.1 releases have matching raw Goldens and current-source Adapter capability `available`; other patch releases remain `partial` until separately reviewed. Cumulative Evidence stays `partial` even for available versions; fixed-Go rebuilt-package host functional acceptance passed; see the readiness record for Native fixture overhead and local/publication gates |
 | Generic NDJSON | Strict schema 1.0/1.1 controlled import with bounded streaming and replay | Import source must declare its exact/thresholded/sampled/cumulative meaning, clocks, visibility, loss, owner and hold provenance; malformed, cross-target, out-of-order, or non-conserving input is rejected |
 
 JDK, Go, async-profiler, DTrace/SystemTap, and other runtime tools are optional external
@@ -148,8 +159,14 @@ dependencies. PerfLens detects them; the two core DEBs do not download or bundle
 The Java Adapter resolves `java` from the MCP server's `PATH`, then pins `java`, `jfr`, and the
 runtime payload to that same trusted JDK root. Select JDK 17, 21, or 25 by starting the client with
 the intended JDK first on `PATH`; `JAVA_HOME` alone does not select it. A project built for Java 17
-is intended to be captured with its JDK 17 runtime instead of being forced onto the acceptance
-host's JDK 21; the v0.4.0 compatibility claim remains blocked until the real JDK 17 matrix passes.
+can be captured with its JDK 17 runtime instead of being forced onto JDK 21. The fixed Temurin
+17.0.20.1 host path passed; short-lived-thread coverage remains explicitly partial at the Run layer.
+For active Go conversion, the Adapter requires a trusted root-owned go binary
+and a prebuilt root-owned pprof executable at the Go tool directory reported
+by go env GOTOOLDIR. Some Go archives omit the prebuilt tool. An administrator
+must build it from the matching fixed Go source and install it with mode 0755.
+PerfLens deliberately does not use go tool pprof's on-demand build or a
+user-writable cache as an identity-pinned collection tool.
 The main native DEB carries the fixed, root-owned, capability-free pthread probe and Runtime Lock
 supervisor. Neither is activated by package installation.
 
@@ -164,11 +181,25 @@ after the owning MCP process has stopped.
 
 ## Docker optimization integration
 
-In the repository v0.4.0 prerelease, a Docker optimization Preview may extend the v0.3.2 workflow
+In v0.4.0, a Docker optimization Preview may extend the v0.3.2 workflow
 with one reviewed Runtime Lock Adapter and semantics. When it does, the one Docker optimization
 confirmation also authorizes that bounded Runtime Lock scope; PerfLens does not create a second
 hidden authorization. Runtime Lock budget is checked before container creation and charged only to
 the same single-use workload lease. Published v0.3.2 packages cannot request this extension.
+
+An embedded Run has `authorization_kind=docker_optimization`; its `docker_optimization_binding`
+binds the charged parent Session, Build, Container Run, and Measurement. It does not create a
+standalone host Run Finalization. Verify those content-bound artifacts and the later terminal
+parent state. Page the immutable `session_artifact_id`, not `session_id`. Runtime Lock evidence
+accounting conservatively charges the public Evidence and capture/raw/normalized representations,
+in addition to the separate perf charge; it is not merely the captured NDJSON file size.
+
+When `collect_docker_optimization_workload` omits `workload_timeout_seconds`, an embedded Runtime
+Lock capture uses the selected semantics' authorized duration limit, capped at the ordinary
+60-second default. Without Runtime Lock, the default remains 60 seconds. An explicitly supplied
+timeout above the selected Runtime Lock window is rejected before a workload lease is issued.
+The timeout is an upper bound on workload execution, not a promise to keep a shorter workload
+running for the entire window.
 
 `preview_docker_optimization_session` accepts an optional `runtime_lock_semantics` object that maps
 each requested Adapter to one exact measurement semantics, for example
@@ -186,6 +217,13 @@ correctness, Benchmark, perf-event-source, resource-transfer, and deterministic 
 Any post-processing or persistence failure makes Runtime Lock unavailable for the parent session
 and prevents misleading continuation. Identity replacement, policy/tool/payload changes, budget
 exhaustion, revocation, or expiry fail closed and are not retried unchanged.
+
+The parent `state` is the authorization state. `runtime_lock_status` is a retained projection of
+the embedded Runtime Lock scope/result (`active`, `partial`, `unavailable`, or `exhausted`), not a
+second authority flag. A terminal parent Artifact may therefore be `state=revoked` while retaining
+`runtime_lock_status=active` from its last successful embedded result. Every operation rejects the
+non-active parent state; reports must read both fields and must not describe the retained substatus
+as live permission.
 
 ## Offline CLI
 

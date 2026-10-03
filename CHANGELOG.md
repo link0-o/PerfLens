@@ -4,7 +4,11 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-09-04
+## [0.4.0] - 2026-10-04
+
+This is the source-release closeout date, not a GitHub publication timestamp. The
+[readiness record](docs/v0.4.0-release-readiness.md) distinguishes local acceptance from remote
+CI, attestation, and publication; see also [audit findings and fixes](docs/known-issues.md).
 
 ### Added
 
@@ -39,6 +43,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ### Security
 
+- The final locked dependency audit upgrades the MCP dependency PyJWT from 2.13.0 to 2.15.1;
+  the complete exported runtime set is re-audited without suppressing advisory IDs.
 - Active Native, CPython, and Java collection is launch-time only; v0.4.0 does not add arbitrary
   live-process or existing-container injection, live JVM attach, or a privileged eBPF/uprobe path.
 - The locked MCP transport stack now uses `httpx2` and `httpcore2` 2.12.0, replacing the vulnerable
@@ -47,12 +53,25 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   Measurement, session, replay, and persistence identities are independently checked. Replacement,
   cross-target splicing, malformed input, unsafe paths, budget exhaustion, and failed
   post-processing fail closed without exposing raw paths, addresses, environments, or credentials.
+  Public Docker Build/optimization paging now validates the same byte snapshot it returns;
+  Iteration and Disposition also reuse their typed cross-artifact replay checks.
 - A Docker parent session reserves combined perf and Runtime Lock evidence before container
   creation. Runtime Lock charges only the same completed workload lease, and any unreliable
   capture/conversion/replay/persistence state blocks misleading continuation.
 
 ### Fixed
 
+- Docker optimization with embedded Runtime Lock now derives an omitted workload timeout from
+  the selected exact or collection window, capped at the previous 60-second default. Explicit
+  over-limit timeouts still fail before a workload lease is issued.
+- PID collection now drains an already buffered perf control acknowledgement before treating a
+  fast child exit as a missing ACK. This closes a low-probability race in which perf could write
+  its final acknowledgement, exit successfully, and still be reported as having exited before
+  readiness; timeout and malformed/absent-ACK failures remain bounded and fail closed.
+- Local stdio MCP negotiation now treats an opening 2026-07-28 `server/discover` request as a
+  compatibility probe, allowing auto-negotiating clients to fall back to the legacy `initialize`
+  handshake on the same process. This prevents intermittent Claude Code sessions from losing all
+  native PerfLens tools with error `-32022`; direct modern-protocol requests remain unchanged.
 - Managed Docker Benchmark capture now validates the scratch layout actually created by the
   coordinator: an exact `0733` container-writable leaf inside an invoking-user-owned `0700`
   per-run directory. Benchmark file ownership is checked against the verified target host UID,
@@ -61,13 +80,23 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - Managed Docker workload timeouts now start when the authenticated package Gate releases the
   workload, rather than during container/Collector preparation. The remaining wait budget keeps
   sub-second precision, and a genuine Docker wait expiry is reported at the `docker_workload`
-  stage instead of looking like an Agent-client tool timeout. Managed-session settlement also
+  stage instead of looking like an Agent-client tool timeout. Inner managed-session settlement also
   charges only the Gate-release-to-workload-exit lifetime, excluding both setup and post-exit
   finalization, while keeping the integer charge within the already reserved lease.
+  Outer optimization-session accounting now consumes the same inner Gate-relative charge,
+  including failure paths; a failure before workload release charges one attempt but no active time.
+  The identity-pinned cgroup monitor now records independently observed container exit, so delayed
+  Collector publication cannot consume a completed workload's remaining exact-capture window or
+  inflate parent accounting. Docker exit-status publication gets a separate bounded confirmation
+  window only after target exit is proven; absent or late observations retain the strict deadline.
 - Bounded artifact paging now includes the public Docker Build capability, Recipe, Context,
   Preview, Session, Build, Iteration, Disposition, and Container Target types already persisted by
-  Docker optimization, so an Agent can audit known returned IDs without enumerating storage or
+  Docker optimization, so an Agent can read known returned IDs without enumerating storage or
   reading private build archives.
+- MCP domain failures now retain a versioned ErrorArtifact in both structured output and JSON
+  text with `isError=true`, including stage, safe accounting details, no-retry flags, and bounded
+  recovery actions. Private details are omitted explicitly and text truncation is disclosed.
+  Success schemas, authorization enforcement, and cancellation behavior remain unchanged.
 - Docker optimization Runtime Lock Previews can now explicitly bind one measurement semantics per
   requested Adapter through `runtime_lock_semantics`; callers that omit it retain the existing
   policy-derived compatibility default. Java JFR Evidence now publishes the content-bound
@@ -93,10 +122,12 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - Runtime Adapter Capability and Run Finalization artifacts are available through bounded paging;
   pre-lease request rejection is distinct from an explicit user revocation, and CPython exact-mode
   duration/event budget errors identify the violated authorized ceiling.
-- Successful Runtime Lock collection references now expose the immutable Run Finalization ID and
+- Successful standalone host Runtime Lock collection references expose the immutable Run Finalization ID and
   digest plus the settled Session revision. Agent guidance no longer mistakes the later revoked
   Session's intentionally empty settlement field for a missing Finalization, and it keeps Evidence
   quality separate from Run quality.
+- Docker embedded Runtime Lock guidance now explicitly checks the charged parent Session and
+  content-bound Build/Run/Measurement chain instead of requiring a standalone host Finalization.
 - Successful CPython and Go Runtime Lock collection references now expose the same `target_uid`
   and `evidence_bytes` summary fields as Native and Java, while keeping the persisted Run as the
   authoritative record.

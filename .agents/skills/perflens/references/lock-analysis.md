@@ -65,6 +65,17 @@ gate. Follow the capability Artifact exactly: Go versions without a reviewed mat
 version is recognized. The current candidate evidence and blockers are recorded in
 `docs/v0.4.0-release-readiness.md`.
 
+A reviewed Go Golden changes Adapter availability only. Even with `available` capability,
+cumulative Go Evidence and its Run can correctly remain `partial`; read `quality.limitations`
+for the reason. A bounded functional host acceptance may pass when correctness, independent
+verification/replay, completed finalization, and revocation pass; that does not establish L4
+A/B improvement or release readiness.
+
+Capability snapshots are time-stamped. Across separate Previews, unrelated Adapter reference
+IDs can differ solely with `created_at`; bind each Preview to its own persisted capability and
+execution binding rather than requiring sibling IDs to match across Previews. A selected Adapter,
+tool, target, or policy change still requires a fresh Preview and consent.
+
 Call the independent Runtime Lock verifier before any interpretation. A verified `partial` result
 can support only its explicit allowed conclusions. Runtime Lock A/B must bind target, Adapter,
 runtime/tool/payload, workload, semantics/threshold, resource environment, and correctness. A

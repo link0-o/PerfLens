@@ -5,9 +5,176 @@
 This document records reproduced issues and their bounded workarounds, including
 resolved issues. Do not weaken deployment safety checks to work around them.
 
+The 2026-10-04 source-release closeout and current gate results are tracked in the
+[v0.4.0 readiness record](v0.4.0-release-readiness.md). Dated candidate entries below retain their
+original scope; they are not all open defects. The final dependency audit replaced PyJWT 2.13.0
+with 2.15.1 in the lockfile and passed without advisory suppression. Docker embedded Runtime Lock
+uses its charged parent binding, not a standalone host Run Finalization; absence of the latter
+is not a publication failure.
+
 Maintainers changing Collector, Helper, Gate, or Docker optimization state must also follow the
 [v0.3.2 Docker optimization regression playbook](v0.3.2-regression-playbook.md). It turns the
 2026-08-26 fixes into permanent ordering, invariants, forbidden shortcuts, and test gates.
+
+## KI-2026-09-22: a fast perf exit could hide its buffered control ACK (resolved in candidate source)
+
+- Affected scope: PID collection using perf's acknowledged control FD, including short-lived
+  Collector-backed workloads.
+- Symptom: a full-suite run and a repeated startup-diagnostic test intermittently reported that
+  perf exited before collection readiness, even though the child had written its final `ack`.
+- Root cause: the acknowledgement reader called `process.poll()` before reading the socket. If the
+  child wrote the ACK and exited before the reader was scheduled, the kernel still held valid ACK
+  bytes but the exit status won the race and those bytes were never consumed.
+- Fix: the reader now drains the bounded socket first. It checks process exit only after a polling
+  read times out; EOF, malformed ACK, missing ACK, and the shared handshake deadline retain their
+  existing fail-closed behavior. A complete newline-terminated ACK read at the boundary is handled
+  before deciding whether an incomplete response exceeded the deadline.
+- Regression coverage: a deterministic test places an ACK in the socket after a child has already
+  exited. The old implementation fails that test; the candidate passes it, the full 18-test
+  collection file, and 50 consecutive executions of the formerly intermittent diagnostic case.
+- Package status: the ACK-fix DEBs built on 2026-09-22 passed subsequent installed-host Native and
+  Docker embedded Native functional acceptance. The old `/tmp` build directories have since expired;
+  their Artifact IDs and package hashes remain in the readiness record. The later Docker
+  timeout-default fix was absent from those DEBs; its separate rebuilt package passed on 2026-09-27.
+
+## KI-2026-09-27: omitted Docker Runtime Lock timeout exceeded the authorized window (package-accepted)
+
+- Affected scope: `collect_docker_optimization_workload` with an embedded Runtime Lock Adapter.
+- Root cause: omitting `workload_timeout_seconds` selected the generic 60-second default even when
+  the chosen exact or non-exact Runtime Lock window was shorter. The server correctly rejected
+  that mismatch before issuing a workload lease.
+- Fix: an omitted timeout now uses the selected window, capped at 60 seconds. The generic
+  non-Runtime-Lock default remains 60 seconds; explicit over-limit values still fail before a
+  lease. This changes no Preview, budget, or collection authority.
+- Regression: in-memory MCP cases select exact Native/CPython and non-exact Java/Go bindings;
+  omission reserves the bound 3 or 30 seconds, while explicit 60 seconds is denied without a
+  workload attempt. The rebuilt package passed a fresh real-host Native exact and Docker embedded
+  Native exact run with the Docker timeout omitted: complete Evidence, zero loss/truncation, and
+  ten passed Verification checks on each path. Other Adapter defaults remain source-test evidence.
+
+## Source-audit findings at `5a799ac` (2026-09-18; fixed in candidate source)
+
+These three defects were reproduced with isolated fake workloads and temporary artifacts.
+The initial audit changed documentation only. Subsequent candidate-source fixes now cover all
+three defects with regression tests; `5a799ac` itself does not contain these fixes. Fresh installed
+package acceptance remains separate from source-level regression results. Later rebuilt-package
+acceptance confirmed native MCP injection, structured errors, and the bounded Docker path; the
+positive paging path passed, while deliberate Artifact-corruption rejection remains source-test
+evidence because the host acceptance did not tamper with installed evidence.
+
+### Docker public Artifact paging skips content validation
+
+- Affected scope: `read_artifact_page` admits eight Docker Build/optimization types that are
+  missing from the validated snapshot dispatch in `ArtifactStore.read_page`: capability, recipe,
+  context, Preview, Session, Build, Iteration, and Disposition. `container-target` is already on
+  the validated path and is not affected by this omission.
+- Reproduction: change `DockerBuildArtifact.image_size_bytes` without changing `content_sha256`.
+  The typed Build loader rejects the digest mismatch, but the MCP paging tool returns the changed
+  value successfully. All eight types also accept a stored document with the wrong model schema.
+- Impact: an Agent reading an altered or corrupted artifact through paging does not receive the
+  integrity failure that typed consumers receive. This is an evidence-integrity gap, not a
+  demonstrated privilege escalation or automatic authorization expansion.
+- Fix: all eight types now validate their schema, embedded ID, and content digest on the same byte
+  snapshot returned by paging. Iteration and Disposition reuse their typed loaders' cross-artifact
+  replay checks without reopening the requested file. Regressions cover valid reads, wrong schemas,
+  swapped IDs, digest corruption, linked Build corruption, and replacement after the snapshot read.
+  A page read is still not evidence of performance improvement or a substitute for analysis replay.
+
+### Outer Docker optimization accounting still includes setup and finalization
+
+- Affected scope: `collect_docker_optimization_workload` success and failure settlement. Its
+  timer starts before internal session authorization and ends after managed collection returns.
+  The inner managed-session timer was repaired; the outer session does not reuse that result.
+- Reproduction: a fake 1.25-second active workload with three seconds of setup and five seconds
+  of finalization, under a 30-second reservation, charges two seconds internally but ten seconds
+  to the parent optimization session. No real workload is needed to reproduce it.
+- Impact: the parent active-time budget can be exhausted early. Capping whole-call time at the
+  reservation prevents one overrun error but does not make the accounting correct.
+- Fix: the inner managed collector records its Gate-relative charge for the parent before
+  settlement, including failure paths; the outer session no longer uses a whole-call timer.
+  Regressions cover success, pre-release/authorization failure (zero active seconds but one
+  charged attempt), post-release/post-exit failure, and timeout capped at the existing reservation.
+  Failures still stop the session, and temporary accounting state is removed after each call.
+  The successful three-second real-host case alone cannot distinguish the old and new formulas.
+
+### MCP tool failures discard structured domain error fields
+
+- Affected scope: `PerfLensError` exceptions escaping a tool registered by `create_server`.
+  `PerfLensError.__str__` returns only the message; without a PerfLens transport adapter, the
+  installed MCP SDK wraps that string as a tool error.
+- Reproduction: a synthetic optimization failure after lease issuance retains its stage,
+  charged-attempt flag, no-retry flag, and suggested actions in the domain exception. Through
+  the real in-memory MCP client the result is `is_error=true`, `structured_content=None`, and
+  message text only. This is reproducible without Claude Code, not merely a client display issue.
+- Impact: clients cannot reliably report the exact failure stage or recover the structured
+  accounting/recovery instructions from that response. Backend denial and charged-attempt
+  enforcement remain intact.
+- Fix: a transport adapter now returns the versioned `ErrorArtifact` as both structured content
+  and JSON text with `is_error=true`, preserving the error ID, code, stage, recovery flags, bounded
+  actions, and allowlisted scalar details. Private diagnostics are omitted and truncation is
+  disclosed. Real MCP client tests cover every domain error code, unchanged success schemas,
+  charged/no-retry fields, output bounds, and unchanged cancellation/SDK-error behavior.
+  See [MCP error responses](mcp-and-skill.md#mcp-error-responses). A failed authorized call still
+  requires stopping; missing retry metadata is never permission to retry or change evidence mode.
+
+## KI-2026-09-22: post-exit publication latency could exhaust a managed Docker deadline (resolved and package-accepted)
+
+- Affected scope: a short managed Docker workload, especially an exact Runtime Lock capture whose
+  `workload_timeout_seconds` equals its evidence window.
+- Symptom: the identity-pinned cgroup monitor can observe that the container has already ended,
+  while Collector result publication and module capture finish only after the authorized deadline.
+  The server then rejects the run before Docker exit-status confirmation, or charges the
+  post-exit tail to the parent optimization session. A later plain-`stat` acceptance charged four
+  seconds for a benchmark whose own window and cgroup CPU use were both about two seconds; that
+  charge did not prove that the workload itself needed more than the three-second exact window.
+- Root cause: the monitor retained only a Boolean lifecycle-removal marker. The MCP path therefore
+  had no trusted exit timestamp until `docker container wait` returned, even though cgroup removal
+  had already proved that the identity-bound target could no longer execute.
+- Fix: the monitor now records the first monotonic timestamp at which the pinned cgroup path is
+  verified removed. The server validates that timestamp against Gate release, current monotonic
+  time, and the authorized workload deadline, uses it for both inner and parent accounting, and
+  derives the persisted wall-clock finish from the same interval. Once target exit is proven,
+  Docker receives a separate bounded 15-second administrative window only to publish the exit
+  status. Without that proof, the original precise remaining workload deadline still applies.
+- Safety boundary: this does not extend workload execution authority. A missing timestamp keeps
+  the strict old path; a non-finite, out-of-order, future, or post-deadline observation fails
+  closed. The observation comes only from the already identity-pinned cgroup reader, and the
+  administrative window cannot run user workload code.
+- Regression coverage: unit tests cover final-read and background removal timestamps, absent and
+  invalid observations, post-deadline exit, the unchanged fallback deadline, parent accounting,
+  and the MCP managed-workload branch that uses the post-exit confirmation window.
+- Installed-package acceptance: on 2026-09-22, Container Run
+  `container-run-8aea9a2a463c237d5692` exited zero and was removed. Embedded Runtime Lock Run
+  `runtime-lock-run-5cfa2d491c9f0a11bf31` completed within the exact three-second workload and
+  three-second evidence bounds, with 7,808 events, zero loss/truncation, and a verified ten-check
+  private-source replay. Parent Session `docker-optimization-session-20383e2d45920e51fa9c`
+  charged three workload-active seconds and three Runtime Lock seconds before explicit revocation.
+
+## KI-2026-09-19: Claude Code stdio negotiation intermittently omitted all tools (resolved and package-accepted)
+
+- Affected scope: local stdio clients that first send a 2026-07-28 `server/discover` probe and then
+  fall back to the legacy `initialize` handshake on the same server process. The failure was
+  reproduced with Claude Code 2.1.276 and 2.1.278; successful connections from the same version
+  made the defect intermittent.
+- Symptom: the session contains no `mcp__perflens__*` tools and no project-bound `perflens-mcp`
+  child. The server log reports MCP error `-32022`: the connection is already serving 2026-07-28
+  and will not accept `initialize`. A separate `claude mcp list` probe can still report Connected,
+  because it starts a different short-lived connection.
+- Root cause: MCP SDK 2 selects the connection era from the first request. Once the modern discovery
+  envelope selects 2026-07-28, a later legacy handshake is correctly rejected. Project trust state
+  observed after that failure is not sufficient evidence that trust caused the missing tools.
+- Fix: the PerfLens stdio boundary now presents only an opening enveloped `server/discover` as an
+  unsupported legacy method probe. The client receives method-not-found and can complete its
+  fallback handshake on the same process. Other opening requests are untouched, so a client that
+  starts directly with a 2026-07-28 tool request retains the modern path. HTTP transports are not
+  changed.
+- Safety boundary: negotiation does not authorize a tool, persist an authorization, widen a path,
+  or change Docker/Runtime Lock policy. Missing native tools remains a hard stop; shell-launched
+  replacement servers and custom JSON-RPC bridges remain forbidden.
+- Regression coverage: a real subprocess stdio client in `auto` mode negotiates 2025-11-25 after
+  discovery fallback and lists the Runtime Lock/paging tools; a version-pinned 2026-07-28 client
+  lists the same tools without downgrade. Fresh rebuilt-package Claude Code acceptance on
+  2026-09-20 and 2026-09-22 loaded the project-bound native tools; this release blocker is closed.
 
 ## KI-2026-09-15: Benchmark capture rejected its own managed scratch layout (resolved)
 
@@ -32,7 +199,7 @@ Maintainers changing Collector, Helper, Gate, or Docker optimization state must 
   parent, or an output-owner mismatch fails closed; the MCP server passes the verified target host
   UID into Benchmark capture.
 
-## KI-2026-09-15: setup and finalization consumed managed workload time (resolved)
+## KI-2026-09-15: managed wait and inner-session time accounting (resolved)
 
 - Affected scope: managed Docker collection, including a Docker optimization Preview that also
   binds Runtime Lock, when the fixed workload duration is close to
@@ -50,9 +217,10 @@ Maintainers changing Collector, Helper, Gate, or Docker optimization state must 
 - Fix: the workload deadline now starts immediately before the authenticated Gate release. The
   Collector observation interval still consumes that workload window, but pre-release setup does
   not. The Docker wait receives the precise fractional remainder, and a real expiry is reported as
-  a `docker_workload` / `container_wait` failure. Settlement records the workload-exit monotonic
-  timestamp and charges only the Gate-to-exit interval; setup and post-exit Benchmark/Runtime Lock
-  finalization are excluded, and integer rounding cannot exceed the already reserved lease.
+  a `docker_workload` / `container_wait` failure. Inner managed-session settlement records the
+  workload-exit monotonic timestamp and charges only the Gate-to-exit interval; setup and post-exit
+  Benchmark/Runtime Lock finalization are excluded, and integer rounding cannot exceed the already
+  reserved lease.
 - Safety boundary: this does not enlarge the authorized duration or add an automatic retry. A
   separate precise Docker-wait deadline still enforces the authorized duration. A failure after
   lease issuance remains charged and ends the optimization workflow exactly as before.
@@ -61,6 +229,9 @@ Maintainers changing Collector, Helper, Gate, or Docker optimization state must 
   reject non-finite/out-of-range values, retain the typed Docker-wait timeout stage, exclude a
   long post-exit finalization interval from accounting, and cap an in-flight failure at its
   reserved integer lease.
+
+The original fix applied to the wait deadline and inner managed session only. The subsequent
+source-audit fix described above extends consistent accounting to the outer optimization session.
 
 ## KI-2026-08-26: the automatic PMU probe could release a fast Docker workload (resolved)
 

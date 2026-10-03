@@ -226,6 +226,13 @@ started, restart once, then invoke `/perflens`.
 See the official Claude Code [Skills](https://code.claude.com/docs/en/slash-commands)
 and [MCP](https://code.claude.com/docs/en/mcp) documentation for client behavior.
 
+The stdio server supports both the legacy handshake and direct 2026-07-28 requests. It treats an
+opening modern `server/discover` only as a compatibility probe, so an auto-negotiating client can
+fall back to `initialize` on the same process instead of intermittently losing every tool with MCP
+error `-32022`. If an older installed package records that exact error, reinstall the corrected
+package and restart the project session; repeatedly changing project trust does not repair a
+protocol-era mismatch. Approval is still a separate client decision.
+
 ## Connect OpenCode and local GitHub Copilot
 
 Run `perflens init --client opencode` to install the shared Agent Skill and merge an OpenCode
@@ -359,6 +366,20 @@ The user need not discover a PID, but natural-language intent alone is not
 authorization to execute arbitrary project files.
 
 All list responses are bounded and paginated. The server emits typed structured output and checked-in JSON Schemas; it never returns an unbounded full analysis through a list tool.
+
+## MCP error responses
+
+Domain tool failures return `isError=true` with the same schema-1.0 `ErrorArtifact` in
+`structuredContent` and JSON text content (see `schemas/error.schema.json`). The error includes
+`error_id`, `code`, `stage`, `recoverable`, `retryable`, `suggested_actions`, and `details`.
+Success output schemas are unchanged; cancellation and non-domain SDK errors keep SDK semantics.
+
+Details use an explicit scalar allowlist, including safe Artifact/session IDs, bounds, exit code,
+publication status, and the Docker charged-attempt/no-retry fields. Paths, environment, commands,
+raw output, arbitrary objects, and non-finite numbers are not forwarded. `details_omitted=true`
+discloses omitted details. Message/stage limits are 1,024/128 characters, with at most four
+256-character actions; `presentation_truncated=true` discloses truncation. These flags are inside
+`error.details`. Missing information is unknown, not permission to retry or widen authorization.
 
 ## Detach project integration
 
