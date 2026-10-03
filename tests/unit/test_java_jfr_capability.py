@@ -159,6 +159,24 @@ def _runner(version: str = "25.0.4.1") -> JavaJfrRunner:
     return run
 
 
+def _temurin17_runner(
+    argv: Sequence[str], timeout: float, max_bytes: int
+) -> subprocess.CompletedProcess[str]:
+    del timeout, max_bytes
+    if argv[-1] == "-version":
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            "",
+            'openjdk version "17.0.20.1" 2026-08-18\n'
+            "OpenJDK Runtime Environment Temurin-17.0.20.1+1 "
+            "(build 17.0.20.1+1)\n",
+        )
+    if argv[-1] == "version":
+        return subprocess.CompletedProcess(argv, 0, "1.0\n", "")
+    return subprocess.CompletedProcess(argv, 0, METADATA, "")
+
+
 @pytest.mark.parametrize("major", [17, 21, 25])
 def test_java_jfr_capability_supports_reviewed_jdks(tmp_path: Path, major: int) -> None:
     root = _fake_jdk(tmp_path)
@@ -189,6 +207,77 @@ def test_java_jfr_capability_supports_reviewed_jdks(tmp_path: Path, major: int) 
     assert len(result.runtime_payload.native_library_manifest_sha256) == 64
     assert result.active_launch_supported is True
     assert result.live_attach_supported is False
+
+
+def test_java_jfr_capability_accepts_temurin_17_format_version(tmp_path: Path) -> None:
+    root = _fake_jdk(tmp_path)
+    (root / "release").write_text(
+        'JAVA_VERSION="17.0.20.1"\nJAVA_RUNTIME_VERSION="17.0.20.1+1"\n',
+        encoding="utf-8",
+    )
+
+    result = inspect_java_jfr_installation(
+        root,
+        profile_root=PROFILE_ROOT,
+        trusted_owner_uids=(os.getuid(),),
+        runner=_temurin17_runner,
+    )
+
+    assert result.availability == "available"
+    assert result.java_version == "17.0.20.1"
+    assert result.java_build == "17.0.20.1+1"
+    assert any("format version 1.0" in item for item in result.limitations)
+
+
+@pytest.mark.parametrize(
+    ("release_text", "expected"),
+    [
+        ('JAVA_VERSION="17.0.20.2"\nJAVA_RUNTIME_VERSION="17.0.20.1+1"\n', "does not match"),
+        ('JAVA_VERSION="17.0.20.1"\nJAVA_RUNTIME_VERSION="17.0.20.1+2"\n', "does not match"),
+        ('JAVA_VERSION="17.0.20.1"\n', "incomplete"),
+        (
+            'JAVA_VERSION="17.0.20.1"\nJAVA_VERSION="17.0.20.1"\n'
+            'JAVA_RUNTIME_VERSION="17.0.20.1+1"\n',
+            "malformed",
+        ),
+    ],
+)
+def test_java_jfr_capability_rejects_unbound_temurin_17_release(
+    tmp_path: Path, release_text: str, expected: str
+) -> None:
+    root = _fake_jdk(tmp_path)
+    (root / "release").write_text(release_text, encoding="utf-8")
+
+    result = inspect_java_jfr_installation(
+        root,
+        profile_root=PROFILE_ROOT,
+        trusted_owner_uids=(os.getuid(),),
+        runner=_temurin17_runner,
+    )
+
+    assert result.availability == "unavailable"
+    assert expected in result.limitations[0]
+
+
+def test_java_jfr_capability_rejects_format_version_for_jdk_21(tmp_path: Path) -> None:
+    root = _fake_jdk(tmp_path)
+
+    def wrong_jfr_version(
+        argv: Sequence[str], timeout: float, max_bytes: int
+    ) -> subprocess.CompletedProcess[str]:
+        if argv[-1] == "version":
+            return subprocess.CompletedProcess(argv, 0, "1.0\n", "")
+        return _runner("21.0.1")(argv, timeout, max_bytes)
+
+    result = inspect_java_jfr_installation(
+        root,
+        profile_root=PROFILE_ROOT,
+        trusted_owner_uids=(os.getuid(),),
+        runner=wrong_jfr_version,
+    )
+
+    assert result.availability == "unavailable"
+    assert "same JDK build" in result.limitations[0]
 
 
 def test_java_jfr_capability_is_unavailable_for_wheel_only() -> None:

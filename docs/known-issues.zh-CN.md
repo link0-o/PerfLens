@@ -5,9 +5,142 @@
 本文记录已经复现、具有明确边界和临时处理方法的问题，包括已经修复的问题。
 不要通过降低部署器安全检查来规避问题；升级前仍可按对应版本的临时方法处理。
 
+2026-10-04 源码发布收口及当前门禁见[《v0.4.0 就绪记录》](v0.4.0-release-readiness.zh-CN.md)。
+下文带日期的候选记录保留当时范围，不应全部当作未修复缺陷。最终依赖审计已将锁文件中的
+PyJWT 2.13.0 更新为 2.15.1，并在不忽略公告的情况下通过。Docker 内嵌 Runtime Lock
+使用已结算父会话绑定，不生成独立宿主机 Run Finalization；缺少后者不是持久化失败。
+
 维护 Collector、Helper、Gate 或 Docker optimization 状态机时，还必须遵循
 [《v0.3.2 Docker 优化链路防回归手册》](v0.3.2-regression-playbook.zh-CN.md)。该手册把
 2026-08-26 的修复转换成永久时序、不变量、禁止捷径和测试门禁。
+
+## KI-2026-09-22：快速退出的 perf 可能掩盖已缓冲的控制 ACK（候选源码已修复）
+
+- 影响范围：使用 perf 带确认 control FD 的 PID 采集，包括短命的 Collector 托管 workload；
+- 现象：一次全量套件和重复启动诊断测试间歇报告 perf 在采集就绪前退出，但子进程实际已写入
+  最后的 `ack`；
+- 根因：ACK reader 在读取 socket 前先调用 `process.poll()`。若子进程写入 ACK 后在 reader
+  获得调度前退出，内核仍缓存有效 ACK 字节，但退出状态先赢得竞态，ACK 从未被消费；
+- 修复：reader 现在先排空有界 socket，只在一次轮询读取超时后检查进程退出。EOF、非法或缺失
+  ACK 以及共享握手截止时间仍保持原有 fail-closed 语义；在边界内读到完整换行结尾 ACK 时，
+  会先处理完整响应，再判断不完整响应是否超过截止时间；
+- 回归覆盖：确定性测试会在子进程已经退出后把 ACK 放入 socket；旧实现稳定失败，候选实现
+  通过，同时 collection 文件 18 项全绿，原间歇用例连续执行 50 次均通过；
+- 安装包状态：2026-09-22 构建的 ACK 修复 DEB 后续通过了安装主机的 Host Native 和 Docker
+  内嵌 Native 功能验收。旧 `/tmp` 构建目录已失效；留存的 Artifact ID 与包摘要见发布就绪记录。
+  此后新增的 Docker 默认超时修复不在这两个 DEB 中；其独立重建包已于 2026-09-27 通过验收。
+
+## KI-2026-09-27：省略 Docker 内嵌 Runtime Lock 超时会超过授权窗口（安装包已验收）
+
+- 影响范围：带内嵌 Runtime Lock Adapter 的 `collect_docker_optimization_workload`。
+- 根因：省略 `workload_timeout_seconds` 会采用普通路径的 60 秒默认值，即使所选 exact 或
+  非 exact Runtime Lock 的授权窗口更短；服务在签发 workload lease 前正确拒绝该请求。
+- 修复：省略时按已选语义使用授权窗口，最多仍为 60 秒。不带 Runtime Lock 的普通路径继续
+  默认 60 秒；明确传入超限值仍在签发 lease 前拒绝，不改变 Preview、预算或采集权限。
+- 回归：MCP 内存集成分别选择 exact Native/CPython 和非 exact Java/Go；省略时预留已绑定的
+  3 或 30 秒，明确传入 60 秒则被拒且不扣 workload 尝试。重建安装包的宿主 Native exact 与
+  Docker 内嵌 Native exact 真实验收已通过，Docker 调用省略超时参数；两条 Evidence 均
+  complete、零丢失/截断，Verification 均为十项通过。其他 Adapter 默认值仍是源码测试证据。
+
+## `5a799ac` 源码复审发现的问题（2026-09-18；已在候选源码修复）
+
+以下三项曾用隔离的模拟 workload 和临时 Artifact 复现。初次复审只修改文档，后续候选源码
+现已修复三项并补充回归测试；`5a799ac` 本身不包含这些修复。新安装包的真实验收仍须与
+源码回归结果分开记录。后续重建安装包已经确认原生 MCP 注入、结构化错误及有界 Docker
+路径；分页正向路径通过，但宿主验收没有篡改已安装证据，因此损坏拒绝仍以源码测试为证。
+
+### Docker 公开 Artifact 分页没有执行内容校验
+
+- 影响范围：`read_artifact_page` 新接入的八类 Docker Build/optimization Artifact 未进入
+  `ArtifactStore.read_page` 的快照校验分支：capability、recipe、context、Preview、Session、
+  Build、Iteration 和 Disposition。`container-target` 已走校验分支，不属于该遗漏；
+- 复现：改变 `DockerBuildArtifact.image_size_bytes`，保持 `content_sha256` 不变。typed
+  Build loader 拒绝摘要不匹配，但 MCP 分页成功返回修改后的值；八类分页还都能返回不符合
+  对应模型 Schema 的已存储文档；
+- 影响：Agent 通过分页读到已改动或损坏的内容时，无法得到 typed 消费者会得到的完整性
+  错误。这是证据完整性缺口，不是已经证明的提权或自动扩大授权；
+- 修复：八类分页均对实际返回的同一字节快照校验 Schema、内嵌 ID 与内容摘要；Iteration
+  和 Disposition 复用 typed loader 的跨 Artifact 重放校验，不重新打开待分页文件。
+  回归覆盖正常读取、错误 Schema、错配 ID、摘要损坏、关联 Build 损坏及快照读取后文件被替换。
+  分页成功仍不代表性能已改进，也不能代替分析层重放验证。
+
+### Docker optimization 外层 Session 仍把准备和收尾计入活跃时间
+
+- 影响范围：`collect_docker_optimization_workload` 成功和失败结算。其计时从内部 Session
+  授权前开始，到托管采集返回后才结束；内层 managed Session 的计时已经修复，但外层没有
+  使用该结果；
+- 复现：在 30 秒预留下，模拟 3 秒准备、1.25 秒运行和 5 秒收尾。内层记 2 秒，外层却扣
+  10 秒，无需真实运行 workload 即可复现；
+- 影响：父 Session 的活跃时间预算可能提前耗尽。将整个调用时间截到预留上限，只能避免
+  单次超额错误，不能证明结算准确；
+- 修复：内层 managed collector 在结算前向父会话记录 Gate 相对计费时长，包含失败路径；
+  外层不再使用整次调用计时。回归覆盖成功、授权/Gate 放行前失败（活跃时间为零但仍扣一次
+  尝试）、放行后/退出后失败和达到原预留上限的超时。失败仍终止会话，每次调用后移除临时
+  记账状态。原来的三秒真实用例不能独立区分新旧公式。
+
+### MCP 工具错误丢失结构化领域错误字段
+
+- 影响范围：从 `create_server` 注册的工具中抛出的 `PerfLensError`。
+  `PerfLensError.__str__` 只返回 message；当前没有 PerfLens 传输适配层，已安装 MCP SDK
+  会把该字符串包装成工具错误；
+- 复现：模拟 optimization lease 签发后的失败，领域异常仍包含阶段、已扣尝试次数标志、
+  禁止重试标志与操作建议；经真实的内存 MCP client 返回时却只有 `is_error=true`、
+  `structured_content=None` 和消息文本。无需 Claude Code 即可复现，不只是客户端显示问题；
+- 影响：客户端不能从错误响应中可靠提取精确失败阶段及结构化扣费/恢复指引。后端拒绝和
+  尝试次数扣费约束仍然生效；
+- 修复：传输适配层以 `is_error=true` 同时返回结构化内容及 JSON 文本，使用带版本的
+  `ErrorArtifact`，保留错误 ID、代码、阶段、恢复标志、有界建议和白名单标量详情；省略私有
+  诊断并披露截断。真实 MCP client 回归覆盖全部领域错误码、保持不变的成功 Schema、
+  已扣次数/禁止重试字段、输出上限及保持不变的取消/SDK 错误行为。详见
+  [《MCP 错误响应》](mcp-and-skill.zh-CN.md#mcp-错误响应)。授权调用失败后仍须停止；
+  缺少 retry 字段不代表可以重试或换采集模式。
+
+## KI-2026-09-22：退出后的发布延迟可能耗尽托管 Docker 截止时间（已修复并通过安装包验收）
+
+- 影响范围：短时托管 Docker workload，尤其是 `workload_timeout_seconds` 与 Evidence 窗口
+  相同的 exact Runtime Lock 采集；
+- 现象：身份已绑定的 cgroup monitor 已观察到容器结束，但 Collector 结果发布与模块快照在
+  授权截止时间之后才完成。服务随后会在 Docker 退出码确认前拒绝本次运行，或把退出后的尾部
+  延迟计入父 optimization Session。后续一次普通 `stat` 验收中，Benchmark 自身窗口与 cgroup
+  CPU 都约为两秒，Session 却计为四秒；该计费不能证明 workload 本身无法在三秒 exact 窗口内
+  完成；
+- 根因：monitor 只保留了生命周期路径已移除的布尔标记。即使 cgroup 移除已经证明身份绑定的
+  目标不能继续执行，MCP 路径仍要等 `docker container wait` 返回后才有可用于结算的时间；
+- 修复：monitor 现在记录首次确认固定 cgroup 路径已移除时的单调时钟。服务会根据 Gate 放行、
+  当前单调时间与已授权 workload 截止时间校验该值，用同一时间完成内层和父 Session 结算，并
+  从同一区间推导持久化的墙钟结束时间。目标退出得到证明后，Docker 仅获得独立、有界的 15 秒
+  管理窗口来发布退出状态；没有该证明时，仍执行原来精确的剩余 workload 截止时间；
+- 安全边界：这不会扩大 workload 执行权限。时间缺失时保持严格旧路径；非有限、乱序、未来或
+  截止时间之后的观察全部 fail closed。观察只来自已有身份绑定的 cgroup reader，管理确认窗口
+  不能执行用户 workload；
+- 回归覆盖：单元测试覆盖最终读取和后台采样发现移除、缺失/非法观察、截止后退出、未改变的
+  回退截止时间、父 Session 计费，以及 MCP managed-workload 使用退出后确认窗口的分支；
+- 安装包验收：2026-09-22，Container Run `container-run-8aea9a2a463c237d5692` 零退出并完成
+  删除。内嵌 Runtime Lock Run `runtime-lock-run-5cfa2d491c9f0a11bf31` 在精确的三秒 workload
+  与三秒 Evidence 边界内完成，得到 7,808 条事件、零丢失/零截断，并通过十项私有来源重放
+  验证。父 Session `docker-optimization-session-20383e2d45920e51fa9c` 在显式撤销前结算三秒
+  workload 活跃时间与三秒 Runtime Lock 时间。
+
+## KI-2026-09-19：Claude Code stdio 协商偶发丢失全部工具（已修复并通过安装包验收）
+
+- 影响范围：先发送 2026-07-28 `server/discover` 探测、随后在同一个服务进程上回退旧式
+  `initialize` 握手的本地 stdio 客户端。Claude Code 2.1.276 与 2.1.278 均复现过；同一版本
+  也存在成功连接，因此属于间歇性故障。
+- 现象：会话中没有任何 `mcp__perflens__*` 工具，也没有绑定当前项目的 `perflens-mcp`
+  子进程。服务日志返回 MCP `-32022`：连接已服务 2026-07-28，拒绝 `initialize`。另行执行
+  `claude mcp list` 仍可能显示 Connected，因为它启动的是另一条短命探测连接。
+- 根因：MCP SDK 2 按首个请求选择连接协议时代。现代 discovery envelope 一旦选中
+  2026-07-28，之后的旧式握手就必须被拒绝。失败后看到的项目 trust 状态不足以证明 trust
+  是工具缺失的原因。
+- 修复：PerfLens stdio 边界只把“首个带 envelope 的 `server/discover`”呈现为旧协议不支持的
+  方法探测。客户端收到 method-not-found 后可在同一进程完成回退握手。其他首请求不变，因此
+  直接以 2026-07-28 工具请求起步的客户端仍走现代协议；HTTP transport 不受影响。
+- 安全边界：协议协商不会授权工具、持久化授权、扩大路径，也不会改变 Docker/Runtime Lock
+  策略。原生工具缺失仍必须立即停止；仍禁止用 Shell 拉起替代服务或自建 JSON-RPC 桥。
+- 回归覆盖：真实子进程 stdio 客户端在 `auto` 模式下经 discovery 回退协商到 2025-11-25，
+  并成功列出 Runtime Lock/分页工具；固定 2026-07-28 的客户端不降级也能列出同样工具。
+  2026-09-20 与 2026-09-22 的全新重建安装包 Claude Code 验收均加载了项目绑定的原生工具，
+  该发布阻断已经关闭。
 
 ## KI-2026-09-15：Benchmark 采集拒绝自身创建的托管 scratch 布局（已修复）
 
@@ -28,7 +161,7 @@
 - 回归覆盖：真实 `0700`/`0733` 布局通过；scratch 误为 `0700`、外层目录不私有或输出 owner
   不匹配均保持 fail-closed；MCP server 会把已验证目标的宿主 UID 传给 Benchmark capture。
 
-## KI-2026-09-15：准备和收尾阶段消耗了托管 workload 时间（已修复）
+## KI-2026-09-15：托管等待与内层 Session 计时（已修复）
 
 - 影响范围：固定 workload 时长接近 `workload_timeout_seconds` 的托管 Docker 采集，包括
   同时绑定 Runtime Lock 的 Docker optimization Preview；
@@ -41,14 +174,17 @@
   向上取整，导致合法三秒 lease 在 workload 已退出后仍可能被记为超过三秒；
 - 修复：workload 截止时间改为在已认证 Gate 即将放行时开始。Gate 放行后的 Collector 观测
   仍消耗该窗口，放行前的准备则不再消耗；Docker wait 接收保留小数精度的剩余时间，真正
-  超时时明确报告为 `docker_workload` / `container_wait`。结算记录 workload 退出时的单调
-  时钟，只计 Gate 放行至退出的区间；准备和退出后的 Benchmark/Runtime Lock 收尾不计入，
-  整数向上取整也不会超过已经预留的 lease；
+  超时时明确报告为 `docker_workload` / `container_wait`。内层 managed Session 结算记录
+  workload 退出时的单调时钟，只计 Gate 放行至退出的区间；准备和退出后的 Benchmark/Runtime
+  Lock 收尾不计入，整数向上取整也不会超过已经预留的 lease；
 - 安全边界：修复不扩大授权时长，也不增加自动重试；精确 Docker wait 截止时间仍单独执行
   授权时长上限。lease 签发后的失败仍会计费，并按原有规则终止 optimization 工作流；
 - 回归覆盖：测试证明三秒 Gate 相对窗口经过 `1.041` 秒后仍精确保留 `1.959` 秒，经托管
   coordinator 原样传递该小数值，拒绝非有限值与越界值，保留明确的 Docker wait 超时阶段，
   并证明较长的退出后收尾不会进入记账、运行中失败最多计入其已预留整数 lease。
+
+原修复仅适用于等待截止时间和内层 managed Session；上文后续源码复审修复已将一致的
+计时结算扩展到外层 optimization Session。
 
 ## KI-2026-08-26：自动 PMU 探测可能提前放行快速 Docker workload（已修复）
 

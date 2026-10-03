@@ -8,6 +8,7 @@ import os
 import re
 import stat
 import threading
+import time
 from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -346,7 +347,20 @@ class CgroupSnapshotMonitor:
         self._thread: threading.Thread | None = None
         self._error: PerfLensError | None = None
         self._lifecycle_ended = False
+        self._lifecycle_ended_monotonic: float | None = None
         self._state = "pending"
+
+    @property
+    def lifecycle_ended_monotonic(self) -> float | None:
+        """Return when the pinned cgroup first proved that the workload ended.
+
+        The monitor records this independently of Collector publication and Docker
+        command latency.  A missing value means only that lifecycle end has not
+        been observed; it never means that the workload is still running.
+        """
+
+        with self._lock:
+            return self._lifecycle_ended_monotonic
 
     def start(self) -> None:
         if self._state != "pending":
@@ -381,6 +395,9 @@ class CgroupSnapshotMonitor:
             if not self._reader.path_is_removed():
                 raise
             lifecycle_ended = True
+            with self._lock:
+                if self._lifecycle_ended_monotonic is None:
+                    self._lifecycle_ended_monotonic = time.monotonic()
         self._state = "finished"
         if lifecycle_ended:
             latest = _add_snapshot_limitation(
@@ -413,6 +430,8 @@ class CgroupSnapshotMonitor:
                 with self._lock:
                     if self._reader.path_is_removed():
                         self._lifecycle_ended = True
+                        if self._lifecycle_ended_monotonic is None:
+                            self._lifecycle_ended_monotonic = time.monotonic()
                     else:
                         self._error = exc
                 return

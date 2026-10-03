@@ -29,9 +29,11 @@ uv run perflens-mcp --version
 
 不要默认使用 sudo。PerfLens 的只读分析、测试和构建都不需要 root。
 
-开发计划中的 `paranoid=3` 高权限 Helper 还需要仓库
-`rust-toolchain.toml` 固定的 Rust 1.97.1。Rust 只用于 Helper；普通 Python wheel、
-只读分析和最终用户不需要安装工具链。安装后检查：
+构建仓库中的 `paranoid=3` 高权限 Helper、独立 Trace Helper、非特权 Container Gate 和
+Runtime Lock Supervisor，需要 `rust-toolchain.toml` 固定的 Rust 1.97.1。Rust 不用于
+CLI/MCP/分析层；普通 Python wheel 构建和只读分析不要求 Rust，最终用户使用已打包的二进制
+也无需安装工具链。Trace Helper 的构建还需要 clang 和 libbpf 开发文件；Native pthread
+probe 的发布构建需要 CMake 与 C 编译器。安装相应开发依赖后检查：
 
 ```bash
 rustc --version
@@ -88,10 +90,36 @@ golden fixtures。完整边界见[《高权限 Helper 设计》](privileged-help
 提交前至少运行：
 
 ```bash
+cargo build --locked --package perflens-runtime-supervisor
 uv run ruff check .
 uv run pyright
+umask 022
 uv run pytest --cov=perflens --cov-fail-under=85
 ```
+
+完整集成测试需要先构建非特权 Runtime Supervisor。首次 Rust 工具链准备、依赖下载和
+编译应在 pytest 之外完成；否则会占用测试默认的 10 秒超时，并使依赖同一个 session
+fixture 的用例连锁报错。CI 和 Release 的两个 Python 版本都显式执行此步骤，构建失败
+会直接阻断测试，不跳过用例或降低覆盖率门槛。两个工作流也保留成功/失败的 JUnit 报告。
+这项开发测试要求不改变普通 wheel 构建和最终用户安装不需要 Rust 的规则。
+
+真实 Go/JFR 集成测试还需要完整的本地 Go 工具链和 JDK 17/21/25。某些 CI 预装工具或
+用户缓存中的文件带有 `0775`/`0777` 等权限，不能直接满足生产运行时的安全校验。
+不要放宽校验或修改主机工具权限；可在 pytest 之前创建独立测试副本：
+
+```bash
+perflens_test_root="$(mktemp -d /tmp/perflens-test-runtimes.XXXXXXXX)"
+uv run python scripts/prepare_test_runtimes.py --directory "$perflens_test_root/runtimes"
+export PATH="$perflens_test_root/runtimes/go/bin:$perflens_test_root/runtimes/jdk/bin:$PATH"
+```
+
+此开发脚本使用当前 PATH 中已有的可信 Go/JDK（也可显式指定 `--go` 和 `--java`），
+只调整新副本的权限，解除副本中的硬链接/符号链接依赖，并离线编译同一 Go 源码自带的
+`cmd/pprof`。它不下载工具链、不修改原始安装，也不替代产品的管理员信任配置。
+复制后先用真实 Adapter 做只读预检；缺少运行时或预检失败会阻断 CI，而不是跳过测试。
+CI 和 Release 均自动执行此步骤，输出源文件权限与副本身份供诊断；JUnit 报告继续保留。
+Python 测试进程固定使用 `umask 022`，使新建 fixture 权限不依赖开发者/runner 的 shell
+默认值；这不会修改已有文件权限，也不会改变产品接受不安全文件时的拒绝行为。
 
 当前 CI 会在 Python 3.12 和 3.13 上执行检查。不要因为总覆盖率通过就忽略新增代码；新增错误分支和安全边界应有对应回归测试。
 

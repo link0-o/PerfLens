@@ -1,0 +1,16 @@
+PeriodType: contentions count
+Period: 1
+Time: 2026-09-29 03:27:32.82364648 +0800 CST
+Samples:
+contentions/count delay/nanoseconds
+       2936 64164689928: 1 2 
+          1 4021254254: 3 4 5 
+Locations
+     1: 0x40ddd6 M=1 runtime.chansend1 runtime/chan.go:161:0 s=160
+     2: 0x4d8f7b M=1 main.main.func2 perflensrlworkload/cmd/block/main.go:55:0 s=52
+     3: 0x4874e4 M=1 sync.(*WaitGroup).Wait sync/waitgroup.go:206:0 s=160
+     4: 0x4d8e09 M=1 main.main perflensrlworkload/cmd/block/main.go:59:0 s=17
+     5: 0x44205c M=1 runtime.main runtime/proc.go:285:0 s=148
+Mappings
+1: 0x400000/0x4da000/0x0 /home/link/test/perflens-v040-host-acceptance-project/runtime-lock-workloads/go_block_workload_go1.25.14 e42d27a1158abf3ceaab2c3444a0f9419fb4b654 [FN]
+2: 0x7f508b487000/0x7f508b489000/0x0 [vdso]  

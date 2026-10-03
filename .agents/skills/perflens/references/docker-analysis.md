@@ -172,6 +172,21 @@ plus different authorized mutable Treatment and final image digest. A Runtime Lo
 cannot produce final `verified_improvement`; it joins the outer correctness, Benchmark, perf, and
 resource-transfer gates.
 
+The parent optimization `state` controls authorization. Its `runtime_lock_status` is a retained
+projection of the embedded scope/result, not a second authority flag, so a terminal Artifact may
+legitimately be `state=revoked` and still retain `runtime_lock_status=active` from its last successful
+result. Further operations fail against the parent state. Report both fields instead of calling the
+retained substatus an active permission.
+
+An embedded Runtime Lock Run uses `authorization_kind=docker_optimization` and a content-bound
+`docker_optimization_binding` to the charged parent Session, Build, Container Run, and Measurement.
+It does not create the standalone host `RuntimeLockRunFinalizationArtifact`. Verify that binding
+and the parent's settled workload/evidence counters, then verify the later terminal parent state.
+Page the immutable `session_artifact_id`, not the live authority's `session_id`.
+The Runtime Lock evidence charge conservatively includes public Evidence bytes plus the capture,
+raw conversion, and normalized conversion representations; it is not just the NDJSON file size.
+Keep that charge distinct from the additional perf evidence charge and from active workload time.
+
 ## Evidence and reporting
 
 For each result report target runtime, container and image identity digests, container PID, actual

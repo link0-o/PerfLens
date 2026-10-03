@@ -43,6 +43,7 @@ from perflens.contracts.artifacts import (
     ConversionProvenance,
     DiagnosisBundle,
     ElfMetadataArtifact,
+    ErrorArtifact,
     Evidence,
     EvidenceQuality,
     Frame,
@@ -120,6 +121,7 @@ from perflens.trace_helper.protocol import (
 )
 
 MODELS = {
+    "error.schema.json": ErrorArtifact,
     "analysis.schema.json": AnalysisArtifact,
     "analysis-verification.schema.json": AnalysisVerificationArtifact,
     "verification-check.schema.json": VerificationCheck,

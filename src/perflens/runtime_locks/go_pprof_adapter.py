@@ -29,10 +29,12 @@ from perflens.runtime_locks.supervisor import discover_runtime_supervisor_policy
 GO_PPROF_ADAPTER_VERSION = "go-pprof-adapter-v1"
 _GO_VERSION = re.compile(r"^go version go(1\.(?:24|25|26|27))(?:\.[0-9]+)? linux/amd64$")
 _GO_ANY_VERSION = re.compile(r"^go version go(1\.[0-9]+)(?:\.[0-9]+)? linux/amd64$")
-# Only versions with checked-in, real ``pprof -raw`` Goldens may be marked
-# available. The remaining reviewed versions stay partial until their matrix
-# job contributes a matching Golden instead of being trusted by version text.
-_GOLDEN_VALIDATED_GO_MINOR = frozenset({"1.24"})
+# Only exact releases with checked-in, real mutex and block ``pprof -raw``
+# Goldens may be marked available. This controls Adapter capability, not the
+# inherently partial visibility of cumulative Go profile Evidence.
+REVIEWED_GO_PPROF_GOLDEN_VERSIONS = frozenset(
+    {"1.24.4", "1.25.14", "1.26.8", "1.27.1"}
+)
 _MAX_GO_BYTES = 512 << 20
 
 
@@ -99,7 +101,7 @@ def inspect_go_pprof_installation(
             limitations=(f"Go pprof tool discovery failed: {exc.message}",),
         )
     availability: Literal["available", "partial", "unavailable"] = (
-        "available" if tool.minor_version in _GOLDEN_VALIDATED_GO_MINOR else "partial"
+        "available" if tool.version in REVIEWED_GO_PPROF_GOLDEN_VERSIONS else "partial"
     )
     limitations = (
         "Go mutex and block profiles are cumulative profiles, not exact contention logs.",
@@ -112,8 +114,9 @@ def inspect_go_pprof_installation(
     if availability == "partial":
         limitations = (
             *limitations,
-            "This Go version is outside the reviewed 1.24-1.27 Golden matrix; output remains "
-            "partial until a matching Golden is accepted.",
+            "This exact Go version has no reviewed matching pprof Golden; Adapter "
+            "availability remains partial until one is accepted. Cumulative Go "
+            "Evidence remains partial even when Adapter availability is available.",
         )
     metadata_sha256 = hashlib.sha256(
         "\0".join(

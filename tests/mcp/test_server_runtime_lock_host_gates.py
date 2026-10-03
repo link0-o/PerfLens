@@ -999,6 +999,8 @@ def test_runtime_lock_mcp_main_wires_default_and_explicit_security_policy(
                 str(allowed / "container-workload.toml"),
                 "--runtime-lock-project-config",
                 str(allowed / "runtime-locks.toml"),
+                "--runtime-lock-cpython-interpreter",
+                str(allowed / "python3.13t"),
                 "--docker-runtime-root",
                 str(allowed / "docker-runtime"),
                 "--docker-builder-policy",
@@ -1037,6 +1039,9 @@ def test_runtime_lock_mcp_main_wires_default_and_explicit_security_policy(
     assert config.allowed_roots == (allowed, secondary)
     assert config.artifact_root == artifacts
     assert config.allow_runtime_locks is full_configuration
+    assert config.runtime_lock_cpython_interpreter == (
+        allowed / "python3.13t" if full_configuration else None
+    )
     assert config.allow_docker_optimization is full_configuration
     assert config.automatic_collection_policy.enabled is full_configuration
     assert config.automatic_collection_policy.allowed_modes == (

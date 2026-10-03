@@ -49,9 +49,33 @@ jobs:
           enable-cache: true
       - run: uv python install ${{ matrix.python }}
       - run: uv sync --all-groups --python ${{ matrix.python }} --frozen
+      - name: Build Runtime Supervisor test prerequisite
+        timeout-minutes: 5
+        # Cold toolchain setup and compilation must not consume pytest's 10s test timeout.
+        run: cargo build --locked --package perflens-runtime-supervisor
+      - name: Prepare private test runtimes
+        timeout-minutes: 10
+        run: |
+          uv run --python ${{ matrix.python }} python scripts/prepare_test_runtimes.py \
+            --directory "$RUNNER_TEMP/perflens-test-runtimes"
+          echo "$RUNNER_TEMP/perflens-test-runtimes/go/bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/perflens-test-runtimes/jdk/bin" >> "$GITHUB_PATH"
       - run: uv run --python ${{ matrix.python }} ruff check .
       - run: uv run --python ${{ matrix.python }} pyright
-      - run: uv run --python ${{ matrix.python }} pytest --cov=perflens --cov-report=term-missing
+      - id: pytest
+        run: |
+          umask 022
+          uv run --python ${{ matrix.python }} pytest \
+          --cov=perflens --cov-report=term-missing \
+          --junitxml=test-results/pytest.xml
+      - name: Preserve Python test report
+        if: ${{ always() && (steps.pytest.outcome == 'success' || steps.pytest.outcome == 'failure') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-python-${{ matrix.python }}-test-report
+          path: test-results/pytest.xml
+          if-no-files-found: error
+          retention-days: 7
 
   debian-package:
     needs: rust-helper

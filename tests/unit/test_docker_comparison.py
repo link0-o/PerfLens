@@ -1619,7 +1619,30 @@ def test_store_replays_complete_docker_optimization_iteration(
     assert store.load_docker_build(baseline_build.build_id) == baseline_build
     assert store.load_docker_optimization_session(session.session_artifact_id) == session
     assert store.load_docker_optimization_iteration(iteration.iteration_id) == iteration
-    assert (
-        store.load_docker_optimization_disposition(disposition.disposition_id)
-        == disposition
+    assert store.load_docker_optimization_disposition(disposition.disposition_id) == disposition
+    for model, artifact_id, artifact_type in (
+        (iteration, iteration.iteration_id, "docker-optimization-iteration"),
+        (disposition, disposition.disposition_id, "docker-optimization-disposition"),
+    ):
+        text, _, _ = store.read_page(artifact_id, artifact_type, offset=0, limit=65_536)
+        assert text.encode() == serialize_json(model)
+        path = store.save(model, artifact_id, artifact_type)
+        path.write_bytes(serialize_json(model.model_copy(update={"perflens_version": "99.0.0"})))
+        with pytest.raises(PerfLensError):
+            store.read_page(artifact_id, artifact_type, offset=0, limit=65_536)
+        path.write_bytes(serialize_json(model))
+        store.save(model, "swapped-id", artifact_type)
+        with pytest.raises(PerfLensError):
+            store.read_page("swapped-id", artifact_type, offset=0, limit=65_536)
+
+    # A valid requested digest cannot hide corrupted linked Build evidence.
+    baseline_path = store.save(baseline_build, baseline_build.build_id, "docker-build")
+    baseline_path.write_bytes(
+        serialize_json(baseline_build.model_copy(update={"perflens_version": "99.0.0"}))
     )
+    for artifact_id, artifact_type in (
+        (iteration.iteration_id, "docker-optimization-iteration"),
+        (disposition.disposition_id, "docker-optimization-disposition"),
+    ):
+        with pytest.raises(PerfLensError):
+            store.read_page(artifact_id, artifact_type, offset=0, limit=65_536)

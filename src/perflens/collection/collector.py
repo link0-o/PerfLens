@@ -581,21 +581,24 @@ class _PerfControl:
         while b"\n" not in self._ack_buffer:
             if len(self._ack_buffer) >= _PERF_CONTROL_ACK_MAX_BYTES:
                 break
-            exit_code = process.poll()
-            if exit_code is not None:
-                raise self._control_error(
-                    "perf exited before collection readiness was established",
-                    process,
-                    phase=phase,
-                    exit_code=exit_code,
-                )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise self._control_timeout(process, phase=phase)
             self._ack_reader.settimeout(min(_PERF_CONTROL_POLL_SECONDS, remaining))
             try:
                 chunk = self._ack_reader.recv(_PERF_CONTROL_ACK_MAX_BYTES - len(self._ack_buffer))
-            except TimeoutError:
+            except TimeoutError as exc:
+                # A short-lived perf can write its final acknowledgement and exit before
+                # this thread is scheduled. Always drain the socket first: poll() alone
+                # cannot distinguish a missing ACK from one already buffered by the kernel.
+                exit_code = process.poll()
+                if exit_code is not None:
+                    raise self._control_error(
+                        "perf exited before collection readiness was established",
+                        process,
+                        phase=phase,
+                        exit_code=exit_code,
+                    ) from exc
                 continue
             if not chunk:
                 raise self._control_error(
@@ -604,7 +607,7 @@ class _PerfControl:
                     phase=phase,
                 )
             self._ack_buffer.extend(chunk)
-            if time.monotonic() >= deadline:
+            if b"\n" not in self._ack_buffer and time.monotonic() >= deadline:
                 raise self._control_timeout(process, phase=phase)
         newline = self._ack_buffer.find(b"\n")
         if newline < 0:

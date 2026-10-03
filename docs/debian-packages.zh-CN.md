@@ -2,6 +2,10 @@
 
 简体中文 | [English](debian-packages.md)
 
+下文 `0.4.0-1` 示例对应本地候选构建，不表示该版本已经发布。安装正式发行包时，两个
+文件名均应替换成实际下载的精确版本。剩余门禁见
+[《v0.4.0 就绪记录》](v0.4.0-release-readiness.zh-CN.md)。
+
 PerfLens 为 Debian 13 `amd64` 提供两个职责分离的原生安装包：
 
 - `perflens_<版本>-<Debian修订号>_amd64.deb`：普通用户 CLI、MCP Server、Skill、锁定运行依赖

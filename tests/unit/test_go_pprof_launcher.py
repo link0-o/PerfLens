@@ -75,17 +75,20 @@ func main() {
 
 
 def _go_installation() -> GoPprofInstallation:
-    go = Path(shutil.which("go") or "")
-    if not go:
+    go_name = shutil.which("go")
+    if go_name is None:
         pytest.skip("Go toolchain is unavailable")
+    go = Path(go_name)
     owner = go.resolve(strict=True).stat().st_uid
     installation = inspect_go_pprof_installation(
         go_path=go,
         trusted_owner_uids=tuple(dict.fromkeys((0, os.geteuid(), owner))),
     )
-    if installation.tool is None:
-        pytest.skip("Go toolchain cannot be safely inspected")
-    assert installation.pprof_tool is not None
+    assert installation.tool is not None, (
+        "Prepare private test runtimes with scripts/prepare_test_runtimes.py: "
+        f"{installation.limitations}"
+    )
+    assert installation.pprof_tool is not None, installation.limitations
     return installation
 
 

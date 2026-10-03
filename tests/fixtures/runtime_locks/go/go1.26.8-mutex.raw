@@ -1,0 +1,12 @@
+PeriodType: contentions count
+Period: 1
+Time: 2026-09-29 03:27:45.286310268 +0800 CST
+Samples:
+contentions/count delay/nanoseconds
+       2831 60041873788: 1 
+Locations
+     1: 0x4da150 M=1 sync.(*Mutex).Unlock sync/mutex.go:65:0 s=64
+             main.main.func1 perflensrlworkload/cmd/mutex/main.go:43:0 s=38
+Mappings
+1: 0x400000/0x4db000/0x0 /home/link/test/perflens-v040-host-acceptance-project/runtime-lock-workloads/go_mutex_workload_go1.26.8 4718ae31f337f8c8815b1eee30500f5f0436078f [FN]
+2: 0x7fa7d9c75000/0x7fa7d9c77000/0x0 [vdso]  

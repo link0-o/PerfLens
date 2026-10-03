@@ -76,6 +76,74 @@ def test_workflows_default_to_read_only_repository_contents() -> None:
         assert permissions == {"contents": "read"}
 
 
+def test_python_quality_jobs_build_supervisor_before_pytest() -> None:
+    workflows = _workflows()
+    for workflow_name, job_name in (("ci.yml", "test"), ("release.yml", "python-quality")):
+        jobs = _jobs(workflows[workflow_name], label=workflow_name)
+        steps = _steps(jobs[job_name], label=f"{workflow_name}.{job_name}")
+        build_indexes = [
+            index
+            for index, step in enumerate(steps)
+            if step.get("run") == "cargo build --locked --package perflens-runtime-supervisor"
+        ]
+        assert len(build_indexes) == 1
+        build = steps[build_indexes[0]]
+        assert "if" not in build and not build.get("continue-on-error", False)
+        assert build.get("timeout-minutes") == 5
+        test_index = next(index for index, step in enumerate(steps) if step.get("id") == "pytest")
+        assert build_indexes[0] < test_index
+        assert not steps[test_index].get("continue-on-error", False)
+
+
+def test_python_quality_jobs_preserve_reports_after_test_failure() -> None:
+    workflows = _workflows()
+    for workflow_name, job_name in (("ci.yml", "test"), ("release.yml", "python-quality")):
+        jobs = _jobs(workflows[workflow_name], label=workflow_name)
+        steps = _steps(jobs[job_name], label=f"{workflow_name}.{job_name}")
+        test_index = next(index for index, step in enumerate(steps) if step.get("id") == "pytest")
+        command = steps[test_index].get("run")
+        assert isinstance(command, str) and "--junitxml=test-results/pytest.xml" in command
+        assert command.startswith("umask 022\n")
+        reports = [
+            step
+            for step in steps[test_index + 1 :]
+            if str(step.get("uses", "")).startswith("actions/upload-artifact@")
+        ]
+        assert len(reports) == 1
+        assert reports[0].get("if") == (
+            "${{ always() && (steps.pytest.outcome == 'success' || "
+            "steps.pytest.outcome == 'failure') }}"
+        )
+        configuration = _mapping(reports[0].get("with"), label=f"{workflow_name}.report.with")
+        assert configuration.get("path") == "test-results/pytest.xml"
+        assert "${{ matrix.python }}" in str(configuration.get("name"))
+
+
+def test_python_quality_jobs_prepare_private_runtimes_before_pytest() -> None:
+    workflows = _workflows()
+    for workflow_name, job_name in (("ci.yml", "test"), ("release.yml", "python-quality")):
+        jobs = _jobs(workflows[workflow_name], label=workflow_name)
+        steps = _steps(jobs[job_name], label=f"{workflow_name}.{job_name}")
+        preparations = [
+            (index, step)
+            for index, step in enumerate(steps)
+            if "scripts/prepare_test_runtimes.py" in str(step.get("run", ""))
+        ]
+        assert len(preparations) == 1
+        index, preparation = preparations[0]
+        assert "if" not in preparation and not preparation.get("continue-on-error", False)
+        assert preparation.get("timeout-minutes") == 10
+        assert index < next(index for index, step in enumerate(steps) if step.get("id") == "pytest")
+        command = str(preparation["run"])
+        assert "uv run --python ${{ matrix.python }} python " in command
+        assert '--directory "$RUNNER_TEMP/perflens-test-runtimes"' in command
+        for runtime in ("go", "jdk"):
+            assert (
+                f'"$RUNNER_TEMP/perflens-test-runtimes/{runtime}/bin" >> "$GITHUB_PATH"' in command
+            )
+        assert "sudo" not in command and "chmod" not in command
+
+
 def test_release_write_token_is_isolated_from_checkout_and_project_code() -> None:
     release = _workflows()["release.yml"]
     jobs = _jobs(release, label="release.yml")

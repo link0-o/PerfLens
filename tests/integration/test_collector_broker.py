@@ -147,9 +147,18 @@ def _fake_perf_with_failed_hardware_probe(tmp_path: Path) -> Path:
     executable = tmp_path / "perf-failed-probe"
     executable.write_text(
         f"#!{sys.executable}\n"
-        "import os, pathlib, sys\n"
+        "import os, pathlib, sys, time\n"
         "args = sys.argv[1:]\n"
         + _FAKE_PERF_CONTROL
+        # Model a post-binding execution failure, not a race between exit and
+        # the parent consuming the enable ACK. The test publishes this marker
+        # only after the real readiness handshake finishes, for this exact PID.
+        + f"ready = pathlib.Path({str(tmp_path)!r}) / f'perf-ready-{{os.getpid()}}'\n"
+        "deadline = time.monotonic() + 2\n"
+        "while not ready.exists():\n"
+        "    if time.monotonic() >= deadline:\n"
+        "        raise SystemExit('test readiness synchronization timed out')\n"
+        "    time.sleep(0.001)\n"
         + "output = pathlib.Path(args[args.index('-o') + 1])\n"
         "events = args[args.index('-e') + 1]\n"
         "if events == 'cycles,instructions':\n"
@@ -827,10 +836,20 @@ def test_cap_perfmon_broker_short_auto_collection_skips_hardware_probe(
 )
 def test_cap_perfmon_broker_auto_selects_verified_event_source(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     perf_factory: Any,
     expected_source: str,
     expected_reason: str | None,
 ) -> None:
+    from perflens.collection.collector import _PerfControl  # pyright: ignore[reportPrivateUsage]
+
+    original_after_start = _PerfControl.after_start
+
+    def acknowledge_binding(control: _PerfControl, process: subprocess.Popen[bytes]) -> None:
+        original_after_start(control, process)
+        (tmp_path / f"perf-ready-{process.pid}").touch(mode=0o600, exist_ok=False)
+
+    monkeypatch.setattr(_PerfControl, "after_start", acknowledge_binding)
     spool = tmp_path / "spool"
     runtime = tmp_path / "run"
     spool.mkdir()

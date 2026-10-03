@@ -2,6 +2,12 @@
 
 English | [简体中文](INSTALL.zh-CN.md)
 
+Version scope: the `0.4.0` filenames below also apply to local source builds. A local tag is not
+a published GitHub Release. Use the exact downloaded filenames for a published
+release. GitHub attestation checks apply to published workflow-built assets, not locally built
+candidates; validate a candidate against its reviewed build record and do not present it as an
+attested release. See the [candidate readiness record](docs/v0.4.0-release-readiness.md).
+
 Download `perflens-0.4.0-py3-none-any.whl` for the normal CLI/MCP installation. A wheel is an installable Python package: do not extract it. The extracted `perflens/` and `.dist-info/` directories are modules and metadata, not a graphical launcher.
 
 On Debian 13 `amd64`, the recommended alternative is
@@ -63,7 +69,7 @@ project MCP. Onboarding does not install/start Docker, join its group, build/pul
 arbitrary Docker arguments. A separately enabled schema-1.1 optimization contract may perform a
 typed build only after its own reviewed authorization.
 
-The repository v0.4.0 prerelease adds a separate Runtime Lock project policy. Enable discovery
+v0.4.0 adds a separate Runtime Lock project policy. Enable discovery
 without performing instrumentation or collection with:
 
 ```bash
@@ -213,7 +219,12 @@ To tune collection policy without reinstalling, copy the deployed TOML to a
 separate mode-`0600` candidate, run `perflens-admin update-policy --config
 <candidate> --dry-run`, then repeat with `sudo`. It restarts, health-checks, and
 rolls back on failure while preserving the authorized UID, fixed spool, and
-privilege mode. Changing privilege mode requires a reviewed undeploy/redeploy.
+privilege mode. To change privilege mode, review
+`perflens-admin switch-mode <mode> --dry-run`, then have the administrator execute the reviewed
+transaction with the required risk acknowledgements. It performs health checks and rollback;
+routine mode switches do not require a manual undeploy/redeploy. After a successful switch,
+refresh each project with `perflens init --update`. See the
+[mode lifecycle](docs/collector-mode-lifecycle.md).
 
 For long-term evidence retention, use the administrator archive-then-prune
 workflow instead of deleting spool files by age. It creates a root-managed ZIP

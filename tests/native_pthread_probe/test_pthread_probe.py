@@ -6,6 +6,7 @@ import shutil
 import socket
 import statistics
 import subprocess
+from collections.abc import Callable
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -553,6 +554,7 @@ def _measure_cpu_seconds(
 def test_probe_disabled_and_thresholded_overhead_are_bounded(
     tmp_path: Path,
     native_assets: tuple[Path, Path],
+    record_testsuite_property: Callable[[str, object], None],
 ) -> None:
     probe, _ = native_assets
     compiler = _tool("gcc")
@@ -652,6 +654,27 @@ def test_probe_disabled_and_thresholded_overhead_are_bounded(
             os.close(descriptor)
     disabled_limit = max(0.01 * baseline, 0.002)
     thresholded_limit = max(0.15 * baseline, 0.002)
+    record_testsuite_property(
+        "native_overhead_measurement",
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "measurement_cpu": measurement_cpu,
+                "clock": "wait4_process_cpu_seconds",
+                "baseline_seconds": baseline,
+                "disabled_overhead_seconds": disabled_overhead,
+                "disabled_limit_seconds": disabled_limit,
+                "thresholded_overhead_seconds": thresholded_overhead,
+                "thresholded_limit_seconds": thresholded_limit,
+                "baseline_samples": baseline_samples,
+                "disabled_samples": disabled_samples,
+                "thresholded_samples": thresholded_samples,
+                "disabled_block_deltas": disabled_block_deltas,
+                "thresholded_block_deltas": thresholded_block_deltas,
+            },
+            sort_keys=True,
+        ),
+    )
     diagnostics = (
         f"measurement_cpu={measurement_cpu}, baseline={baseline!r}, "
         f"disabled_overhead={disabled_overhead!r}, disabled_limit={disabled_limit!r}, "

@@ -231,6 +231,11 @@ PerfLens 保留其他 `mcpServers`，但拒绝覆盖名称相同且内容不同�
 [Skill 文档](https://code.claude.com/docs/en/slash-commands)和
 [MCP 项目级配置文档](https://code.claude.com/docs/en/mcp)。
 
+stdio 服务同时支持旧式握手与直接 2026-07-28 请求。它只把首个现代
+`server/discover` 当作兼容性探测，使自动协商客户端可以在同一进程回退到 `initialize`，
+避免因 MCP `-32022` 间歇性丢失全部工具。旧安装包若记录了这一精确错误，应安装修正包并
+重启项目会话；反复修改项目 trust 不能修复协议时代不匹配。项目批准仍是客户端的独立决定。
+
 ## 连接 OpenCode 与本地 GitHub Copilot
 
 运行 `perflens init --client opencode` 会安装共享 Agent Skill，并安全合并本地 stdio 服务到
@@ -439,6 +444,19 @@ PerfLens 不会请求 sudo，不会修改 `perf_event_paranoid`、capability 或
 - **只在终端处理文件**：直接使用 CLI，不需要 MCP 或 Skill。
 
 遇到权限、符号或兼容性问题时，请看[中文故障排查](troubleshooting.zh-CN.md)。
+
+## MCP 错误响应
+
+领域工具错误返回 `isError=true`，并在 `structuredContent` 和 JSON 文本中返回相同的
+Schema 1.0 `ErrorArtifact`（见 `schemas/error.schema.json`），包含 `error_id`、`code`、
+`stage`、`recoverable`、`retryable`、`suggested_actions` 与 `details`。成功输出 Schema
+不变；取消与非领域 SDK 错误保留 SDK 原有语义。
+
+详情只保留明确白名单内的标量，例如安全的 Artifact/会话 ID、上限、退出码、发布状态和
+Docker 已扣尝试/禁止重试字段。不转发路径、环境、命令、原始输出、任意对象或非有限数值；
+省略时给出 `details_omitted=true`。消息/阶段最多 1,024/128 字符，操作建议最多四条、
+每条 256 字符，截断时给出 `presentation_truncated=true`。这两个标志位于
+`error.details` 内。缺失信息表示未知，不表示可以重试或扩大授权。
 
 ## 解除项目接入
 

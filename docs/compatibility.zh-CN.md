@@ -12,7 +12,7 @@
 | ELF/DWARF | 使用 pyelftools 0.33 读取 ELF；使用 LLVM JSON Provider 或 GNU/elfutils addr2line 作为源码定位后备 |
 | 规则 | 安全 YAML；安装包内置通用、Linux 和 C++ 候选规则 |
 | 报告 | JSON 证据包和 Markdown |
-| MCP | 官方 Python SDK 2.x，本地 stdio 传输 |
+| MCP | 官方 Python SDK 2.x，本地 stdio 传输；协议测试覆盖握手回退与直接 2026-07-28 请求 |
 | Skill | Codex/OpenCode/本地 Copilot `.agents/skills` 与 Claude Code `.claude/skills` 项目 Skill，并使用 `skill-creator` 验证 |
 | AI 客户端配置 | Codex `.codex/config.toml`；Claude Code/Copilot CLI `.mcp.json`；OpenCode `.opencode/opencode.json`；VS Code Copilot Agent `.vscode/mcp.json` |
 | 主动采集 | 发布版 `0.3.0` 正式支持 `record/stat`，并通过独立 Trace Helper 提供可选的 `sched/off_cpu/lock` |
@@ -21,14 +21,16 @@
 | paranoid=3 Helper | 现有 Rust Helper 永远只支持 `record/stat`；v0.3.0 用另一套服务/协议/Socket/spool 的 Trace Helper 处理高级模式 |
 | 目标运行时 | Linux 宿主 PID，或本地 Linux Docker Engine + cgroup v2 中的一个明确进程；不支持远程 Engine、Docker Desktop VM、Compose 或整容器聚合 |
 | 原生 DEB | Debian 13 `amd64`、系统 Python 3.13；主包和完全同版本 Collector 包分离 |
-| Runtime Lock（仓库 v0.4.0 预发布） | 已实现目标矩阵：Debian 12/13 amd64 + glibc 2.36/2.41 的 Native pthread；JDK 17/21/25 的 Java JFR；CPython 3.12/3.13（含 free-threaded 检测）；Go pprof 1.24-1.27。本地发布证据目前覆盖 JDK 21/25、非 free-threaded CPython 3.12/3.13 与 Go 1.24；JDK 17、free-threaded CPython 3.13、Go 1.25-1.27 仍是发布阻断，未验证的 Go 版本会报告为 `partial`。 |
+| Runtime Lock（v0.4.0） | 已实现目标矩阵：Debian 12/13 amd64 + glibc 2.36/2.41 的 Native pthread；JDK 17/21/25 的 Java JFR；CPython 3.12/3.13（含 free-threaded 检测）；Go pprof 1.24-1.27。本机功能 Evidence 已覆盖 JDK 17/21/25、CPython 3.12/3.13（含真实 3.13.5 free-threaded Run）和 Go 1.24-1.27；JDK 17 Run 的线程覆盖 partial 已披露，free-threaded Run 也如实保留公开 threading 可见性的 partial。固定的 Go 1.25.14/1.26.8/1.27.1 现有匹配原始 pprof Golden，当前源码的 Adapter 能力为 `available`；其他补丁版本未经另行审查仍为 `partial`。即使能力可用，累计 Evidence 仍为 `partial`。重建安装包 Go 宿主功能矩阵已通过；Native 固定 fixture 开销与最终本地/发布门禁分别见 v0.4.0 就绪记录。 |
 | Runtime Lock 目标 | 已审阅宿主启动、托管/优化 Docker 启动、受控导入，或显式同 UID loopback Go pprof；不支持任意 live 注入 |
 | 产物 Schema | 现有公共产物 1.0；Docker 项目策略严格读取 1.0/1.1；Runtime Lock Evidence 严格读取 1.0/1.1，新 Adapter 写入 1.1 |
 
 PerfLens 不直接解析 `perf.data`。二进制兼容性由选定的系统 `perf` 负责；无法解码
 Profile 时，应使用与采集环境匹配的 perf。GNU addr2line 后备流程已使用 Binutils 2.44
 验证。由于开发主机没有安装 `llvm-symbolizer`，LLVM JSON Provider 目前通过协议 Test
-Double 验证。MCP 行为使用官方 SDK 客户端在内存中完成测试。
+Double 验证。MCP 行为同时使用官方 SDK 客户端完成内存测试和真实子进程 stdio 测试。
+首个带 envelope 的 `server/discover` 会按兼容性探测处理，使自动协商的本地客户端能在同一
+进程完成 2025-11-25 握手；直接以 2026-07-28 请求起步的客户端仍保留现代协议路径。
 
 Collector Broker 已使用真实 Unix Socket 和可执行 perf Test Double 完成端到端测试。
 Debian 13 人工主机验收还证明了 `paranoid3_helper` 可以在硬件 PMU 没有产生可用计数时，

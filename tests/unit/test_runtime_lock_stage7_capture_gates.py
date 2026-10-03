@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 # pyright: reportPrivateUsage=false
+import json
 import os
 from pathlib import Path
 from typing import BinaryIO, Literal
@@ -323,13 +324,18 @@ def test_private_source_change_after_descriptor_pin_is_rejected(
         os.close(source.root_descriptor)
 
 
+@pytest.mark.parametrize("uid_offset", (0, 1), ids=("same-uid", "cross-uid"))
 def test_native_capture_rejects_private_target_mismatch_and_replay_failure(
     tmp_path: Path,
     fixture_root: Path,
     monkeypatch: pytest.MonkeyPatch,
+    uid_offset: int,
 ) -> None:
     root = _scratch(tmp_path)
     raw = (fixture_root / "runtime_locks/native-pthread-exact.ndjson").read_bytes()
+    records = [json.loads(line) for line in raw.splitlines()]
+    records[0]["uid"] = os.geteuid() + uid_offset
+    raw = b"".join(json.dumps(record).encode() + b"\n" for record in records)
     _write_private(root, "runtime-lock-native.ndjson", raw)
     launch = NativePthreadDockerLaunch(Path("/p"), "a" * 64, "exact", None, 20)
     binding = _binding("native_pthread", "a" * 64)
@@ -337,13 +343,23 @@ def test_native_capture_rejects_private_target_mismatch_and_replay_failure(
     with pytest.raises(PerfLensError, match="verified target identity"):
         _capture(root, launch, binding, target_pid=4243)
 
+    replay_attempted = False
+
     def failed_replay(_expected: RuntimeLockEvidenceArtifact, _stream: BinaryIO) -> bool:
+        nonlocal replay_attempted
+        replay_attempted = True
         return False
 
     monkeypatch.setattr(capture_module, "replay_native_pthread_probe", failed_replay)
+    if uid_offset:
+        with pytest.raises(PerfLensError, match="verified target identity"):
+            _capture(root, launch, binding)
+        assert not replay_attempted
+        return
     with pytest.raises(PerfLensError, match="replay did not match") as raised:
         _capture(root, launch, binding)
     assert raised.value.code == ErrorCode.PROFILE_PARSE_FAILED
+    assert replay_attempted
 
 
 def _java_tool() -> JavaJfrFileIdentity:

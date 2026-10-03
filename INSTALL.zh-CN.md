@@ -2,6 +2,11 @@
 
 简体中文 | [English](INSTALL.md)
 
+版本范围：下文的 `0.4.0` 文件名也适用于本地源码构建；本地 Tag 不等于已发布 GitHub Release。
+安装正式发行版时使用实际下载的精确文件名。GitHub attestation 检查适用于发布工作流生成的
+正式资产，不适用于本地候选包；候选包须与已审阅的构建记录核对，不能称为已有发布证明的
+正式发行版。当前状态见[《候选就绪记录》](docs/v0.4.0-release-readiness.zh-CN.md)。
+
 ## 先确认下载哪个文件
 
 普通 Linux 用户应下载：
@@ -382,8 +387,11 @@ sudo perflens-admin update-policy --config "$PWD/collector.next.toml"
 ```
 
 它会自动重启、健康检查并在失败时恢复原配置，但拒绝改变授权 UID、固定 spool 和
-`privilege_mode`。两种权限模式使用不同的 systemd 服务拓扑，切换时必须先审查并执行
-`undeploy`，再用新模式重新部署，不能通过策略热更新切换。
+`privilege_mode`。切换权限模式应先审查 `perflens-admin switch-mode <模式> --dry-run`，
+再由管理员附带必要的风险确认执行该事务；它会健康检查并在失败时回滚，常规切换不需要
+手工 `undeploy` 后重新部署。成功后在各项目运行 `perflens init --update` 同步配置。
+不能通过 `update-policy` 改变模式，详见
+[《权限模式生命周期》](docs/collector-mode-lifecycle.zh-CN.md)。
 
 长期使用后需要释放采集目录空间时，不要手工按文件时间直接删除。使用
 `perflens-admin archive-spool` 先生成带哈希 manifest 的 root 管理归档，再通过

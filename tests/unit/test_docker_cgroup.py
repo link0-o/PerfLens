@@ -629,6 +629,7 @@ def test_cgroup_monitor_returns_a_partial_lower_bound_after_lifecycle_removal(
     reader = CgroupV2ResourceReader(target, cgroup_root=cgroup_root)
     baseline = reader.capture(observed_at=datetime(2026, 8, 21, tzinfo=UTC))
     monitor = CgroupSnapshotMonitor(reader, baseline, sample_interval_seconds=1.0)
+    assert monitor.lifecycle_ended_monotonic is None
     monitor.start()
 
     for child in directory.iterdir():
@@ -652,6 +653,9 @@ def test_cgroup_monitor_returns_a_partial_lower_bound_after_lifecycle_removal(
     monkeypatch.setattr(CgroupV2ResourceReader, "capture", unavailable_after_removal)
     final = monitor.finish()
 
+    lifecycle_ended = monitor.lifecycle_ended_monotonic
+    assert lifecycle_ended is not None
+    assert lifecycle_ended > 0
     assert final.snapshot.cpu_usage_usec == baseline.snapshot.cpu_usage_usec
     assert any("lower bounds" in value for value in final.limitations)
     reader.close()
@@ -687,6 +691,7 @@ def test_cgroup_monitor_samples_during_the_collection_window(
 
     monkeypatch.setattr(CgroupV2ResourceReader, "capture", observed_capture)
     monitor = CgroupSnapshotMonitor(reader, baseline, sample_interval_seconds=0.01)
+    assert monitor.lifecycle_ended_monotonic is None
     monitor.start()
     assert background_sampled.wait(timeout=1.0)
     final = monitor.finish()
@@ -732,6 +737,9 @@ def test_cgroup_monitor_detects_lifecycle_removal_in_background(
     assert background_observed_removal.wait(timeout=1.0)
     final = monitor.finish()
 
+    lifecycle_ended = monitor.lifecycle_ended_monotonic
+    assert lifecycle_ended is not None
+    assert lifecycle_ended > 0
     assert final.snapshot.cpu_usage_usec == baseline.snapshot.cpu_usage_usec
     assert any("lower bounds" in value for value in final.limitations)
     reader.close()

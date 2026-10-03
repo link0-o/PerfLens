@@ -20,9 +20,8 @@
 [《Docker 进程采集与分析指南》](docs/docker-container-roadmap.zh-CN.md)。
 `v0.3.2` 的一次授权构建与自动优化合同见
 [《Docker 自动优化指南》](docs/docker-optimization-roadmap.zh-CN.md)。
-仓库中的 v0.4.0 发布候选 Runtime Lock 工作流见
-[《用户态锁工作流》](docs/runtime-locks.zh-CN.md)；它不属于已发布的 v0.3.2 安装包，且尚未
-创建 Tag 或发布。
+v0.4.0 Runtime Lock 工作流见[《用户态锁工作流》](docs/runtime-locks.zh-CN.md)；它不属于
+v0.3.2 安装包。本地源码 Tag 不会发布 GitHub Release 资产；正式发布须另行运行发布工作流。
 perf 原始证据如何转换、校验并带着质量边界交给 Agent，见
 [《Perf 原始证据到 Agent 数据的可信链路》](docs/evidence-pipeline.zh-CN.md)。
 
@@ -52,17 +51,23 @@ PerfLens 不包含 LLM API、Web UI、源码补丁工具、通用 Benchmark 执�
 在明确授权的优化会话中，外部 Agent 只能编辑已审阅的 mutable 路径，固定 workload 合同负责
 产出正确性和 Benchmark 证据。
 
-当前仓库还包含 v0.4.0 发布候选 Runtime Lock 实现：严格的 Evidence Schema 1.1 与重放验证、
+当前仓库还包含 v0.4.0 Runtime Lock 实现：严格的 Evidence Schema 1.1 与重放验证、
 有界会话、Native pthread、Java JFR、CPython threading、Go pprof Adapter，以及 Docker
-optimization 集成。最终本地门禁、可复现 `0.4.0-1` 候选包、真实主机/运行时矩阵验收以及
-远端 CI 与 Tag 门禁仍须通过；最新已发布稳定版本仍是 v0.3.2。当前证据见
-[《v0.4.0 发布候选就绪记录》](docs/v0.4.0-release-readiness.zh-CN.md)。
+optimization 集成。本地门禁、可复现安装包及真实主机矩阵分别记录在
+[《v0.4.0 发布就绪记录》](docs/v0.4.0-release-readiness.zh-CN.md)。功能验收覆盖固定 JDK 17、
+CPython 3.13 free-threaded、Go 1.25.14/1.26.8/1.27.1 mutex/block 与 Docker 内嵌 Native。
+Go 累计语义与 CPython 可见性限制仍须披露。Native 开销结果只适用于仓库固定 fixture，
+不能推广为任意应用的性能保证。远端 CI、attestation 与发布均独立于本地验收。
+源码复审发现的 Docker Artifact 校验、外层 Session 计时和 MCP 错误输出问题已在候选源码
+修复并完成重建安装包功能验收。分页损坏拒绝路径仍是源码回归证据，因为宿主验收没有故意
+篡改已安装 Artifact。详见[《已知问题》](docs/known-issues.zh-CN.md)。
 
 ## 安装
 
 需要 Python 3.12 或更高版本。
 
-从 GitHub Releases 下载 wheel 后，推荐作为独立工具安装：
+以下命令使用本地构建的 v0.4.0 候选 wheel，它尚不是已发布的 GitHub Release 资产。
+安装正式发行版时，请替换成实际下载的精确文件名。推荐作为独立工具安装：
 
 ```bash
 pipx install ./perflens-0.4.0-py3-none-any.whl
@@ -492,9 +497,19 @@ Skill 本身不是授权。
 第一次维护项目时，建议先阅读[《中文开发指南》](docs/development.zh-CN.md)和
 [《架构说明》](docs/architecture.zh-CN.md)。
 
+完整集成测试前先用固定 Rust 工具链构建非特权 Supervisor，避免冷编译占用 pytest 的
+单项测试超时；普通 wheel 构建和最终用户安装仍不要求 Rust。
+
+真实 Go/JFR 集成测试还需要完整 Go 工具链和 JDK 17/21/25。CI 会在 pytest 前用
+`scripts/prepare_test_runtimes.py` 创建独立安全副本并离线构建匹配的 `cmd/pprof`；
+本地工具权限不符合要求时也可采用此步骤，详见[开发指南](docs/development.zh-CN.md)。
+原始工具安装与生产运行时安全规则均不修改。
+
 ```bash
+cargo build --locked --package perflens-runtime-supervisor
 uv run ruff check .
 uv run pyright
+umask 022
 uv run pytest --cov=perflens
 uv build
 uv run pip-audit
@@ -535,7 +550,7 @@ uv run pip-audit
 - [产品部署、验收、升级与卸载](docs/deployment.zh-CN.md)
 - [安全策略](SECURITY.zh-CN.md)
 - [v0.3.2 历史发布就绪检查](docs/release-readiness.zh-CN.md)
-- [v0.4.0 发布候选就绪记录](docs/v0.4.0-release-readiness.zh-CN.md)
+- [v0.4.0 发布就绪记录](docs/v0.4.0-release-readiness.zh-CN.md)
 - [发布流程](docs/releasing.zh-CN.md)
 - [已知问题与临时处理](docs/known-issues.zh-CN.md)
 - [故障排查](docs/troubleshooting.zh-CN.md)

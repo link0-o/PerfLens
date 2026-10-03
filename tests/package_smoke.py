@@ -41,6 +41,7 @@ def main() -> None:
     assert "--docker-gate-path" in mcp_help
     assert "--allow-runtime-locks" in mcp_help
     assert "--runtime-lock-project-config" in mcp_help
+    assert "--runtime-lock-cpython-interpreter" in mcp_help
     detach_help = _run(perflens, "detach", "--help")
     assert "--dry-run" in detach_help
     assert "--json" in detach_help

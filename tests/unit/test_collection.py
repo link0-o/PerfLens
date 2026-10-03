@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -365,6 +367,32 @@ def test_pid_collection_drains_startup_diagnostics_before_control_ack(
     assert artifact.diagnostics_truncated is False
     assert len(artifact.diagnostics) == 1
     assert artifact.diagnostics[0] == "x" * 512
+
+
+def test_perf_control_reads_a_buffered_ack_after_the_process_exits() -> None:
+    process = subprocess.Popen(
+        (sys.executable, "-c", "pass"),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    assert process.wait(timeout=5) == 0
+    control = collector_module._PerfControl(  # pyright: ignore[reportPrivateUsage]
+        lambda: None,
+        None,
+    )
+    try:
+        _, acknowledgement_fd = control.child_fds
+        os.write(acknowledgement_fd, b"ack\n\0")
+
+        acknowledgement = control._read_acknowledgement(  # pyright: ignore[reportPrivateUsage]
+            process,
+            phase="bounded_enable",
+            deadline=time.monotonic() + 1.0,
+        )
+    finally:
+        control.close()
+
+    assert acknowledgement == b"ack\n"
 
 
 def test_pid_collection_classifies_a_live_control_ack_timeout(

@@ -2,6 +2,10 @@
 
 [简体中文](debian-packages.zh-CN.md) | English
 
+The `0.4.0-1` examples below refer to local candidate builds, not an already published release.
+For released packages, substitute the exact downloaded version in both filenames. See the
+[v0.4.0 readiness record](v0.4.0-release-readiness.md) for remaining gates.
+
 PerfLens publishes two role-separated native packages for Debian 13 `amd64`:
 
 - `perflens_<version>-<Debian-revision>_amd64.deb` contains the unprivileged CLI, MCP server,

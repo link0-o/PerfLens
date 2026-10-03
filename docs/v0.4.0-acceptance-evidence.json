@@ -1,0 +1,411 @@
+{
+  "schema_version": "1.0",
+  "purpose": "Local v0.4.0 functional acceptance and fixed-fixture overhead record; not remote CI, an L4 improvement claim, or a release attestation.",
+  "acceptance_date": "2026-10-03",
+  "read_only_reverification_date": "2026-10-04",
+  "accepted_main_deb_sha256": "227b82fde783b699b1d68e4b1a3c94c6a0ec73c7e24d8980b602da2d99b964e9",
+  "accepted_collector_deb_sha256": "8a9099ff41e44568f4e3f5a6162c608efe2d696fa4c48c82a955724e31d95978",
+  "runs": [
+    {
+      "label": "Native glibc 2.41",
+      "run_id": "runtime-lock-run-873e7c60212dddf08968",
+      "run_sha256": "c45d76ca16d74f77abd4b464730cd5be4e5ea684390efbdad7ab99cc114a8989",
+      "evidence_id": "runtime-lock-evidence-9d4cf156542258abea6be626",
+      "event_count": 7804,
+      "semantics": "exact",
+      "evidence_quality": "complete",
+      "run_quality": "partial",
+      "lost_events": 0,
+      "truncated_events": 0,
+      "malformed_records": 0,
+      "correctness": "passed",
+      "verification": "verified",
+      "checks_passed": 10,
+      "source_replay": "passed",
+      "settlement": {
+        "finalization_id": "runtime-lock-run-finalization-fec5c855da15e4acfa0a",
+        "settled_revision": 2
+      }
+    },
+    {
+      "label": "JDK 17.0.20.1",
+      "run_id": "runtime-lock-run-a3ed18b1e892243904fe",
+      "run_sha256": "1d1a81e4acfd4629f940bbf741e745e7e1b4f54daf10da697d7546a831a2a144",
+      "evidence_id": "runtime-lock-evidence-b7bf5287e58a7eb889a4d2f8",
+      "event_count": 20,
+      "semantics": "thresholded",
+      "evidence_quality": "complete",
+      "run_quality": "partial",
+      "lost_events": 0,
+      "truncated_events": 0,
+      "malformed_records": 0,
+      "correctness": "passed",
+      "verification": "verified",
+      "checks_passed": 10,
+      "source_replay": "passed",
+      "settlement": {
+        "finalization_id": "runtime-lock-run-finalization-6eda6b21ef7e8f132173",
+        "settled_revision": 2
+      }
+    },
+    {
+      "label": "CPython 3.13.5 free-threaded",
+      "run_id": "runtime-lock-run-760dfc1c59839aab3cd4",
+      "run_sha256": "f3962dc2a0857f7767fcbe76cc1b9b29d2ef3e7cb7cf0c98769de5543070a0ad",
+      "evidence_id": "runtime-lock-evidence-20d8d76da4588a7c6c590ff0",
+      "event_count": 2940,
+      "semantics": "exact",
+      "evidence_quality": "partial",
+      "run_quality": "partial",
+      "lost_events": 0,
+      "truncated_events": 0,
+      "malformed_records": 0,
+      "correctness": "passed",
+      "verification": "verified",
+      "checks_passed": 10,
+      "source_replay": "passed",
+      "settlement": {
+        "finalization_id": "runtime-lock-run-finalization-b10d27c6a2a45529b6d3",
+        "settled_revision": 2
+      }
+    },
+    {
+      "label": "Go 1.25.14 mutex",
+      "run_id": "runtime-lock-run-429dc4781235a0b280e6",
+      "run_sha256": "9c0f3cb59e122fd70cd899f4905b9e5866fbc5e0d83164e745c336a37f4480d1",
+      "evidence_id": "runtime-lock-evidence-6e311de06152635d9c609820",
+      "event_count": 1,
+      "semantics": "cumulative",
+      "evidence_quality": "partial",
+      "run_quality": "partial",
+      "lost_events": 0,
+      "truncated_events": 0,
+      "malformed_records": 0,
+      "correctness": "passed",
+      "verification": "verified",
+      "checks_passed": 10,
+      "source_replay": "passed",
+      "settlement": {
+        "finalization_id": "runtime-lock-run-finalization-8b68a046ad839de0675e",
+        "settled_revision": 2
+      }
+    },
+    {
+      "label": "Go 1.25.14 block",
+      "run_id": "runtime-lock-run-b42af4f6dba956f9d938",
+      "run_sha256": "6c4439dea21a2f230cfd285a5710d3ea23b56425887d48eeedc20b98a36d39c5",
+      "evidence_id": "runtime-lock-evidence-20de92ec48c9650f9ca34892",
+      "event_count": 2,
+      "semantics": "cumulative",
+      "evidence_quality": "partial",
+      "run_quality": "partial",
+      "lost_events": 0,
+      "truncated_events": 0,
+      "malformed_records": 0,
+      "correctness": "passed",
+      "verification": "verified",
+      "checks_passed": 10,
+      "source_replay": "passed",
+      "settlement": {
+        "finalization_id": "runtime-lock-run-finalization-fd0a14be59675cb6898a",
+        "settled_revision": 2
+      }
+    },
+    {
+      "label": "Docker Native glibc 2.41",
+      "run_id": "runtime-lock-run-4d6668ac071ea2de3e02",
+      "run_sha256": "50a336c2fbc8aaf5e4709605c5adef37c4e535014cb2d58b6c7b21c04a72e068",
+      "evidence_id": "runtime-lock-evidence-40c7e4835fd9ee73811a26e9",
+      "event_count": 7780,
+      "semantics": "exact",
+      "evidence_quality": "complete",
+      "run_quality": "complete",
+      "lost_events": 0,
+      "truncated_events": 0,
+      "malformed_records": 0,
+      "correctness": "passed",
+      "verification": "verified",
+      "checks_passed": 10,
+      "source_replay": "passed",
+      "settlement": {
+        "charged_parent_artifact_id": "docker-optimization-session-state-24f9db6ccdb0cf279010",
+        "charged_parent_sha256": "e079d13e34a76643c544f85695451fac2ca9d26452beb90fff03c4a76655bc5c",
+        "terminal_parent_artifact_id": "docker-optimization-session-state-502a0353bfa7f8af8a07",
+        "runtime_lock_evidence_bytes": 11144540,
+        "workload_runs_used": 1
+      }
+    },
+    {
+      "label": "Go 1.26.8 mutex",
+      "run_id": "runtime-lock-run-9f7e763bb303c6f452f2",
+      "run_sha256": "7c35c22e4a3fca656e53a11ab2d2336beb75fd4b7b25abafdcfb2cc95fe57564",
+      "evidence_id": "runtime-lock-evidence-f82aa8c02393eaad29dc48f3",
+      "event_count": 1,
+      "semantics": "cumulative",
+      "evidence_quality": "partial",
+      "run_quality": "partial",
+      "lost_events": 0,
+      "truncated_events": 0,
+      "malformed_records": 0,
+      "correctness": "passed",
+      "verification": "verified",
+      "checks_passed": 10,
+      "source_replay": "passed",
+      "settlement": {
+        "finalization_id": "runtime-lock-run-finalization-46a3f9784ff41fc15eef",
+        "settled_revision": 2
+      }
+    },
+    {
+      "label": "Go 1.26.8 block",
+      "run_id": "runtime-lock-run-a769d9fd4c9b80118208",
+      "run_sha256": "9fdef83d757f2a362858ce031ac0a7a29eca2b3b46d38610460e9f69d85fc404",
+      "evidence_id": "runtime-lock-evidence-c2dcadf94ed0999de529db21",
+      "event_count": 2,
+      "semantics": "cumulative",
+      "evidence_quality": "partial",
+      "run_quality": "partial",
+      "lost_events": 0,
+      "truncated_events": 0,
+      "malformed_records": 0,
+      "correctness": "passed",
+      "verification": "verified",
+      "checks_passed": 10,
+      "source_replay": "passed",
+      "settlement": {
+        "finalization_id": "runtime-lock-run-finalization-35e3958e90b853216221",
+        "settled_revision": 2
+      }
+    },
+    {
+      "label": "Go 1.27.1 mutex",
+      "run_id": "runtime-lock-run-412ca7d6447da1223d74",
+      "run_sha256": "14f380f22f1f9f6a5cea848ea4e47cf62c7c37af66d368a8aa8ba5da31aa01b5",
+      "evidence_id": "runtime-lock-evidence-05e00ba05ddbbc0108b917f9",
+      "event_count": 1,
+      "semantics": "cumulative",
+      "evidence_quality": "partial",
+      "run_quality": "partial",
+      "lost_events": 0,
+      "truncated_events": 0,
+      "malformed_records": 0,
+      "correctness": "passed",
+      "verification": "verified",
+      "checks_passed": 10,
+      "source_replay": "passed",
+      "settlement": {
+        "finalization_id": "runtime-lock-run-finalization-b72df5b1d12ff1f8e72b",
+        "settled_revision": 2
+      }
+    },
+    {
+      "label": "Go 1.27.1 block",
+      "run_id": "runtime-lock-run-dd61f533c7f33001d612",
+      "run_sha256": "92db774f24e77b60ea4ba66ede84a50f227f19eb2a6bb03d382ef4d8e36e0afb",
+      "evidence_id": "runtime-lock-evidence-be8fde19e50f928349407392",
+      "event_count": 2,
+      "semantics": "cumulative",
+      "evidence_quality": "partial",
+      "run_quality": "partial",
+      "lost_events": 0,
+      "truncated_events": 0,
+      "malformed_records": 0,
+      "correctness": "passed",
+      "verification": "verified",
+      "checks_passed": 10,
+      "source_replay": "passed",
+      "settlement": {
+        "finalization_id": "runtime-lock-run-finalization-e15522e69f3adf635e68",
+        "settled_revision": 2
+      }
+    }
+  ],
+  "native_overhead": {
+    "date": "2026-10-04",
+    "fixture_scope_only": true,
+    "source_sha256": {
+      "native/pthread_probe/perflens_pthread_probe.c": "6c1636097052eecae9f6f8d4a220c6dda9326bd6f0b4927749b961293ef47b8f",
+      "native/pthread_probe/perflens_pthread_probe.h": "59733b42493360d203a38bf55566d1398d6f3ebfaa03040d67dc6121f467593a",
+      "tests/native_pthread_probe/test_pthread_probe.py": "643efd11fb0e0a30f77de7a8ca1f3b820bb6eb632157d31466e8c9711016ea1d",
+      "tests/native_pthread_probe/pthread_probe_overhead.c": "f7fbd123673e4fa73c4f40ae29897e0e8236e325a544a2d92291c5a85592bd8d"
+    },
+    "host_before": "2026-10-04T02:11:11+08:00\nLinux debian 6.12.101+deb13-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.101-1 (2026-08-05) x86_64 GNU/Linux\n 02:11:11 up 52 min,  1 user,  load average: 1.46, 2.48, 2.36\nsome avg10=0.30 avg60=0.80 avg300=3.61 total=104846429\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\npid 100805's current affinity list: 0-7\n",
+    "host_after": "2026-10-04T02:11:58+08:00\n 02:11:58 up 53 min,  1 user,  load average: 2.77, 2.68, 2.43\nsome avg10=64.60 avg60=31.55 avg300=11.37 total=131773343\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+    "runs": [
+      {
+        "run": 1,
+        "junit_sha256": "44fa51dcb9e286e893cbd7c0f1886aad03f806214528e3c5adb3a126b0e6f7bc",
+        "test_seconds": 14.817,
+        "measurement": {
+          "baseline_samples": [
+            0.469472,
+            0.467568,
+            0.48378299999999996,
+            0.481747,
+            0.47872499999999996,
+            0.48539699999999997,
+            0.47517499999999996,
+            0.48022,
+            0.47111699999999995
+          ],
+          "baseline_seconds": 0.47872499999999996,
+          "clock": "wait4_process_cpu_seconds",
+          "disabled_block_deltas": [
+            -0.0025060000000000082,
+            -0.000010999999999983245,
+            -0.0037279999999999536
+          ],
+          "disabled_limit_seconds": 0.00478725,
+          "disabled_overhead_seconds": -0.0025060000000000082,
+          "disabled_samples": [
+            0.466966,
+            0.472556,
+            0.477315,
+            0.482155,
+            0.473682,
+            0.485386,
+            0.47951499999999997,
+            0.475128,
+            0.467389
+          ],
+          "measurement_cpu": 0,
+          "schema_version": "1.0",
+          "thresholded_block_deltas": [
+            0.006777999999999951,
+            0.004383999999999999,
+            0.0044660000000000255
+          ],
+          "thresholded_limit_seconds": 0.07180874999999999,
+          "thresholded_overhead_seconds": 0.0044660000000000255,
+          "thresholded_samples": [
+            0.47624999999999995,
+            0.4745,
+            0.48657799999999995,
+            0.493026,
+            0.48310899999999996,
+            0.489564,
+            0.48100299999999996,
+            0.484686,
+            0.47401699999999997
+          ]
+        }
+      },
+      {
+        "run": 2,
+        "junit_sha256": "98597b67d8e26c668c67d512e1be562e264705093e88ce313d309db42b95abce",
+        "test_seconds": 14.622,
+        "measurement": {
+          "baseline_samples": [
+            0.46864599999999995,
+            0.470636,
+            0.471651,
+            0.46873699999999996,
+            0.46859,
+            0.46480899999999997,
+            0.468548,
+            0.46452099999999996,
+            0.466474
+          ],
+          "baseline_seconds": 0.46859,
+          "clock": "wait4_process_cpu_seconds",
+          "disabled_block_deltas": [
+            -0.00045199999999995244,
+            0.0007070000000000132,
+            -0.00011600000000000499
+          ],
+          "disabled_limit_seconds": 0.0046859,
+          "disabled_overhead_seconds": -0.00011600000000000499,
+          "disabled_samples": [
+            0.468194,
+            0.47049799999999997,
+            0.46851299999999996,
+            0.469444,
+            0.46906899999999996,
+            0.46697299999999997,
+            0.467261,
+            0.464485,
+            0.466358
+          ],
+          "measurement_cpu": 0,
+          "schema_version": "1.0",
+          "thresholded_block_deltas": [
+            0.007164999999999977,
+            0.006236000000000019,
+            0.008792000000000022
+          ],
+          "thresholded_limit_seconds": 0.0702885,
+          "thresholded_overhead_seconds": 0.007164999999999977,
+          "thresholded_samples": [
+            0.481301,
+            0.477801,
+            0.47596,
+            0.474973,
+            0.47168499999999997,
+            0.474111,
+            0.47322699999999995,
+            0.473313,
+            0.478296
+          ]
+        }
+      },
+      {
+        "run": 3,
+        "junit_sha256": "5862c11fbdd4c4ad5c5f17192d558575a5e2e5fdf514dba816fcd321968b88e2",
+        "test_seconds": 14.651,
+        "measurement": {
+          "baseline_samples": [
+            0.46903999999999996,
+            0.46856499999999995,
+            0.466258,
+            0.469514,
+            0.467829,
+            0.467533,
+            0.46887399999999996,
+            0.465418,
+            0.47689
+          ],
+          "baseline_seconds": 0.46856499999999995,
+          "clock": "wait4_process_cpu_seconds",
+          "disabled_block_deltas": [
+            0.0020230000000000525,
+            0.0010270000000000001,
+            -0.0016289999999999916
+          ],
+          "disabled_limit_seconds": 0.0046856499999999995,
+          "disabled_overhead_seconds": 0.0010270000000000001,
+          "disabled_samples": [
+            0.46649399999999996,
+            0.470588,
+            0.468344,
+            0.46913699999999997,
+            0.47226999999999997,
+            0.46856,
+            0.46679699999999996,
+            0.475701,
+            0.475261
+          ],
+          "measurement_cpu": 0,
+          "schema_version": "1.0",
+          "thresholded_block_deltas": [
+            0.012419999999999987,
+            0.007209000000000021,
+            0.009093000000000018
+          ],
+          "thresholded_limit_seconds": 0.07028475,
+          "thresholded_overhead_seconds": 0.009093000000000018,
+          "thresholded_samples": [
+            0.486351,
+            0.47300899999999996,
+            0.478678,
+            0.476415,
+            0.475038,
+            0.477252,
+            0.47456099999999996,
+            0.475463,
+            0.485983
+          ]
+        }
+      }
+    ]
+  }
+}

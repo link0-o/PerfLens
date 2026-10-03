@@ -103,8 +103,8 @@ def _server(
         go_path=go_path,
         trusted_owner_uids=tuple(dict.fromkeys((0, os.geteuid(), go_path.stat().st_uid))),
     )
-    assert installation.tool is not None
-    assert installation.pprof_tool is not None
+    assert installation.tool is not None, installation.limitations
+    assert installation.pprof_tool is not None, installation.limitations
     policy = load_runtime_lock_project_policy(policy_path, allowed_roots=(project,))
     bridge = build_go_pprof_adapter_bridge(
         policy,

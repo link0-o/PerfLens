@@ -436,12 +436,12 @@ def test_docker_runtime_lock_preview_rejects_invalid_explicit_semantics_scope(
 
 
 @pytest.mark.parametrize(
-    ("adapter_id", "launch_name", "profile_kind"),
+    ("adapter_id", "launch_name", "profile_kind", "expected_timeout"),
     (
-        ("native_pthread", "NativePthreadDockerLaunch", None),
-        ("cpython_threading", "CpythonDockerLaunch", None),
-        ("java_jfr", "JavaJfrDockerLaunch", None),
-        ("go_pprof", "GoPprofDockerLaunch", "mutex"),
+        ("native_pthread", "NativePthreadDockerLaunch", None, 3),
+        ("cpython_threading", "CpythonDockerLaunch", None, 3),
+        ("java_jfr", "JavaJfrDockerLaunch", None, 30),
+        ("go_pprof", "GoPprofDockerLaunch", "mutex", 30),
     ),
 )
 def test_one_docker_confirmation_builds_each_typed_runtime_lock_launch(
@@ -450,10 +450,20 @@ def test_one_docker_confirmation_builds_each_typed_runtime_lock_launch(
     adapter_id: str,
     launch_name: str,
     profile_kind: str | None,
+    expected_timeout: int,
 ) -> None:
     server, runtime, adapter, _project = _four_adapter_server(tmp_path, monkeypatch)
     recorded_launches: list[object] = []
+    reserved_active_seconds: list[int] = []
     launch_type = getattr(docker_adapter, launch_name)
+
+    begin_workload = runtime.begin_workload
+
+    def record_reservation(*args: Any, **kwargs: Any) -> Any:
+        reserved_active_seconds.append(cast(int, kwargs["reserve_active_seconds"]))
+        return begin_workload(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "begin_workload", record_reservation)
 
     def record_launch(**values: object) -> object:
         launch = launch_type(**values)
@@ -488,6 +498,12 @@ def test_one_docker_confirmation_builds_each_typed_runtime_lock_launch(
                         "java_jfr",
                         "native_pthread",
                     ],
+                    "runtime_lock_semantics": {
+                        "cpython_threading": "exact",
+                        "go_pprof": "cumulative",
+                        "java_jfr": "thresholded",
+                        "native_pthread": "exact",
+                    },
                 },
             )
             assert not preview_result.is_error, preview_result.content
@@ -526,13 +542,20 @@ def test_one_docker_confirmation_builds_each_typed_runtime_lock_launch(
                 "build_id": baseline["artifact_id"],
                 "mode": "stat",
                 "duration_seconds": 1,
-                "workload_timeout_seconds": 3,
                 "max_output_bytes": 1 << 20,
                 "runtime_lock_adapter": adapter_id,
                 "runtime_lock_max_events": 100,
             }
             if profile_kind is not None:
                 request["runtime_lock_go_profile_kind"] = profile_kind
+            over_limit = await client.call_tool(
+                "collect_docker_optimization_workload",
+                {**request, "workload_timeout_seconds": 60},
+            )
+            assert over_limit.is_error
+            assert "exceeds the selected Runtime Lock evidence window" in str(over_limit.content)
+            assert runtime.snapshot(cast(str, session["session_id"])).workload_runs_used == 0
+            assert reserved_active_seconds == []
             stopped = await client.call_tool(
                 "collect_docker_optimization_workload",
                 request,
@@ -545,8 +568,9 @@ def test_one_docker_confirmation_builds_each_typed_runtime_lock_launch(
             assert current.runtime_lock_status == "unavailable"
 
     asyncio.run(exercise())
-    assert len(recorded_launches) == 1
-    assert type(recorded_launches[0]).__name__ == launch_name
+    assert reserved_active_seconds == [expected_timeout]
+    assert len(recorded_launches) == 2
+    assert all(type(launch).__name__ == launch_name for launch in recorded_launches)
     assert len(adapter.cleaned) == 1
 
 
