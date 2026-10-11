@@ -50,7 +50,7 @@ jobs:
           --junitxml=test-results/pytest.xml
       - name: Preserve Python test report
         if: ${{ always() && (steps.pytest.outcome == 'success' || steps.pytest.outcome == 'failure') }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-python-${{ matrix.python }}-test-report
           path: test-results/pytest.xml
@@ -175,7 +175,7 @@ jobs:
           test ! -e /etc/systemd/system/perflens-collector.service
           apt-get remove --yes perflens-collector perflens
           test ! -e /usr/bin/perflens
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: perflens-debian-packages
           path: dist/*.deb
@@ -241,7 +241,7 @@ jobs:
           --tag "$GITHUB_REF_NAME"
           --output release-notes.md
       - name: Transfer the verified release bundle to the publisher
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: perflens-release-bundle
           path: |
